@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>py_lucidum</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #eef2f7;
+        --panel: #ffffff;
+        --panel-2: #f8fafc;
+        --text: #1f2937;
+        --muted: #667085;
+        --line: #d7dde7;
+        --accent: #2276d2;
+        --accent-2: #12a8c7;
+        --bar: #bfeefa;
+        --tail: #72c7df;
+        --danger: #b42318;
+        --shadow: 0 1px 2px rgb(15 23 42 / 8%);
+      }
+
+      body.dark {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --panel: #151f32;
+        --panel-2: #111827;
+        --text: #e5e7eb;
+        --muted: #a8b3c7;
+        --line: #2c3952;
+        --accent: #72b7ff;
+        --accent-2: #2dd4bf;
+        --bar: #245b73;
+        --tail: #3b91ad;
+        --danger: #fca5a5;
+        --shadow: none;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      header {
+        height: 56px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+      }
+
+      .mark {
+        width: 28px;
+        height: 28px;
+        border-left: 3px solid var(--text);
+        border-bottom: 3px solid var(--text);
+        position: relative;
+      }
+
+      .mark::before {
+        content: "";
+        position: absolute;
+        inset: 5px 1px 2px 5px;
+        border-bottom: 2px solid #ef4444;
+        border-left: 2px solid transparent;
+        transform: skewX(16deg);
+      }
+
+      .meta {
+        color: var(--muted);
+        font-size: 13px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .spacer {
+        flex: 1;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        min-height: 0;
+      }
+
+      aside {
+        border-right: 1px solid var(--line);
+        background: var(--panel-2);
+        padding: 12px;
+        overflow: auto;
+      }
+
+      main {
+        min-width: 0;
+        padding: 14px;
+        overflow: auto;
+      }
+
+      .section {
+        margin-bottom: 14px;
+      }
+
+      .section h2 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
+
+      .search,
+      select,
+      input[type="number"] {
+        width: 100%;
+        height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--text);
+        padding: 0 10px;
+      }
+
+      .feature-list {
+        height: 338px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+      }
+
+      .feature {
+        width: 100%;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        background: transparent;
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        min-height: 28px;
+        padding: 5px 8px;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .feature:hover,
+      .feature.active {
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
+      }
+
+      .kind {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .metric-row {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 7px;
+        margin-bottom: 10px;
+      }
+
+      .metric-title {
+        font-weight: 650;
+        font-size: 13px;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(160px, 1fr));
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .control {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        min-width: 0;
+        box-shadow: var(--shadow);
+      }
+
+      .control h3 {
+        margin: 0 0 8px;
+        font-size: 13px;
+      }
+
+      .segmented {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .segmented button,
+      .tab,
+      .ghost {
+        min-height: 30px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-2);
+        color: var(--text);
+        padding: 4px 9px;
+        cursor: pointer;
+      }
+
+      .segmented button.active,
+      .tab.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 0;
+      }
+
+      .workspace {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        min-height: 620px;
+        padding: 12px;
+      }
+
+      #chart {
+        width: 100%;
+        height: 570px;
+      }
+
+      .table-wrap {
+        overflow: auto;
+        max-height: 570px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 7px 8px;
+        text-align: right;
+      }
+
+      th:first-child,
+      td:first-child {
+        text-align: left;
+        position: sticky;
+        left: 0;
+        background: var(--panel);
+      }
+
+      .status {
+        min-height: 22px;
+        color: var(--muted);
+        font-size: 13px;
+        margin: 7px 0 10px;
+      }
+
+      .status.error {
+        color: var(--danger);
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      @media (max-width: 1180px) {
+        .shell {
+          grid-template-columns: 300px 1fr;
+        }
+
+        .toolbar {
+          grid-template-columns: repeat(3, minmax(160px, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div class="brand"><span class="mark"></span><span>py_lucidum</span></div>
+        <div id="datasetMeta" class="meta">Loading dataset...</div>
+        <div class="spacer"></div>
+        <button id="reloadBtn" class="ghost">Reload</button>
+        <button id="themeBtn" class="ghost">Dark</button>
+      </header>
+
+      <div class="shell">
+        <aside>
+          <section class="section">
+            <h2>x-axis feature</h2>
+            <input id="featureSearch" class="search" placeholder="search" />
+            <div id="featureList" class="feature-list"></div>
+          </section>
+
+          <section class="section">
+            <h2>Response lines</h2>
+            <div class="metric-row">
+              <div class="metric-title">Actual / line 1</div>
+              <select id="actualNumerator"></select>
+              <select id="actualDenominator"></select>
+            </div>
+            <div class="metric-row">
+              <div class="metric-title">Expected / line 2</div>
+              <select id="expectedNumerator"></select>
+              <select id="expectedDenominator"></select>
+            </div>
+          </section>
+        </aside>
+
+        <main>
+          <div class="toolbar">
+            <div class="control">
+              <h3>x-axis sort order</h3>
+              <div class="segmented" data-control="sort">
+                <button data-value="original" class="active">Original</button>
+                <button data-value="alpha">A-Z</button>
+                <button data-value="volume">Volume</button>
+                <button data-value="response">Response</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Group low weights</h3>
+              <div class="segmented" data-control="lowGroup">
+                <button data-value="0" class="active">0</button>
+                <button data-value="5">5</button>
+                <button data-value="10">10</button>
+                <button data-value="20">20</button>
+                <button data-value="50">50</button>
+                <button data-value="0.1%">0.1%</button>
+                <button data-value="1%">1%</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Labels</h3>
+              <div class="segmented" data-control="labels">
+                <button data-value="none" class="active">-</button>
+                <button data-value="bar">Bar</button>
+                <button data-value="line">Line</button>
+                <button data-value="all">All</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Banding</h3>
+              <div class="segmented" data-control="bandWidth">
+                <button data-value="0" class="active">-</button>
+                <button data-value="0.01">0.01</button>
+                <button data-value="0.1">0.1</button>
+                <button data-value="1">1</button>
+                <button data-value="5">5</button>
+                <button data-value="10">10</button>
+                <button data-value="100">100</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Date bucket</h3>
+              <div class="segmented" data-control="dateBucket">
+                <button data-value="none" class="active">-</button>
+                <button data-value="hour">Hour</button>
+                <button data-value="day">Day</button>
+                <button data-value="week">Week</button>
+                <button data-value="month">Month</button>
+                <button data-value="year">Year</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Response transform</h3>
+              <div class="segmented" data-control="transform">
+                <button data-value="none" class="active">-</button>
+                <button data-value="log">Log</button>
+                <button data-value="exp">Exp</button>
+                <button data-value="logit">Logit</button>
+                <button data-value="zero">0</button>
+                <button data-value="one">1</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Sigma bars</h3>
+              <div class="segmented" data-control="sigma">
+                <button data-value="0" class="active">-</button>
+                <button data-value="2">2</button>
+                <button data-value="3">3</button>
+                <button data-value="4">4</button>
+                <button data-value="5">5</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="tabs">
+            <button id="chartTab" class="tab active">Chart</button>
+            <button id="tableTab" class="tab">Table</button>
+          </div>
+          <div id="status" class="status"></div>
+          <section class="workspace">
+            <div id="chart"></div>
+            <div id="tableWrap" class="table-wrap hidden"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      const token = new URLSearchParams(location.search).get("token") || "";
+      const state = {
+        schema: null,
+        x: null,
+        sort: "original",
+        lowGroup: "0",
+        labels: "none",
+        bandWidth: "0",
+        dateBucket: "none",
+        transform: "none",
+        sigma: "0",
+        view: "chart",
+        lastData: null,
+      };
+
+      const chart = echarts.init(document.getElementById("chart"));
+      const el = (id) => document.getElementById(id);
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            "x-lucidum-token": token,
+            ...(options.headers || {}),
+          },
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text);
+        }
+        return response.json();
+      }
+
+      function setStatus(message, isError = false) {
+        el("status").textContent = message || "";
+        el("status").classList.toggle("error", isError);
+      }
+
+      function numericColumns() {
+        return state.schema.columns.filter((c) => c.kind === "numeric");
+      }
+
+      function fillMetricSelect(select, includeNone = false) {
+        select.innerHTML = "";
+        if (includeNone) {
+          select.append(new Option("None", ""));
+        }
+        for (const col of numericColumns()) {
+          select.append(new Option(col.name, col.name));
+        }
+      }
+
+      function fillDenominatorSelect(select) {
+        select.innerHTML = "";
+        select.append(new Option("Average row value", "__none__"));
+        select.append(new Option("Divide by row count", "__count__"));
+        for (const col of numericColumns()) {
+          select.append(new Option(`Divide by ${col.name}`, col.name));
+        }
+      }
+
+      function chooseDefaults() {
+        const names = state.schema.columns.map((c) => c.name);
+        state.x = names.includes("YoungestDriverAge") ? "YoungestDriverAge" : state.schema.columns[0].name;
+        fillMetricSelect(el("actualNumerator"));
+        fillMetricSelect(el("expectedNumerator"), true);
+        fillDenominatorSelect(el("actualDenominator"));
+        fillDenominatorSelect(el("expectedDenominator"));
+        el("actualNumerator").value = names.includes("AvgPrice1_5") ? "AvgPrice1_5" : numericColumns()[0]?.name || "";
+        el("expectedNumerator").value = names.includes("glm_prediction") ? "glm_prediction" : "";
+        el("actualDenominator").value = "__none__";
+        el("expectedDenominator").value = "__none__";
+      }
+
+      function renderFeatures() {
+        const query = el("featureSearch").value.trim().toLowerCase();
+        const list = el("featureList");
+        list.innerHTML = "";
+        for (const col of state.schema.columns) {
+          if (query && !col.name.toLowerCase().includes(query)) continue;
+          const button = document.createElement("button");
+          button.className = `feature ${col.name === state.x ? "active" : ""}`;
+          button.innerHTML = `<span>${escapeHtml(col.name)}</span><span class="kind">${col.kind}</span>`;
+          button.addEventListener("click", () => {
+            state.x = col.name;
+            renderFeatures();
+            refreshChart();
+          });
+          list.append(button);
+        }
+      }
+
+      function currentResponses() {
+        const responses = [];
+        if (el("actualNumerator").value) {
+          responses.push({
+            label: el("actualNumerator").value,
+            numerator: el("actualNumerator").value,
+            denominator: el("actualDenominator").value,
+          });
+        }
+        if (el("expectedNumerator").value) {
+          responses.push({
+            label: el("expectedNumerator").value,
+            numerator: el("expectedNumerator").value,
+            denominator: el("expectedDenominator").value,
+          });
+        }
+        return responses;
+      }
+
+      async function refreshChart() {
+        if (!state.schema || !state.x) return;
+        setStatus("Computing...");
+        const request = {
+          x: state.x,
+          sort: state.sort,
+          lowGroup: state.lowGroup,
+          bandWidth: Number(state.bandWidth),
+          dateBucket: state.dateBucket,
+          transform: state.transform,
+          sigma: Number(state.sigma),
+          responses: currentResponses(),
+          maxGroups: 2000,
+        };
+        try {
+          const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
+          state.lastData = data;
+          renderChart(data);
+          renderTable(data);
+          const warning = data.warnings?.length ? ` ${data.warnings.join(" ")}` : "";
+          setStatus(`${data.rows.length.toLocaleString()} groups shown.${warning}`);
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      }
+
+      function renderChart(data) {
+        const labels = data.rows.map((r) => r.x);
+        const labelMode = state.labels;
+        const barSeries = {
+          name: "N",
+          type: "bar",
+          yAxisIndex: 1,
+          data: data.rows.map((r) => ({
+            value: r.volume,
+            itemStyle: { color: r.is_tail ? getCss("--tail") : getCss("--bar") },
+          })),
+          label: { show: labelMode === "bar" || labelMode === "all", position: "top", fontSize: 10 },
+          barMaxWidth: 22,
+        };
+        const lineSeries = data.responses.map((response, index) => ({
+          name: response.label,
+          type: "line",
+          yAxisIndex: 0,
+          smooth: false,
+          showSymbol: data.rows.length < 250,
+          symbolSize: 5,
+          data: data.rows.map((r) => r[`resp${index}`]),
+          label: { show: labelMode === "line" || labelMode === "all", fontSize: 10 },
+        }));
+
+        const customSeries = [];
+        if (Number(state.sigma) > 0 && data.responses.length >= 2) {
+          customSeries.push({
+            name: "sigma",
+            type: "custom",
+            yAxisIndex: 0,
+            renderItem: function (params, api) {
+              const x = api.coord([api.value(0), api.value(1)])[0];
+              const low = api.coord([api.value(0), api.value(2)])[1];
+              const high = api.coord([api.value(0), api.value(3)])[1];
+              if (!Number.isFinite(low) || !Number.isFinite(high)) return;
+              return {
+                type: "group",
+                children: [
+                  { type: "line", shape: { x1: x, y1: low, x2: x, y2: high }, style: { stroke: getCss("--accent-2"), lineWidth: 1.5 } },
+                  { type: "line", shape: { x1: x - 4, y1: low, x2: x + 4, y2: low }, style: { stroke: getCss("--accent-2"), lineWidth: 1.5 } },
+                  { type: "line", shape: { x1: x - 4, y1: high, x2: x + 4, y2: high }, style: { stroke: getCss("--accent-2"), lineWidth: 1.5 } },
+                ],
+              };
+            },
+            data: data.rows.map((r, i) => [i, r.resp1, r.resp1_low, r.resp1_high]).filter((r) => r.every((v) => v !== null && v !== undefined)),
+            encode: { x: 0, y: [2, 3] },
+            tooltip: { show: false },
+          });
+        }
+
+        chart.setOption(
+          {
+            backgroundColor: "transparent",
+            color: ["#222222", "#d13f3f", "#2f80ed"],
+            tooltip: { trigger: "axis" },
+            legend: { top: 8, textStyle: { color: getCss("--text") } },
+            grid: { left: 72, right: 76, top: 64, bottom: labels.length > 60 ? 92 : 52 },
+            xAxis: {
+              type: "category",
+              data: labels,
+              axisLabel: { color: getCss("--text"), interval: labels.length > 80 ? "auto" : 0, rotate: labels.length > 40 ? 65 : 0, fontSize: 10 },
+              axisLine: { lineStyle: { color: getCss("--line") } },
+            },
+            yAxis: [
+              { type: "value", name: "Response", axisLabel: { color: getCss("--text") }, splitLine: { lineStyle: { color: getCss("--line") } } },
+              { type: "value", name: "Number of rows", axisLabel: { color: getCss("--text") }, splitLine: { show: false } },
+            ],
+            dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
+            series: [barSeries, ...lineSeries, ...customSeries],
+          },
+          true,
+        );
+      }
+
+      function renderTable(data) {
+        const responseHeaders = data.responses.map((r, i) => `<th>${escapeHtml(r.label)}</th>`).join("");
+        const rows = data.rows
+          .map((r) => {
+            const values = data.responses.map((_, i) => `<td>${formatNumber(r[`resp${i}`])}</td>`).join("");
+            return `<tr><td>${escapeHtml(r.x)}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
+          })
+          .join("");
+        el("tableWrap").innerHTML = `<table><thead><tr><th>${escapeHtml(data.x)}</th><th>N</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody></table>`;
+      }
+
+      function setView(view) {
+        state.view = view;
+        el("chartTab").classList.toggle("active", view === "chart");
+        el("tableTab").classList.toggle("active", view === "table");
+        el("chart").classList.toggle("hidden", view !== "chart");
+        el("tableWrap").classList.toggle("hidden", view !== "table");
+        if (view === "chart") chart.resize();
+      }
+
+      function bindControls() {
+        document.querySelectorAll(".segmented").forEach((group) => {
+          group.addEventListener("click", (event) => {
+            if (event.target.tagName !== "BUTTON") return;
+            group.querySelectorAll("button").forEach((button) => button.classList.remove("active"));
+            event.target.classList.add("active");
+            state[group.dataset.control] = event.target.dataset.value;
+            refreshChart();
+          });
+        });
+        ["actualNumerator", "actualDenominator", "expectedNumerator", "expectedDenominator"].forEach((id) => {
+          el(id).addEventListener("change", refreshChart);
+        });
+        el("featureSearch").addEventListener("input", renderFeatures);
+        el("chartTab").addEventListener("click", () => setView("chart"));
+        el("tableTab").addEventListener("click", () => setView("table"));
+        el("themeBtn").addEventListener("click", () => {
+          document.body.classList.toggle("dark");
+          el("themeBtn").textContent = document.body.classList.contains("dark") ? "Light" : "Dark";
+          if (state.lastData) renderChart(state.lastData);
+        });
+        el("reloadBtn").addEventListener("click", async () => {
+          setStatus("Reloading dataset...");
+          state.schema = await api("/api/reload", { method: "POST" });
+          renderFeatures();
+          refreshChart();
+        });
+        window.addEventListener("resize", () => chart.resize());
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
+      }
+
+      function formatNumber(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return "";
+        return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
+      }
+
+      function getCss(name) {
+        return getComputedStyle(document.body).getPropertyValue(name).trim();
+      }
+
+      async function boot() {
+        bindControls();
+        try {
+          state.schema = await api("/api/schema");
+          const path = state.schema.path.split("/").pop();
+          el("datasetMeta").textContent = `${path} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
+          chooseDefaults();
+          renderFeatures();
+          await refreshChart();
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      }
+
+      boot();
+    </script>
+  </body>
+</html>
