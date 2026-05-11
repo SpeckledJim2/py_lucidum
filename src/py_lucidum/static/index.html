@@ -54,6 +54,12 @@
         color: var(--text);
       }
 
+      body.resizing-sidebar,
+      body.resizing-sidebar * {
+        cursor: col-resize !important;
+        user-select: none !important;
+      }
+
       button,
       input,
       select {
@@ -119,18 +125,31 @@
 
       .shell {
         display: grid;
-        grid-template-columns: 300px 1fr;
+        grid-template-columns: var(--sidebar-width, 300px) 6px 1fr;
         min-height: 0;
       }
 
       aside {
-        border-right: 1px solid var(--line);
         background: var(--panel-2);
         padding: 8px;
         overflow: hidden;
         display: flex;
         flex-direction: column;
         min-height: 0;
+      }
+
+      .sidebar-resizer {
+        background: linear-gradient(to right, var(--line), transparent);
+        cursor: col-resize;
+        min-width: 6px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .sidebar-resizer:hover,
+      .sidebar-resizer.dragging {
+        background: var(--accent);
       }
 
       main {
@@ -297,25 +316,45 @@
         height: 100%;
       }
 
-      table {
+      .table-wrap table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 13px;
+        border-spacing: 0;
+        font-size: 12px;
+        line-height: 1.15;
+        font-variant-numeric: tabular-nums;
       }
 
-      th,
-      td {
+      .table-wrap th,
+      .table-wrap td {
         border-bottom: 1px solid var(--line);
-        padding: 7px 8px;
+        padding: 2px 8px;
+        height: 20px;
         text-align: right;
+        white-space: nowrap;
       }
 
-      th:first-child,
-      td:first-child {
+      .table-wrap th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: var(--panel);
+      }
+
+      .table-wrap th:first-child,
+      .table-wrap td:first-child {
         text-align: left;
         position: sticky;
         left: 0;
         background: var(--panel);
+      }
+
+      .table-wrap th:first-child {
+        z-index: 3;
+      }
+
+      .table-wrap td:first-child {
+        z-index: 1;
       }
 
       .status {
@@ -337,7 +376,7 @@
 
       @media (max-width: 1180px) {
         .shell {
-          grid-template-columns: 280px 1fr;
+          grid-template-columns: var(--sidebar-width, 280px) 6px 1fr;
         }
 
         .toolbar {
@@ -379,6 +418,8 @@
             <div id="featureList" class="feature-list"></div>
           </section>
         </aside>
+
+        <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 
         <main>
           <div class="toolbar">
@@ -529,11 +570,15 @@
       }
 
       function numericColumns() {
-        return state.schema.columns.filter((c) => c.kind === "numeric");
+        return state.schema.columns.filter((c) => isNumericKind(c.kind));
       }
 
       function selectedColumn() {
         return state.schema?.columns.find((c) => c.name === state.x);
+      }
+
+      function isNumericKind(kind) {
+        return kind === "numeric" || kind === "integer";
       }
 
       function syncSegmented(control, value) {
@@ -579,7 +624,7 @@
       function updateAxisControls() {
         const kind = selectedColumn()?.kind;
         const isDate = kind === "date" || kind === "datetime";
-        const isNumeric = kind === "numeric";
+        const isNumeric = isNumericKind(kind);
         const isCategorical = kind === "categorical";
         el("sortControl").classList.toggle("hidden", !isCategorical);
         el("dateControl").classList.toggle("hidden", !isDate);
@@ -681,7 +726,7 @@
         updateAxisControls();
         const kind = selectedColumn()?.kind;
         const isDate = kind === "date" || kind === "datetime";
-        const isNumeric = kind === "numeric";
+        const isNumeric = isNumericKind(kind);
         const request = {
           x: state.x,
           sort: state.sort,
@@ -707,10 +752,11 @@
       }
 
       function renderChart(data) {
-        const labels = data.rows.map((r) => r.x);
+        const labels = data.rows.map((r) => formatXLabel(r.x, data.x_kind));
         const labelMode = state.labels;
         const responseTitle = data.responses.map((response) => response.label).join(" / ") || "Response";
         const xLabelPolicy = getXAxisLabelPolicy(labels);
+        const barLayout = getBarLayout(labels.length);
         const barSeries = {
           name: "N",
           type: "bar",
@@ -723,7 +769,9 @@
             itemStyle: { color: r.is_tail ? getCss("--tail") : getCss("--bar") },
           })),
           label: { show: labelMode === "bar" || labelMode === "all", position: "top", fontSize: 10 },
-          barMaxWidth: 22,
+          barWidth: barLayout.width,
+          barMaxWidth: barLayout.maxWidth,
+          barCategoryGap: barLayout.categoryGap,
         };
         const lineSeries = data.responses.map((response, index) => ({
           name: response.label,
@@ -776,7 +824,10 @@
             stateAnimation: { duration: 0 },
             backgroundColor: "transparent",
             color: ["#222222", "#d13f3f", "#2f80ed"],
-            tooltip: { trigger: "axis" },
+            tooltip: {
+              trigger: "axis",
+              valueFormatter: (value) => formatNumber(value),
+            },
             legend: { top: 8, textStyle: { color: getCss("--text") } },
             grid: { left: 72, right: 76, top: 64, bottom: xLabelPolicy.bottom, containLabel: false },
             xAxis: {
@@ -796,8 +847,8 @@
               axisLine: { lineStyle: { color: getCss("--line") } },
             },
             yAxis: [
-              { type: "value", name: responseTitle, axisLabel: { color: getCss("--text") }, nameTextStyle: { color: getCss("--text"), fontWeight: 600 }, splitLine: { lineStyle: { color: getCss("--line") } } },
-              { type: "value", name: "Number of rows", axisLabel: { color: getCss("--text") }, splitLine: { show: false } },
+              { type: "value", name: responseTitle, axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, nameTextStyle: { color: getCss("--text"), fontWeight: 600 }, splitLine: { lineStyle: { color: getCss("--line") } } },
+              { type: "value", name: "Number of rows", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
             ],
             dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
             series: [barSeries, ...lineSeries, ...customSeries],
@@ -835,12 +886,28 @@
         };
       }
 
+      function getBarLayout(count) {
+        if (count <= 3) {
+          return { width: "62%", maxWidth: 240, categoryGap: "18%" };
+        }
+        if (count <= 8) {
+          return { width: "56%", maxWidth: 180, categoryGap: "24%" };
+        }
+        if (count <= 20) {
+          return { width: "46%", maxWidth: 90, categoryGap: "34%" };
+        }
+        if (count <= 60) {
+          return { width: "68%", maxWidth: 34, categoryGap: "28%" };
+        }
+        return { width: null, maxWidth: 18, categoryGap: "30%" };
+      }
+
       function renderTable(data) {
         const responseHeaders = data.responses.map((r, i) => `<th>${escapeHtml(r.label)}</th>`).join("");
         const rows = data.rows
           .map((r) => {
             const values = data.responses.map((_, i) => `<td>${formatNumber(r[`resp${i}`])}</td>`).join("");
-            return `<tr><td>${escapeHtml(r.x)}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
+            return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
           })
           .join("");
         el("tableWrap").innerHTML = `<table><thead><tr><th>${escapeHtml(data.x)}</th><th>N</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody></table>`;
@@ -855,7 +922,60 @@
         if (view === "chart") chart.resize();
       }
 
+      function setupSidebarResize() {
+        const shell = document.querySelector(".shell");
+        const resizer = el("sidebarResizer");
+        const savedWidth = Number(localStorage.getItem("py_lucidum_sidebar_width"));
+        if (Number.isFinite(savedWidth) && savedWidth > 0) {
+          setSidebarWidth(savedWidth);
+        }
+
+        let dragging = false;
+        resizer.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          dragging = true;
+          resizer.classList.add("dragging");
+          document.body.classList.add("resizing-sidebar");
+          resizer.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        resizer.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          const bounds = shell.getBoundingClientRect();
+          setSidebarWidth(event.clientX - bounds.left);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          resizer.classList.remove("dragging");
+          document.body.classList.remove("resizing-sidebar");
+          window.getSelection()?.removeAllRanges();
+          const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"));
+          if (Number.isFinite(width)) {
+            localStorage.setItem("py_lucidum_sidebar_width", String(Math.round(width)));
+          }
+          if (event.pointerId !== undefined) {
+            try {
+              resizer.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+          chart.resize();
+        }
+        resizer.addEventListener("pointerup", finishDrag);
+        resizer.addEventListener("pointercancel", finishDrag);
+      }
+
+      function setSidebarWidth(rawWidth) {
+        const viewportLimit = Math.max(260, window.innerWidth - 520);
+        const width = Math.min(Math.max(rawWidth, 220), Math.min(560, viewportLimit));
+        document.documentElement.style.setProperty("--sidebar-width", `${Math.round(width)}px`);
+        requestAnimationFrame(() => chart.resize());
+      }
+
       function bindControls() {
+        setupSidebarResize();
         document.querySelectorAll(".segmented").forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
@@ -902,7 +1022,26 @@
 
       function formatNumber(value) {
         if (value === null || value === undefined || Number.isNaN(value)) return "";
-        return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        const abs = Math.abs(number);
+        let maximumFractionDigits = 0;
+        if (abs !== 0 && abs < 0.01) maximumFractionDigits = 6;
+        else if (abs < 1) maximumFractionDigits = 4;
+        else if (abs < 10) maximumFractionDigits = 3;
+        else if (abs < 1000) maximumFractionDigits = 2;
+        else maximumFractionDigits = 1;
+        return number.toLocaleString(undefined, {
+          minimumFractionDigits: 0,
+          maximumFractionDigits,
+        });
+      }
+
+      function formatXLabel(value, kind) {
+        if (kind !== "integer") return String(value);
+        const number = Number(value);
+        if (!Number.isFinite(number) || !Number.isInteger(number)) return String(value);
+        return number.toLocaleString(undefined, { maximumFractionDigits: 0 });
       }
 
       function getCss(name) {

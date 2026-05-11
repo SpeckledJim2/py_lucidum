@@ -50,6 +50,6 @@ def main() -> None:
         path=args.path,
         host=args.host,
         port=args.port,
-        token=None if args.no_token else secrets.token_urlsafe(18),
+        token="" if args.no_token else secrets.token_urlsafe(18),
         open_browser=args.open,
     )

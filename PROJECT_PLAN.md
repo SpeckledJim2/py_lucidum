@@ -15,10 +15,12 @@ The current implementation is a package-first Python app with a FastAPI backend,
   - `POST /api/reload` to refresh the file snapshot and cached metadata.
 - The app supports local analyst mode today and is designed to grow into internal server mode with local or mounted server datasets.
 - Local development datasets `vans.csv` and `vans.parquet` are ignored and not intended for publishing.
+- Launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, and no-token local mode.
 
 ## Chart Behavior
 
-- X-axis supports numeric, character/string, categorical/factor-like, date, and datetime columns.
+- X-axis supports integer, numeric, character/string, categorical/factor-like, date, and datetime columns.
+- Integer columns are identified separately in the sidebar and integer x-axis labels are shown without `.0` suffixes.
 - The main view is a combined bar and line chart:
   - Bars show row volume.
   - One or two response lines can be selected.
@@ -31,9 +33,10 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Character/categorical x-axis sorting supports original order, alphabetical order, bar volume, and response value. Sort controls are hidden for numeric/date x-axes.
 - Numeric banding floors x values to the selected band width. Fixed shortcuts include `0.1`, `1`, `5`, and `10`; `<` and `>` step through the 1/2/5 sequence such as `1 -> 2 -> 5 -> 10 -> 20 -> 50 -> 100`.
 - When a numeric x-axis feature is selected, the app chooses an initial band width from the feature standard deviation over the first 10k rows, rounded down two notches on the 1/2/5 scale.
-- Date/datetime x-axes use calendar buckets: hour, day, week, month, and year. Date bucket controls are only shown for date/datetime features; banding controls are only shown for numeric features.
+- Date/datetime x-axes use calendar buckets: hour, day, week, month, and year. Date bucket controls are only shown for date/datetime features; banding controls are only shown for integer/numeric features.
 - Low-weight grouping supports absolute thresholds and percentage thresholds such as `0.1%` and `1%`. Ordered numeric/date tails are collapsed into low/high tail buckets; low-volume categorical levels are collapsed into “Other”.
 - Sigma bars are optional and shown only when two comparable responses are selected. The first response is treated as actual and the second as expected. Error bars are drawn around expected using deterministic hash folds within each x-axis group.
+- Hover values, y-axis values, and table values are formatted with comma separators and a sensible number of decimal places, independent of the underlying raw precision.
 
 ## UI Direction
 
@@ -41,6 +44,10 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - The chart is the focus: controls should stay compact, avoid unnecessary wrapping, and preserve vertical space.
 - Dark mode is supported.
 - Chart animations are disabled so interactions update as fast as possible.
+- The sidebar is resizable so users can trade space between long column names and the chart.
+- Response controls sit above the x-axis feature list because response selection is usually the first choice in the workflow.
+- Table view uses compact row spacing to support scanning many grouped rows.
+- Bars widen for small numbers of x-axis categories while keeping visible spacing between groups.
 - X-axis labels are always shown below 200 groups, use smaller text above 50 groups, and are hidden with a UI message at 200+ groups.
 - Longer rotated labels should remain visible without excessive blank space under the plot.
 - The chart should resize to fill the browser window toward the bottom-right.

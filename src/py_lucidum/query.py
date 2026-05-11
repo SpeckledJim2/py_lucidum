@@ -18,7 +18,9 @@ def quote_ident(value: str) -> str:
 
 def infer_kind(duckdb_type: str) -> str:
     t = duckdb_type.upper()
-    if any(part in t for part in ("INT", "DOUBLE", "FLOAT", "REAL", "DECIMAL", "HUGEINT", "UBIGINT")):
+    if "INT" in t:
+        return "integer"
+    if any(part in t for part in ("DOUBLE", "FLOAT", "REAL", "DECIMAL")):
         return "numeric"
     if "TIMESTAMP" in t:
         return "datetime"
@@ -27,6 +29,10 @@ def infer_kind(duckdb_type: str) -> str:
     if "BOOL" in t:
         return "categorical"
     return "categorical"
+
+
+def is_numeric_kind(kind: str) -> bool:
+    return kind in {"integer", "numeric"}
 
 
 def json_number(value: Any) -> float | int | None:
@@ -111,7 +117,7 @@ class Dataset:
     def band_suggestions(self, schema: list[ColumnInfo]) -> dict[str, float | int | None]:
         if self._band_suggestions is not None:
             return self._band_suggestions
-        numeric = [col for col in schema if col.kind == "numeric"]
+        numeric = [col for col in schema if is_numeric_kind(col.kind)]
         if not numeric:
             self._band_suggestions = {}
             return self._band_suggestions
@@ -208,16 +214,20 @@ def normalise_responses(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[s
 
 def build_x_sql(x_col: str, kind: str, band_width: Any, date_bucket: Any) -> dict[str, str]:
     col = quote_ident(x_col)
-    if kind == "numeric":
+    if is_numeric_kind(kind):
         raw = f"TRY_CAST({col} AS DOUBLE)"
         width = parse_positive_float(band_width)
         if width:
             key = f"FLOOR({raw} / {width}) * {width}"
         else:
             key = raw
+        if kind == "integer":
+            label = f"CASE WHEN {key} IS NULL THEN '(missing)' ELSE CAST(TRY_CAST({key} AS BIGINT) AS VARCHAR) END"
+        else:
+            label = f"CASE WHEN {key} IS NULL THEN '(missing)' ELSE CAST({key} AS VARCHAR) END"
         return {
             "key": key,
-            "label": f"CASE WHEN {key} IS NULL THEN '(missing)' ELSE CAST({key} AS VARCHAR) END",
+            "label": label,
             "sort": key,
         }
     if kind in ("date", "datetime"):
@@ -410,7 +420,7 @@ def apply_low_weight_grouping(
         return [normalise_row(row, responses) for row in rows]
 
     normalised = [normalise_row(row, responses) for row in rows]
-    if x_kind in {"numeric", "date", "datetime"}:
+    if x_kind in {"integer", "numeric", "date", "datetime"}:
         ordered = sorted(normalised, key=lambda r: (r["x_sort"] is None, r["x_sort"]))
         low: list[dict[str, Any]] = []
         high: list[dict[str, Any]] = []
