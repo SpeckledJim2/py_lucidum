@@ -48,6 +48,7 @@ class ColumnInfo:
     name: str
     duckdb_type: str
     kind: str
+    band_suggestion: float | int | None = None
 
 
 class Dataset:
@@ -58,6 +59,7 @@ class Dataset:
         self.con = duckdb.connect(database=":memory:")
         self._schema: list[ColumnInfo] | None = None
         self._row_count: int | None = None
+        self._band_suggestions: dict[str, float | int | None] | None = None
 
     def relation_sql(self) -> str:
         path = sql_literal(str(self.path))
@@ -71,13 +73,24 @@ class Dataset:
     def reload(self) -> None:
         self._schema = None
         self._row_count = None
+        self._band_suggestions = None
 
     def schema(self) -> dict[str, Any]:
         if self._schema is None:
             rows = self.con.execute(f"DESCRIBE SELECT * FROM {self.relation_sql()}").fetchall()
-            self._schema = [
+            base_schema = [
                 ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
                 for row in rows
+            ]
+            suggestions = self.band_suggestions(base_schema)
+            self._schema = [
+                ColumnInfo(
+                    name=col.name,
+                    duckdb_type=col.duckdb_type,
+                    kind=col.kind,
+                    band_suggestion=suggestions.get(col.name),
+                )
+                for col in base_schema
             ]
         if self._row_count is None:
             self._row_count = int(self.con.execute(f"SELECT COUNT(*) FROM {self.relation_sql()}").fetchone()[0])
@@ -85,10 +98,42 @@ class Dataset:
             "path": str(self.path),
             "row_count": self._row_count,
             "columns": [
-                {"name": c.name, "duckdb_type": c.duckdb_type, "kind": c.kind}
+                {
+                    "name": c.name,
+                    "duckdb_type": c.duckdb_type,
+                    "kind": c.kind,
+                    "band_suggestion": c.band_suggestion,
+                }
                 for c in self._schema
             ],
         }
+
+    def band_suggestions(self, schema: list[ColumnInfo]) -> dict[str, float | int | None]:
+        if self._band_suggestions is not None:
+            return self._band_suggestions
+        numeric = [col for col in schema if col.kind == "numeric"]
+        if not numeric:
+            self._band_suggestions = {}
+            return self._band_suggestions
+        select_sql = ",\n    ".join(
+            f"STDDEV_SAMP(TRY_CAST({quote_ident(col.name)} AS DOUBLE)) AS {quote_ident(col.name)}"
+            for col in numeric
+        )
+        sql = f"""
+WITH sample AS (
+  SELECT * FROM {self.relation_sql()} LIMIT 10000
+)
+SELECT
+    {select_sql}
+FROM sample
+"""
+        row = self.con.execute(sql).fetchone()
+        names = [description[0] for description in self.con.description]
+        self._band_suggestions = {
+            name: suggested_band_width(value)
+            for name, value in zip(names, row)
+        }
+        return self._band_suggestions
 
     def column_map(self) -> dict[str, ColumnInfo]:
         return {c.name: c for c in self._schema_columns()}
@@ -198,6 +243,29 @@ def parse_positive_float(value: Any) -> float | None:
     if parsed <= 0 or not math.isfinite(parsed):
         return None
     return parsed
+
+
+def nice_band_steps() -> list[float]:
+    steps: list[float] = []
+    for exponent in range(-8, 13):
+        multiplier = 10 ** exponent
+        steps.extend([1 * multiplier, 2 * multiplier, 5 * multiplier])
+    return sorted(steps)
+
+
+def suggested_band_width(stddev: Any) -> float | int | None:
+    value = parse_positive_float(stddev)
+    if not value:
+        return None
+    steps = nice_band_steps()
+    lower_index = 0
+    for index, step in enumerate(steps):
+        if step <= value:
+            lower_index = index
+        else:
+            break
+    suggestion_index = max(0, lower_index - 1)
+    return json_number(steps[suggestion_index])
 
 
 def response_parts(response: dict[str, str | None], index: int) -> tuple[str, str, str]:

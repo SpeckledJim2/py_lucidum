@@ -413,15 +413,15 @@
               </div>
             </div>
             <div id="bandControl" class="control">
-              <h3>Banding</h3>
+              <h3>Banding <span id="bandValue"></span></h3>
               <div class="segmented" data-control="bandWidth">
+                <button data-action="band-down">&lt;</button>
                 <button data-value="0" class="active">-</button>
-                <button data-value="0.01">0.01</button>
                 <button data-value="0.1">0.1</button>
                 <button data-value="1">1</button>
                 <button data-value="5">5</button>
                 <button data-value="10">10</button>
-                <button data-value="100">100</button>
+                <button data-action="band-up">&gt;</button>
               </div>
             </div>
             <div id="dateControl" class="control">
@@ -485,7 +485,10 @@
         sigma: "0",
         view: "chart",
         lastData: null,
+        bandFeature: null,
       };
+
+      const BAND_STEPS = makeBandSteps();
 
       const chart = echarts.init(document.getElementById("chart"));
       const el = (id) => document.getElementById(id);
@@ -516,6 +519,15 @@
         el("groupMeta").textContent = message || "";
       }
 
+      function makeBandSteps() {
+        const steps = [];
+        for (let exponent = -8; exponent <= 12; exponent += 1) {
+          const multiplier = 10 ** exponent;
+          steps.push(1 * multiplier, 2 * multiplier, 5 * multiplier);
+        }
+        return [...new Set(steps)].sort((a, b) => a - b);
+      }
+
       function numericColumns() {
         return state.schema.columns.filter((c) => c.kind === "numeric");
       }
@@ -532,6 +544,38 @@
         });
       }
 
+      function formatBandWidth(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number <= 0) return "0";
+        return Number(number.toPrecision(12)).toString();
+      }
+
+      function syncBandingControl() {
+        syncSegmented("bandWidth", state.bandWidth);
+        const display = Number(state.bandWidth) > 0 ? state.bandWidth : "auto off";
+        el("bandValue").textContent = `(${display})`;
+      }
+
+      function autoBandWidthForSelectedColumn() {
+        const suggestion = selectedColumn()?.band_suggestion;
+        return suggestion ? formatBandWidth(suggestion) : "0";
+      }
+
+      function stepBandWidth(direction) {
+        const current = Number(state.bandWidth) > 0 ? Number(state.bandWidth) : Number(autoBandWidthForSelectedColumn()) || 1;
+        let next = current;
+        if (direction < 0) {
+          const smallerSteps = BAND_STEPS.filter((step) => step < current);
+          next = smallerSteps.length ? smallerSteps[smallerSteps.length - 1] : current;
+        } else {
+          next = BAND_STEPS.find((step) => step > current) || current;
+        }
+        state.bandWidth = formatBandWidth(next);
+        state.bandFeature = state.x;
+        syncBandingControl();
+        refreshChart();
+      }
+
       function updateAxisControls() {
         const kind = selectedColumn()?.kind;
         const isDate = kind === "date" || kind === "datetime";
@@ -540,6 +584,10 @@
         el("sortControl").classList.toggle("hidden", !isCategorical);
         el("dateControl").classList.toggle("hidden", !isDate);
         el("bandControl").classList.toggle("hidden", !isNumeric);
+        if (isNumeric && state.bandFeature !== state.x) {
+          state.bandWidth = autoBandWidthForSelectedColumn();
+          state.bandFeature = state.x;
+        }
         if (!isCategorical) {
           state.sort = "original";
           syncSegmented("sort", "original");
@@ -550,8 +598,10 @@
         }
         if (!isNumeric) {
           state.bandWidth = "0";
+          state.bandFeature = state.x;
           syncSegmented("bandWidth", "0");
         }
+        syncBandingControl();
       }
 
       function fillMetricSelect(select, includeNone = false) {
@@ -809,9 +859,17 @@
         document.querySelectorAll(".segmented").forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
+            if (group.dataset.control === "bandWidth" && event.target.dataset.action) {
+              stepBandWidth(event.target.dataset.action === "band-down" ? -1 : 1);
+              return;
+            }
             group.querySelectorAll("button").forEach((button) => button.classList.remove("active"));
             event.target.classList.add("active");
             state[group.dataset.control] = event.target.dataset.value;
+            if (group.dataset.control === "bandWidth") {
+              state.bandFeature = state.x;
+              syncBandingControl();
+            }
             refreshChart();
           });
         });
@@ -830,6 +888,7 @@
           setStatus("");
           setGroupMeta("Reloading...");
           state.schema = await api("/api/reload", { method: "POST" });
+          state.bandFeature = null;
           renderFeatures();
           updateAxisControls();
           refreshChart();
