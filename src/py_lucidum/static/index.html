@@ -42,6 +42,11 @@
         box-sizing: border-box;
       }
 
+      html,
+      body {
+        height: 100%;
+      }
+
       body {
         margin: 0;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -56,17 +61,18 @@
       }
 
       .app {
-        min-height: 100vh;
+        height: 100vh;
         display: grid;
         grid-template-rows: auto 1fr;
+        overflow: hidden;
       }
 
       header {
-        height: 56px;
+        height: 52px;
         display: flex;
         align-items: center;
-        gap: 16px;
-        padding: 0 18px;
+        gap: 14px;
+        padding: 0 14px;
         border-bottom: 1px solid var(--line);
         background: var(--panel);
       }
@@ -97,10 +103,14 @@
 
       .meta {
         color: var(--muted);
-        font-size: 13px;
+        font-size: 12px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .group-meta {
+        flex: 0 0 auto;
       }
 
       .spacer {
@@ -109,46 +119,61 @@
 
       .shell {
         display: grid;
-        grid-template-columns: 360px 1fr;
+        grid-template-columns: 300px 1fr;
         min-height: 0;
       }
 
       aside {
         border-right: 1px solid var(--line);
         background: var(--panel-2);
-        padding: 12px;
-        overflow: auto;
+        padding: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
       }
 
       main {
         min-width: 0;
-        padding: 14px;
-        overflow: auto;
+        padding: 10px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
       }
 
       .section {
-        margin-bottom: 14px;
+        margin-bottom: 10px;
       }
 
       .section h2 {
-        margin: 0 0 8px;
-        font-size: 14px;
+        margin: 0 0 6px;
+        font-size: 13px;
       }
 
       .search,
       select,
       input[type="number"] {
         width: 100%;
-        height: 34px;
+        height: 28px;
         border: 1px solid var(--line);
         border-radius: 6px;
         background: var(--panel);
         color: var(--text);
-        padding: 0 10px;
+        padding: 0 8px;
+        font-size: 12px;
+      }
+
+      .feature-section {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
       }
 
       .feature-list {
-        height: 338px;
+        flex: 1;
+        min-height: 280px;
         overflow: auto;
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -165,10 +190,11 @@
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-        min-height: 28px;
-        padding: 5px 8px;
+        min-height: 23px;
+        padding: 3px 7px;
         cursor: pointer;
         text-align: left;
+        font-size: 12px;
       }
 
       .feature:hover,
@@ -178,58 +204,61 @@
 
       .kind {
         color: var(--muted);
-        font-size: 11px;
+        font-size: 10px;
       }
 
       .metric-row {
         display: grid;
         grid-template-columns: 1fr;
-        gap: 7px;
-        margin-bottom: 10px;
+        gap: 5px;
+        margin-bottom: 8px;
       }
 
       .metric-title {
         font-weight: 650;
-        font-size: 13px;
+        font-size: 12px;
       }
 
       .toolbar {
-        display: grid;
-        grid-template-columns: repeat(6, minmax(160px, 1fr));
-        gap: 12px;
-        margin-bottom: 12px;
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        flex: 0 0 auto;
       }
 
       .control {
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 10px;
-        min-width: 0;
+        border-radius: 6px;
+        padding: 7px;
+        flex: 0 0 auto;
         box-shadow: var(--shadow);
       }
 
       .control h3 {
-        margin: 0 0 8px;
-        font-size: 13px;
+        margin: 0 0 6px;
+        font-size: 12px;
       }
 
       .segmented {
         display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
+        flex-wrap: nowrap;
+        gap: 3px;
       }
 
       .segmented button,
       .tab,
       .ghost {
-        min-height: 30px;
+        min-height: 24px;
         border: 1px solid var(--line);
-        border-radius: 6px;
+        border-radius: 5px;
         background: var(--panel-2);
         color: var(--text);
-        padding: 4px 9px;
+        padding: 2px 7px;
         cursor: pointer;
+        font-size: 12px;
       }
 
       .segmented button.active,
@@ -241,8 +270,10 @@
 
       .tabs {
         display: flex;
+        align-items: center;
         gap: 6px;
-        margin-bottom: 0;
+        margin-bottom: 8px;
+        flex: 0 0 auto;
       }
 
       .workspace {
@@ -250,18 +281,20 @@
         border: 1px solid var(--line);
         border-radius: 8px;
         box-shadow: var(--shadow);
-        min-height: 620px;
-        padding: 12px;
+        padding: 8px;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
       }
 
       #chart {
         width: 100%;
-        height: 570px;
+        height: 100%;
       }
 
       .table-wrap {
         overflow: auto;
-        max-height: 570px;
+        height: 100%;
       }
 
       table {
@@ -286,10 +319,12 @@
       }
 
       .status {
-        min-height: 22px;
+        margin-left: auto;
         color: var(--muted);
-        font-size: 13px;
-        margin: 7px 0 10px;
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .status.error {
@@ -302,11 +337,11 @@
 
       @media (max-width: 1180px) {
         .shell {
-          grid-template-columns: 300px 1fr;
+          grid-template-columns: 280px 1fr;
         }
 
         .toolbar {
-          grid-template-columns: repeat(3, minmax(160px, 1fr));
+          flex-wrap: nowrap;
         }
       }
     </style>
@@ -317,18 +352,13 @@
         <div class="brand"><span class="mark"></span><span>py_lucidum</span></div>
         <div id="datasetMeta" class="meta">Loading dataset...</div>
         <div class="spacer"></div>
+        <div id="groupMeta" class="meta group-meta"></div>
         <button id="reloadBtn" class="ghost">Reload</button>
         <button id="themeBtn" class="ghost">Dark</button>
       </header>
 
       <div class="shell">
         <aside>
-          <section class="section">
-            <h2>x-axis feature</h2>
-            <input id="featureSearch" class="search" placeholder="search" />
-            <div id="featureList" class="feature-list"></div>
-          </section>
-
           <section class="section">
             <h2>Response lines</h2>
             <div class="metric-row">
@@ -342,11 +372,17 @@
               <select id="expectedDenominator"></select>
             </div>
           </section>
+
+          <section class="section feature-section">
+            <h2>x-axis feature</h2>
+            <input id="featureSearch" class="search" placeholder="search" />
+            <div id="featureList" class="feature-list"></div>
+          </section>
         </aside>
 
         <main>
           <div class="toolbar">
-            <div class="control">
+            <div id="sortControl" class="control">
               <h3>x-axis sort order</h3>
               <div class="segmented" data-control="sort">
                 <button data-value="original" class="active">Original</button>
@@ -376,7 +412,7 @@
                 <button data-value="all">All</button>
               </div>
             </div>
-            <div class="control">
+            <div id="bandControl" class="control">
               <h3>Banding</h3>
               <div class="segmented" data-control="bandWidth">
                 <button data-value="0" class="active">-</button>
@@ -388,7 +424,7 @@
                 <button data-value="100">100</button>
               </div>
             </div>
-            <div class="control">
+            <div id="dateControl" class="control">
               <h3>Date bucket</h3>
               <div class="segmented" data-control="dateBucket">
                 <button data-value="none" class="active">-</button>
@@ -425,8 +461,8 @@
           <div class="tabs">
             <button id="chartTab" class="tab active">Chart</button>
             <button id="tableTab" class="tab">Table</button>
+            <div id="status" class="status"></div>
           </div>
-          <div id="status" class="status"></div>
           <section class="workspace">
             <div id="chart"></div>
             <div id="tableWrap" class="table-wrap hidden"></div>
@@ -473,10 +509,49 @@
       function setStatus(message, isError = false) {
         el("status").textContent = message || "";
         el("status").classList.toggle("error", isError);
+        el("status").classList.toggle("hidden", !message);
+      }
+
+      function setGroupMeta(message) {
+        el("groupMeta").textContent = message || "";
       }
 
       function numericColumns() {
         return state.schema.columns.filter((c) => c.kind === "numeric");
+      }
+
+      function selectedColumn() {
+        return state.schema?.columns.find((c) => c.name === state.x);
+      }
+
+      function syncSegmented(control, value) {
+        const group = document.querySelector(`.segmented[data-control="${control}"]`);
+        if (!group) return;
+        group.querySelectorAll("button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.value === value);
+        });
+      }
+
+      function updateAxisControls() {
+        const kind = selectedColumn()?.kind;
+        const isDate = kind === "date" || kind === "datetime";
+        const isNumeric = kind === "numeric";
+        const isCategorical = kind === "categorical";
+        el("sortControl").classList.toggle("hidden", !isCategorical);
+        el("dateControl").classList.toggle("hidden", !isDate);
+        el("bandControl").classList.toggle("hidden", !isNumeric);
+        if (!isCategorical) {
+          state.sort = "original";
+          syncSegmented("sort", "original");
+        }
+        if (!isDate) {
+          state.dateBucket = "none";
+          syncSegmented("dateBucket", "none");
+        }
+        if (!isNumeric) {
+          state.bandWidth = "0";
+          syncSegmented("bandWidth", "0");
+        }
       }
 
       function fillMetricSelect(select, includeNone = false) {
@@ -523,6 +598,7 @@
           button.addEventListener("click", () => {
             state.x = col.name;
             renderFeatures();
+            updateAxisControls();
             refreshChart();
           });
           list.append(button);
@@ -550,13 +626,18 @@
 
       async function refreshChart() {
         if (!state.schema || !state.x) return;
-        setStatus("Computing...");
+        setStatus("");
+        setGroupMeta("Computing...");
+        updateAxisControls();
+        const kind = selectedColumn()?.kind;
+        const isDate = kind === "date" || kind === "datetime";
+        const isNumeric = kind === "numeric";
         const request = {
           x: state.x,
           sort: state.sort,
           lowGroup: state.lowGroup,
-          bandWidth: Number(state.bandWidth),
-          dateBucket: state.dateBucket,
+          bandWidth: isNumeric ? Number(state.bandWidth) : 0,
+          dateBucket: isDate ? state.dateBucket : "none",
           transform: state.transform,
           sigma: Number(state.sigma),
           responses: currentResponses(),
@@ -565,11 +646,12 @@
         try {
           const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
           state.lastData = data;
-          renderChart(data);
+          const labelMessage = renderChart(data);
           renderTable(data);
-          const warning = data.warnings?.length ? ` ${data.warnings.join(" ")}` : "";
-          setStatus(`${data.rows.length.toLocaleString()} groups shown.${warning}`);
+          setGroupMeta(`${data.rows.length.toLocaleString()} groups`);
+          setStatus([...(data.warnings || []), labelMessage].filter(Boolean).join(" "));
         } catch (error) {
+          setGroupMeta("Query failed");
           setStatus(error.message, true);
         }
       }
@@ -577,10 +659,15 @@
       function renderChart(data) {
         const labels = data.rows.map((r) => r.x);
         const labelMode = state.labels;
+        const responseTitle = data.responses.map((response) => response.label).join(" / ") || "Response";
+        const xLabelPolicy = getXAxisLabelPolicy(labels);
         const barSeries = {
           name: "N",
           type: "bar",
           yAxisIndex: 1,
+          animation: false,
+          animationDuration: 0,
+          animationDurationUpdate: 0,
           data: data.rows.map((r) => ({
             value: r.volume,
             itemStyle: { color: r.is_tail ? getCss("--tail") : getCss("--bar") },
@@ -592,6 +679,9 @@
           name: response.label,
           type: "line",
           yAxisIndex: 0,
+          animation: false,
+          animationDuration: 0,
+          animationDurationUpdate: 0,
           smooth: false,
           showSymbol: data.rows.length < 250,
           symbolSize: 5,
@@ -605,6 +695,9 @@
             name: "sigma",
             type: "custom",
             yAxisIndex: 0,
+            animation: false,
+            animationDuration: 0,
+            animationDurationUpdate: 0,
             renderItem: function (params, api) {
               const x = api.coord([api.value(0), api.value(1)])[0];
               const low = api.coord([api.value(0), api.value(2)])[1];
@@ -627,19 +720,33 @@
 
         chart.setOption(
           {
+            animation: false,
+            animationDuration: 0,
+            animationDurationUpdate: 0,
+            stateAnimation: { duration: 0 },
             backgroundColor: "transparent",
             color: ["#222222", "#d13f3f", "#2f80ed"],
             tooltip: { trigger: "axis" },
             legend: { top: 8, textStyle: { color: getCss("--text") } },
-            grid: { left: 72, right: 76, top: 64, bottom: labels.length > 60 ? 92 : 52 },
+            grid: { left: 72, right: 76, top: 64, bottom: xLabelPolicy.bottom, containLabel: false },
             xAxis: {
               type: "category",
               data: labels,
-              axisLabel: { color: getCss("--text"), interval: labels.length > 80 ? "auto" : 0, rotate: labels.length > 40 ? 65 : 0, fontSize: 10 },
+              axisLabel: {
+                show: xLabelPolicy.show,
+                color: getCss("--text"),
+                interval: 0,
+                hideOverlap: false,
+                showMinLabel: true,
+                showMaxLabel: true,
+                rotate: xLabelPolicy.rotate,
+                fontSize: xLabelPolicy.fontSize,
+                margin: 8,
+              },
               axisLine: { lineStyle: { color: getCss("--line") } },
             },
             yAxis: [
-              { type: "value", name: "Response", axisLabel: { color: getCss("--text") }, splitLine: { lineStyle: { color: getCss("--line") } } },
+              { type: "value", name: responseTitle, axisLabel: { color: getCss("--text") }, nameTextStyle: { color: getCss("--text"), fontWeight: 600 }, splitLine: { lineStyle: { color: getCss("--line") } } },
               { type: "value", name: "Number of rows", axisLabel: { color: getCss("--text") }, splitLine: { show: false } },
             ],
             dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
@@ -647,6 +754,35 @@
           },
           true,
         );
+        requestAnimationFrame(() => chart.resize());
+        return xLabelPolicy.message;
+      }
+
+      function getXAxisLabelPolicy(labels) {
+        const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label).length), 0);
+        const tooMany = labels.length >= 200;
+        if (tooMany) {
+          return {
+            show: false,
+            rotate: 0,
+            fontSize: 10,
+            bottom: 44,
+            message: `X-axis labels hidden because ${labels.length.toLocaleString()} groups are too dense to show clearly.`,
+          };
+        }
+        const rotate = labels.length > 18 || maxLength > 10 ? 65 : 0;
+        const fontSize = labels.length > 50 ? 8 : 10;
+        const dataZoomSpace = labels.length > 120 ? 36 : 0;
+        const estimatedTextWidth = maxLength * fontSize * 0.5;
+        const rotatedHeight = estimatedTextWidth * Math.sin((rotate * Math.PI) / 180) + fontSize * Math.cos((rotate * Math.PI) / 180);
+        const labelSpace = rotate ? Math.min(140, Math.max(58, Math.ceil(rotatedHeight) + 18)) : 38;
+        return {
+          show: true,
+          rotate,
+          fontSize,
+          bottom: labelSpace + dataZoomSpace,
+          message: "",
+        };
       }
 
       function renderTable(data) {
@@ -691,9 +827,11 @@
           if (state.lastData) renderChart(state.lastData);
         });
         el("reloadBtn").addEventListener("click", async () => {
-          setStatus("Reloading dataset...");
+          setStatus("");
+          setGroupMeta("Reloading...");
           state.schema = await api("/api/reload", { method: "POST" });
           renderFeatures();
+          updateAxisControls();
           refreshChart();
         });
         window.addEventListener("resize", () => chart.resize());
@@ -720,6 +858,7 @@
           el("datasetMeta").textContent = `${path} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
           chooseDefaults();
           renderFeatures();
+          updateAxisControls();
           await refreshChart();
         } catch (error) {
           setStatus(error.message, true);
