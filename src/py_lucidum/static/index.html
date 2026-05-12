@@ -654,6 +654,8 @@
       const BAND_STEPS = makeBandSteps();
       const TABLE_PAGE_SIZE = 1000;
       const LABEL_DENSITY_LIMIT = 200;
+      const RESPONSE_AXIS_PADDING = 0.08;
+      const RESPONSE_AXIS_TARGET_INTERVALS = 15;
 
       const chart = echarts.init(document.getElementById("chart"));
       const el = (id) => document.getElementById(id);
@@ -948,6 +950,7 @@
         const showBarLabels = dataLabelsAllowed && (labelMode === "bar" || labelMode === "all");
         const showLineLabels = dataLabelsAllowed && (labelMode === "line" || labelMode === "all");
         const barLayout = getBarLayout(labels.length);
+        const responseAxis = responseAxisOptions(data);
         const actualColor = getCss("--actual-line");
         const expectedColor = "#d13f3f";
         const responseColors = [actualColor, expectedColor];
@@ -1057,7 +1060,7 @@
               axisLine: { lineStyle: { color: getCss("--line") } },
             },
             yAxis: [
-              { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
+              { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
               { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
             ],
             dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
@@ -1075,6 +1078,66 @@
           ? "X-axis and chart labels"
           : xLabelsHidden ? "X-axis labels" : "Chart labels";
         return `${labelTarget} hidden as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories.`;
+      }
+
+      function responseAxisOptions(data) {
+        return responseAxisBounds(responseAxisExtent(data.rows, data.responses.length)) || {};
+      }
+
+      function responseAxisExtent(rows, responseCount) {
+        let min = Infinity;
+        let max = -Infinity;
+        rows.forEach((row) => {
+          for (let index = 0; index < responseCount; index += 1) {
+            const value = Number(row[`resp${index}`]);
+            if (!Number.isFinite(value)) continue;
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+          }
+        });
+        return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+      }
+
+      function responseAxisSpan(value) {
+        const min = Number(value?.min);
+        const max = Number(value?.max);
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+        if (max > min) return max - min;
+        return Math.max(Math.abs(max), Math.abs(min), 1);
+      }
+
+      function niceAxisStep(span) {
+        if (!Number.isFinite(span) || span <= 0) return 1;
+        const roughStep = span / RESPONSE_AXIS_TARGET_INTERVALS;
+        const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+        const normalized = roughStep / magnitude;
+        const multiplier = [1, 2, 5, 10].find((candidate) => normalized <= candidate) || 10;
+        return multiplier * magnitude;
+      }
+
+      function roundAxisValue(value, step) {
+        if (!Number.isFinite(value)) return value;
+        const precision = Math.min(12, Math.max(0, Math.ceil(-Math.log10(Math.abs(step))) + 3));
+        return Number(value.toFixed(precision));
+      }
+
+      function responseAxisBounds(value) {
+        const min = Number(value?.min);
+        const max = Number(value?.max);
+        const span = responseAxisSpan(value);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || span === null) return null;
+        const paddedMin = min - span * RESPONSE_AXIS_PADDING;
+        const paddedMax = max + span * RESPONSE_AXIS_PADDING;
+        const step = niceAxisStep(paddedMax - paddedMin);
+        let axisMin = Math.floor(paddedMin / step) * step;
+        let axisMax = Math.ceil(paddedMax / step) * step;
+        if (min >= 0) axisMin = Math.max(0, axisMin);
+        if (axisMax <= axisMin) axisMax = axisMin + step;
+        return {
+          min: roundAxisValue(axisMin, step),
+          max: roundAxisValue(axisMax, step),
+          interval: step,
+        };
       }
 
       function getXAxisLabelPolicy(labels) {
