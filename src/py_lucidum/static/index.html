@@ -903,6 +903,9 @@
         const labels = data.rows.map((r) => formatXLabel(r.x, data.x_kind));
         const labelMode = state.labels;
         const xLabelPolicy = getXAxisLabelPolicy(labels);
+        const dataLabelsAllowed = labels.length <= 200;
+        const showBarLabels = dataLabelsAllowed && (labelMode === "bar" || labelMode === "all");
+        const showLineLabels = dataLabelsAllowed && (labelMode === "line" || labelMode === "all");
         const barLayout = getBarLayout(labels.length);
         const actualColor = getCss("--actual-line");
         const expectedColor = "#d13f3f";
@@ -926,7 +929,7 @@
             value: r.volume,
             itemStyle: { color: r.is_tail ? getCss("--tail") : getCss("--bar") },
           })),
-          label: { show: labelMode === "bar" || labelMode === "all", position: "top", fontSize: 10 },
+          label: { show: showBarLabels, position: "top", fontSize: 10, formatter: formatChartLabel },
           barWidth: barLayout.width,
           barMaxWidth: barLayout.maxWidth,
           barCategoryGap: barLayout.categoryGap,
@@ -944,7 +947,7 @@
           lineStyle: { color: responseColors[index] || actualColor },
           itemStyle: { color: responseColors[index] || actualColor },
           data: data.rows.map((r) => r[`resp${index}`]),
-          label: { show: labelMode === "line" || labelMode === "all", fontSize: 10 },
+          label: { show: showLineLabels, fontSize: 10, formatter: formatLineLabel },
         }));
 
         const customSeries = [];
@@ -1022,7 +1025,10 @@
           true,
         );
         requestAnimationFrame(() => chart.resize());
-        return xLabelPolicy.message;
+        const labelMessage = !dataLabelsAllowed && labelMode !== "-"
+          ? `Chart labels hidden because ${labels.length.toLocaleString()} groups are too dense to show clearly.`
+          : "";
+        return [xLabelPolicy.message, labelMessage].filter(Boolean).join(" ");
       }
 
       function getXAxisLabelPolicy(labels) {
@@ -1218,6 +1224,26 @@
         return number.toLocaleString(undefined, {
           minimumFractionDigits: 0,
           maximumFractionDigits,
+        });
+      }
+
+      function formatChartLabel(params) {
+        const value = Array.isArray(params.value) ? params.value[1] : params.value;
+        return formatNumber(value);
+      }
+
+      function formatLineLabel(params) {
+        const value = Array.isArray(params.value) ? params.value[1] : params.value;
+        if (value === null || value === undefined || Number.isNaN(value)) return "";
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        const abs = Math.abs(number);
+        let fractionDigits = 2;
+        if (abs !== 0 && abs < 0.01) fractionDigits = 6;
+        else if (abs < 1) fractionDigits = 4;
+        return number.toLocaleString(undefined, {
+          minimumFractionDigits: fractionDigits,
+          maximumFractionDigits: fractionDigits,
         });
       }
 

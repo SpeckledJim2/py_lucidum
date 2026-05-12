@@ -38,7 +38,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Low-weight grouping supports absolute thresholds and percentage thresholds such as `0.1%` and `1%`. Ordered numeric/date tails are collapsed into low/high tail buckets; low-volume categorical levels are collapsed into “Other”.
 - DuckDB filter expressions can be typed above the chart or loaded from `filter_spec.csv`; filters are applied before aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 - Sigma bars are optional and shown only when two comparable responses are selected. The first response is treated as actual and the second as expected. Error bars are drawn around expected using deterministic hash folds within each x-axis group.
-- Hover values, y-axis values, and table values are formatted with comma separators and a sensible number of decimal places, independent of the underlying raw precision.
+- Hover values, y-axis values, chart labels, and table values are formatted with comma separators and a sensible number of decimal places, independent of the underlying raw precision. Line chart labels keep fixed decimal places, so trailing zeros remain visible. Chart labels are hidden with an overlay note when more than 200 groups are shown.
 - Initial selections are data-agnostic by default: x-axis uses the first dataset column, Actual / line 1 uses the first numeric column, and Expected / line 2 starts as None. CLI options, programmatic app defaults, and URL parameters can override `x`, `actual`, and `expected`.
 - Dataset operations serialize access to the shared DuckDB connection used by the local app process.
 
