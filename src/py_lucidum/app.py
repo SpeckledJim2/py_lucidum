@@ -10,6 +10,16 @@ from .query import Dataset
 
 
 STATIC_DIR = Path(__file__).parent / "static"
+PROJECT_ROOT = Path(__file__).parents[2]
+FAVICON_PATHS = (PROJECT_ROOT / "favicon.ico", STATIC_DIR / "favicon.ico")
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def favicon_media_type(path: Path) -> str:
+    with path.open("rb") as handle:
+        if handle.read(len(PNG_SIGNATURE)) == PNG_SIGNATURE:
+            return "image/png"
+    return "image/x-icon"
 
 
 def create_app(dataset_path: str | Path, token: str | None = None) -> FastAPI:
@@ -29,6 +39,13 @@ def create_app(dataset_path: str | Path, token: str | None = None) -> FastAPI:
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.api_route("/favicon.ico", methods=["GET", "HEAD"])
+    def favicon() -> FileResponse:
+        for path in FAVICON_PATHS:
+            if path.exists():
+                return FileResponse(path, media_type=favicon_media_type(path))
+        raise HTTPException(status_code=404, detail="Favicon not found")
 
     @app.get("/api/schema")
     def schema(request: Request) -> dict[str, Any]:

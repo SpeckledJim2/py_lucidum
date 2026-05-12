@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>py_lucidum</title>
+    <link rel="icon" type="image/png" href="/favicon.ico?v=2" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
     <style>
       :root {
@@ -93,18 +94,8 @@
       .mark {
         width: 28px;
         height: 28px;
-        border-left: 3px solid var(--text);
-        border-bottom: 3px solid var(--text);
-        position: relative;
-      }
-
-      .mark::before {
-        content: "";
-        position: absolute;
-        inset: 5px 1px 2px 5px;
-        border-bottom: 2px solid #ef4444;
-        border-left: 2px solid transparent;
-        transform: skewX(16deg);
+        object-fit: contain;
+        display: block;
       }
 
       .meta {
@@ -388,7 +379,7 @@
   <body>
     <div class="app">
       <header>
-        <div class="brand"><span class="mark"></span><span>py_lucidum</span></div>
+        <div class="brand"><img class="mark" src="/favicon.ico?v=2" alt="" /><span>py_lucidum</span></div>
         <div id="datasetMeta" class="meta">Loading dataset...</div>
         <div class="spacer"></div>
         <div id="groupMeta" class="meta group-meta"></div>
