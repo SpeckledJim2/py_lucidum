@@ -51,7 +51,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Chart requests allow up to 10,000 x-axis groups before backend grouping limits apply.
 - DuckDB filter expressions can be typed above the chart or loaded from `filter_spec.csv`; filters are applied before aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 - Sigma bars are optional and shown only when two comparable responses are selected. The first response is treated as actual and the second as expected. Error bars are drawn around expected using deterministic hash folds within each x-axis group.
-- Hover values, y-axis values, chart labels, and table values are formatted with comma separators and a sensible number of decimal places, independent of the underlying raw precision. Line chart labels keep fixed decimal places, so trailing zeros remain visible. Chart labels are hidden with an overlay note when more than 200 groups are shown.
+- Hover values, y-axis values, chart labels, and table values are formatted with comma separators and a sensible number of decimal places, independent of the underlying raw precision. Line chart labels keep fixed decimal places, so trailing zeros remain visible. Labels are hidden with one combined overlay note when the label density limit is reached.
 - Table output renders directly up to 1,000 rows; larger result sets are paginated client-side in 1,000-row pages to avoid slow scrolling.
 - Initial selections are data-agnostic by default: x-axis uses the first dataset column, Actual / line 1 uses the first numeric column, and Expected / line 2 starts as None. CLI options, programmatic app defaults, and URL parameters can override `x`, `actual`, and `expected`.
 - Dataset operations serialize access to the shared DuckDB connection used by the local app process.
@@ -71,7 +71,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Bars widen for small numbers of x-axis categories while keeping visible spacing between groups.
 - Chart legend order is Actual response, Expected response when selected, then N. Actual is black in light mode and white in dark mode, Expected is red, N uses the bar colour, and grey sigma guides are never listed in the legend.
 - Y-axis tick values are shown without extra axis-title text above the plot area.
-- X-axis labels are always shown below 200 groups, use smaller text above 50 groups, and are hidden with a UI message at 200+ groups.
+- X-axis labels are always shown below the label density limit, use smaller text above 50 groups, and are hidden with a UI message when the limit is reached.
 - Longer rotated labels should remain visible without excessive blank space under the plot.
 - The chart should resize to fill the browser window toward the bottom-right.
 - Histogram, SHAP, feature groups, and model-object loading are out of v1.

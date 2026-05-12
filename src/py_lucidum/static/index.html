@@ -653,6 +653,7 @@
 
       const BAND_STEPS = makeBandSteps();
       const TABLE_PAGE_SIZE = 1000;
+      const LABEL_DENSITY_LIMIT = 200;
 
       const chart = echarts.init(document.getElementById("chart"));
       const el = (id) => document.getElementById(id);
@@ -943,7 +944,7 @@
         const labels = data.rows.map((r) => formatXLabel(r.x, data.x_kind));
         const labelMode = state.labels;
         const xLabelPolicy = getXAxisLabelPolicy(labels);
-        const dataLabelsAllowed = labels.length <= 200;
+        const dataLabelsAllowed = labels.length < LABEL_DENSITY_LIMIT;
         const showBarLabels = dataLabelsAllowed && (labelMode === "bar" || labelMode === "all");
         const showLineLabels = dataLabelsAllowed && (labelMode === "line" || labelMode === "all");
         const barLayout = getBarLayout(labels.length);
@@ -1065,22 +1066,26 @@
           true,
         );
         requestAnimationFrame(() => chart.resize());
-        const labelMessage = !dataLabelsAllowed && labelMode !== "-"
-          ? `Chart labels hidden because ${labels.length.toLocaleString()} groups are too dense to show clearly.`
-          : "";
-        return [xLabelPolicy.message, labelMessage].filter(Boolean).join(" ");
+        return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-");
+      }
+
+      function chartDensityMessage(groupCount, xLabelsHidden, chartLabelsHidden) {
+        if (!xLabelsHidden && !chartLabelsHidden) return "";
+        const labelTarget = xLabelsHidden && chartLabelsHidden
+          ? "X-axis and chart labels"
+          : xLabelsHidden ? "X-axis labels" : "Chart labels";
+        return `${labelTarget} hidden as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories.`;
       }
 
       function getXAxisLabelPolicy(labels) {
         const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label).length), 0);
-        const tooMany = labels.length >= 200;
+        const tooMany = labels.length >= LABEL_DENSITY_LIMIT;
         if (tooMany) {
           return {
             show: false,
             rotate: 0,
             fontSize: 10,
             bottom: 44,
-            message: `X-axis labels hidden because ${labels.length.toLocaleString()} groups are too dense to show clearly.`,
           };
         }
         const rotate = labels.length > 18 || maxLength > 10 ? 65 : 0;
@@ -1094,7 +1099,6 @@
           rotate,
           fontSize,
           bottom: labelSpace + dataZoomSpace,
-          message: "",
         };
       }
 
