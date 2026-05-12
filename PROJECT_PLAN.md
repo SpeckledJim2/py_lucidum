@@ -55,6 +55,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Chart/Table view controls sit before the filter bar; chart-only density messages are shown in the chart's top-right corner instead of consuming filter-bar width.
 - Table view uses compact row spacing to support scanning many grouped rows.
 - Bars widen for small numbers of x-axis categories while keeping visible spacing between groups.
+- Chart legend order is Actual response, Expected response when selected, then N. Actual is black, Expected is red, N uses the bar colour, and grey sigma guides are never listed in the legend.
 - Y-axis tick values are shown without extra axis-title text above the plot area.
 - X-axis labels are always shown below 200 groups, use smaller text above 50 groups, and are hidden with a UI message at 200+ groups.
 - Longer rotated labels should remain visible without excessive blank space under the plot.

@@ -329,8 +329,8 @@
       }
 
       #savedFilterSelect {
-        flex: 0 0 170px;
-        width: 170px;
+        flex: 0 0 250px;
+        min-width: 250px;
       }
 
       .workspace {
@@ -901,10 +901,21 @@
         const labelMode = state.labels;
         const xLabelPolicy = getXAxisLabelPolicy(labels);
         const barLayout = getBarLayout(labels.length);
+        const actualColor = "#222222";
+        const expectedColor = "#d13f3f";
+        const responseColors = [actualColor, expectedColor];
+        const nColor = getCss("--bar");
+        const sigmaColor = "#8a94a6";
+        const legendData = [
+          ...data.responses.map((response) => response.label),
+          { name: "N", icon: "roundRect", itemStyle: { color: nColor, borderColor: nColor } },
+        ];
         const barSeries = {
           name: "N",
           type: "bar",
           yAxisIndex: 1,
+          legendHoverLink: true,
+          itemStyle: { color: nColor },
           animation: false,
           animationDuration: 0,
           animationDurationUpdate: 0,
@@ -927,6 +938,8 @@
           smooth: false,
           showSymbol: data.rows.length < 250,
           symbolSize: 5,
+          lineStyle: { color: responseColors[index] || actualColor },
+          itemStyle: { color: responseColors[index] || actualColor },
           data: data.rows.map((r) => r[`resp${index}`]),
           label: { show: labelMode === "line" || labelMode === "all", fontSize: 10 },
         }));
@@ -937,6 +950,7 @@
             name: "sigma",
             type: "custom",
             yAxisIndex: 0,
+            legendHoverLink: false,
             animation: false,
             animationDuration: 0,
             animationDurationUpdate: 0,
@@ -948,9 +962,9 @@
               return {
                 type: "group",
                 children: [
-                  { type: "line", shape: { x1: x, y1: low, x2: x, y2: high }, style: { stroke: getCss("--accent-2"), lineWidth: 1.5 } },
-                  { type: "line", shape: { x1: x - 4, y1: low, x2: x + 4, y2: low }, style: { stroke: getCss("--accent-2"), lineWidth: 1.5 } },
-                  { type: "line", shape: { x1: x - 4, y1: high, x2: x + 4, y2: high }, style: { stroke: getCss("--accent-2"), lineWidth: 1.5 } },
+                  { type: "line", shape: { x1: x, y1: low, x2: x, y2: high }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
+                  { type: "line", shape: { x1: x - 4, y1: low, x2: x + 4, y2: low }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
+                  { type: "line", shape: { x1: x - 4, y1: high, x2: x + 4, y2: high }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
                 ],
               };
             },
@@ -967,12 +981,17 @@
             animationDurationUpdate: 0,
             stateAnimation: { duration: 0 },
             backgroundColor: "transparent",
-            color: ["#222222", "#d13f3f", "#2f80ed"],
+            color: [actualColor, expectedColor, nColor],
             tooltip: {
               trigger: "axis",
               valueFormatter: (value) => formatNumber(value),
             },
-            legend: { top: 8, textStyle: { color: getCss("--text") } },
+            legend: {
+              top: 8,
+              data: legendData,
+              selectedMode: false,
+              textStyle: { color: getCss("--text") },
+            },
             grid: { left: 72, right: 76, top: 64, bottom: xLabelPolicy.bottom, containLabel: false },
             xAxis: {
               type: "category",

@@ -7,5 +7,5 @@ No claims bonus,Proposer_NCB >= 5
 Home owners,ProposerHomeOwner = 1
 High annual mileage,AnnualMileage >= 20000
 Heavy vans,"""Gross.Weight"" >= 3000"
-Card payments,PaymentType = 'Card'
+PaymentType = 'Annually',PaymentType = 'Annually'
 London postcode area,PostcodeArea = 'LONDON'
