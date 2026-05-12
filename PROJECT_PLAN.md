@@ -30,7 +30,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
   - numerator divided by row count.
   - numerator divided by another numeric denominator, such as claims divided by vehicle years.
 - Response transforms apply after aggregation for display: none, log, exp, logit, zero-centred, and one-scaled. Invalid transform domains should show a user-facing message.
-- Character/categorical x-axis sorting supports original order, alphabetical order, bar volume, and response value. Sort controls are hidden for numeric/date x-axes.
+- Character/categorical x-axis sorting starts alphabetically and also supports bar volume, Actual response value, and Expected response value when line 2 is selected. Sort controls are hidden for numeric/date x-axes.
 - Numeric banding floors x values to the selected band width. Fixed shortcuts include `0.1`, `1`, `5`, and `10`; `<` and `>` step through the 1/2/5 ladder plus the exact useful levels `4`, `7`, and `12`.
 - When an integer x-axis feature has a full-data range below 120, the app chooses initial band width `1`. Otherwise, when an integer or numeric x-axis feature is selected, the app chooses an initial band width from the feature standard deviation over the first 10k rows, rounded down two notches on the 1/2/5 scale.
 - Date/datetime x-axes use calendar buckets: hour, day, week, month, and year. Date bucket controls are only shown for date/datetime features; banding controls are only shown for integer/numeric features.
@@ -79,3 +79,4 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Current frontend is a static ECharts app; a React/Vite frontend can be reconsidered later if UI complexity justifies it.
 - Repeat-query caching is allowed, but no persistent pre-aggregation or materialized cube is used.
 - Files are treated as fixed during a session until the user presses reload.
+- `PROJECT_PLAN.md` should be updated alongside every product or behavior change so it remains the durable source of project context.

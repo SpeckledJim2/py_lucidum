@@ -207,7 +207,7 @@ FROM sample
             x_kind=x_info.kind,
             threshold=str(request.get("lowGroup") or "0"),
         )
-        sorted_rows = sort_rows(grouped_rows, x_info.kind, str(request.get("sort") or "original"))
+        sorted_rows = sort_rows(grouped_rows, x_info.kind, str(request.get("sort") or "alpha"))
         max_groups = int(request.get("maxGroups") or 2000)
         if len(sorted_rows) > max_groups:
             sorted_rows = sorted_rows[:max_groups]
@@ -535,13 +535,13 @@ def combine_rows(rows: list[dict[str, Any]], label: str, responses: list[dict[st
 def sort_rows(rows: list[dict[str, Any]], x_kind: str, sort: str) -> list[dict[str, Any]]:
     if x_kind not in {"categorical"}:
         return sorted(rows, key=lambda r: (r["x_sort"] is None, r["x_sort"]))
-    if sort == "alpha":
-        return sorted(rows, key=lambda r: str(r["x"]).lower())
     if sort == "volume":
         return sorted(rows, key=lambda r: (not r.get("is_tail"), -(r["volume"] or 0), str(r["x"]).lower()))
-    if sort == "response":
+    if sort in {"actual", "response"}:
         return sorted(rows, key=lambda r: (r.get("resp0") is None, -(r.get("resp0") or 0), str(r["x"]).lower()))
-    return sorted(rows, key=lambda r: r.get("original_order") or 0)
+    if sort == "expected":
+        return sorted(rows, key=lambda r: (r.get("resp1") is None, -(r.get("resp1") or 0), str(r["x"]).lower()))
+    return sorted(rows, key=lambda r: str(r["x"]).lower())
 
 
 def apply_transform(

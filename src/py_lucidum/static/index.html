@@ -426,10 +426,10 @@
             <div id="sortControl" class="control">
               <h3>x-axis sort order</h3>
               <div class="segmented" data-control="sort">
-                <button data-value="original" class="active">Original</button>
-                <button data-value="alpha">A-Z</button>
+                <button data-value="alpha" class="active">A-Z</button>
                 <button data-value="volume">Volume</button>
-                <button data-value="response">Response</button>
+                <button data-value="actual">Actual</button>
+                <button id="expectedSortButton" data-value="expected" class="hidden">Expected</button>
               </div>
             </div>
             <div class="control">
@@ -528,7 +528,7 @@
       const state = {
         schema: null,
         x: null,
-        sort: "original",
+        sort: "alpha",
         lowGroup: "0",
         labels: "none",
         bandWidth: "0",
@@ -638,16 +638,20 @@
         const isDate = kind === "date" || kind === "datetime";
         const isNumeric = isNumericKind(kind);
         const isCategorical = kind === "categorical";
+        const hasExpected = Boolean(el("expectedNumerator").value);
         el("sortControl").classList.toggle("hidden", !isCategorical);
+        el("expectedSortButton").classList.toggle("hidden", !hasExpected);
         el("dateControl").classList.toggle("hidden", !isDate);
         el("bandControl").classList.toggle("hidden", !isNumeric);
         if (isNumeric && state.bandFeature !== state.x) {
           state.bandWidth = autoBandWidthForSelectedColumn();
           state.bandFeature = state.x;
         }
-        if (!isCategorical) {
-          state.sort = "original";
-          syncSegmented("sort", "original");
+        if (!isCategorical || (state.sort === "expected" && !hasExpected)) {
+          state.sort = "alpha";
+          syncSegmented("sort", "alpha");
+        } else {
+          syncSegmented("sort", state.sort);
         }
         if (!isDate) {
           state.dateBucket = "none";
