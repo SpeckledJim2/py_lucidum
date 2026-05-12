@@ -15,6 +15,7 @@
         --text: #1f2937;
         --muted: #667085;
         --line: #d7dde7;
+        --actual-line: #222222;
         --accent: #2276d2;
         --accent-2: #12a8c7;
         --bar: #bfeefa;
@@ -31,6 +32,7 @@
         --text: #e5e7eb;
         --muted: #a8b3c7;
         --line: #2c3952;
+        --actual-line: #ffffff;
         --accent: #72b7ff;
         --accent-2: #2dd4bf;
         --bar: #245b73;
@@ -561,8 +563,9 @@
             <button id="tableTab" class="tab">Table</button>
             <div class="filter-bar">
               <span class="filter-label">Filter</span>
-              <input id="filterInput" placeholder="DuckDB WHERE expression" />
               <select id="savedFilterSelect"></select>
+              <span class="filter-label">Filter expression</span>
+              <input id="filterInput" placeholder="DuckDB WHERE expression" />
               <button id="filterApplyBtn" class="ghost">Apply</button>
               <button id="filterClearBtn" class="ghost">Clear</button>
             </div>
@@ -901,7 +904,7 @@
         const labelMode = state.labels;
         const xLabelPolicy = getXAxisLabelPolicy(labels);
         const barLayout = getBarLayout(labels.length);
-        const actualColor = "#222222";
+        const actualColor = getCss("--actual-line");
         const expectedColor = "#d13f3f";
         const responseColors = [actualColor, expectedColor];
         const nColor = getCss("--bar");
@@ -1175,7 +1178,7 @@
         });
         el("savedFilterSelect").addEventListener("change", () => {
           el("filterInput").value = el("savedFilterSelect").value;
-          el("filterInput").focus();
+          applyFilter();
         });
         el("chartTab").addEventListener("click", () => setView("chart"));
         el("tableTab").addEventListener("click", () => setView("table"));

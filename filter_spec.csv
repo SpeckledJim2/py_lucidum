@@ -8,4 +8,4 @@ Home owners,ProposerHomeOwner = 1
 High annual mileage,AnnualMileage >= 20000
 Heavy vans,"""Gross.Weight"" >= 3000"
 PaymentType = 'Annually',PaymentType = 'Annually'
-London postcode area,PostcodeArea = 'LONDON'
+Portsmouth postcode area,PostcodeArea = 'PO'
