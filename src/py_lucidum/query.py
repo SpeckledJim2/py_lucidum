@@ -121,10 +121,14 @@ class Dataset:
         if not numeric:
             self._band_suggestions = {}
             return self._band_suggestions
-        select_sql = ",\n    ".join(
-            f"STDDEV_SAMP(TRY_CAST({quote_ident(col.name)} AS DOUBLE)) AS {quote_ident(col.name)}"
-            for col in numeric
-        )
+        select_parts: list[str] = []
+        aliases: dict[str, tuple[str, str]] = {}
+        for index, col in enumerate(numeric):
+            raw = quote_ident(col.name)
+            std_alias = f"c{index}_std"
+            select_parts.append(f"STDDEV_SAMP(TRY_CAST({raw} AS DOUBLE)) AS {quote_ident(std_alias)}")
+            aliases[std_alias] = (col.name, "std")
+        select_sql = ",\n    ".join(select_parts)
         sql = f"""
 WITH sample AS (
   SELECT * FROM {self.relation_sql()} LIMIT 10000
@@ -134,11 +138,40 @@ SELECT
 FROM sample
 """
         row = self.con.execute(sql).fetchone()
-        names = [description[0] for description in self.con.description]
-        self._band_suggestions = {
-            name: suggested_band_width(value)
-            for name, value in zip(names, row)
-        }
+        metrics: dict[str, dict[str, Any]] = {col.name: {} for col in numeric}
+        for description, value in zip(self.con.description, row):
+            metric = aliases.get(description[0])
+            if metric:
+                name, key = metric
+                metrics[name][key] = value
+        integer_columns = [col for col in numeric if col.kind == "integer"]
+        if integer_columns:
+            range_parts: list[str] = []
+            range_aliases: dict[str, tuple[str, str]] = {}
+            for index, col in enumerate(integer_columns):
+                raw = quote_ident(col.name)
+                min_alias = f"i{index}_min"
+                max_alias = f"i{index}_max"
+                range_parts.append(f"MIN(TRY_CAST({raw} AS BIGINT)) AS {quote_ident(min_alias)}")
+                range_parts.append(f"MAX(TRY_CAST({raw} AS BIGINT)) AS {quote_ident(max_alias)}")
+                range_aliases[min_alias] = (col.name, "min")
+                range_aliases[max_alias] = (col.name, "max")
+            range_sql = f"SELECT {', '.join(range_parts)} FROM {self.relation_sql()}"
+            range_row = self.con.execute(range_sql).fetchone()
+            for description, value in zip(self.con.description, range_row):
+                metric = range_aliases.get(description[0])
+                if metric:
+                    name, key = metric
+                    metrics[name][key] = value
+        suggestions: dict[str, float | int | None] = {}
+        kinds = {col.name: col.kind for col in numeric}
+        for name, values in metrics.items():
+            if kinds[name] == "integer" and values.get("min") is not None and values.get("max") is not None:
+                if values["max"] - values["min"] < 120:
+                    suggestions[name] = 1
+                    continue
+            suggestions[name] = suggested_band_width(values.get("std"))
+        self._band_suggestions = suggestions
         return self._band_suggestions
 
     def column_map(self) -> dict[str, ColumnInfo]:

@@ -31,8 +31,8 @@ The current implementation is a package-first Python app with a FastAPI backend,
   - numerator divided by another numeric denominator, such as claims divided by vehicle years.
 - Response transforms apply after aggregation for display: none, log, exp, logit, zero-centred, and one-scaled. Invalid transform domains should show a user-facing message.
 - Character/categorical x-axis sorting supports original order, alphabetical order, bar volume, and response value. Sort controls are hidden for numeric/date x-axes.
-- Numeric banding floors x values to the selected band width. Fixed shortcuts include `0.1`, `1`, `5`, and `10`; `<` and `>` step through the 1/2/5 sequence such as `1 -> 2 -> 5 -> 10 -> 20 -> 50 -> 100`.
-- When a numeric x-axis feature is selected, the app chooses an initial band width from the feature standard deviation over the first 10k rows, rounded down two notches on the 1/2/5 scale.
+- Numeric banding floors x values to the selected band width. Fixed shortcuts include `0.1`, `1`, `5`, and `10`; `<` and `>` step through the 1/2/5 ladder plus the exact useful levels `4`, `7`, and `12`.
+- When an integer x-axis feature has a full-data range below 120, the app chooses initial band width `1`. Otherwise, when an integer or numeric x-axis feature is selected, the app chooses an initial band width from the feature standard deviation over the first 10k rows, rounded down two notches on the 1/2/5 scale.
 - Date/datetime x-axes use calendar buckets: hour, day, week, month, and year. Date bucket controls are only shown for date/datetime features; banding controls are only shown for integer/numeric features.
 - Low-weight grouping supports absolute thresholds and percentage thresholds such as `0.1%` and `1%`. Ordered numeric/date tails are collapsed into low/high tail buckets; low-volume categorical levels are collapsed into “Other”.
 - Sigma bars are optional and shown only when two comparable responses are selected. The first response is treated as actual and the second as expected. Error bars are drawn around expected using deterministic hash folds within each x-axis group.
@@ -48,6 +48,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Response controls sit above the x-axis feature list because response selection is usually the first choice in the workflow.
 - Table view uses compact row spacing to support scanning many grouped rows.
 - Bars widen for small numbers of x-axis categories while keeping visible spacing between groups.
+- Y-axis tick values are shown without extra axis-title text above the plot area.
 - X-axis labels are always shown below 200 groups, use smaller text above 50 groups, and are hidden with a UI message at 200+ groups.
 - Longer rotated labels should remain visible without excessive blank space under the plot.
 - The chart should resize to fill the browser window toward the bottom-right.

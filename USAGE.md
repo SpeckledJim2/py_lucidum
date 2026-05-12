@@ -30,6 +30,7 @@ Open http://127.0.0.1:8000/?token=...
 ```
 
 Open that URL in the browser. Stop the server with `Ctrl+C` in the terminal.
+The same printed URL can also be opened in the Positron Viewer pane.
 
 Useful options:
 
@@ -87,6 +88,8 @@ http://127.0.0.1:8000/?token=dev-token
 - CSV files still work, for example `.venv/bin/lucidum vans.csv --port 8000`.
 - The local `vans.csv` and `vans.parquet` files are ignored by `.gitignore`.
 - The current prototype identifies integer columns separately from continuous numeric columns in the sidebar.
+- Integer features with a full-data range below 120 start with banding `1`; other integer/numeric features use the automatic standard-deviation based suggestion.
+- The `<` and `>` banding controls include practical intermediate values such as `4`, `7`, and `12`.
 - Table view is intentionally compact so grouped results can be scanned without excessive row spacing.
 
 ## Verification

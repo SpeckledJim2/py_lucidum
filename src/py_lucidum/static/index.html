@@ -513,7 +513,18 @@
     </div>
 
     <script>
-      const token = new URLSearchParams(location.search).get("token") || "";
+      function tokenFromLocation() {
+        const standardToken = new URLSearchParams(location.search).get("token");
+        if (standardToken) return standardToken;
+        const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
+        try {
+          return new URLSearchParams(decodeURIComponent(rawSearch)).get("token") || "";
+        } catch (_) {
+          return "";
+        }
+      }
+
+      const token = tokenFromLocation();
       const state = {
         schema: null,
         x: null,
@@ -566,6 +577,7 @@
           const multiplier = 10 ** exponent;
           steps.push(1 * multiplier, 2 * multiplier, 5 * multiplier);
         }
+        steps.push(4, 7, 12);
         return [...new Set(steps)].sort((a, b) => a - b);
       }
 
@@ -754,7 +766,6 @@
       function renderChart(data) {
         const labels = data.rows.map((r) => formatXLabel(r.x, data.x_kind));
         const labelMode = state.labels;
-        const responseTitle = data.responses.map((response) => response.label).join(" / ") || "Response";
         const xLabelPolicy = getXAxisLabelPolicy(labels);
         const barLayout = getBarLayout(labels.length);
         const barSeries = {
@@ -847,8 +858,8 @@
               axisLine: { lineStyle: { color: getCss("--line") } },
             },
             yAxis: [
-              { type: "value", name: responseTitle, axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, nameTextStyle: { color: getCss("--text"), fontWeight: 600 }, splitLine: { lineStyle: { color: getCss("--line") } } },
-              { type: "value", name: "Number of rows", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
+              { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
+              { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
             ],
             dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
             series: [barSeries, ...lineSeries, ...customSeries],
