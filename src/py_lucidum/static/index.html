@@ -250,6 +250,10 @@
         font-size: 12px;
       }
 
+      .metric-value {
+        color: var(--muted);
+      }
+
       .toolbar {
         display: flex;
         gap: 8px;
@@ -489,14 +493,13 @@
       <div class="shell">
         <aside>
           <section class="section">
-            <h2>Response lines</h2>
             <div class="metric-row">
-              <div class="metric-title">Actual / line 1</div>
+              <div id="actualMetricTitle" class="metric-title">Actual</div>
               <select id="actualNumerator"></select>
               <select id="actualDenominator"></select>
             </div>
             <div class="metric-row">
-              <div class="metric-title">Expected / line 2</div>
+              <div id="expectedMetricTitle" class="metric-title">Expected</div>
               <select id="expectedNumerator"></select>
               <select id="expectedDenominator"></select>
             </div>
@@ -926,6 +929,7 @@
           const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
           state.lastData = data;
           state.tablePage = 1;
+          updateMetricTitles(data);
           const labelMessage = renderChart(data);
           renderTable(data);
           const filteredRows = data.filtered_row_count ?? data.row_count;
@@ -1078,6 +1082,23 @@
           ? "X-axis and chart labels"
           : xLabelsHidden ? "X-axis labels" : "Chart labels";
         return `${labelTarget} hidden as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories.`;
+      }
+
+      function updateMetricTitles(data) {
+        const summaries = data.response_summaries || [];
+        renderMetricTitle(el("actualMetricTitle"), "Actual", summaries[0]?.value);
+        renderMetricTitle(el("expectedMetricTitle"), "Expected", summaries[1]?.value);
+      }
+
+      function renderMetricTitle(target, label, value) {
+        const formatted = formatLineValue(value);
+        target.textContent = label;
+        if (!formatted) return;
+        target.append(" ");
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "metric-value";
+        valueSpan.textContent = formatted;
+        target.append(valueSpan);
       }
 
       function responseAxisOptions(data) {
@@ -1364,6 +1385,10 @@
 
       function formatLineLabel(params) {
         const value = Array.isArray(params.value) ? params.value[1] : params.value;
+        return formatLineValue(value);
+      }
+
+      function formatLineValue(value) {
         if (value === null || value === undefined || Number.isNaN(value)) return "";
         const number = Number(value);
         if (!Number.isFinite(number)) return "";

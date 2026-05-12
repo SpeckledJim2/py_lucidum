@@ -26,6 +26,7 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         include_sigma = sigma_multiplier > 0 and len(responses) >= 2
         row_count = dataset.row_count()
         filtered_row_count = dataset.filtered_row_count(filter_sql)
+        response_summaries = response_summary(dataset, responses, filter_sql)
         sql = build_chart_sql(dataset.relation_sql(), x_sql, responses, include_sigma, filter_sql)
         raw_rows = [
             dict(zip([d[0] for d in dataset.con.description], row))
@@ -57,6 +58,7 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
                 {"label": r["label"], "numerator": r["numerator"], "denominator": r["denominator"]}
                 for r in responses
             ],
+            "response_summaries": response_summaries,
             "rows": display_rows,
             "warnings": warnings,
         }
@@ -239,6 +241,55 @@ SELECT
     agg_values.*{sigma_output}
 FROM agg_values
 {sigma_join}
+	"""
+
+
+def response_summary(dataset: Dataset, responses: list[dict[str, str | None]], filter_sql: str = "") -> list[dict[str, Any]]:
+    if not responses:
+        return []
+    sql = build_response_summary_sql(dataset.relation_sql(), responses, filter_sql)
+    cursor = dataset.con.execute(sql)
+    fetched = cursor.fetchone()
+    row = dict(zip([d[0] for d in cursor.description], fetched or []))
+    return [
+        {
+            "label": response["label"],
+            "value": json_number(row.get(f"resp{index}")),
+            "numerator": json_number(row.get(f"resp{index}_num")),
+            "denominator": json_number(row.get(f"resp{index}_den")),
+        }
+        for index, response in enumerate(responses)
+    ]
+
+
+def build_response_summary_sql(
+    relation: str,
+    responses: list[dict[str, str | None]],
+    filter_sql: str = "",
+) -> str:
+    metric_selects: list[str] = []
+    value_selects: list[str] = []
+    for index, response in enumerate(responses):
+        num_expr, den_expr, value_expr = response_parts(response, index)
+        metric_selects.extend([num_expr, den_expr])
+        value_selects.append(value_expr)
+
+    metric_sql = ",\n    ".join(metric_selects)
+    value_sql = ",\n    ".join(value_selects)
+    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    return f"""
+WITH base AS (
+  SELECT * FROM {relation}{where_sql}
+),
+summary AS (
+  SELECT
+    {metric_sql}
+  FROM base
+)
+SELECT
+    *,
+    {value_sql}
+FROM summary
 """
 
 
@@ -418,6 +469,7 @@ __all__ = [
     "apply_low_weight_grouping",
     "apply_transform",
     "build_chart_sql",
+    "build_response_summary_sql",
     "build_x_sql",
     "chart",
     "combine_rows",
@@ -425,6 +477,7 @@ __all__ = [
     "normalise_row",
     "parse_group_threshold",
     "response_parts",
+    "response_summary",
     "sort_rows",
     "transform_value",
 ]

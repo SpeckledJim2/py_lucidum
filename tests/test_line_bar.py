@@ -65,6 +65,12 @@ class LineBarToolTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["volume"], 2)
         self.assertEqual(result["rows"][0]["resp0"], 350)
         self.assertEqual(result["rows"][0]["resp1"], 350)
+        self.assertEqual(result["response_summaries"][0]["label"], "Actual")
+        self.assertEqual(result["response_summaries"][0]["value"], 300)
+        self.assertEqual(result["response_summaries"][0]["numerator"], 900)
+        self.assertEqual(result["response_summaries"][0]["denominator"], 3)
+        self.assertEqual(result["response_summaries"][1]["label"], "Expected")
+        self.assertAlmostEqual(result["response_summaries"][1]["value"], 910 / 3)
 
     def test_chart_accepts_string_date_and_quoted_column_filters(self) -> None:
         dataset = Dataset(self.data_path)
