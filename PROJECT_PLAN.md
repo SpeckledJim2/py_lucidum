@@ -61,7 +61,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - The R Lucidum line-and-bar tool is product inspiration, but the Python app should continue toward a cleaner, denser browser UI.
 - The chart is the focus: controls should stay compact, avoid unnecessary wrapping, and preserve vertical space.
 - Dark mode is supported.
-- The browser tab icon and in-app header mark are served from the project `favicon.ico`, with PNG favicon content supported and packaging configured to include it under the app static assets.
+- The browser tab icon and in-app header mark are served from the project `favicon.ico`, with PNG favicon content supported and packaging configured to include it under the app static assets. Favicon references include a cache-busting query string. The current favicon uses a point-up blue hexagon, centred white `lucidum` wordmark, and surrounding gold stars that avoid overlapping the wordmark. The in-page header mark is displayed at 42px for readability while the header bar height remains fixed.
 - Chart animations are disabled so interactions update as fast as possible.
 - The sidebar is resizable so users can trade space between long column names and the chart.
 - Response controls sit above the x-axis feature list because response selection is usually the first choice in the workflow.
