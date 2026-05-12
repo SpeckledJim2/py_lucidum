@@ -40,6 +40,7 @@ Useful options:
 .venv/bin/lucidum vans.parquet --no-token
 .venv/bin/lucidum vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
 .venv/bin/lucidum vans.parquet --filters filter_spec.csv
+.venv/bin/lucidum vans.parquet --tools line-bar
 ```
 
 - `--open` asks Python to open the generated URL in your browser.
@@ -47,6 +48,7 @@ Useful options:
 - `--no-token` is convenient for local-only testing and makes API requests work without the generated query-string token.
 - `--x`, `--actual`, and `--expected` set the initial x-axis feature, Actual / line 1 feature, and Expected / line 2 feature.
 - `--filters` sets the saved-filter CSV path. If omitted, the app loads `./filter_spec.csv` from the working directory when it exists.
+- `--tools` selects which tool components to enable. The implemented tool today is `line-bar`; this is also the default when `--tools` is omitted.
 - Without explicit defaults, the app starts with the first dataset column on the x-axis, the first numeric column as Actual / line 1, and no Expected / line 2.
 - URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=YoungestDriverAge&actual=AvgPrice1_5&expected=glm_prediction`.
 
@@ -69,6 +71,12 @@ py_lucidum.serve("vans.parquet", port=8000, open_browser=True)
 ```
 
 This call starts the Uvicorn server and blocks until the server is stopped.
+
+The line-and-bar chart can also be launched explicitly:
+
+```python
+py_lucidum.serve_line_bar("vans.parquet", port=8000, open_browser=True)
+```
 
 ## Launch With Uvicorn Programmatically
 
@@ -96,8 +104,31 @@ app = create_app(
     token="dev-token",
     defaults={"x": "YoungestDriverAge", "actual": "AvgPrice1_5", "expected": "glm_prediction"},
     filters_path="filter_spec.csv",
+    tools=["line_bar"],
 )
 ```
+
+## Tool Structure
+
+`py_lucidum` is organised as a shared workbench plus independently registered tools:
+
+```text
+py_lucidum.core                 shared DuckDB dataset, schema, filter, and SQL helpers
+py_lucidum.app                  FastAPI app factory and shared app context
+py_lucidum.tools.line_bar       implemented line-and-bar chart tool
+py_lucidum.tools.glm            placeholder package for GLM building
+py_lucidum.tools.gbm            placeholder package for GBM building
+py_lucidum.tools.uk_map         placeholder package for UK mapping
+```
+
+The current browser UI still opens the line-and-bar chart first. Internally, chart requests are served by the line-and-bar tool. Both endpoints are available:
+
+```text
+POST /api/chart
+POST /api/line-bar/chart
+```
+
+`/api/chart` is retained for compatibility with the existing frontend. New tool-specific integrations should prefer the namespaced endpoint.
 
 ## Filters
 
@@ -136,6 +167,12 @@ Heavy vans,"""Gross.Weight"" >= 3000"
 
 ## Verification
 
+Run the line-and-bar backend tests:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```
+
 These launch paths are expected to work from the project root when `vans.parquet` exists:
 
 ```bash
@@ -145,6 +182,7 @@ These launch paths are expected to work from the project root when `vans.parquet
 .venv/bin/lucidum vans.parquet --no-token
 .venv/bin/lucidum vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
 .venv/bin/lucidum vans.parquet --filters filter_spec.csv
+.venv/bin/lucidum vans.parquet --tools line-bar
 .venv/bin/python -m py_lucidum vans.parquet --port 8000
 ```
 

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "py-lucidum"
 version = "0.1.0"
-description = "Interactive line and bar charts for local CSV and Parquet files."
+description = "Interactive data exploration workbench for local CSV and Parquet files."
 readme = "PROJECT_PLAN.md"
 requires-python = ">=3.9"
 dependencies = [

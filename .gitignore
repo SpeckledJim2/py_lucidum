@@ -15,3 +15,7 @@ build/
 
 # OS/editor metadata
 .DS_Store
+
+# Generated README previews
+README.html
+README_files/

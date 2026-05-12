@@ -1,19 +1,30 @@
 from __future__ import annotations
 
-import csv
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from .query import Dataset
+from py_lucidum.core import Dataset, load_saved_filters
+
+from .context import AppContext
 
 
-STATIC_DIR = Path(__file__).parent / "static"
-PROJECT_ROOT = Path(__file__).parents[2]
+PACKAGE_ROOT = Path(__file__).parents[1]
+PROJECT_ROOT = Path(__file__).parents[3]
+STATIC_DIR = PACKAGE_ROOT / "static"
 FAVICON_PATHS = (PROJECT_ROOT / "favicon.ico", STATIC_DIR / "favicon.ico")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+TOOL_ALIASES = {
+    "line-bar": "line_bar",
+    "line_bar": "line_bar",
+    "linebar": "line_bar",
+}
+TOOL_METADATA = {
+    "line_bar": {"id": "line_bar", "label": "Line and bar chart"},
+}
 
 
 def favicon_media_type(path: Path) -> str:
@@ -23,27 +34,29 @@ def favicon_media_type(path: Path) -> str:
     return "image/x-icon"
 
 
-def resolve_filters_path(filters_path: str | Path | None) -> Path:
-    return Path(filters_path).expanduser().resolve() if filters_path else (Path.cwd() / "filter_spec.csv").resolve()
+def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
+    if tools is None:
+        requested = ["line_bar"]
+    elif isinstance(tools, str):
+        requested = [part.strip() for part in tools.split(",") if part.strip()]
+    else:
+        requested = [str(part).strip() for part in tools if str(part).strip()]
+    if not requested:
+        requested = ["line_bar"]
+
+    enabled: list[str] = []
+    for name in requested:
+        canonical = TOOL_ALIASES.get(name.lower())
+        if not canonical:
+            supported = ", ".join(sorted(TOOL_ALIASES))
+            raise ValueError(f"Unknown tool '{name}'. Supported tools: {supported}")
+        if canonical not in enabled:
+            enabled.append(canonical)
+    return enabled
 
 
-def load_saved_filters(filters_path: str | Path | None) -> list[dict[str, str]]:
-    path = resolve_filters_path(filters_path)
-    if not path.exists():
-        if filters_path:
-            raise FileNotFoundError(f"Filter specification file does not exist: {path}")
-        return []
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames != ["name", "expression"]:
-            raise ValueError("filter_spec.csv must have exactly these columns: name,expression")
-        filters: list[dict[str, str]] = []
-        for row in reader:
-            name = str(row.get("name") or "").strip()
-            expression = str(row.get("expression") or "").strip()
-            if name and expression:
-                filters.append({"name": name, "expression": expression})
-        return filters
+def tool_payload(enabled_tools: Sequence[str]) -> list[dict[str, str]]:
+    return [TOOL_METADATA[tool] for tool in enabled_tools]
 
 
 def create_app(
@@ -51,13 +64,16 @@ def create_app(
     token: str | None = None,
     defaults: dict[str, str | None] | None = None,
     filters_path: str | Path | None = None,
+    tools: str | Sequence[str] | None = None,
 ) -> FastAPI:
+    enabled_tools = normalise_tools(tools)
     dataset = Dataset(dataset_path)
     app = FastAPI(title="py_lucidum")
     app.state.dataset = dataset
     app.state.token = token
     app.state.filters_path = filters_path
     app.state.saved_filters = load_saved_filters(filters_path)
+    app.state.enabled_tools = enabled_tools
     app.state.defaults = {
         key: value
         for key, value in (defaults or {}).items()
@@ -71,6 +87,13 @@ def create_app(
         supplied = request.headers.get("x-lucidum-token") or request.query_params.get("token")
         if supplied != expected:
             raise HTTPException(status_code=401, detail="Invalid or missing app token")
+
+    def schema_payload() -> dict[str, Any]:
+        payload = dict(app.state.dataset.schema())
+        payload["defaults"] = app.state.defaults
+        payload["filters"] = app.state.saved_filters
+        payload["tools"] = tool_payload(app.state.enabled_tools)
+        return payload
 
     @app.get("/")
     def index() -> FileResponse:
@@ -86,28 +109,19 @@ def create_app(
     @app.get("/api/schema")
     def schema(request: Request) -> dict[str, Any]:
         check_token(request)
-        payload = dict(app.state.dataset.schema())
-        payload["defaults"] = app.state.defaults
-        payload["filters"] = app.state.saved_filters
-        return payload
-
-    @app.post("/api/chart")
-    async def chart(request: Request) -> dict[str, Any]:
-        check_token(request)
-        payload = await request.json()
-        try:
-            return app.state.dataset.chart(payload)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return schema_payload()
 
     @app.post("/api/reload")
     def reload_dataset(request: Request) -> dict[str, Any]:
         check_token(request)
         app.state.dataset.reload()
         app.state.saved_filters = load_saved_filters(app.state.filters_path)
-        payload = dict(app.state.dataset.schema())
-        payload["defaults"] = app.state.defaults
-        payload["filters"] = app.state.saved_filters
-        return payload
+        return schema_payload()
+
+    context = AppContext(dataset=dataset, check_token=check_token)
+    if "line_bar" in enabled_tools:
+        from py_lucidum.tools.line_bar import register as register_line_bar
+
+        register_line_bar(app, context)
 
     return app

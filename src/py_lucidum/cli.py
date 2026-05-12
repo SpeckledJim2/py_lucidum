@@ -4,6 +4,7 @@ import argparse
 import secrets
 import socket
 import webbrowser
+from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -28,11 +29,12 @@ def serve(
     actual: str | None = None,
     expected: str | None = None,
     filters: str | Path | None = None,
+    tools: str | Sequence[str] | None = None,
 ) -> str:
     selected_port = port or find_free_port()
     selected_token = token if token is not None else secrets.token_urlsafe(18)
     defaults = {"x": x, "actual": actual, "expected": expected}
-    app = create_app(path, token=selected_token, defaults=defaults, filters_path=filters)
+    app = create_app(path, token=selected_token, defaults=defaults, filters_path=filters, tools=tools)
     url = f"http://{host}:{selected_port}/"
     params = {key: value for key, value in defaults.items() if value}
     if selected_token:
@@ -47,6 +49,31 @@ def serve(
     return url
 
 
+def serve_line_bar(
+    path: str | Path,
+    host: str = "127.0.0.1",
+    port: int | None = None,
+    token: str | None = None,
+    open_browser: bool = False,
+    x: str | None = None,
+    actual: str | None = None,
+    expected: str | None = None,
+    filters: str | Path | None = None,
+) -> str:
+    return serve(
+        path=path,
+        host=host,
+        port=port,
+        token=token,
+        open_browser=open_browser,
+        x=x,
+        actual=actual,
+        expected=expected,
+        filters=filters,
+        tools=["line_bar"],
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Launch py_lucidum for a local CSV or Parquet file.")
     parser.add_argument("path", help="Path to a CSV or Parquet file")
@@ -58,6 +85,7 @@ def main() -> None:
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
     parser.add_argument("--filters", default=None, help="Path to filter_spec.csv. Defaults to ./filter_spec.csv when present.")
+    parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Currently supports line-bar.")
     args = parser.parse_args()
     serve(
         path=args.path,
@@ -69,4 +97,5 @@ def main() -> None:
         actual=args.actual,
         expected=args.expected,
         filters=args.filters,
+        tools=args.tools,
     )
