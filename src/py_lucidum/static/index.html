@@ -365,8 +365,17 @@
       }
 
       .table-wrap {
-        overflow: auto;
+        display: flex;
+        flex-direction: column;
         height: 100%;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .table-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
       }
 
       .table-wrap table {
@@ -408,6 +417,34 @@
 
       .table-wrap td:first-child {
         z-index: 1;
+      }
+
+      .table-pagination {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        flex: 0 0 auto;
+        border-top: 1px solid var(--line);
+        padding: 7px 0 0;
+        margin-top: 7px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .table-pagination button {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        border-radius: 5px;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+
+      .table-pagination button:disabled {
+        color: var(--muted);
+        cursor: default;
+        opacity: 0.55;
       }
 
       .status {
@@ -610,10 +647,12 @@
         featureSort: "original",
         activeFilter: "",
         lastData: null,
+        tablePage: 1,
         bandFeature: null,
       };
 
       const BAND_STEPS = makeBandSteps();
+      const TABLE_PAGE_SIZE = 1000;
 
       const chart = echarts.init(document.getElementById("chart"));
       const el = (id) => document.getElementById(id);
@@ -878,11 +917,12 @@
           sigma: Number(state.sigma),
           filter: state.activeFilter,
           responses: currentResponses(),
-          maxGroups: 2000,
+          maxGroups: 10000,
         };
         try {
           const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
           state.lastData = data;
+          state.tablePage = 1;
           const labelMessage = renderChart(data);
           renderTable(data);
           const filteredRows = data.filtered_row_count ?? data.row_count;
@@ -1076,13 +1116,36 @@
 
       function renderTable(data) {
         const responseHeaders = data.responses.map((r, i) => `<th>${escapeHtml(r.label)}</th>`).join("");
-        const rows = data.rows
+        const needsPagination = data.rows.length > TABLE_PAGE_SIZE;
+        const pageCount = needsPagination ? Math.ceil(data.rows.length / TABLE_PAGE_SIZE) : 1;
+        state.tablePage = Math.min(Math.max(state.tablePage, 1), pageCount);
+        const start = needsPagination ? (state.tablePage - 1) * TABLE_PAGE_SIZE : 0;
+        const pageRows = needsPagination ? data.rows.slice(start, start + TABLE_PAGE_SIZE) : data.rows;
+        const rows = pageRows
           .map((r) => {
             const values = data.responses.map((_, i) => `<td>${formatNumber(r[`resp${i}`])}</td>`).join("");
             return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
           })
           .join("");
-        el("tableWrap").innerHTML = `<table><thead><tr><th>${escapeHtml(data.x)}</th><th>N</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody></table>`;
+        const pager = needsPagination
+          ? `<div class="table-pagination">
+              <span>${(start + 1).toLocaleString()}-${(start + pageRows.length).toLocaleString()} of ${data.rows.length.toLocaleString()} rows</span>
+              <button id="tablePrevBtn" type="button"${state.tablePage === 1 ? " disabled" : ""}>Previous</button>
+              <span>Page ${state.tablePage.toLocaleString()} of ${pageCount.toLocaleString()}</span>
+              <button id="tableNextBtn" type="button"${state.tablePage === pageCount ? " disabled" : ""}>Next</button>
+            </div>`
+          : "";
+        el("tableWrap").innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>N</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody></table></div>${pager}`;
+        if (needsPagination) {
+          el("tablePrevBtn").addEventListener("click", () => {
+            state.tablePage -= 1;
+            renderTable(data);
+          });
+          el("tableNextBtn").addEventListener("click", () => {
+            state.tablePage += 1;
+            renderTable(data);
+          });
+        }
       }
 
       function setView(view) {
