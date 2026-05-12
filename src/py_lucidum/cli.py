@@ -5,6 +5,7 @@ import secrets
 import socket
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlencode
 
 import uvicorn
 
@@ -23,13 +24,20 @@ def serve(
     port: int | None = None,
     token: str | None = None,
     open_browser: bool = False,
+    x: str | None = None,
+    actual: str | None = None,
+    expected: str | None = None,
 ) -> str:
     selected_port = port or find_free_port()
     selected_token = token if token is not None else secrets.token_urlsafe(18)
-    app = create_app(path, token=selected_token)
+    defaults = {"x": x, "actual": actual, "expected": expected}
+    app = create_app(path, token=selected_token, defaults=defaults)
     url = f"http://{host}:{selected_port}/"
+    params = {key: value for key, value in defaults.items() if value}
     if selected_token:
-        url = f"{url}?token={selected_token}"
+        params = {"token": selected_token, **params}
+    if params:
+        url = f"{url}?{urlencode(params)}"
     print(f"py_lucidum serving {Path(path).resolve()}", flush=True)
     print(f"Open {url}", flush=True)
     if open_browser:
@@ -45,6 +53,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=None, help="Bind port. Defaults to a free local port.")
     parser.add_argument("--no-token", action="store_true", help="Disable the token in the URL and API requests")
     parser.add_argument("--open", action="store_true", help="Open the app in the default browser")
+    parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
+    parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
+    parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
     args = parser.parse_args()
     serve(
         path=args.path,
@@ -52,4 +63,7 @@ def main() -> None:
         port=args.port,
         token="" if args.no_token else secrets.token_urlsafe(18),
         open_browser=args.open,
+        x=args.x,
+        actual=args.actual,
+        expected=args.expected,
     )

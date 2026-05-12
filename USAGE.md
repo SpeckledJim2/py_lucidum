@@ -38,11 +38,15 @@ Useful options:
 .venv/bin/lucidum vans.parquet --open --port 8000
 .venv/bin/lucidum vans.parquet --host 0.0.0.0 --port 8000
 .venv/bin/lucidum vans.parquet --no-token
+.venv/bin/lucidum vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
 ```
 
 - `--open` asks Python to open the generated URL in your browser.
 - `--host 0.0.0.0` is useful for internal server/LAN testing. Keep the generated token enabled unless you have another access control layer.
 - `--no-token` is convenient for local-only testing and makes API requests work without the generated query-string token.
+- `--x`, `--actual`, and `--expected` set the initial x-axis feature, Actual / line 1 feature, and Expected / line 2 feature.
+- Without explicit defaults, the app starts with the first dataset column on the x-axis, the first numeric column as Actual / line 1, and no Expected / line 2.
+- URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=YoungestDriverAge&actual=AvgPrice1_5&expected=glm_prediction`.
 
 ## Launch As A Python Module
 
@@ -82,12 +86,23 @@ Then open:
 http://127.0.0.1:8000/?token=dev-token
 ```
 
+Initial selections can be supplied programmatically:
+
+```python
+app = create_app(
+    "vans.parquet",
+    token="dev-token",
+    defaults={"x": "YoungestDriverAge", "actual": "AvgPrice1_5", "expected": "glm_prediction"},
+)
+```
+
 ## Notes
 
 - Prefer Parquet for normal work. It is much faster than CSV in the current DuckDB backend.
 - CSV files still work, for example `.venv/bin/lucidum vans.csv --port 8000`.
 - The local `vans.csv` and `vans.parquet` files are ignored by `.gitignore`.
 - The current prototype identifies integer columns separately from continuous numeric columns in the sidebar.
+- Initial x-axis and response selections are data-agnostic by default and can be overridden with CLI options or URL parameters.
 - Integer features with a full-data range below 120 start with banding `1`; other integer/numeric features use the automatic standard-deviation based suggestion.
 - The `<` and `>` banding controls include practical intermediate values such as `4`, `7`, and `12`.
 - Table view is intentionally compact so grouped results can be scanned without excessive row spacing.
@@ -101,6 +116,7 @@ These launch paths are expected to work from the project root when `vans.parquet
 .venv/bin/lucidum vans.parquet --open --port 8000
 .venv/bin/lucidum vans.parquet --host 0.0.0.0 --port 8000
 .venv/bin/lucidum vans.parquet --no-token
+.venv/bin/lucidum vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
 .venv/bin/python -m py_lucidum vans.parquet --port 8000
 ```
 

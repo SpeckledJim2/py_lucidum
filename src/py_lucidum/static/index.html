@@ -161,6 +161,24 @@
         font-size: 13px;
       }
 
+      .section-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+
+      .section-title-row h2 {
+        margin: 0;
+      }
+
+      .section-title-row .segmented button {
+        min-height: 22px;
+        padding: 1px 6px;
+        font-size: 11px;
+      }
+
       .search,
       select,
       input[type="number"] {
@@ -404,7 +422,13 @@
           </section>
 
           <section class="section feature-section">
-            <h2>x-axis feature</h2>
+            <div class="section-title-row">
+              <h2>x-axis feature</h2>
+              <div class="segmented" data-control="featureSort">
+                <button data-value="original" class="active">Original</button>
+                <button data-value="alpha">A-Z</button>
+              </div>
+            </div>
             <input id="featureSearch" class="search" placeholder="search" />
             <div id="featureList" class="feature-list"></div>
           </section>
@@ -504,18 +528,21 @@
     </div>
 
     <script>
-      function tokenFromLocation() {
-        const standardToken = new URLSearchParams(location.search).get("token");
-        if (standardToken) return standardToken;
+      function paramsFromLocation() {
+        const standardParams = new URLSearchParams(location.search);
+        const expectedKeys = ["token", "x", "actual", "expected"];
+        if (expectedKeys.some((key) => standardParams.has(key))) return standardParams;
         const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
         try {
-          return new URLSearchParams(decodeURIComponent(rawSearch)).get("token") || "";
+          const decodedParams = new URLSearchParams(decodeURIComponent(rawSearch));
+          return expectedKeys.some((key) => decodedParams.has(key)) ? decodedParams : standardParams;
         } catch (_) {
-          return "";
+          return standardParams;
         }
       }
 
-      const token = tokenFromLocation();
+      const locationParams = paramsFromLocation();
+      const token = locationParams.get("token") || "";
       const state = {
         schema: null,
         x: null,
@@ -527,6 +554,7 @@
         transform: "none",
         sigma: "0",
         view: "chart",
+        featureSort: "original",
         lastData: null,
         bandFeature: null,
       };
@@ -675,15 +703,29 @@
         }
       }
 
+      function columnExists(name) {
+        return Boolean(name && state.schema.columns.some((col) => col.name === name));
+      }
+
+      function numericColumnExists(name) {
+        return Boolean(name && numericColumns().some((col) => col.name === name));
+      }
+
+      function requestedDefault(name) {
+        return locationParams.get(name) || state.schema.defaults?.[name] || "";
+      }
+
       function chooseDefaults() {
-        const names = state.schema.columns.map((c) => c.name);
-        state.x = names.includes("YoungestDriverAge") ? "YoungestDriverAge" : state.schema.columns[0].name;
+        const requestedX = requestedDefault("x");
+        state.x = columnExists(requestedX) ? requestedX : state.schema.columns[0]?.name || null;
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("actualDenominator"));
         fillDenominatorSelect(el("expectedDenominator"));
-        el("actualNumerator").value = names.includes("AvgPrice1_5") ? "AvgPrice1_5" : numericColumns()[0]?.name || "";
-        el("expectedNumerator").value = names.includes("glm_prediction") ? "glm_prediction" : "";
+        const requestedActual = requestedDefault("actual");
+        const requestedExpected = requestedDefault("expected");
+        el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
+        el("expectedNumerator").value = numericColumnExists(requestedExpected) ? requestedExpected : "";
         el("actualDenominator").value = "__none__";
         el("expectedDenominator").value = "__none__";
       }
@@ -692,7 +734,11 @@
         const query = el("featureSearch").value.trim().toLowerCase();
         const list = el("featureList");
         list.innerHTML = "";
-        for (const col of state.schema.columns) {
+        const columns = [...state.schema.columns];
+        if (state.featureSort === "alpha") {
+          columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        }
+        for (const col of columns) {
           if (query && !col.name.toLowerCase().includes(query)) continue;
           const button = document.createElement("button");
           button.className = `feature ${col.name === state.x ? "active" : ""}`;
@@ -992,6 +1038,10 @@
             group.querySelectorAll("button").forEach((button) => button.classList.remove("active"));
             event.target.classList.add("active");
             state[group.dataset.control] = event.target.dataset.value;
+            if (group.dataset.control === "featureSort") {
+              renderFeatures();
+              return;
+            }
             if (group.dataset.control === "bandWidth") {
               state.bandFeature = state.x;
               syncBandingControl();

@@ -9,13 +9,14 @@ The current implementation is a package-first Python app with a FastAPI backend,
 ## Current Baseline
 
 - Package structure exists with `pyproject.toml`, `src/py_lucidum/`, CLI entry point `lucidum`, an importable app factory, and a static frontend.
+- Repository hygiene excludes local datasets, Python build/cache artifacts, virtual environments, and OS metadata such as `.DS_Store`.
 - Backend supports:
   - `GET /api/schema` for file path, row count, inferred column types, and numeric band suggestions.
   - `POST /api/chart` for live grouped chart/table data.
   - `POST /api/reload` to refresh the file snapshot and cached metadata.
 - The app supports local analyst mode today and is designed to grow into internal server mode with local or mounted server datasets.
 - Local development datasets `vans.csv` and `vans.parquet` are ignored and not intended for publishing.
-- Launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, and no-token local mode.
+- Launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, and initial selection overrides.
 
 ## Chart Behavior
 
@@ -37,6 +38,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Low-weight grouping supports absolute thresholds and percentage thresholds such as `0.1%` and `1%`. Ordered numeric/date tails are collapsed into low/high tail buckets; low-volume categorical levels are collapsed into “Other”.
 - Sigma bars are optional and shown only when two comparable responses are selected. The first response is treated as actual and the second as expected. Error bars are drawn around expected using deterministic hash folds within each x-axis group.
 - Hover values, y-axis values, and table values are formatted with comma separators and a sensible number of decimal places, independent of the underlying raw precision.
+- Initial selections are data-agnostic by default: x-axis uses the first dataset column, Actual / line 1 uses the first numeric column, and Expected / line 2 starts as None. CLI options, programmatic app defaults, and URL parameters can override `x`, `actual`, and `expected`.
 
 ## UI Direction
 
@@ -47,6 +49,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Chart animations are disabled so interactions update as fast as possible.
 - The sidebar is resizable so users can trade space between long column names and the chart.
 - Response controls sit above the x-axis feature list because response selection is usually the first choice in the workflow.
+- The x-axis feature list can be shown in original dataset column order or alphabetically without changing the selected chart sort.
 - Table view uses compact row spacing to support scanning many grouped rows.
 - Bars widen for small numbers of x-axis categories while keeping visible spacing between groups.
 - Y-axis tick values are shown without extra axis-title text above the plot area.

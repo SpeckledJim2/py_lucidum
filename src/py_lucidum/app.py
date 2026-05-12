@@ -22,11 +22,20 @@ def favicon_media_type(path: Path) -> str:
     return "image/x-icon"
 
 
-def create_app(dataset_path: str | Path, token: str | None = None) -> FastAPI:
+def create_app(
+    dataset_path: str | Path,
+    token: str | None = None,
+    defaults: dict[str, str | None] | None = None,
+) -> FastAPI:
     dataset = Dataset(dataset_path)
     app = FastAPI(title="py_lucidum")
     app.state.dataset = dataset
     app.state.token = token
+    app.state.defaults = {
+        key: value
+        for key, value in (defaults or {}).items()
+        if key in {"x", "actual", "expected"} and value
+    }
 
     def check_token(request: Request) -> None:
         expected = app.state.token
@@ -50,7 +59,9 @@ def create_app(dataset_path: str | Path, token: str | None = None) -> FastAPI:
     @app.get("/api/schema")
     def schema(request: Request) -> dict[str, Any]:
         check_token(request)
-        return app.state.dataset.schema()
+        payload = dict(app.state.dataset.schema())
+        payload["defaults"] = app.state.defaults
+        return payload
 
     @app.post("/api/chart")
     async def chart(request: Request) -> dict[str, Any]:
@@ -65,6 +76,8 @@ def create_app(dataset_path: str | Path, token: str | None = None) -> FastAPI:
     def reload_dataset(request: Request) -> dict[str, Any]:
         check_token(request)
         app.state.dataset.reload()
-        return app.state.dataset.schema()
+        payload = dict(app.state.dataset.schema())
+        payload["defaults"] = app.state.defaults
+        return payload
 
     return app
