@@ -1,0 +1,11 @@
+name,expression
+Older drivers,YoungestDriverAge > 40
+Young drivers,YoungestDriverAge < 25
+Recent quotes,QuoteDate >= DATE '2024-01-01'
+Long licence history,Least_LicenceLengthMonths >= 120
+No claims bonus,Proposer_NCB >= 5
+Home owners,ProposerHomeOwner = 1
+High annual mileage,AnnualMileage >= 20000
+Heavy vans,"""Gross.Weight"" >= 3000"
+Card payments,PaymentType = 'Card'
+London postcode area,PostcodeArea = 'LONDON'

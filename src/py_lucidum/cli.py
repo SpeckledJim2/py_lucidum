@@ -27,11 +27,12 @@ def serve(
     x: str | None = None,
     actual: str | None = None,
     expected: str | None = None,
+    filters: str | Path | None = None,
 ) -> str:
     selected_port = port or find_free_port()
     selected_token = token if token is not None else secrets.token_urlsafe(18)
     defaults = {"x": x, "actual": actual, "expected": expected}
-    app = create_app(path, token=selected_token, defaults=defaults)
+    app = create_app(path, token=selected_token, defaults=defaults, filters_path=filters)
     url = f"http://{host}:{selected_port}/"
     params = {key: value for key, value in defaults.items() if value}
     if selected_token:
@@ -56,6 +57,7 @@ def main() -> None:
     parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
+    parser.add_argument("--filters", default=None, help="Path to filter_spec.csv. Defaults to ./filter_spec.csv when present.")
     args = parser.parse_args()
     serve(
         path=args.path,
@@ -66,4 +68,5 @@ def main() -> None:
         x=args.x,
         actual=args.actual,
         expected=args.expected,
+        filters=args.filters,
     )

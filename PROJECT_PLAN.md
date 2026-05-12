@@ -16,7 +16,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
   - `POST /api/reload` to refresh the file snapshot and cached metadata.
 - The app supports local analyst mode today and is designed to grow into internal server mode with local or mounted server datasets.
 - Local development datasets `vans.csv` and `vans.parquet` are ignored and not intended for publishing.
-- Launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, and initial selection overrides.
+- Launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, initial selection overrides, and saved filter files.
 
 ## Chart Behavior
 
@@ -36,9 +36,11 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - When an integer x-axis feature has a full-data range below 120, the app chooses initial band width `1`. Otherwise, when an integer or numeric x-axis feature is selected, the app chooses an initial band width from the feature standard deviation over the first 10k rows, rounded down two notches on the 1/2/5 scale.
 - Date/datetime x-axes use calendar buckets: hour, day, week, month, and year. Date bucket controls are only shown for date/datetime features; banding controls are only shown for integer/numeric features.
 - Low-weight grouping supports absolute thresholds and percentage thresholds such as `0.1%` and `1%`. Ordered numeric/date tails are collapsed into low/high tail buckets; low-volume categorical levels are collapsed into “Other”.
+- DuckDB filter expressions can be typed above the chart or loaded from `filter_spec.csv`; filters are applied before aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 - Sigma bars are optional and shown only when two comparable responses are selected. The first response is treated as actual and the second as expected. Error bars are drawn around expected using deterministic hash folds within each x-axis group.
 - Hover values, y-axis values, and table values are formatted with comma separators and a sensible number of decimal places, independent of the underlying raw precision.
 - Initial selections are data-agnostic by default: x-axis uses the first dataset column, Actual / line 1 uses the first numeric column, and Expected / line 2 starts as None. CLI options, programmatic app defaults, and URL parameters can override `x`, `actual`, and `expected`.
+- Dataset operations serialize access to the shared DuckDB connection used by the local app process.
 
 ## UI Direction
 
@@ -50,13 +52,14 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - The sidebar is resizable so users can trade space between long column names and the chart.
 - Response controls sit above the x-axis feature list because response selection is usually the first choice in the workflow.
 - The x-axis feature list can be shown in original dataset column order or alphabetically without changing the selected chart sort.
+- Chart/Table view controls sit before the filter bar; chart-only density messages are shown in the chart's top-right corner instead of consuming filter-bar width.
 - Table view uses compact row spacing to support scanning many grouped rows.
 - Bars widen for small numbers of x-axis categories while keeping visible spacing between groups.
 - Y-axis tick values are shown without extra axis-title text above the plot area.
 - X-axis labels are always shown below 200 groups, use smaller text above 50 groups, and are hidden with a UI message at 200+ groups.
 - Longer rotated labels should remain visible without excessive blank space under the plot.
 - The chart should resize to fill the browser window toward the bottom-right.
-- Histogram, SHAP, filters, feature groups, and model-object loading are out of v1.
+- Histogram, SHAP, feature groups, and model-object loading are out of v1.
 
 ## Performance Notes
 

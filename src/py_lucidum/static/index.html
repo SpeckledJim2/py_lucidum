@@ -180,6 +180,7 @@
       }
 
       .search,
+      #filterInput,
       select,
       input[type="number"] {
         width: 100%;
@@ -296,12 +297,40 @@
         color: white;
       }
 
+      #tableTab {
+        margin-right: 30px;
+      }
+
       .tabs {
         display: flex;
         align-items: center;
         gap: 6px;
         margin-bottom: 8px;
         flex: 0 0 auto;
+      }
+
+      .filter-bar {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex: 1 1 auto;
+        min-width: 360px;
+      }
+
+      .filter-label {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      #filterInput {
+        flex: 1 1 280px;
+        min-width: 180px;
+      }
+
+      #savedFilterSelect {
+        flex: 0 0 170px;
+        width: 170px;
       }
 
       .workspace {
@@ -313,11 +342,24 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow: hidden;
+        position: relative;
       }
 
       #chart {
         width: 100%;
         height: 100%;
+      }
+
+      .chart-message {
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        max-width: min(420px, calc(100% - 24px));
+        color: var(--muted);
+        font-size: 12px;
+        text-align: right;
+        pointer-events: none;
+        z-index: 4;
       }
 
       .table-wrap {
@@ -517,9 +559,17 @@
           <div class="tabs">
             <button id="chartTab" class="tab active">Chart</button>
             <button id="tableTab" class="tab">Table</button>
+            <div class="filter-bar">
+              <span class="filter-label">Filter</span>
+              <input id="filterInput" placeholder="DuckDB WHERE expression" />
+              <select id="savedFilterSelect"></select>
+              <button id="filterApplyBtn" class="ghost">Apply</button>
+              <button id="filterClearBtn" class="ghost">Clear</button>
+            </div>
             <div id="status" class="status"></div>
           </div>
           <section class="workspace">
+            <div id="chartMessage" class="chart-message hidden"></div>
             <div id="chart"></div>
             <div id="tableWrap" class="table-wrap hidden"></div>
           </section>
@@ -555,6 +605,7 @@
         sigma: "0",
         view: "chart",
         featureSort: "original",
+        activeFilter: "",
         lastData: null,
         bandFeature: null,
       };
@@ -575,7 +626,12 @@
         });
         if (!response.ok) {
           const text = await response.text();
-          throw new Error(text);
+          let message = text;
+          try {
+            message = JSON.parse(text).detail || text;
+          } catch (_) {
+          }
+          throw new Error(message);
         }
         return response.json();
       }
@@ -584,6 +640,11 @@
         el("status").textContent = message || "";
         el("status").classList.toggle("error", isError);
         el("status").classList.toggle("hidden", !message);
+      }
+
+      function setChartMessage(message) {
+        el("chartMessage").textContent = message || "";
+        el("chartMessage").classList.toggle("hidden", !message || state.view !== "chart");
       }
 
       function setGroupMeta(message) {
@@ -715,6 +776,17 @@
         return locationParams.get(name) || state.schema.defaults?.[name] || "";
       }
 
+      function renderSavedFilters() {
+        const select = el("savedFilterSelect");
+        const filters = state.schema.filters || [];
+        select.innerHTML = "";
+        select.append(new Option("Saved filters", ""));
+        for (const filter of filters) {
+          select.append(new Option(filter.name, filter.expression));
+        }
+        select.disabled = filters.length === 0;
+      }
+
       function chooseDefaults() {
         const requestedX = requestedDefault("x");
         state.x = columnExists(requestedX) ? requestedX : state.schema.columns[0]?.name || null;
@@ -772,9 +844,22 @@
         return responses;
       }
 
+      function applyFilter() {
+        state.activeFilter = el("filterInput").value.trim();
+        refreshChart();
+      }
+
+      function clearFilter() {
+        el("filterInput").value = "";
+        el("savedFilterSelect").value = "";
+        state.activeFilter = "";
+        refreshChart();
+      }
+
       async function refreshChart() {
         if (!state.schema || !state.x) return;
         setStatus("");
+        setChartMessage("");
         setGroupMeta("Computing...");
         updateAxisControls();
         const kind = selectedColumn()?.kind;
@@ -788,6 +873,7 @@
           dateBucket: isDate ? state.dateBucket : "none",
           transform: state.transform,
           sigma: Number(state.sigma),
+          filter: state.activeFilter,
           responses: currentResponses(),
           maxGroups: 2000,
         };
@@ -796,10 +882,16 @@
           state.lastData = data;
           const labelMessage = renderChart(data);
           renderTable(data);
-          setGroupMeta(`${data.rows.length.toLocaleString()} groups`);
-          setStatus([...(data.warnings || []), labelMessage].filter(Boolean).join(" "));
+          const filteredRows = data.filtered_row_count ?? data.row_count;
+          const rowMeta = filteredRows === data.row_count
+            ? `${data.row_count.toLocaleString()} rows`
+            : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
+          setGroupMeta(`${data.rows.length.toLocaleString()} groups · ${rowMeta}`);
+          setStatus([...(data.warnings || [])].filter(Boolean).join(" "));
+          setChartMessage(labelMessage);
         } catch (error) {
           setGroupMeta("Query failed");
+          setChartMessage("");
           setStatus(error.message, true);
         }
       }
@@ -971,6 +1063,7 @@
         el("tableTab").classList.toggle("active", view === "table");
         el("chart").classList.toggle("hidden", view !== "chart");
         el("tableWrap").classList.toggle("hidden", view !== "table");
+        el("chartMessage").classList.toggle("hidden", view !== "chart" || !el("chartMessage").textContent);
         if (view === "chart") chart.resize();
       }
 
@@ -1053,6 +1146,18 @@
           el(id).addEventListener("change", refreshChart);
         });
         el("featureSearch").addEventListener("input", renderFeatures);
+        el("filterApplyBtn").addEventListener("click", applyFilter);
+        el("filterClearBtn").addEventListener("click", clearFilter);
+        el("filterInput").addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            applyFilter();
+          }
+        });
+        el("savedFilterSelect").addEventListener("change", () => {
+          el("filterInput").value = el("savedFilterSelect").value;
+          el("filterInput").focus();
+        });
         el("chartTab").addEventListener("click", () => setView("chart"));
         el("tableTab").addEventListener("click", () => setView("table"));
         el("themeBtn").addEventListener("click", () => {
@@ -1065,6 +1170,7 @@
           setGroupMeta("Reloading...");
           state.schema = await api("/api/reload", { method: "POST" });
           state.bandFeature = null;
+          renderSavedFilters();
           renderFeatures();
           updateAxisControls();
           refreshChart();
@@ -1111,6 +1217,7 @@
           const path = state.schema.path.split("/").pop();
           el("datasetMeta").textContent = `${path} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
           chooseDefaults();
+          renderSavedFilters();
           renderFeatures();
           updateAxisControls();
           await refreshChart();

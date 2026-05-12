@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,7 @@ class Dataset:
         self._schema: list[ColumnInfo] | None = None
         self._row_count: int | None = None
         self._band_suggestions: dict[str, float | int | None] | None = None
+        self._lock = threading.RLock()
 
     def relation_sql(self) -> str:
         path = sql_literal(str(self.path))
@@ -77,42 +79,44 @@ class Dataset:
         raise ValueError("Only .csv and .parquet files are supported in this prototype")
 
     def reload(self) -> None:
-        self._schema = None
-        self._row_count = None
-        self._band_suggestions = None
+        with self._lock:
+            self._schema = None
+            self._row_count = None
+            self._band_suggestions = None
 
     def schema(self) -> dict[str, Any]:
-        if self._schema is None:
-            rows = self.con.execute(f"DESCRIBE SELECT * FROM {self.relation_sql()}").fetchall()
-            base_schema = [
-                ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
-                for row in rows
-            ]
-            suggestions = self.band_suggestions(base_schema)
-            self._schema = [
-                ColumnInfo(
-                    name=col.name,
-                    duckdb_type=col.duckdb_type,
-                    kind=col.kind,
-                    band_suggestion=suggestions.get(col.name),
-                )
-                for col in base_schema
-            ]
-        if self._row_count is None:
-            self._row_count = int(self.con.execute(f"SELECT COUNT(*) FROM {self.relation_sql()}").fetchone()[0])
-        return {
-            "path": str(self.path),
-            "row_count": self._row_count,
-            "columns": [
-                {
-                    "name": c.name,
-                    "duckdb_type": c.duckdb_type,
-                    "kind": c.kind,
-                    "band_suggestion": c.band_suggestion,
-                }
-                for c in self._schema
-            ],
-        }
+        with self._lock:
+            if self._schema is None:
+                rows = self.con.execute(f"DESCRIBE SELECT * FROM {self.relation_sql()}").fetchall()
+                base_schema = [
+                    ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
+                    for row in rows
+                ]
+                suggestions = self.band_suggestions(base_schema)
+                self._schema = [
+                    ColumnInfo(
+                        name=col.name,
+                        duckdb_type=col.duckdb_type,
+                        kind=col.kind,
+                        band_suggestion=suggestions.get(col.name),
+                    )
+                    for col in base_schema
+                ]
+            if self._row_count is None:
+                self._row_count = int(self.con.execute(f"SELECT COUNT(*) FROM {self.relation_sql()}").fetchone()[0])
+            return {
+                "path": str(self.path),
+                "row_count": self._row_count,
+                "columns": [
+                    {
+                        "name": c.name,
+                        "duckdb_type": c.duckdb_type,
+                        "kind": c.kind,
+                        "band_suggestion": c.band_suggestion,
+                    }
+                    for c in self._schema
+                ],
+            }
 
     def band_suggestions(self, schema: list[ColumnInfo]) -> dict[str, float | int | None]:
         if self._band_suggestions is not None:
@@ -183,46 +187,76 @@ FROM sample
         return self._schema
 
     def chart(self, request: dict[str, Any]) -> dict[str, Any]:
-        columns = self.column_map()
-        x_col = str(request.get("x") or "")
-        if x_col not in columns:
-            raise ValueError("Choose a valid x-axis feature")
+        with self._lock:
+            columns = self.column_map()
+            x_col = str(request.get("x") or "")
+            if x_col not in columns:
+                raise ValueError("Choose a valid x-axis feature")
 
-        responses = normalise_responses(request.get("responses"), columns)
-        x_info = columns[x_col]
-        x_sql = build_x_sql(
-            x_col=x_col,
-            kind=x_info.kind,
-            band_width=request.get("bandWidth"),
-            date_bucket=request.get("dateBucket"),
-        )
-        sigma_multiplier = float(request.get("sigma") or 0)
-        include_sigma = sigma_multiplier > 0 and len(responses) >= 2
-        sql = build_chart_sql(self.relation_sql(), x_sql, responses, include_sigma)
-        raw_rows = [dict(zip([d[0] for d in self.con.description], row)) for row in self.con.execute(sql).fetchall()]
+            filter_sql = self.normalise_filter(request.get("filter"))
+            responses = normalise_responses(request.get("responses"), columns)
+            x_info = columns[x_col]
+            x_sql = build_x_sql(
+                x_col=x_col,
+                kind=x_info.kind,
+                band_width=request.get("bandWidth"),
+                date_bucket=request.get("dateBucket"),
+            )
+            sigma_multiplier = float(request.get("sigma") or 0)
+            include_sigma = sigma_multiplier > 0 and len(responses) >= 2
+            row_count = self._row_count if self._row_count is not None else self.schema()["row_count"]
+            filtered_row_count = self.filtered_row_count(filter_sql)
+            sql = build_chart_sql(self.relation_sql(), x_sql, responses, include_sigma, filter_sql)
+            raw_rows = [dict(zip([d[0] for d in self.con.description], row)) for row in self.con.execute(sql).fetchall()]
 
-        grouped_rows = apply_low_weight_grouping(
-            rows=raw_rows,
-            responses=responses,
-            x_kind=x_info.kind,
-            threshold=str(request.get("lowGroup") or "0"),
-        )
-        sorted_rows = sort_rows(grouped_rows, x_info.kind, str(request.get("sort") or "alpha"))
-        max_groups = int(request.get("maxGroups") or 2000)
-        if len(sorted_rows) > max_groups:
-            sorted_rows = sorted_rows[:max_groups]
+            grouped_rows = apply_low_weight_grouping(
+                rows=raw_rows,
+                responses=responses,
+                x_kind=x_info.kind,
+                threshold=str(request.get("lowGroup") or "0"),
+            )
+            sorted_rows = sort_rows(grouped_rows, x_info.kind, str(request.get("sort") or "alpha"))
+            max_groups = int(request.get("maxGroups") or 2000)
+            if len(sorted_rows) > max_groups:
+                sorted_rows = sorted_rows[:max_groups]
 
-        transform = str(request.get("transform") or "none")
-        warnings: list[str] = []
-        display_rows = apply_transform(sorted_rows, responses, transform, sigma_multiplier, warnings)
+            transform = str(request.get("transform") or "none")
+            warnings: list[str] = []
+            display_rows = apply_transform(sorted_rows, responses, transform, sigma_multiplier, warnings)
 
-        return {
-            "x": x_col,
-            "x_kind": x_info.kind,
-            "responses": [{"label": r["label"], "numerator": r["numerator"], "denominator": r["denominator"]} for r in responses],
-            "rows": display_rows,
-            "warnings": warnings,
-        }
+            return {
+                "x": x_col,
+                "x_kind": x_info.kind,
+                "row_count": row_count,
+                "filtered_row_count": filtered_row_count,
+                "filter": filter_sql,
+                "responses": [{"label": r["label"], "numerator": r["numerator"], "denominator": r["denominator"]} for r in responses],
+                "rows": display_rows,
+                "warnings": warnings,
+            }
+
+    def normalise_filter(self, raw: Any) -> str:
+        expression = str(raw or "").strip()
+        if not expression:
+            return ""
+        forbidden = (";", "--", "/*", "*/")
+        if any(token in expression for token in forbidden):
+            raise ValueError("Filter must be a single DuckDB expression without statement separators or comments")
+        try:
+            self.con.execute(f"SELECT 1 FROM {self.relation_sql()} WHERE ({expression}) LIMIT 0")
+        except duckdb.Error as exc:
+            message = str(exc).splitlines()[0]
+            raise ValueError(f"Invalid filter: {message}") from exc
+        return expression
+
+    def filtered_row_count(self, filter_sql: str) -> int:
+        if not filter_sql:
+            if self._row_count is None:
+                self.schema()
+            assert self._row_count is not None
+            return self._row_count
+        value = self.con.execute(f"SELECT COUNT(*) FROM {self.relation_sql()} WHERE ({filter_sql})").fetchone()[0]
+        return int(value)
 
 
 def normalise_responses(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[str, str | None]]:
@@ -335,7 +369,13 @@ def response_parts(response: dict[str, str | None], index: int) -> tuple[str, st
     )
 
 
-def build_chart_sql(relation: str, x_sql: dict[str, str], responses: list[dict[str, str | None]], include_sigma: bool) -> str:
+def build_chart_sql(
+    relation: str,
+    x_sql: dict[str, str],
+    responses: list[dict[str, str | None]],
+    include_sigma: bool,
+    filter_sql: str = "",
+) -> str:
     metric_selects: list[str] = []
     value_selects: list[str] = []
     for index, response in enumerate(responses):
@@ -393,9 +433,10 @@ sigma AS (
         sigma_output = ",\n    NULL AS sigma_se,\n    NULL AS valid_folds"
         sigma_join = ""
 
+    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
     return f"""
 WITH base AS (
-  SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}
+  SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}{where_sql}
 ),
 keyed AS (
   SELECT
