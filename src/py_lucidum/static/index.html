@@ -58,8 +58,16 @@
       }
 
       body.resizing-sidebar,
-      body.resizing-sidebar * {
+      body.resizing-sidebar *,
+      body.resizing-chart-controls,
+      body.resizing-chart-controls * {
         cursor: col-resize !important;
+        user-select: none !important;
+      }
+
+      body.resizing-chart-control-heights,
+      body.resizing-chart-control-heights * {
+        cursor: row-resize !important;
         user-select: none !important;
       }
 
@@ -112,10 +120,6 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-      }
-
-      .group-meta {
-        flex: 0 0 auto;
       }
 
       .spacer {
@@ -179,6 +183,16 @@
 
       .section-title-row h2 {
         margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        line-height: 1.2;
+      }
+
+      .section-title-row .segmented {
+        flex: 0 0 auto;
       }
 
       .section-title-row .segmented button {
@@ -300,6 +314,7 @@
         padding: 2px 7px;
         cursor: pointer;
         font-size: 12px;
+        white-space: nowrap;
       }
 
       .segmented button.active,
@@ -325,16 +340,17 @@
         color: #111827;
       }
 
-      #tableTab {
-        margin-right: 30px;
-      }
-
       .tabs {
         display: flex;
         align-items: center;
         gap: 6px;
-        margin-bottom: 8px;
-        flex: 0 0 auto;
+      }
+
+      .workspace-tabs {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        z-index: 5;
       }
 
       .filter-bar {
@@ -343,6 +359,14 @@
         gap: 5px;
         flex: 1 1 auto;
         min-width: 360px;
+      }
+
+      .filter-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        flex: 0 0 auto;
       }
 
       .filter-label {
@@ -373,21 +397,100 @@
         position: relative;
       }
 
+      .visual-area {
+        display: grid;
+        grid-template-columns: var(--chart-controls-width, 260px) 6px minmax(0, 1fr);
+        gap: 8px;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      .chart-controls-resizer {
+        background: linear-gradient(to right, var(--line), transparent);
+        cursor: col-resize;
+        min-width: 6px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .chart-controls-resizer:hover,
+      .chart-controls-resizer.dragging {
+        background: var(--accent);
+      }
+
+      .chart-side-controls {
+        display: grid;
+        grid-template-rows: var(--chart-feature-controls-height, minmax(0, 1fr)) 6px minmax(0, 1fr);
+        gap: 8px;
+        min-width: 0;
+        min-height: 0;
+      }
+
+      .chart-control-height-resizer {
+        background: linear-gradient(to bottom, var(--line), transparent);
+        cursor: row-resize;
+        min-height: 6px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .chart-control-height-resizer:hover,
+      .chart-control-height-resizer.dragging {
+        background: var(--accent);
+      }
+
+      .chart-side-section {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        display: flex;
+        flex: 1 1 0;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      .chart-side-section h2 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+
+      .chart-side-section .feature-list {
+        min-height: 0;
+      }
+
+      .visual-area .workspace {
+        height: 100%;
+        min-width: 0;
+      }
+
       #chart {
         width: 100%;
         height: 100%;
       }
 
-      .chart-message {
+      .workspace-messages {
         position: absolute;
-        top: 10px;
+        top: 8px;
         right: 12px;
-        max-width: min(420px, calc(100% - 24px));
-        color: var(--muted);
-        font-size: 12px;
+        z-index: 6;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        max-width: min(520px, calc(100% - 150px));
         text-align: right;
         pointer-events: none;
-        z-index: 4;
+      }
+
+      .workspace-meta,
+      .chart-message {
+        color: var(--muted);
+        font-size: 12px;
       }
 
       .table-wrap {
@@ -396,6 +499,7 @@
         height: 100%;
         min-height: 0;
         overflow: hidden;
+        padding-top: 36px;
       }
 
       .table-scroll {
@@ -530,6 +634,14 @@
         .toolbar {
           flex-wrap: nowrap;
         }
+
+        .visual-area {
+          grid-template-columns: var(--chart-controls-width, 230px) 6px minmax(0, 1fr);
+        }
+
+        .filter-bar {
+          min-width: 0;
+        }
       }
     </style>
   </head>
@@ -539,7 +651,6 @@
         <div class="brand"><img class="mark" src="/favicon.ico?v=3" alt="" /><span>py_lucidum</span></div>
         <div id="datasetMeta" class="meta">Loading dataset...</div>
         <div class="spacer"></div>
-        <div id="groupMeta" class="meta group-meta"></div>
         <button id="reloadBtn" class="ghost">Reload</button>
         <button id="themeBtn" class="ghost">Dark</button>
         <button id="stopAppBtn" class="danger-action">Stop app</button>
@@ -553,31 +664,26 @@
               <select id="actualNumerator"></select>
             </div>
             <div class="metric-row">
-              <div id="expectedMetricTitle" class="metric-title">Expected</div>
-              <select id="expectedNumerator"></select>
-            </div>
-            <div class="metric-row">
               <div id="weightMetricTitle" class="metric-title">Weight</div>
               <select id="denominator"></select>
             </div>
-          </section>
-
-          <section class="section feature-section">
-            <div class="section-title-row">
-              <h2>x-axis feature</h2>
-              <div class="segmented" data-control="featureSort">
-                <button data-value="original" class="active">Original</button>
-                <button data-value="alpha">A-Z</button>
-              </div>
-            </div>
-            <input id="featureSearch" class="search" placeholder="search" />
-            <div id="featureList" class="feature-list"></div>
           </section>
         </aside>
 
         <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 
         <main>
+          <div class="filter-row">
+            <div class="filter-bar">
+              <span class="filter-label">Filter</span>
+              <select id="savedFilterSelect"></select>
+              <span class="filter-label">Filter expression</span>
+              <input id="filterInput" placeholder="DuckDB WHERE expression" />
+              <button id="filterApplyBtn" class="ghost">Apply</button>
+              <button id="filterClearBtn" class="ghost">Clear</button>
+            </div>
+            <div id="status" class="status"></div>
+          </div>
           <div class="toolbar">
             <div id="sortControl" class="control">
               <h3>x-axis sort order</h3>
@@ -652,24 +758,51 @@
             </div>
           </div>
 
-          <div class="tabs">
-            <button id="chartTab" class="tab active">Chart</button>
-            <button id="tableTab" class="tab">Table</button>
-            <div class="filter-bar">
-              <span class="filter-label">Filter</span>
-              <select id="savedFilterSelect"></select>
-              <span class="filter-label">Filter expression</span>
-              <input id="filterInput" placeholder="DuckDB WHERE expression" />
-              <button id="filterApplyBtn" class="ghost">Apply</button>
-              <button id="filterClearBtn" class="ghost">Clear</button>
+          <div class="visual-area">
+            <div class="chart-side-controls">
+              <section class="chart-side-section feature-section">
+                <div class="section-title-row">
+                  <h2>x-axis feature</h2>
+                  <div class="segmented" data-control="featureSort">
+                    <button data-value="original" class="active">Original</button>
+                    <button data-value="alpha">A-Z</button>
+                  </div>
+                </div>
+                <input id="featureSearch" class="search" placeholder="search" />
+                <div id="featureList" class="feature-list"></div>
+              </section>
+
+              <div id="chartControlHeightResizer" class="chart-control-height-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize x-axis and expected controls"></div>
+
+              <section class="chart-side-section">
+                <div class="section-title-row">
+                  <h2 id="expectedMetricTitle" class="metric-title">Expected</h2>
+                  <div class="segmented" data-control="expectedSort">
+                    <button data-value="original" class="active">Original</button>
+                    <button data-value="alpha">A-Z</button>
+                  </div>
+                </div>
+                <select id="expectedNumerator" class="hidden" aria-hidden="true" tabindex="-1"></select>
+                <input id="expectedSearch" class="search" placeholder="search" />
+                <div id="expectedList" class="feature-list"></div>
+              </section>
             </div>
-            <div id="status" class="status"></div>
+
+            <div id="chartControlsResizer" class="chart-controls-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chart controls"></div>
+
+            <section class="workspace">
+              <div class="tabs workspace-tabs">
+                <button id="chartTab" class="tab active">Chart</button>
+                <button id="tableTab" class="tab">Table</button>
+              </div>
+              <div class="workspace-messages">
+                <div id="groupMeta" class="workspace-meta"></div>
+                <div id="chartMessage" class="chart-message hidden"></div>
+              </div>
+              <div id="chart"></div>
+              <div id="tableWrap" class="table-wrap hidden"></div>
+            </section>
           </div>
-          <section class="workspace">
-            <div id="chartMessage" class="chart-message hidden"></div>
-            <div id="chart"></div>
-            <div id="tableWrap" class="table-wrap hidden"></div>
-          </section>
         </main>
       </div>
     </div>
@@ -702,6 +835,7 @@
         sigma: "0",
         view: "chart",
         featureSort: "original",
+        expectedSort: "original",
         activeFilter: "",
         lastData: null,
         tablePage: 1,
@@ -901,6 +1035,41 @@
         el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
         el("expectedNumerator").value = numericColumnExists(requestedExpected) ? requestedExpected : "";
         el("denominator").value = numericColumnExists(requestedDenominator) ? requestedDenominator : "__none__";
+      }
+
+      function renderExpectedNumerators() {
+        const query = el("expectedSearch").value.trim().toLowerCase();
+        const select = el("expectedNumerator");
+        const list = el("expectedList");
+        list.innerHTML = "";
+
+        function addExpectedButton(label, value, kind) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `feature ${value === select.value ? "active" : ""}`;
+          button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
+          button.addEventListener("click", () => {
+            const changed = select.value !== value;
+            select.value = value;
+            renderExpectedNumerators();
+            updateAxisControls();
+            if (changed) refreshChart();
+          });
+          list.append(button);
+        }
+
+        if (!query || "none".includes(query)) {
+          addExpectedButton("None", "", "none");
+        }
+
+        const columns = [...numericColumns()];
+        if (state.expectedSort === "alpha") {
+          columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        }
+        for (const col of columns) {
+          if (query && !col.name.toLowerCase().includes(query)) continue;
+          addExpectedButton(col.name, col.name, col.kind);
+        }
       }
 
       function renderFeatures() {
@@ -1389,8 +1558,122 @@
         requestAnimationFrame(() => chart.resize());
       }
 
+      function setupChartControlsResize() {
+        const visualArea = document.querySelector(".visual-area");
+        const resizer = el("chartControlsResizer");
+        const savedWidth = Number(localStorage.getItem("py_lucidum_chart_controls_width"));
+        if (Number.isFinite(savedWidth) && savedWidth > 0) {
+          setChartControlsWidth(savedWidth);
+        }
+
+        let dragging = false;
+        resizer.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          dragging = true;
+          resizer.classList.add("dragging");
+          document.body.classList.add("resizing-chart-controls");
+          resizer.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        resizer.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          const bounds = visualArea.getBoundingClientRect();
+          setChartControlsWidth(event.clientX - bounds.left);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          resizer.classList.remove("dragging");
+          document.body.classList.remove("resizing-chart-controls");
+          window.getSelection()?.removeAllRanges();
+          const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-controls-width"));
+          if (Number.isFinite(width)) {
+            localStorage.setItem("py_lucidum_chart_controls_width", String(Math.round(width)));
+          }
+          if (event.pointerId !== undefined) {
+            try {
+              resizer.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+          chart.resize();
+        }
+        resizer.addEventListener("pointerup", finishDrag);
+        resizer.addEventListener("pointercancel", finishDrag);
+      }
+
+      function setChartControlsWidth(rawWidth) {
+        const visualArea = document.querySelector(".visual-area");
+        const availableWidth = visualArea?.getBoundingClientRect().width || window.innerWidth;
+        const maxWidth = Math.max(200, Math.min(560, availableWidth - 420));
+        const width = Math.min(Math.max(rawWidth, 200), maxWidth);
+        document.documentElement.style.setProperty("--chart-controls-width", `${Math.round(width)}px`);
+        requestAnimationFrame(() => chart.resize());
+      }
+
+      function setupChartControlHeightsResize() {
+        const controls = document.querySelector(".chart-side-controls");
+        const firstPanel = controls?.querySelector(".chart-side-section");
+        const resizer = el("chartControlHeightResizer");
+        const savedHeight = Number(localStorage.getItem("py_lucidum_chart_feature_controls_height"));
+        if (Number.isFinite(savedHeight) && savedHeight > 0) {
+          setChartFeatureControlsHeight(savedHeight);
+        }
+
+        let dragging = false;
+        let startY = 0;
+        let startHeight = 0;
+        resizer.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          dragging = true;
+          startY = event.clientY;
+          startHeight = firstPanel?.getBoundingClientRect().height || 0;
+          resizer.classList.add("dragging");
+          document.body.classList.add("resizing-chart-control-heights");
+          resizer.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        resizer.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          setChartFeatureControlsHeight(startHeight + event.clientY - startY);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          resizer.classList.remove("dragging");
+          document.body.classList.remove("resizing-chart-control-heights");
+          window.getSelection()?.removeAllRanges();
+          const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-feature-controls-height"));
+          if (Number.isFinite(height)) {
+            localStorage.setItem("py_lucidum_chart_feature_controls_height", String(Math.round(height)));
+          }
+          if (event.pointerId !== undefined) {
+            try {
+              resizer.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+        }
+        resizer.addEventListener("pointerup", finishDrag);
+        resizer.addEventListener("pointercancel", finishDrag);
+      }
+
+      function setChartFeatureControlsHeight(rawHeight) {
+        const controls = document.querySelector(".chart-side-controls");
+        const availableHeight = controls?.getBoundingClientRect().height || window.innerHeight;
+        const splitterSpace = 22;
+        const minPanelHeight = 96;
+        const maxHeight = Math.max(minPanelHeight, availableHeight - splitterSpace - minPanelHeight);
+        const height = Math.min(Math.max(rawHeight, minPanelHeight), maxHeight);
+        document.documentElement.style.setProperty("--chart-feature-controls-height", `${Math.round(height)}px`);
+      }
+
       function bindControls() {
         setupSidebarResize();
+        setupChartControlsResize();
+        setupChartControlHeightsResize();
         document.querySelectorAll(".segmented").forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
@@ -1405,6 +1688,10 @@
               renderFeatures();
               return;
             }
+            if (group.dataset.control === "expectedSort") {
+              renderExpectedNumerators();
+              return;
+            }
             if (group.dataset.control === "bandWidth") {
               state.bandFeature = state.x;
               syncBandingControl();
@@ -1412,9 +1699,15 @@
             refreshChart();
           });
         });
-        ["actualNumerator", "expectedNumerator", "denominator"].forEach((id) => {
+        ["actualNumerator", "denominator"].forEach((id) => {
           el(id).addEventListener("change", refreshChart);
         });
+        el("expectedNumerator").addEventListener("change", () => {
+          renderExpectedNumerators();
+          updateAxisControls();
+          refreshChart();
+        });
+        el("expectedSearch").addEventListener("input", renderExpectedNumerators);
         el("featureSearch").addEventListener("input", renderFeatures);
         el("filterApplyBtn").addEventListener("click", applyFilter);
         el("filterClearBtn").addEventListener("click", clearFilter);
@@ -1442,11 +1735,18 @@
           state.schema = await api("/api/reload", { method: "POST" });
           state.bandFeature = null;
           renderSavedFilters();
+          renderExpectedNumerators();
           renderFeatures();
           updateAxisControls();
           refreshChart();
         });
-        window.addEventListener("resize", () => chart.resize());
+        window.addEventListener("resize", () => {
+          const controls = document.querySelector(".chart-side-controls");
+          if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
+          const firstPanel = controls?.querySelector(".chart-side-section");
+          if (firstPanel) setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height);
+          chart.resize();
+        });
       }
 
       function escapeHtml(value) {
@@ -1527,6 +1827,7 @@
           el("datasetMeta").textContent = `${path} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
           chooseDefaults();
           renderSavedFilters();
+          renderExpectedNumerators();
           renderFeatures();
           updateAxisControls();
           await refreshChart();
