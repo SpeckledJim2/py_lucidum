@@ -124,6 +124,7 @@ def run_app(
     url: str | None = None,
 ) -> str:
     selected_port = port or find_free_port()
+    ensure_port_available(host, selected_port)
     display_url = url or _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
     print(f"Open {display_url}", flush=True)
@@ -147,6 +148,7 @@ def serve(
     tools: str | Sequence[str] | None = None,
 ) -> str:
     selected_port = port or find_free_port()
+    ensure_port_available(host, selected_port)
     selected_token = token if token is not None else secrets.token_urlsafe(18)
     defaults = {"x": x, "actual": actual, "expected": expected, "denominator": denominator}
     app = create_app(
@@ -210,7 +212,7 @@ def saved_filters_status(app: object) -> str:
         return str(resolved)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Launch py_lucidum for a local CSV or Parquet file.")
     parser.add_argument("path", help="Path to a CSV or Parquet file")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host, e.g. 127.0.0.1 or 0.0.0.0")
@@ -234,17 +236,21 @@ def main() -> None:
     )
     parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Currently supports line-bar.")
     args = parser.parse_args()
-    serve(
-        path=args.path,
-        host=args.host,
-        port=args.port,
-        token="" if args.no_token else secrets.token_urlsafe(18),
-        open_browser=args.open,
-        x=args.x,
-        actual=args.actual,
-        expected=args.expected,
-        denominator=args.denominator,
-        filters=args.filters,
-        no_filters=args.no_filters,
-        tools=args.tools,
-    )
+    try:
+        serve(
+            path=args.path,
+            host=args.host,
+            port=args.port,
+            token="" if args.no_token else secrets.token_urlsafe(18),
+            open_browser=args.open,
+            x=args.x,
+            actual=args.actual,
+            expected=args.expected,
+            denominator=args.denominator,
+            filters=args.filters,
+            no_filters=args.no_filters,
+            tools=args.tools,
+        )
+    except RuntimeError as error:
+        parser.exit(1, f"lucidum: error: {error}\n")
+    return 0

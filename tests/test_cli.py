@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
 import socket
 import threading
+from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import uvicorn
 
-from py_lucidum.cli import LucidumServer, _display_url_for_app, _run_server, ensure_port_available
+from py_lucidum.cli import LucidumServer, _display_url_for_app, _run_server, ensure_port_available, main, run_app, serve
 
 
 class FakeServer:
@@ -66,6 +69,53 @@ class CliRuntimeTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, f"Port {port} is already in use"):
                 ensure_port_available("127.0.0.1", port)
+
+    def test_run_app_checks_busy_port_before_printing(self) -> None:
+        app = SimpleNamespace(state=SimpleNamespace(token="", defaults={}))
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = int(sock.getsockname()[1])
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout), self.assertRaisesRegex(RuntimeError, f"Port {port} is already in use"):
+                run_app(app, port=port)
+
+        self.assertEqual(stdout.getvalue(), "")
+
+    def test_serve_checks_busy_port_before_printing_or_building_app(self) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = int(sock.getsockname()[1])
+            stdout = io.StringIO()
+
+            with (
+                patch("py_lucidum.cli.create_app") as create_app_mock,
+                redirect_stdout(stdout),
+                self.assertRaisesRegex(RuntimeError, f"Port {port} is already in use"),
+            ):
+                serve("missing.parquet", port=port)
+
+        create_app_mock.assert_not_called()
+        self.assertEqual(stdout.getvalue(), "")
+
+    def test_main_reports_runtime_error_without_traceback(self) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = int(sock.getsockname()[1])
+            stderr = io.StringIO()
+
+            with (
+                patch("sys.argv", ["lucidum", "missing.parquet", "--port", str(port)]),
+                patch("py_lucidum.cli.create_app") as create_app_mock,
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_context,
+            ):
+                main()
+
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertIn(f"lucidum: error: Port {port} is already in use", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+        create_app_mock.assert_not_called()
 
 
 class AsyncCliRuntimeTests(unittest.IsolatedAsyncioTestCase):

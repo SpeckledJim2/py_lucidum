@@ -225,6 +225,7 @@
       .feature-list {
         flex: 1;
         min-height: 280px;
+        min-width: 0;
         overflow: auto;
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -246,6 +247,15 @@
         cursor: pointer;
         text-align: left;
         font-size: 12px;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .feature span:first-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .feature:hover,
@@ -255,6 +265,7 @@
 
       .kind {
         color: var(--muted);
+        flex: 0 0 auto;
         font-size: 10px;
       }
 
@@ -399,7 +410,7 @@
 
       .visual-area {
         display: grid;
-        grid-template-columns: var(--chart-controls-width, 260px) 6px minmax(0, 1fr);
+        grid-template-columns: var(--chart-controls-width, 340px) 6px minmax(0, 1fr);
         gap: 8px;
         flex: 1 1 auto;
         min-height: 0;
@@ -450,6 +461,8 @@
         flex: 1 1 0;
         flex-direction: column;
         min-height: 0;
+        min-width: 0;
+        overflow: hidden;
       }
 
       .chart-side-section h2 {
@@ -636,7 +649,7 @@
         }
 
         .visual-area {
-          grid-template-columns: var(--chart-controls-width, 230px) 6px minmax(0, 1fr);
+          grid-template-columns: var(--chart-controls-width, 340px) 6px minmax(0, 1fr);
         }
 
         .filter-bar {
@@ -1606,8 +1619,9 @@
       function setChartControlsWidth(rawWidth) {
         const visualArea = document.querySelector(".visual-area");
         const availableWidth = visualArea?.getBoundingClientRect().width || window.innerWidth;
-        const maxWidth = Math.max(200, Math.min(560, availableWidth - 420));
-        const width = Math.min(Math.max(rawWidth, 200), maxWidth);
+        const minWidth = 280;
+        const maxWidth = Math.max(minWidth, Math.min(560, availableWidth - 420));
+        const width = Math.min(Math.max(rawWidth, minWidth), maxWidth);
         document.documentElement.style.setProperty("--chart-controls-width", `${Math.round(width)}px`);
         requestAnimationFrame(() => chart.resize());
       }
