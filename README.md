@@ -11,9 +11,9 @@ Implemented:
 - Line-and-bar chart for local CSV and Parquet datasets.
 - DuckDB-backed schema inference and grouped aggregation.
 - One or two response lines over an x-axis feature.
-- Row volume bars.
+- A shared Weight selector for response denominators and blue bar totals.
 - Numeric banding and date buckets.
-- Low-weight group collapsing with `0`, `10`, `100`, `0.1%`, and `1%` presets.
+- Low-weight group collapsing with `0`, `10`, `100`, `0.1%`, and `1%` presets, based on the selected Weight.
 - DuckDB `WHERE` filters typed directly into the UI.
 - Saved filters from `filter_spec.csv` or `specs/filter_spec.csv`.
 - Chart/table view switching.
@@ -70,7 +70,7 @@ Parquet is recommended for normal use because DuckDB reads it much faster.
 .venv/bin/lucidum my_data.parquet --open --port 8000
 .venv/bin/lucidum my_data.parquet --host 0.0.0.0 --port 8000
 .venv/bin/lucidum my_data.parquet --no-token
-.venv/bin/lucidum my_data.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
+.venv/bin/lucidum my_data.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction --denominator Exposure
 .venv/bin/lucidum my_data.parquet --filters path/to/filter_spec.csv
 .venv/bin/lucidum my_data.parquet --no-filters
 .venv/bin/lucidum my_data.parquet --tools line-bar
@@ -79,7 +79,7 @@ Parquet is recommended for normal use because DuckDB reads it much faster.
 - `--open` opens the generated URL with Python's configured browser or viewer handler.
 - `--host 0.0.0.0` binds to all network interfaces for LAN testing.
 - `--no-token` disables URL/API token protection for local-only use.
-- `--x`, `--actual`, and `--expected` set initial chart selections.
+- `--x`, `--actual`, `--expected`, and `--denominator` set initial chart selections.
 - `--filters` points to a saved-filter CSV file.
 - `--no-filters` disables saved filters and skips default filter-spec discovery.
 - `--tools line-bar` explicitly enables the line-and-bar tool. This is currently also the default.
@@ -111,7 +111,7 @@ from py_lucidum.app import create_app
 app = create_app(
     "my_data.parquet",
     token="dev-token",
-    defaults={"x": "YoungestDriverAge", "actual": "AvgPrice1_5"},
+    defaults={"x": "YoungestDriverAge", "actual": "AvgPrice1_5", "denominator": "Exposure"},
     filters_path="path/to/filter_spec.csv",
     use_saved_filters=True,
     tools=["line_bar"],
@@ -127,6 +127,16 @@ http://127.0.0.1:8000/?token=dev-token
 ```
 
 Use raw `uvicorn.run(app, ...)` only from a standalone Python script or terminal. Positron and Jupyter already have an asyncio event loop running, so `uvicorn.run()` raises `RuntimeError: asyncio.run() cannot be called from a running event loop` there.
+
+## Line-Bar Weights
+
+The line-and-bar chart uses one shared **Weight** selector for both response lines.
+
+- `Average row value` divides each response by the count of rows where all selected response values are non-null. The blue bars show that row count.
+- Selecting a numeric Weight column divides Actual and Expected by `SUM(weight)` for each x-axis group, using rows where the selected response values and Weight are non-null. The blue bars show the same `SUM(weight)`.
+- Low-weight grouping and tail grouping use the selected Weight total, not raw row count.
+- The grey value next to the Weight label is the filtered total Weight used by the chart.
+- If rows are excluded because selected response values or Weight values are missing, the chart status text reports that. It also reports zero or negative Weight values.
 
 ## Filters
 

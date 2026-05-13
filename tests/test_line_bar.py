@@ -19,11 +19,11 @@ class LineBarToolTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.data_path = self.root / "sample.csv"
         self.data_path.write_text(
-            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected\n"
-            "30,Social,2024-01-01,2500,100,90\n"
-            "45,Social,2024-01-02,3500,200,210\n"
-            "50,Business,2024-02-01,4000,300,290\n"
-            "60,Business,2024-02-20,4500,400,410\n",
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "30,Social,2024-01-01,2500,100,90,10\n"
+            "45,Social,2024-01-02,3500,200,210,20\n"
+            "50,Business,2024-02-01,4000,300,290,30\n"
+            "60,Business,2024-02-20,4500,400,410,40\n",
             encoding="utf-8",
         )
         self.filters_path = self.root / "filter_spec.csv"
@@ -39,15 +39,22 @@ class LineBarToolTests(unittest.TestCase):
             "sigma": 0,
             "transform": "none",
             "filter": filter_expression,
+            "denominator": "__none__",
             "maxGroups": 10000,
             "responses": [
-                {"label": "Actual", "numerator": "Actual", "denominator": None},
-                {"label": "Expected", "numerator": "Expected", "denominator": None},
+                {"label": "Actual", "numerator": "Actual"},
+                {"label": "Expected", "numerator": "Expected"},
             ],
         }
 
     def test_app_registers_line_bar_routes_and_saved_filters(self) -> None:
-        app = create_app(self.data_path, token="dev-token", filters_path=self.filters_path, tools=["line_bar"])
+        app = create_app(
+            self.data_path,
+            token="dev-token",
+            defaults={"denominator": "Weight"},
+            filters_path=self.filters_path,
+            tools=["line_bar"],
+        )
         paths = {route.path for route in app.routes}
 
         self.assertIn("/api/chart", paths)
@@ -55,6 +62,7 @@ class LineBarToolTests(unittest.TestCase):
         self.assertIn("/api/schema", paths)
         self.assertIn("/api/shutdown", paths)
         self.assertEqual(app.state.enabled_tools, ["line_bar"])
+        self.assertEqual(app.state.defaults["denominator"], "Weight")
         self.assertEqual(app.state.saved_filters, [{"name": "Older drivers", "expression": "YoungestDriverAge > 40"}])
 
     def test_default_saved_filters_fall_back_to_specs_directory(self) -> None:
@@ -111,6 +119,76 @@ class LineBarToolTests(unittest.TestCase):
         self.assertEqual(result["response_summaries"][0]["denominator"], 3)
         self.assertEqual(result["response_summaries"][1]["label"], "Expected")
         self.assertAlmostEqual(result["response_summaries"][1]["value"], 910 / 3)
+        self.assertEqual(result["denominator"]["label"], "Average row value")
+        self.assertEqual(result["denominator"]["bar_label"], "Row count")
+        self.assertEqual(result["denominator"]["value"], 3)
+
+    def test_chart_uses_common_weight_column_for_lines_bars_and_summary(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.request("YoungestDriverAge > 40")
+        request["denominator"] = "Weight"
+
+        result = chart(dataset, request)
+
+        self.assertEqual(result["denominator"]["label"], "Weight")
+        self.assertEqual(result["denominator"]["bar_label"], "Weight")
+        self.assertEqual(result["denominator"]["value"], 90)
+        self.assertEqual([row["x"] for row in result["rows"]], ["Business", "Social"])
+        self.assertEqual(result["rows"][0]["volume"], 70)
+        self.assertEqual(result["rows"][1]["volume"], 20)
+        self.assertEqual(result["rows"][0]["resp0"], 10)
+        self.assertEqual(result["rows"][0]["resp1"], 10)
+        self.assertEqual(result["response_summaries"][0]["denominator"], 90)
+        self.assertEqual(result["response_summaries"][0]["value"], 10)
+
+    def test_average_row_value_reports_rows_with_missing_responses(self) -> None:
+        self.data_path.write_text(
+            "UseofVan,Actual,Expected,Weight\n"
+            "Social,100,90,10\n"
+            "Social,,110,20\n"
+            "Business,300,290,30\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request["x"] = "UseofVan"
+
+        result = chart(dataset, request)
+
+        self.assertEqual(result["denominator"]["value"], 2)
+        self.assertEqual(result["denominator"]["missing_response_rows"], 1)
+        self.assertIn(
+            "1 row excluded from Weight because one or more selected response values were missing.",
+            result["warnings"],
+        )
+        social = next(row for row in result["rows"] if row["x"] == "Social")
+        self.assertEqual(social["volume"], 1)
+        self.assertEqual(social["resp0"], 100)
+        self.assertEqual(social["resp1"], 90)
+
+    def test_weight_column_reports_missing_zero_and_negative_values(self) -> None:
+        self.data_path.write_text(
+            "UseofVan,Actual,Expected,Weight\n"
+            "Social,100,90,10\n"
+            "Social,200,210,0\n"
+            "Business,300,290,-5\n"
+            "Business,400,410,\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request["x"] = "UseofVan"
+        request["denominator"] = "Weight"
+
+        result = chart(dataset, request)
+
+        self.assertEqual(result["denominator"]["value"], 5)
+        self.assertEqual(result["denominator"]["missing_weight_rows"], 1)
+        self.assertEqual(result["denominator"]["zero_weight_rows"], 1)
+        self.assertEqual(result["denominator"]["negative_weight_rows"], 1)
+        self.assertIn("1 row excluded from Weight because Weight was missing.", result["warnings"])
+        self.assertIn("1 row has zero Weight.", result["warnings"])
+        self.assertIn("1 row has negative Weight.", result["warnings"])
 
     def test_chart_accepts_string_date_and_quoted_column_filters(self) -> None:
         dataset = Dataset(self.data_path)

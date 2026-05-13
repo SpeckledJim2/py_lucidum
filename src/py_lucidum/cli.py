@@ -36,6 +36,16 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def ensure_port_available(host: str, port: int) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+        except OSError as exc:
+            raise RuntimeError(
+                f"Port {port} is already in use on {host}. Stop the existing py_lucidum app or choose another port."
+            ) from exc
+
+
 def _has_running_event_loop() -> bool:
     try:
         asyncio.get_running_loop()
@@ -68,7 +78,7 @@ def _display_url_for_app(app: object, host: str, port: int) -> str:
     if token:
         params["token"] = token
     if isinstance(defaults, dict):
-        params.update({key: value for key, value in defaults.items() if key in {"x", "actual", "expected"} and value})
+        params.update({key: value for key, value in defaults.items() if key in {"x", "actual", "expected", "denominator"} and value})
     if params:
         return f"{url}?{urlencode(params)}"
     return url
@@ -95,6 +105,7 @@ def _start_app_server(
     open_browser: bool,
     run_in_background: bool,
 ) -> None:
+    ensure_port_available(host, port)
     if open_browser:
         webbrowser.open(url)
     config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
@@ -130,13 +141,14 @@ def serve(
     x: str | None = None,
     actual: str | None = None,
     expected: str | None = None,
+    denominator: str | None = None,
     filters: str | Path | None = None,
     no_filters: bool = False,
     tools: str | Sequence[str] | None = None,
 ) -> str:
     selected_port = port or find_free_port()
     selected_token = token if token is not None else secrets.token_urlsafe(18)
-    defaults = {"x": x, "actual": actual, "expected": expected}
+    defaults = {"x": x, "actual": actual, "expected": expected, "denominator": denominator}
     app = create_app(
         path,
         token=selected_token,
@@ -164,6 +176,7 @@ def serve_line_bar(
     x: str | None = None,
     actual: str | None = None,
     expected: str | None = None,
+    denominator: str | None = None,
     filters: str | Path | None = None,
     no_filters: bool = False,
 ) -> str:
@@ -176,6 +189,7 @@ def serve_line_bar(
         x=x,
         actual=actual,
         expected=expected,
+        denominator=denominator,
         filters=filters,
         no_filters=no_filters,
         tools=["line_bar"],
@@ -206,6 +220,7 @@ def main() -> None:
     parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
+    parser.add_argument("--denominator", default=None, help="Initial Weight column. Defaults to Average row value.")
     filter_group = parser.add_mutually_exclusive_group()
     filter_group.add_argument(
         "--filters",
@@ -228,6 +243,7 @@ def main() -> None:
         x=args.x,
         actual=args.actual,
         expected=args.expected,
+        denominator=args.denominator,
         filters=args.filters,
         no_filters=args.no_filters,
         tools=args.tools,

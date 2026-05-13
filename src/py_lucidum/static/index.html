@@ -551,12 +551,14 @@
             <div class="metric-row">
               <div id="actualMetricTitle" class="metric-title">Actual</div>
               <select id="actualNumerator"></select>
-              <select id="actualDenominator"></select>
             </div>
             <div class="metric-row">
               <div id="expectedMetricTitle" class="metric-title">Expected</div>
               <select id="expectedNumerator"></select>
-              <select id="expectedDenominator"></select>
+            </div>
+            <div class="metric-row">
+              <div id="weightMetricTitle" class="metric-title">Weight</div>
+              <select id="denominator"></select>
             </div>
           </section>
 
@@ -581,7 +583,7 @@
               <h3>x-axis sort order</h3>
               <div class="segmented" data-control="sort">
                 <button data-value="alpha" class="active">A-Z</button>
-                <button data-value="volume">Volume</button>
+                <button data-value="volume">Weight</button>
                 <button data-value="actual">Actual</button>
                 <button id="expectedSortButton" data-value="expected" class="hidden">Expected</button>
               </div>
@@ -675,7 +677,7 @@
     <script>
       function paramsFromLocation() {
         const standardParams = new URLSearchParams(location.search);
-        const expectedKeys = ["token", "x", "actual", "expected"];
+        const expectedKeys = ["token", "x", "actual", "expected", "denominator"];
         if (expectedKeys.some((key) => standardParams.has(key))) return standardParams;
         const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
         try {
@@ -704,6 +706,7 @@
         lastData: null,
         tablePage: 1,
         bandFeature: null,
+        chartRequestSeq: 0,
       };
 
       const BAND_STEPS = makeBandSteps();
@@ -858,9 +861,8 @@
       function fillDenominatorSelect(select) {
         select.innerHTML = "";
         select.append(new Option("Average row value", "__none__"));
-        select.append(new Option("Divide by row count", "__count__"));
         for (const col of numericColumns()) {
-          select.append(new Option(`Divide by ${col.name}`, col.name));
+          select.append(new Option(col.name, col.name));
         }
       }
 
@@ -892,14 +894,13 @@
         state.x = columnExists(requestedX) ? requestedX : state.schema.columns[0]?.name || null;
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
-        fillDenominatorSelect(el("actualDenominator"));
-        fillDenominatorSelect(el("expectedDenominator"));
+        fillDenominatorSelect(el("denominator"));
         const requestedActual = requestedDefault("actual");
         const requestedExpected = requestedDefault("expected");
+        const requestedDenominator = requestedDefault("denominator");
         el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
         el("expectedNumerator").value = numericColumnExists(requestedExpected) ? requestedExpected : "";
-        el("actualDenominator").value = "__none__";
-        el("expectedDenominator").value = "__none__";
+        el("denominator").value = numericColumnExists(requestedDenominator) ? requestedDenominator : "__none__";
       }
 
       function renderFeatures() {
@@ -931,14 +932,12 @@
           responses.push({
             label: el("actualNumerator").value,
             numerator: el("actualNumerator").value,
-            denominator: el("actualDenominator").value,
           });
         }
         if (el("expectedNumerator").value) {
           responses.push({
             label: el("expectedNumerator").value,
             numerator: el("expectedNumerator").value,
-            denominator: el("expectedDenominator").value,
           });
         }
         return responses;
@@ -987,6 +986,8 @@
 
       async function refreshChart() {
         if (!state.schema || !state.x) return;
+        const requestSeq = state.chartRequestSeq + 1;
+        state.chartRequestSeq = requestSeq;
         setStatus("");
         setChartMessage("");
         setGroupMeta("Computing...");
@@ -1003,11 +1004,13 @@
           transform: state.transform,
           sigma: Number(state.sigma),
           filter: state.activeFilter,
+          denominator: el("denominator").value,
           responses: currentResponses(),
           maxGroups: 10000,
         };
         try {
           const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
+          if (requestSeq !== state.chartRequestSeq) return;
           state.lastData = data;
           state.tablePage = 1;
           updateMetricTitles(data);
@@ -1021,6 +1024,7 @@
           setStatus([...(data.warnings || [])].filter(Boolean).join(" "));
           setChartMessage(labelMessage);
         } catch (error) {
+          if (requestSeq !== state.chartRequestSeq) return;
           setGroupMeta("Query failed");
           setChartMessage("");
           setStatus(error.message, true);
@@ -1040,13 +1044,14 @@
         const expectedColor = "#d13f3f";
         const responseColors = [actualColor, expectedColor];
         const nColor = getCss("--bar");
+        const weightLabel = data.denominator?.bar_label || "Weight";
         const sigmaColor = "#8a94a6";
         const legendData = [
           ...data.responses.map((response) => response.label),
-          { name: "N", icon: "roundRect", itemStyle: { color: nColor, borderColor: nColor } },
+          { name: weightLabel, icon: "roundRect", itemStyle: { color: nColor, borderColor: nColor } },
         ];
         const barSeries = {
-          name: "N",
+          name: weightLabel,
           type: "bar",
           yAxisIndex: 1,
           z: 1,
@@ -1172,10 +1177,11 @@
         const summaries = data.response_summaries || [];
         renderMetricTitle(el("actualMetricTitle"), "Actual", summaries[0]?.value);
         renderMetricTitle(el("expectedMetricTitle"), "Expected", summaries[1]?.value);
+        renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
       }
 
-      function renderMetricTitle(target, label, value) {
-        const formatted = formatLineValue(value);
+      function renderMetricTitle(target, label, value, formatter = formatLineValue) {
+        const formatted = formatter(value);
         target.textContent = label;
         if (!formatted) return;
         target.append(" ");
@@ -1288,6 +1294,7 @@
 
       function renderTable(data) {
         const responseHeaders = data.responses.map((r, i) => `<th>${escapeHtml(r.label)}</th>`).join("");
+        const weightLabel = data.denominator?.bar_label || "Weight";
         const needsPagination = data.rows.length > TABLE_PAGE_SIZE;
         const pageCount = needsPagination ? Math.ceil(data.rows.length / TABLE_PAGE_SIZE) : 1;
         state.tablePage = Math.min(Math.max(state.tablePage, 1), pageCount);
@@ -1307,7 +1314,7 @@
               <button id="tableNextBtn" type="button"${state.tablePage === pageCount ? " disabled" : ""}>Next</button>
             </div>`
           : "";
-        el("tableWrap").innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>N</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody></table></div>${pager}`;
+        el("tableWrap").innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>${escapeHtml(weightLabel)}</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody></table></div>${pager}`;
         if (needsPagination) {
           el("tablePrevBtn").addEventListener("click", () => {
             state.tablePage -= 1;
@@ -1405,7 +1412,7 @@
             refreshChart();
           });
         });
-        ["actualNumerator", "actualDenominator", "expectedNumerator", "expectedDenominator"].forEach((id) => {
+        ["actualNumerator", "expectedNumerator", "denominator"].forEach((id) => {
           el(id).addEventListener("change", refreshChart);
         });
         el("featureSearch").addEventListener("input", renderFeatures);
@@ -1485,6 +1492,20 @@
           minimumFractionDigits: fractionDigits,
           maximumFractionDigits: fractionDigits,
         });
+      }
+
+      function formatWeightValue(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return "";
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        const abs = Math.abs(number);
+        if (abs >= 10 || Number.isInteger(number)) {
+          return number.toLocaleString(undefined, {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0,
+          });
+        }
+        return formatNumber(number);
       }
 
       function formatXLabel(value, kind) {

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import socket
 import threading
 from types import SimpleNamespace
 import unittest
 
 import uvicorn
 
-from py_lucidum.cli import LucidumServer, _display_url_for_app, _run_server
+from py_lucidum.cli import LucidumServer, _display_url_for_app, _run_server, ensure_port_available
 
 
 class FakeServer:
@@ -47,13 +48,24 @@ class CliRuntimeTests(unittest.TestCase):
         app = SimpleNamespace(
             state=SimpleNamespace(
                 token="dev-token",
-                defaults={"x": "Driver Age", "actual": "AvgPrice1_5", "unused": "ignored"},
+                defaults={"x": "Driver Age", "actual": "AvgPrice1_5", "denominator": "Exposure", "unused": "ignored"},
             )
         )
 
         url = _display_url_for_app(app, "127.0.0.1", 8000)
 
-        self.assertEqual(url, "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5")
+        self.assertEqual(
+            url,
+            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&denominator=Exposure",
+        )
+
+    def test_ensure_port_available_reports_busy_port(self) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = int(sock.getsockname()[1])
+
+            with self.assertRaisesRegex(RuntimeError, f"Port {port} is already in use"):
+                ensure_port_available("127.0.0.1", port)
 
 
 class AsyncCliRuntimeTests(unittest.IsolatedAsyncioTestCase):

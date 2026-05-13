@@ -40,7 +40,7 @@ Useful options:
 .venv/bin/lucidum datasets/vans.parquet --open --port 8000
 .venv/bin/lucidum datasets/vans.parquet --host 0.0.0.0 --port 8000
 .venv/bin/lucidum datasets/vans.parquet --no-token
-.venv/bin/lucidum datasets/vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
+.venv/bin/lucidum datasets/vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction --denominator Gross.Weight
 .venv/bin/lucidum datasets/vans.parquet --filters specs/filter_spec.csv
 .venv/bin/lucidum datasets/home.parquet --no-filters --port 8000
 .venv/bin/lucidum datasets/vans.parquet --tools line-bar
@@ -49,12 +49,12 @@ Useful options:
 - `--open` asks Python to open the generated URL with its configured browser or viewer handler. Positron may open it in the Viewer pane rather than an external browser.
 - `--host 0.0.0.0` is useful for internal server/LAN testing. Keep the generated token enabled unless you have another access control layer.
 - `--no-token` is convenient for local-only testing and makes API requests work without the generated query-string token.
-- `--x`, `--actual`, and `--expected` set the initial x-axis feature, Actual / line 1 feature, and Expected / line 2 feature.
+- `--x`, `--actual`, `--expected`, and `--denominator` set the initial x-axis feature, Actual / line 1 feature, Expected / line 2 feature, and Weight column.
 - `--filters` sets the saved-filter CSV path. If omitted, the app loads `./filter_spec.csv` from the working directory when it exists, otherwise `./specs/filter_spec.csv` when it exists.
 - `--no-filters` disables saved filters and skips the default filter-spec lookup.
 - `--tools` selects which tool components to enable. The implemented tool today is `line-bar`; this is also the default when `--tools` is omitted.
 - Without explicit defaults, the app starts with the first dataset column on the x-axis, the first numeric column as Actual / line 1, and no Expected / line 2.
-- URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=YoungestDriverAge&actual=AvgPrice1_5&expected=glm_prediction`.
+- URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=YoungestDriverAge&actual=AvgPrice1_5&expected=glm_prediction&denominator=Gross.Weight`.
 
 ## Launch As A Python Module
 
@@ -111,7 +111,7 @@ Initial selections can be supplied programmatically:
 app = create_app(
     "datasets/vans.parquet",
     token="dev-token",
-    defaults={"x": "YoungestDriverAge", "actual": "AvgPrice1_5", "expected": "glm_prediction"},
+    defaults={"x": "YoungestDriverAge", "actual": "AvgPrice1_5", "expected": "glm_prediction", "denominator": "Gross.Weight"},
     filters_path="specs/filter_spec.csv",
     use_saved_filters=True,
     tools=["line_bar"],
@@ -152,6 +152,16 @@ POST /api/line-bar/chart
 
 `/api/chart` is retained for compatibility with the existing frontend. New tool-specific integrations should prefer the namespaced endpoint.
 
+## Line-And-Bar Weights
+
+The line-and-bar chart has one shared **Weight** selector:
+
+- `Average row value` divides Actual and Expected by the count of rows where all selected response values are non-null. The blue bars show that same row count.
+- Selecting a numeric Weight column divides Actual and Expected by `SUM(weight)` within each x-axis group, using rows where the selected response values and Weight are non-null. The blue bars show the same `SUM(weight)`.
+- The grey value next to the Weight label is the filtered total Weight used by the chart.
+- Low-weight grouping, including Low tail, High tail, and Other groups, uses the selected Weight total instead of raw row count.
+- The chart status text reports rows excluded because selected response values or Weight values are missing. It also reports zero or negative Weight values.
+
 ## Filters
 
 The filter box above the chart accepts a DuckDB `WHERE` expression. Type the expression and press Enter or click Apply. Clear removes the active filter.
@@ -184,7 +194,7 @@ Heavy vans,"""Gross.Weight"" >= 3000"
 - The current prototype identifies integer columns separately from continuous numeric columns in the sidebar.
 - Initial x-axis and response selections are data-agnostic by default and can be overridden with CLI options or URL parameters.
 - Filters use DuckDB expression syntax and are applied before aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
-- Low-weight grouping presets are `0`, `10`, `100`, `0.1%`, and `1%`.
+- Low-weight grouping presets are `0`, `10`, `100`, `0.1%`, and `1%`; they are evaluated against the selected Weight.
 - Integer features with a full-data range below 120 start with banding `1`; other integer/numeric features use the automatic standard-deviation based suggestion.
 - The `<` and `>` banding controls include practical intermediate values such as `4`, `7`, and `12`.
 - Table view is intentionally compact so grouped results can be scanned without excessive row spacing.
@@ -204,7 +214,7 @@ These launch paths are expected to work from the project root when `datasets/van
 .venv/bin/lucidum datasets/vans.parquet --open --port 8000
 .venv/bin/lucidum datasets/vans.parquet --host 0.0.0.0 --port 8000
 .venv/bin/lucidum datasets/vans.parquet --no-token
-.venv/bin/lucidum datasets/vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
+.venv/bin/lucidum datasets/vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction --denominator Gross.Weight
 .venv/bin/lucidum datasets/vans.parquet --filters specs/filter_spec.csv
 .venv/bin/lucidum datasets/home.parquet --no-filters --port 8000
 .venv/bin/lucidum datasets/vans.parquet --tools line-bar

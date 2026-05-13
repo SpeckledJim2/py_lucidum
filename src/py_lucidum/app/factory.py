@@ -81,7 +81,7 @@ def create_app(
     app.state.defaults = {
         key: value
         for key, value in (defaults or {}).items()
-        if key in {"x", "actual", "expected"} and value
+        if key in {"x", "actual", "expected", "denominator"} and value
     }
 
     def check_token(request: Request) -> None:
