@@ -72,7 +72,10 @@ def serve(
     config = uvicorn.Config(app, host=host, port=selected_port, log_level="info", access_log=False)
     server = LucidumServer(config, url)
     app.state.shutdown_callback = lambda: setattr(server, "should_exit", True)
-    server.run()
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        pass
     return url
 
 

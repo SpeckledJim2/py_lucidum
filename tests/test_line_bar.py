@@ -127,6 +127,20 @@ class LineBarToolTests(unittest.TestCase):
         self.assertEqual(date_result["filtered_row_count"], 2)
         self.assertEqual([row["x"] for row in date_result["rows"]], ["Business"])
 
+    def test_grouped_numeric_tails_keep_sigma_bars(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request.update({"x": "YoungestDriverAge", "lowGroup": "2", "sigma": 2})
+
+        result = chart(dataset, request)
+
+        tails = {row["x"]: row for row in result["rows"] if row["is_tail"]}
+        self.assertEqual(set(tails), {"Low tail", "High tail"})
+        for row in tails.values():
+            self.assertEqual(row["valid_folds"], 2)
+            self.assertIsNotNone(row.get("resp1_low"))
+            self.assertIsNotNone(row.get("resp1_high"))
+
     def test_invalid_filter_is_rejected(self) -> None:
         dataset = Dataset(self.data_path)
 

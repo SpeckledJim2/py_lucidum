@@ -164,7 +164,7 @@ def build_chart_sql(
 
     sigma_sql = ""
     sigma_join = ""
-    sigma_output = ",\n    sigma.sigma_se,\n    sigma.valid_folds"
+    sigma_output = ",\n    sigma.sigma_se,\n    sigma.valid_folds,\n    sigma.sigma_folds"
     if include_sigma:
         fold_metrics: list[str] = []
         fold_values: list[str] = []
@@ -184,9 +184,7 @@ folds AS (
 ),
 fold_values AS (
   SELECT
-    x_key,
-    x_label,
-    __fold,
+    *,
     {', '.join(fold_values)}
   FROM folds
 ),
@@ -195,14 +193,21 @@ sigma AS (
     x_key,
     x_label,
     STDDEV_SAMP(resp0 - resp1) / SQRT(COUNT(*)) AS sigma_se,
-    COUNT(*) AS valid_folds
+    COUNT(*) AS valid_folds,
+    LIST(struct_pack(
+      fold := __fold,
+      resp0_num := resp0_num,
+      resp0_den := resp0_den,
+      resp1_num := resp1_num,
+      resp1_den := resp1_den
+    )) AS sigma_folds
   FROM fold_values
   WHERE resp0 IS NOT NULL AND resp1 IS NOT NULL
   GROUP BY x_key, x_label
 )"""
         sigma_join = "LEFT JOIN sigma ON agg_values.x_key IS NOT DISTINCT FROM sigma.x_key AND agg_values.x_label = sigma.x_label"
     else:
-        sigma_output = ",\n    NULL AS sigma_se,\n    NULL AS valid_folds"
+        sigma_output = ",\n    NULL AS sigma_se,\n    NULL AS valid_folds,\n    NULL AS sigma_folds"
         sigma_join = ""
 
     where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
@@ -367,6 +372,7 @@ def normalise_row(row: dict[str, Any], responses: list[dict[str, str | None]]) -
         "is_tail": False,
         "sigma_se": json_number(row.get("sigma_se")),
         "valid_folds": json_number(row.get("valid_folds")),
+        "sigma_folds": row.get("sigma_folds"),
     }
     for index, _ in enumerate(responses):
         result[f"resp{index}_num"] = json_number(row.get(f"resp{index}_num"))
@@ -376,14 +382,16 @@ def normalise_row(row: dict[str, Any], responses: list[dict[str, str | None]]) -
 
 
 def combine_rows(rows: list[dict[str, Any]], label: str, responses: list[dict[str, str | None]], is_tail: bool) -> dict[str, Any]:
+    sigma_se, valid_folds = combine_sigma(rows) if len(responses) >= 2 else (None, None)
     combined = {
         "x": label,
         "x_sort": rows[0].get("x_sort"),
         "original_order": min(int(row.get("original_order") or 0) for row in rows),
         "volume": sum(int(row.get("volume") or 0) for row in rows),
         "is_tail": is_tail,
-        "sigma_se": None,
-        "valid_folds": None,
+        "sigma_se": sigma_se,
+        "valid_folds": valid_folds,
+        "sigma_folds": None,
     }
     for index, _ in enumerate(responses):
         num = sum(float(row.get(f"resp{index}_num") or 0) for row in rows)
@@ -392,6 +400,39 @@ def combine_rows(rows: list[dict[str, Any]], label: str, responses: list[dict[st
         combined[f"resp{index}_den"] = json_number(den)
         combined[f"resp{index}"] = json_number(num / den) if den else None
     return combined
+
+
+def combine_sigma(rows: list[dict[str, Any]]) -> tuple[float | int | None, float | int | None]:
+    fold_totals: dict[int, dict[str, float]] = {}
+    for row in rows:
+        components = row.get("sigma_folds") or []
+        if not isinstance(components, list):
+            continue
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            fold = component.get("fold")
+            if fold is None:
+                continue
+            bucket = fold_totals.setdefault(
+                int(fold),
+                {"resp0_num": 0.0, "resp0_den": 0.0, "resp1_num": 0.0, "resp1_den": 0.0},
+            )
+            for key in bucket:
+                value = json_number(component.get(key))
+                if value is not None:
+                    bucket[key] += float(value)
+
+    diffs: list[float] = []
+    for totals in fold_totals.values():
+        if totals["resp0_den"] and totals["resp1_den"]:
+            diffs.append(totals["resp0_num"] / totals["resp0_den"] - totals["resp1_num"] / totals["resp1_den"])
+    valid_folds = len(diffs)
+    if valid_folds < 2:
+        return None, json_number(valid_folds) if valid_folds else None
+    mean = sum(diffs) / valid_folds
+    variance = sum((value - mean) ** 2 for value in diffs) / (valid_folds - 1)
+    return json_number(math.sqrt(variance) / math.sqrt(valid_folds)), json_number(valid_folds)
 
 
 def sort_rows(rows: list[dict[str, Any]], x_kind: str, sort: str) -> list[dict[str, Any]]:
@@ -473,6 +514,7 @@ __all__ = [
     "build_x_sql",
     "chart",
     "combine_rows",
+    "combine_sigma",
     "normalise_responses",
     "normalise_row",
     "parse_group_threshold",
