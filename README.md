@@ -13,7 +13,7 @@ Implemented:
 - One or two response lines over an x-axis feature.
 - Row volume bars.
 - Numeric banding and date buckets.
-- Low-weight group collapsing.
+- Low-weight group collapsing with `0`, `10`, `100`, `0.1%`, and `1%` presets.
 - DuckDB `WHERE` filters typed directly into the UI.
 - Saved filters from `filter_spec.csv`.
 - Chart/table view switching.

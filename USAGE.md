@@ -161,6 +161,7 @@ Heavy vans,"""Gross.Weight"" >= 3000"
 - The current prototype identifies integer columns separately from continuous numeric columns in the sidebar.
 - Initial x-axis and response selections are data-agnostic by default and can be overridden with CLI options or URL parameters.
 - Filters use DuckDB expression syntax and are applied before aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
+- Low-weight grouping presets are `0`, `10`, `100`, `0.1%`, and `1%`.
 - Integer features with a full-data range below 120 start with banding `1`; other integer/numeric features use the automatic standard-deviation based suggestion.
 - The `<` and `>` banding controls include practical intermediate values such as `4`, `7`, and `12`.
 - Table view is intentionally compact so grouped results can be scanned without excessive row spacing.
