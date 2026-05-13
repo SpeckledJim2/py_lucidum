@@ -1,6 +1,6 @@
 # Local development datasets
-vans.csv
-vans.parquet
+datasets/*.csv
+datasets/*.parquet
 
 # Python/cache/build artifacts
 __pycache__/

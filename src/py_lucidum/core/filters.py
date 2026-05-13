@@ -4,12 +4,21 @@ import csv
 from pathlib import Path
 
 
-def resolve_filters_path(filters_path: str | Path | None) -> Path:
-    return Path(filters_path).expanduser().resolve() if filters_path else (Path.cwd() / "filter_spec.csv").resolve()
+def resolve_filters_path(filters_path: str | Path | None, use_saved_filters: bool = True) -> Path | None:
+    if not use_saved_filters:
+        return None
+    if filters_path:
+        return Path(filters_path).expanduser().resolve()
+    root_spec = (Path.cwd() / "filter_spec.csv").resolve()
+    if root_spec.exists():
+        return root_spec
+    return (Path.cwd() / "specs" / "filter_spec.csv").resolve()
 
 
-def load_saved_filters(filters_path: str | Path | None) -> list[dict[str, str]]:
-    path = resolve_filters_path(filters_path)
+def load_saved_filters(filters_path: str | Path | None, use_saved_filters: bool = True) -> list[dict[str, str]]:
+    path = resolve_filters_path(filters_path, use_saved_filters=use_saved_filters)
+    if path is None:
+        return []
     if not path.exists():
         if filters_path:
             raise FileNotFoundError(f"Filter specification file does not exist: {path}")

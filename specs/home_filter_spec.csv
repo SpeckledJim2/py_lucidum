@@ -1,0 +1,93 @@
+filter
+--- AGEATCOVERSTARTDATE
+AGEATCOVERSTARTDATE<40
+between(AGEATCOVERSTARTDATE, 40, 70)
+AGEATCOVERSTARTDATE>70
+
+--- Altitude
+Altitude<=10
+between(Altitude,200,998)
+
+--- BUILDINGS_ACCIDENTALDAMAGE
+BUILDINGS_ACCIDENTALDAMAGE==0
+BUILDINGS_ACCIDENTALDAMAGE==1
+
+--- BUILDINGS_MARKETVALUE
+BUILDINGS_MARKETVALUE<1000000
+
+--- CONTENTS_ACCIDENTALDAMAGE
+CONTENTS_ACCIDENTALDAMAGE==0
+CONTENTS_ACCIDENTALDAMAGE==1
+
+--- CONTENTS_AWAYFROMHOMECOVER
+CONTENTS_AWAYFROMHOMECOVER==0
+CONTENTS_AWAYFROMHOMECOVER>0
+
+--- CONTENTS_VALUE
+CONTENTS_VALUE<100000
+
+--- COVERTYPE
+COVERTYPE=='Buildings and contents cover'
+COVERTYPE=='Buildings only cover'
+COVERTYPE=='Contents only cover'
+TOTAL_SPECIFIED_ITEMS==0
+TOTAL_SPECIFIED_ITEMS>0
+
+--- Country
+Country=='England'
+Country=='Northern Ireland'
+Country=='Scotland'
+Country=='Wales'
+
+--- DECLAREDBANKRUPT
+DECLAREDBANKRUPT==0
+DECLAREDBANKRUPT==1
+
+--- DeprivationIndex
+DeprivationIndex<=25
+between(DeprivationIndex, 26, 50)
+between(DeprivationIndex, 51,75)
+DeprivationIndex>75
+
+--- EA_flood_category
+EA_flood_category=='None'
+EA_flood_category=='Very Low'
+EA_flood_category=='Low'
+EA_flood_category=='Medium'
+EA_flood_category=='High'
+
+--- jba_c_score
+jba_c_score==-1
+jba_c_score>=0
+
+--- Marshmallow_Accept
+Marshmallow_Accept==0
+Marshmallow_Accept==1
+
+--- PAYMENTTYPE
+PAYMENTTYPE=='Annually'
+PAYMENTTYPE=='Monthly'
+
+--- PROPERTY_DESCRIPTION
+PROPERTY_DESCRIPTION %like% 'bungalow'
+PROPERTY_DESCRIPTION %like% 'house'
+PROPERTY_DESCRIPTION %like% 'Flat'
+
+--- PROPOSER_YEARS_UK_RESIDENT
+PROPOSER_YEARS_UK_RESIDENT<=1
+PROPOSER_YEARS_UK_RESIDENT<=3
+PROPOSER_YEARS_UK_RESIDENT<=10
+
+--- QUOTEDATE
+year(QUOTEDATE)==2019
+year(QUOTEDATE)==2020
+year(QUOTEDATE)==2021
+year(QUOTEDATE)==2022
+year(QUOTEDATE)==2023
+year(QUOTEDATE)==2024
+year(QUOTEDATE)==2025
+
+--- UKRESIDENTSINCEBIRTH
+UKRESIDENTSINCEBIRTH==0
+UKRESIDENTSINCEBIRTH==1
+

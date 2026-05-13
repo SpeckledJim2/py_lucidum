@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import secrets
 import socket
 import webbrowser
@@ -11,6 +12,19 @@ from urllib.parse import urlencode
 import uvicorn
 
 from .app import create_app
+
+
+class LucidumServer(uvicorn.Server):
+    def __init__(self, config: uvicorn.Config, display_url: str) -> None:
+        super().__init__(config)
+        self.display_url = display_url
+
+    def _log_started_message(self, listeners: Sequence[socket.SocketType]) -> None:
+        message = f"Uvicorn running on {self.display_url} (Press CTRL+C to quit)"
+        logging.getLogger("uvicorn.error").info(
+            message,
+            extra={"color_message": message},
+        )
 
 
 def find_free_port() -> int:
@@ -29,12 +43,20 @@ def serve(
     actual: str | None = None,
     expected: str | None = None,
     filters: str | Path | None = None,
+    no_filters: bool = False,
     tools: str | Sequence[str] | None = None,
 ) -> str:
     selected_port = port or find_free_port()
     selected_token = token if token is not None else secrets.token_urlsafe(18)
     defaults = {"x": x, "actual": actual, "expected": expected}
-    app = create_app(path, token=selected_token, defaults=defaults, filters_path=filters, tools=tools)
+    app = create_app(
+        path,
+        token=selected_token,
+        defaults=defaults,
+        filters_path=filters,
+        use_saved_filters=not no_filters,
+        tools=tools,
+    )
     url = f"http://{host}:{selected_port}/"
     params = {key: value for key, value in defaults.items() if value}
     if selected_token:
@@ -43,9 +65,14 @@ def serve(
         url = f"{url}?{urlencode(params)}"
     print(f"py_lucidum serving {Path(path).resolve()}", flush=True)
     print(f"Open {url}", flush=True)
+    print(f"Saved filters: {saved_filters_status(app)}", flush=True)
+    print("lucidum is still running until you press Ctrl+C in this terminal.", flush=True)
     if open_browser:
         webbrowser.open(url)
-    uvicorn.run(app, host=host, port=selected_port, log_level="info")
+    config = uvicorn.Config(app, host=host, port=selected_port, log_level="info", access_log=False)
+    server = LucidumServer(config, url)
+    app.state.shutdown_callback = lambda: setattr(server, "should_exit", True)
+    server.run()
     return url
 
 
@@ -59,6 +86,7 @@ def serve_line_bar(
     actual: str | None = None,
     expected: str | None = None,
     filters: str | Path | None = None,
+    no_filters: bool = False,
 ) -> str:
     return serve(
         path=path,
@@ -70,8 +98,23 @@ def serve_line_bar(
         actual=actual,
         expected=expected,
         filters=filters,
+        no_filters=no_filters,
         tools=["line_bar"],
     )
+
+
+def saved_filters_status(app: object) -> str:
+    state = getattr(app, "state")
+    if not getattr(state, "use_saved_filters", True):
+        return "disabled"
+    path = getattr(state, "resolved_filters_path", None)
+    if not path or not Path(path).exists():
+        return "none"
+    resolved = Path(path)
+    try:
+        return str(resolved.relative_to(Path.cwd()))
+    except ValueError:
+        return str(resolved)
 
 
 def main() -> None:
@@ -84,7 +127,17 @@ def main() -> None:
     parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
-    parser.add_argument("--filters", default=None, help="Path to filter_spec.csv. Defaults to ./filter_spec.csv when present.")
+    filter_group = parser.add_mutually_exclusive_group()
+    filter_group.add_argument(
+        "--filters",
+        default=None,
+        help="Path to filter_spec.csv. Defaults to ./filter_spec.csv, then ./specs/filter_spec.csv when present.",
+    )
+    filter_group.add_argument(
+        "--no-filters",
+        action="store_true",
+        help="Disable saved filters and skip default filter_spec.csv discovery.",
+    )
     parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Currently supports line-bar.")
     args = parser.parse_args()
     serve(
@@ -97,5 +150,6 @@ def main() -> None:
         actual=args.actual,
         expected=args.expected,
         filters=args.filters,
+        no_filters=args.no_filters,
         tools=args.tools,
     )

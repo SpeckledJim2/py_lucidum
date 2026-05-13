@@ -17,8 +17,8 @@ The current implementation is a package-first Python app with a FastAPI backend,
   - `POST /api/line-bar/chart` for the namespaced line-and-bar chart endpoint.
   - `POST /api/reload` to refresh the file snapshot and cached metadata.
 - The app supports local analyst mode today and is designed to grow into internal server mode with local or mounted server datasets.
-- Local development datasets `vans.csv` and `vans.parquet` are ignored and not intended for publishing.
-- Public repository documentation lives in `README.md`. Detailed launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, initial selection overrides, and saved filter files.
+- Local development datasets live under `datasets/`, including `datasets/vans.csv`, `datasets/vans.parquet`, and `datasets/home.parquet`; this folder is ignored and not intended for publishing. Saved filter CSVs live under `specs/` and are tracked.
+- Public repository documentation lives in `README.md`. Detailed launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, initial selection overrides, saved filter files, and `--no-filters` launch mode.
 - A small standard-library `unittest` suite now covers the line-and-bar backend routes, saved-filter loading, filter validation, aggregation behavior, and compatibility re-exports without introducing a test dependency.
 
 ## Tool Architecture
@@ -49,7 +49,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Date/datetime x-axes use calendar buckets: hour, day, week, month, and year. Date bucket controls are only shown for date/datetime features; banding controls are only shown for integer/numeric features.
 - Low-weight grouping supports preset thresholds `0`, `10`, `100`, `0.1%`, and `1%`. Ordered numeric/date tails are collapsed into low/high tail buckets; low-volume categorical levels are collapsed into “Other”.
 - Chart requests allow up to 10,000 x-axis groups before backend grouping limits apply.
-- DuckDB filter expressions can be typed above the chart or loaded from `filter_spec.csv`; filters are applied before aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
+- DuckDB filter expressions can be typed above the chart or loaded from `filter_spec.csv`, with `specs/filter_spec.csv` used as the tidied repo fallback; `--no-filters` disables saved-filter loading entirely. Filters are applied before aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 - The sidebar response controls use dynamic Actual and Expected metric titles without a separate section heading; each title shows the filtered whole-dataset response average for the currently selected response definition, with the numeric value muted and formatted consistently with line labels.
 - Sigma bars are optional, with presets `-`, `1`, `2`, and `5`, and shown only when two comparable responses are selected. The first response is treated as actual and the second as expected. Error bars are drawn around expected using deterministic hash folds within each x-axis group.
 - The response y-axis scales automatically to the visible Actual and Expected line values instead of always forcing zero into the range; bounds and the explicit tick interval are rounded to the standard 1/2/5 × 10^n ladder, and when response-axis values are non-negative the lower bound is clamped so it cannot fall below zero. The N/bar axis keeps its standard volume scale.
@@ -69,6 +69,8 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Response controls sit above the x-axis feature list because response selection is usually the first choice in the workflow.
 - The x-axis feature list can be shown in original dataset column order or alphabetically without changing the selected chart sort.
 - Chart/Table view controls sit before the filter bar; saved-filter selections populate and apply the filter expression immediately, while manual filter edits require Enter or Apply. Chart-only density messages are shown in the chart's top-right corner instead of consuming filter-bar width.
+- A prominent Stop app button in the header calls a token-protected shutdown endpoint so local users can stop the running server from the browser; after shutdown, the page is greyed out with a clear stopped message.
+- CLI startup output repeats the full tokenized app URL in the final Uvicorn running message, avoids per-request access-log noise by default, and shuts down from the browser without a traceback.
 - Table view uses compact row spacing to support scanning many grouped rows.
 - Bars widen for small numbers of x-axis categories while keeping visible spacing between groups.
 - Chart legend order is Actual response, Expected response when selected, then N. Actual is black in light mode and white in dark mode, Expected is red, N uses the bar colour, and grey sigma guides are never listed in the legend.

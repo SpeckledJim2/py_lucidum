@@ -1,6 +1,6 @@
 # Launching py_lucidum
 
-This project is currently developed against the local example file `vans.parquet`.
+This project is currently developed against the local example file `datasets/vans.parquet`.
 That file is intentionally ignored by git because it is a local development dataset.
 
 ## One-Time Setup
@@ -20,34 +20,38 @@ Use `/usr/bin/python3` on this machine because the installed Homebrew Python bui
 Run the installed command:
 
 ```bash
-.venv/bin/lucidum vans.parquet --port 8000
+.venv/bin/lucidum datasets/vans.parquet --port 8000
 ```
 
 The app prints a URL like:
 
 ```text
 Open http://127.0.0.1:8000/?token=...
+Saved filters: specs/filter_spec.csv
+Uvicorn running on http://127.0.0.1:8000/?token=... (Press CTRL+C to quit)
 ```
 
-Open that URL in the browser. Stop the server with `Ctrl+C` in the terminal.
+Open that URL in the browser. Stop the server with `Ctrl+C` in the terminal, or use the red `Stop app` button in the browser header.
 The same printed URL can also be opened in the Positron Viewer pane.
 
 Useful options:
 
 ```bash
-.venv/bin/lucidum vans.parquet --open --port 8000
-.venv/bin/lucidum vans.parquet --host 0.0.0.0 --port 8000
-.venv/bin/lucidum vans.parquet --no-token
-.venv/bin/lucidum vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
-.venv/bin/lucidum vans.parquet --filters filter_spec.csv
-.venv/bin/lucidum vans.parquet --tools line-bar
+.venv/bin/lucidum datasets/vans.parquet --open --port 8000
+.venv/bin/lucidum datasets/vans.parquet --host 0.0.0.0 --port 8000
+.venv/bin/lucidum datasets/vans.parquet --no-token
+.venv/bin/lucidum datasets/vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
+.venv/bin/lucidum datasets/vans.parquet --filters specs/filter_spec.csv
+.venv/bin/lucidum datasets/home.parquet --no-filters --port 8000
+.venv/bin/lucidum datasets/vans.parquet --tools line-bar
 ```
 
 - `--open` asks Python to open the generated URL in your browser.
 - `--host 0.0.0.0` is useful for internal server/LAN testing. Keep the generated token enabled unless you have another access control layer.
 - `--no-token` is convenient for local-only testing and makes API requests work without the generated query-string token.
 - `--x`, `--actual`, and `--expected` set the initial x-axis feature, Actual / line 1 feature, and Expected / line 2 feature.
-- `--filters` sets the saved-filter CSV path. If omitted, the app loads `./filter_spec.csv` from the working directory when it exists.
+- `--filters` sets the saved-filter CSV path. If omitted, the app loads `./filter_spec.csv` from the working directory when it exists, otherwise `./specs/filter_spec.csv` when it exists.
+- `--no-filters` disables saved filters and skips the default filter-spec lookup.
 - `--tools` selects which tool components to enable. The implemented tool today is `line-bar`; this is also the default when `--tools` is omitted.
 - Without explicit defaults, the app starts with the first dataset column on the x-axis, the first numeric column as Actual / line 1, and no Expected / line 2.
 - URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=YoungestDriverAge&actual=AvgPrice1_5&expected=glm_prediction`.
@@ -57,7 +61,7 @@ Useful options:
 This is equivalent to the console command:
 
 ```bash
-.venv/bin/python -m py_lucidum vans.parquet --port 8000
+.venv/bin/python -m py_lucidum datasets/vans.parquet --port 8000
 ```
 
 ## Launch From A Python Console
@@ -67,7 +71,7 @@ From a Python shell started in the project root:
 ```python
 import py_lucidum
 
-py_lucidum.serve("vans.parquet", port=8000, open_browser=True)
+py_lucidum.serve("datasets/vans.parquet", port=8000, open_browser=True)
 ```
 
 This call starts the Uvicorn server and blocks until the server is stopped.
@@ -75,7 +79,7 @@ This call starts the Uvicorn server and blocks until the server is stopped.
 The line-and-bar chart can also be launched explicitly:
 
 ```python
-py_lucidum.serve_line_bar("vans.parquet", port=8000, open_browser=True)
+py_lucidum.serve_line_bar("datasets/vans.parquet", port=8000, open_browser=True)
 ```
 
 ## Launch With Uvicorn Programmatically
@@ -86,7 +90,7 @@ For server-style usage, create the ASGI app and pass it to Uvicorn:
 import uvicorn
 from py_lucidum.app import create_app
 
-app = create_app("vans.parquet", token="dev-token")
+app = create_app("datasets/vans.parquet", token="dev-token")
 uvicorn.run(app, host="127.0.0.1", port=8000)
 ```
 
@@ -100,10 +104,11 @@ Initial selections can be supplied programmatically:
 
 ```python
 app = create_app(
-    "vans.parquet",
+    "datasets/vans.parquet",
     token="dev-token",
     defaults={"x": "YoungestDriverAge", "actual": "AvgPrice1_5", "expected": "glm_prediction"},
-    filters_path="filter_spec.csv",
+    filters_path="specs/filter_spec.csv",
+    use_saved_filters=True,
     tools=["line_bar"],
 )
 ```
@@ -145,7 +150,7 @@ QuoteDate >= DATE '2024-01-01'
 
 Use double quotes for column names that contain punctuation, spaces, or other special characters, such as `"Gross.Weight"`.
 
-Saved filters are read from `filter_spec.csv` in the working directory by default. Use `--filters path/to/filter_spec.csv` to choose another file. The file must have exactly these columns:
+Saved filters are read from `filter_spec.csv` in the working directory by default, falling back to `specs/filter_spec.csv` for the tidied project layout. Use `--filters path/to/filter_spec.csv` to choose another file, or `--no-filters` to start without any saved-filter dropdown entries. The file must have exactly these columns:
 
 ```csv
 name,expression
@@ -156,8 +161,9 @@ Heavy vans,"""Gross.Weight"" >= 3000"
 ## Notes
 
 - Prefer Parquet for normal work. It is much faster than CSV in the current DuckDB backend.
-- CSV files still work, for example `.venv/bin/lucidum vans.csv --port 8000`.
-- The local `vans.csv` and `vans.parquet` files are ignored by `.gitignore`.
+- CSV files still work, for example `.venv/bin/lucidum datasets/vans.csv --port 8000`.
+- Local data files under `datasets/`, such as `datasets/vans.csv`, `datasets/vans.parquet`, and `datasets/home.parquet`, are ignored by `.gitignore`.
+- Saved-filter CSVs under `specs/`, including `specs/filter_spec.csv` and `specs/home_filter_spec.csv`, are tracked.
 - The current prototype identifies integer columns separately from continuous numeric columns in the sidebar.
 - Initial x-axis and response selections are data-agnostic by default and can be overridden with CLI options or URL parameters.
 - Filters use DuckDB expression syntax and are applied before aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
@@ -174,17 +180,18 @@ Run the line-and-bar backend tests:
 .venv/bin/python -m unittest discover -s tests
 ```
 
-These launch paths are expected to work from the project root when `vans.parquet` exists:
+These launch paths are expected to work from the project root when `datasets/vans.parquet` exists:
 
 ```bash
-.venv/bin/lucidum vans.parquet --port 8000
-.venv/bin/lucidum vans.parquet --open --port 8000
-.venv/bin/lucidum vans.parquet --host 0.0.0.0 --port 8000
-.venv/bin/lucidum vans.parquet --no-token
-.venv/bin/lucidum vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
-.venv/bin/lucidum vans.parquet --filters filter_spec.csv
-.venv/bin/lucidum vans.parquet --tools line-bar
-.venv/bin/python -m py_lucidum vans.parquet --port 8000
+.venv/bin/lucidum datasets/vans.parquet --port 8000
+.venv/bin/lucidum datasets/vans.parquet --open --port 8000
+.venv/bin/lucidum datasets/vans.parquet --host 0.0.0.0 --port 8000
+.venv/bin/lucidum datasets/vans.parquet --no-token
+.venv/bin/lucidum datasets/vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction
+.venv/bin/lucidum datasets/vans.parquet --filters specs/filter_spec.csv
+.venv/bin/lucidum datasets/home.parquet --no-filters --port 8000
+.venv/bin/lucidum datasets/vans.parquet --tools line-bar
+.venv/bin/python -m py_lucidum datasets/vans.parquet --port 8000
 ```
 
 The Python console and programmatic Uvicorn examples above should also start successfully and serve `GET /api/schema` when opened with the correct token, or without a token when no token is configured.

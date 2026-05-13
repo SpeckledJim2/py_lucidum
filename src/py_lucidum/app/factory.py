@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -7,7 +8,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from py_lucidum.core import Dataset, load_saved_filters
+from py_lucidum.core import Dataset, load_saved_filters, resolve_filters_path
 
 from .context import AppContext
 
@@ -64,6 +65,7 @@ def create_app(
     token: str | None = None,
     defaults: dict[str, str | None] | None = None,
     filters_path: str | Path | None = None,
+    use_saved_filters: bool = True,
     tools: str | Sequence[str] | None = None,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
@@ -72,7 +74,9 @@ def create_app(
     app.state.dataset = dataset
     app.state.token = token
     app.state.filters_path = filters_path
-    app.state.saved_filters = load_saved_filters(filters_path)
+    app.state.use_saved_filters = use_saved_filters
+    app.state.resolved_filters_path = resolve_filters_path(filters_path, use_saved_filters=use_saved_filters)
+    app.state.saved_filters = load_saved_filters(filters_path, use_saved_filters=use_saved_filters)
     app.state.enabled_tools = enabled_tools
     app.state.defaults = {
         key: value
@@ -115,8 +119,24 @@ def create_app(
     def reload_dataset(request: Request) -> dict[str, Any]:
         check_token(request)
         app.state.dataset.reload()
-        app.state.saved_filters = load_saved_filters(app.state.filters_path)
+        app.state.resolved_filters_path = resolve_filters_path(
+            app.state.filters_path,
+            use_saved_filters=app.state.use_saved_filters,
+        )
+        app.state.saved_filters = load_saved_filters(
+            app.state.filters_path,
+            use_saved_filters=app.state.use_saved_filters,
+        )
         return schema_payload()
+
+    @app.post("/api/shutdown")
+    def shutdown(request: Request) -> dict[str, str]:
+        check_token(request)
+        shutdown_callback = getattr(app.state, "shutdown_callback", None)
+        if not callable(shutdown_callback):
+            raise HTTPException(status_code=503, detail="Shutdown is only available when launched with the lucidum command")
+        threading.Timer(0.2, shutdown_callback).start()
+        return {"message": "py_lucidum is stopping"}
 
     context = AppContext(dataset=dataset, check_token=check_token)
     if "line_bar" in enabled_tools:

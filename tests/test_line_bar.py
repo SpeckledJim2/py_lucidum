@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -52,8 +53,47 @@ class LineBarToolTests(unittest.TestCase):
         self.assertIn("/api/chart", paths)
         self.assertIn("/api/line-bar/chart", paths)
         self.assertIn("/api/schema", paths)
+        self.assertIn("/api/shutdown", paths)
         self.assertEqual(app.state.enabled_tools, ["line_bar"])
         self.assertEqual(app.state.saved_filters, [{"name": "Older drivers", "expression": "YoungestDriverAge > 40"}])
+
+    def test_default_saved_filters_fall_back_to_specs_directory(self) -> None:
+        self.filters_path.unlink()
+        specs_dir = self.root / "specs"
+        specs_dir.mkdir()
+        (specs_dir / "filter_spec.csv").write_text(
+            "name,expression\nSpec older drivers,YoungestDriverAge > 40\n",
+            encoding="utf-8",
+        )
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            app = create_app(self.data_path, token="dev-token", tools=["line_bar"])
+        finally:
+            os.chdir(previous_cwd)
+
+        self.assertEqual(
+            app.state.saved_filters,
+            [{"name": "Spec older drivers", "expression": "YoungestDriverAge > 40"}],
+        )
+
+    def test_app_loads_with_saved_filters_disabled(self) -> None:
+        specs_dir = self.root / "specs"
+        specs_dir.mkdir()
+        (specs_dir / "filter_spec.csv").write_text(
+            "name,expression\nSpec older drivers,YoungestDriverAge > 40\n",
+            encoding="utf-8",
+        )
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            app = create_app(self.data_path, token="dev-token", tools=["line_bar"], use_saved_filters=False)
+        finally:
+            os.chdir(previous_cwd)
+
+        self.assertEqual(app.state.saved_filters, [])
+        self.assertIsNone(app.state.resolved_filters_path)
+        self.assertFalse(app.state.use_saved_filters)
 
     def test_chart_filters_and_aggregates_response_lines(self) -> None:
         dataset = Dataset(self.data_path)
