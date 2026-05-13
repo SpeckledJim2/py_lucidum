@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import secrets
 import socket
+import threading
 import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
@@ -15,12 +17,13 @@ from .app import create_app
 
 
 class LucidumServer(uvicorn.Server):
-    def __init__(self, config: uvicorn.Config, display_url: str) -> None:
+    def __init__(self, config: uvicorn.Config, display_url: str, stop_instruction: str) -> None:
         super().__init__(config)
         self.display_url = display_url
+        self.stop_instruction = stop_instruction
 
     def _log_started_message(self, listeners: Sequence[socket.SocketType]) -> None:
-        message = f"Uvicorn running on {self.display_url} (Press CTRL+C to quit)"
+        message = f"Uvicorn running on {self.display_url} ({self.stop_instruction})"
         logging.getLogger("uvicorn.error").info(
             message,
             extra={"color_message": message},
@@ -31,6 +34,91 @@ def find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _has_running_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _run_server(server: uvicorn.Server, run_in_background: bool | None = None) -> None:
+    if run_in_background is None:
+        run_in_background = _has_running_event_loop()
+
+    if run_in_background:
+        thread = threading.Thread(target=server.run, name="py-lucidum-uvicorn", daemon=True)
+        thread.start()
+        return
+
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        pass
+
+
+def _display_url_for_app(app: object, host: str, port: int) -> str:
+    url = f"http://{host}:{port}/"
+    state = getattr(app, "state", None)
+    token = getattr(state, "token", None)
+    defaults = getattr(state, "defaults", {})
+    params = {}
+    if token:
+        params["token"] = token
+    if isinstance(defaults, dict):
+        params.update({key: value for key, value in defaults.items() if key in {"x", "actual", "expected"} and value})
+    if params:
+        return f"{url}?{urlencode(params)}"
+    return url
+
+
+def _stop_instruction(run_in_background: bool) -> str:
+    if run_in_background:
+        return "Use the app Stop app button to quit"
+    return "Press CTRL+C to quit"
+
+
+def _print_stop_status(run_in_background: bool) -> None:
+    if run_in_background:
+        print("lucidum is running in the background. Use the app Stop app button to stop it.", flush=True)
+    else:
+        print("lucidum is still running until you press Ctrl+C in this terminal.", flush=True)
+
+
+def _start_app_server(
+    app: object,
+    host: str,
+    port: int,
+    url: str,
+    open_browser: bool,
+    run_in_background: bool,
+) -> None:
+    if open_browser:
+        webbrowser.open(url)
+    config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
+    server = LucidumServer(config, url, _stop_instruction(run_in_background))
+    state = getattr(app, "state", None)
+    if state is not None:
+        state.shutdown_callback = lambda: setattr(server, "should_exit", True)
+    _run_server(server, run_in_background=run_in_background)
+
+
+def run_app(
+    app: object,
+    host: str = "127.0.0.1",
+    port: int | None = 8000,
+    open_browser: bool = False,
+    url: str | None = None,
+) -> str:
+    selected_port = port or find_free_port()
+    display_url = url or _display_url_for_app(app, host, selected_port)
+    run_in_background = _has_running_event_loop()
+    print(f"Open {display_url}", flush=True)
+    _print_stop_status(run_in_background)
+    _start_app_server(app, host, selected_port, display_url, open_browser, run_in_background)
+    return display_url
 
 
 def serve(
@@ -57,25 +145,13 @@ def serve(
         use_saved_filters=not no_filters,
         tools=tools,
     )
-    url = f"http://{host}:{selected_port}/"
-    params = {key: value for key, value in defaults.items() if value}
-    if selected_token:
-        params = {"token": selected_token, **params}
-    if params:
-        url = f"{url}?{urlencode(params)}"
+    url = _display_url_for_app(app, host, selected_port)
+    run_in_background = _has_running_event_loop()
     print(f"py_lucidum serving {Path(path).resolve()}", flush=True)
     print(f"Open {url}", flush=True)
     print(f"Saved filters: {saved_filters_status(app)}", flush=True)
-    print("lucidum is still running until you press Ctrl+C in this terminal.", flush=True)
-    if open_browser:
-        webbrowser.open(url)
-    config = uvicorn.Config(app, host=host, port=selected_port, log_level="info", access_log=False)
-    server = LucidumServer(config, url)
-    app.state.shutdown_callback = lambda: setattr(server, "should_exit", True)
-    try:
-        server.run()
-    except KeyboardInterrupt:
-        pass
+    _print_stop_status(run_in_background)
+    _start_app_server(app, host, selected_port, url, open_browser, run_in_background)
     return url
 
 
@@ -126,7 +202,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Bind host, e.g. 127.0.0.1 or 0.0.0.0")
     parser.add_argument("--port", type=int, default=None, help="Bind port. Defaults to a free local port.")
     parser.add_argument("--no-token", action="store_true", help="Disable the token in the URL and API requests")
-    parser.add_argument("--open", action="store_true", help="Open the app in the default browser")
+    parser.add_argument("--open", action="store_true", help="Open the app with Python's configured browser/viewer")
     parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")

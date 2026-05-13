@@ -46,7 +46,7 @@ Useful options:
 .venv/bin/lucidum datasets/vans.parquet --tools line-bar
 ```
 
-- `--open` asks Python to open the generated URL in your browser.
+- `--open` asks Python to open the generated URL with its configured browser or viewer handler. Positron may open it in the Viewer pane rather than an external browser.
 - `--host 0.0.0.0` is useful for internal server/LAN testing. Keep the generated token enabled unless you have another access control layer.
 - `--no-token` is convenient for local-only testing and makes API requests work without the generated query-string token.
 - `--x`, `--actual`, and `--expected` set the initial x-axis feature, Actual / line 1 feature, and Expected / line 2 feature.
@@ -74,31 +74,36 @@ import py_lucidum
 py_lucidum.serve("datasets/vans.parquet", port=8000, open_browser=True)
 ```
 
-This call starts the Uvicorn server and blocks until the server is stopped.
+In a normal Python shell, this call starts the Uvicorn server and blocks until the server is stopped.
+In notebook-style runtimes such as Positron or Jupyter, where an asyncio event loop is already running, it starts the server in the background and returns the URL immediately. `open_browser=True` uses Python's configured browser or viewer handler, so Positron may open the app in the Viewer pane rather than an external browser. Use the red `Stop app` button in the app header to stop it.
 
 The line-and-bar chart can also be launched explicitly:
 
 ```python
+import py_lucidum
+
 py_lucidum.serve_line_bar("datasets/vans.parquet", port=8000, open_browser=True)
 ```
 
-## Launch With Uvicorn Programmatically
+## Launch A Custom ASGI App Programmatically
 
-For server-style usage, create the ASGI app and pass it to Uvicorn:
+For server-style usage from Python, create the ASGI app and pass it to the py_lucidum runner:
 
 ```python
-import uvicorn
+import py_lucidum
 from py_lucidum.app import create_app
 
 app = create_app("datasets/vans.parquet", token="dev-token")
-uvicorn.run(app, host="127.0.0.1", port=8000)
+py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
 ```
 
-Then open:
+Then open, if it was not opened automatically:
 
 ```text
 http://127.0.0.1:8000/?token=dev-token
 ```
+
+`run_app()` handles both normal Python shells and notebook-style runtimes such as Positron or Jupyter. In a normal Python shell it blocks until stopped. In Positron or Jupyter it starts the server in the background and returns the URL immediately.
 
 Initial selections can be supplied programmatically:
 
@@ -111,6 +116,18 @@ app = create_app(
     use_saved_filters=True,
     tools=["line_bar"],
 )
+```
+
+If you specifically want raw Uvicorn, run it from a standalone Python script or terminal, not from an already-running Positron/Jupyter event loop:
+
+```python
+import uvicorn
+from py_lucidum.app import create_app
+
+app = create_app("datasets/vans.parquet", token="dev-token")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000)
 ```
 
 ## Tool Structure

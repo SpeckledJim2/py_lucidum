@@ -76,7 +76,7 @@ Parquet is recommended for normal use because DuckDB reads it much faster.
 .venv/bin/lucidum my_data.parquet --tools line-bar
 ```
 
-- `--open` opens the generated URL in your default browser.
+- `--open` opens the generated URL with Python's configured browser or viewer handler.
 - `--host 0.0.0.0` binds to all network interfaces for LAN testing.
 - `--no-token` disables URL/API token protection for local-only use.
 - `--x`, `--actual`, and `--expected` set initial chart selections.
@@ -92,6 +92,8 @@ import py_lucidum
 py_lucidum.serve("my_data.parquet", port=8000, open_browser=True)
 ```
 
+In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. `open_browser=True` uses Python's configured browser or viewer handler, so Positron may open the app in the Viewer pane rather than an external browser. Use the app `Stop app` button to stop it.
+
 To launch only the line-and-bar tool explicitly:
 
 ```python
@@ -103,7 +105,7 @@ py_lucidum.serve_line_bar("my_data.parquet", port=8000, open_browser=True)
 For programmatic ASGI usage:
 
 ```python
-import uvicorn
+import py_lucidum
 from py_lucidum.app import create_app
 
 app = create_app(
@@ -115,14 +117,16 @@ app = create_app(
     tools=["line_bar"],
 )
 
-uvicorn.run(app, host="127.0.0.1", port=8000)
+py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
 ```
 
-Then open:
+Then open, if it was not opened automatically:
 
 ```text
 http://127.0.0.1:8000/?token=dev-token
 ```
+
+Use raw `uvicorn.run(app, ...)` only from a standalone Python script or terminal. Positron and Jupyter already have an asyncio event loop running, so `uvicorn.run()` raises `RuntimeError: asyncio.run() cannot be called from a running event loop` there.
 
 ## Filters
 
