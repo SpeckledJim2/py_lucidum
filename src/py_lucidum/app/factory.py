@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import html
 import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse
 
 from py_lucidum.core import Dataset, load_saved_filters, resolve_filters_path
 
+from .assets import NoStoreStaticFiles, no_store_file_response, no_store_html_response
 from .context import AppContext
 
 
@@ -67,6 +68,12 @@ def tool_payload(enabled_tools: Sequence[str]) -> list[dict[str, str]]:
     return [TOOL_METADATA[tool] for tool in enabled_tools]
 
 
+def index_html(dataset_name: str) -> str:
+    title = f"lucidum · {html.escape(dataset_name)}" if dataset_name else "lucidum"
+    html_text = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return html_text.replace("<title>lucidum</title>", f"<title>{title}</title>", 1)
+
+
 def create_app(
     dataset_path: str | Path,
     token: str | None = None,
@@ -107,16 +114,16 @@ def create_app(
         return payload
 
     @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    def index() -> HTMLResponse:
+        return no_store_html_response(index_html(app.state.dataset.path.name))
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", NoStoreStaticFiles(directory=STATIC_DIR), name="static")
 
     @app.api_route("/favicon.ico", methods=["GET", "HEAD"])
     def favicon() -> FileResponse:
         for path in FAVICON_PATHS:
             if path.exists():
-                return FileResponse(path, media_type=favicon_media_type(path))
+                return no_store_file_response(path, media_type=favicon_media_type(path))
         raise HTTPException(status_code=404, detail="Favicon not found")
 
     @app.get("/api/schema")

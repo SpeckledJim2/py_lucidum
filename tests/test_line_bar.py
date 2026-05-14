@@ -104,6 +104,12 @@ class LineBarToolTests(unittest.TestCase):
         self.assertIsNone(app.state.resolved_filters_path)
         self.assertFalse(app.state.use_saved_filters)
 
+    def test_dataset_schema_includes_file_size(self) -> None:
+        dataset = Dataset(self.data_path)
+        schema = dataset.schema()
+
+        self.assertEqual(schema["file_size"], self.data_path.stat().st_size)
+
     def test_chart_filters_and_aggregates_response_lines(self) -> None:
         dataset = Dataset(self.data_path)
         result = chart(dataset, self.request("YoungestDriverAge > 40"))

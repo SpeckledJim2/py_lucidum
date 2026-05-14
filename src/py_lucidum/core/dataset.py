@@ -60,6 +60,7 @@ class Dataset:
                 ]
             return {
                 "path": str(self.path),
+                "file_size": self.path.stat().st_size,
                 "row_count": self.row_count(),
                 "columns": [
                     {

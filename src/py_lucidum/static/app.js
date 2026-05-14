@@ -2181,6 +2181,22 @@
         return formatNumber(number);
       }
 
+      function formatFileSize(value) {
+        const bytes = Number(value);
+        if (!Number.isFinite(bytes) || bytes < 0) return "";
+        let divisor = 1024;
+        let suffix = "Kb";
+        if (bytes >= 1024 ** 3) {
+          divisor = 1024 ** 3;
+          suffix = "Gb";
+        } else if (bytes >= 1024 ** 2) {
+          divisor = 1024 ** 2;
+          suffix = "Mb";
+        }
+        const rounded = Math.round(bytes / divisor);
+        return `${bytes > 0 ? Math.max(1, rounded) : 0}${suffix}`;
+      }
+
       function formatXLabel(value, kind) {
         if (kind !== "integer") return String(value);
         const number = Number(value);
@@ -2196,8 +2212,11 @@
         bindControls();
         try {
           state.schema = await api("/api/schema");
-          const path = state.schema.path.split("/").pop();
-          el("datasetMeta").textContent = `${path} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
+          const path = state.schema.path.split(/[\\/]/).pop();
+          const fileSize = formatFileSize(state.schema.file_size);
+          const fileMeta = fileSize ? `${path} · ${fileSize}` : path;
+          document.title = path ? `lucidum · ${path}` : "lucidum";
+          el("datasetMeta").textContent = `${fileMeta} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
           chooseDefaults();
           renderToolSelector();
           state.tool = chooseDefaultTool();
