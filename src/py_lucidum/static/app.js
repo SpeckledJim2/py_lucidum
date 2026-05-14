@@ -482,10 +482,10 @@
         const list = el("expectedList");
         list.innerHTML = "";
 
-        function addExpectedButton(label, value, kind) {
+        function addExpectedButton(label, value, kind, extraClass = "") {
           const button = document.createElement("button");
           button.type = "button";
-          button.className = `feature ${value === select.value ? "active" : ""}`;
+          button.className = `feature ${extraClass} ${value === select.value ? "active" : ""}`.trim();
           button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
           button.addEventListener("click", () => {
             const changed = select.value !== value;
@@ -497,8 +497,8 @@
           list.append(button);
         }
 
-        if (!query || "none".includes(query)) {
-          addExpectedButton("None", "", "none");
+        if (!query || "none".includes(query) || "no expected line".includes(query) || "off".includes(query)) {
+          addExpectedButton("No expected line", "", "off", "expected-none-option");
         }
 
         const columns = [...numericColumns()];
