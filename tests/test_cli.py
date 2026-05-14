@@ -4,7 +4,9 @@ import io
 import socket
 import threading
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from types import SimpleNamespace
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -122,6 +124,62 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertIn(f"lucidum: error: Port {port} is already in use", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
         create_app_mock.assert_not_called()
+
+    def test_main_reports_missing_dataset_without_traceback(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", ["lucidum", "missing.parquet"]),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            main()
+
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("lucidum: error: Dataset does not exist:", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_main_reports_unknown_tool_without_traceback(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", ["lucidum", "missing.parquet", "--tools", "not-a-tool"]),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            main()
+
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("lucidum: error: Unknown tool 'not-a-tool'", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_main_reports_missing_filter_spec_without_traceback_or_startup_output(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            missing_filters_path = root / "missing_filter_spec.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with (
+                patch("sys.argv", ["lucidum", str(data_path), "--filters", str(missing_filters_path)]),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_context,
+            ):
+                main()
+
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("lucidum: error: Filter specification file does not exist:", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
 
 
 class AsyncCliRuntimeTests(unittest.IsolatedAsyncioTestCase):

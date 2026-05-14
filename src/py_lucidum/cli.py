@@ -272,6 +272,6 @@ def main() -> int:
             no_filters=args.no_filters,
             tools=args.tools,
         )
-    except RuntimeError as error:
+    except (RuntimeError, ValueError, OSError) as error:
         parser.exit(1, f"lucidum: error: {error}\n")
     return 0
