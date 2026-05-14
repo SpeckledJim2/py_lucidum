@@ -71,6 +71,12 @@
         user-select: none !important;
       }
 
+      body.resizing-sidebar-filter,
+      body.resizing-sidebar-filter * {
+        cursor: row-resize !important;
+        user-select: none !important;
+      }
+
       body.app-stopped .app {
         filter: grayscale(1);
         opacity: 0.28;
@@ -285,6 +291,95 @@
         color: var(--muted);
       }
 
+      .sidebar-filter-section {
+        display: flex;
+        flex-direction: column;
+        height: var(--sidebar-filter-height, 238px);
+        margin-top: auto;
+        margin-bottom: 0;
+        min-height: 0;
+      }
+
+      .sidebar-filter-section h2 {
+        margin: 0 0 6px;
+        font-size: 13px;
+      }
+
+      .sidebar-filter-resizer {
+        background: linear-gradient(to bottom, var(--line), transparent);
+        cursor: row-resize;
+        min-height: 6px;
+        margin-bottom: 6px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .sidebar-filter-resizer:hover,
+      .sidebar-filter-resizer.dragging {
+        background: var(--accent);
+      }
+
+      .filter-input-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 28px 28px;
+        gap: 5px;
+        margin-bottom: 7px;
+      }
+
+      .filter-action {
+        width: 28px;
+        min-height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--panel-2);
+        color: var(--text);
+        padding: 0;
+        cursor: pointer;
+        font-size: 15px;
+        line-height: 1;
+      }
+
+      #savedFilterSelect {
+        flex: 1 1 auto;
+        width: 100%;
+        height: auto;
+        min-height: 64px;
+      }
+
+      .filter-operator {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        margin-top: 0;
+      }
+
+      .filter-operator button {
+        min-height: 26px;
+        border: 1px solid var(--line);
+        border-right-width: 0;
+        border-radius: 0;
+        background: var(--panel-2);
+        color: var(--text);
+        padding: 2px 4px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .filter-operator button:first-child {
+        border-radius: 0 0 0 5px;
+      }
+
+      .filter-operator button:last-child {
+        border-right-width: 1px;
+        border-radius: 0 0 5px 0;
+      }
+
+      .filter-operator button.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+
       .toolbar {
         display: flex;
         gap: 8px;
@@ -364,36 +459,8 @@
         z-index: 5;
       }
 
-      .filter-bar {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        flex: 1 1 auto;
-        min-width: 360px;
-      }
-
-      .filter-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 8px;
-        flex: 0 0 auto;
-      }
-
-      .filter-label {
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 650;
-      }
-
       #filterInput {
-        flex: 1 1 280px;
-        min-width: 180px;
-      }
-
-      #savedFilterSelect {
-        flex: 0 0 250px;
-        min-width: 250px;
+        min-width: 0;
       }
 
       .workspace {
@@ -652,9 +719,6 @@
           grid-template-columns: var(--chart-controls-width, 340px) 6px minmax(0, 1fr);
         }
 
-        .filter-bar {
-          min-width: 0;
-        }
       }
     </style>
   </head>
@@ -681,22 +745,28 @@
               <select id="denominator"></select>
             </div>
           </section>
+
+          <section class="section sidebar-filter-section">
+            <div id="sidebarFilterResizer" class="sidebar-filter-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize filter controls"></div>
+            <h2>Filter</h2>
+            <div class="filter-input-row">
+              <input id="filterInput" placeholder="DuckDB WHERE expression" />
+              <button id="filterApplyBtn" class="filter-action" type="button" title="Apply filter" aria-label="Apply filter">&#9654;</button>
+              <button id="filterClearBtn" class="filter-action" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
+            </div>
+            <select id="savedFilterSelect" size="8" multiple></select>
+            <div class="filter-operator" data-control="filterOperator">
+              <button data-value="and" class="active" type="button">AND</button>
+              <button data-value="or" type="button">OR</button>
+              <button data-value="nand" type="button">NAND</button>
+              <button data-value="nor" type="button">NOR</button>
+            </div>
+          </section>
         </aside>
 
         <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 
         <main>
-          <div class="filter-row">
-            <div class="filter-bar">
-              <span class="filter-label">Filter</span>
-              <select id="savedFilterSelect"></select>
-              <span class="filter-label">Filter expression</span>
-              <input id="filterInput" placeholder="DuckDB WHERE expression" />
-              <button id="filterApplyBtn" class="ghost">Apply</button>
-              <button id="filterClearBtn" class="ghost">Clear</button>
-            </div>
-            <div id="status" class="status"></div>
-          </div>
           <div class="toolbar">
             <div id="sortControl" class="control">
               <h3>x-axis sort order</h3>
@@ -769,6 +839,7 @@
                 <button data-value="5">5</button>
               </div>
             </div>
+            <div id="status" class="status"></div>
           </div>
 
           <div class="visual-area">
@@ -849,6 +920,7 @@
         view: "chart",
         featureSort: "original",
         expectedSort: "original",
+        filterOperator: "and",
         activeFilter: "",
         lastData: null,
         tablePage: 1,
@@ -1029,11 +1101,29 @@
         const select = el("savedFilterSelect");
         const filters = state.schema.filters || [];
         select.innerHTML = "";
-        select.append(new Option("Saved filters", ""));
         for (const filter of filters) {
           select.append(new Option(filter.name, filter.expression));
         }
         select.disabled = filters.length === 0;
+      }
+
+      function selectedSavedFilterExpressions() {
+        return Array.from(el("savedFilterSelect").selectedOptions)
+          .map((option) => option.value.trim())
+          .filter(Boolean);
+      }
+
+      function combinedSavedFilterExpression() {
+        const expressions = selectedSavedFilterExpressions();
+        if (!expressions.length) return "";
+        const operator = state.filterOperator === "or" || state.filterOperator === "nor" ? "OR" : "AND";
+        const combined = expressions.join(` ${operator} `);
+        return state.filterOperator === "nand" || state.filterOperator === "nor" ? `NOT (${combined})` : combined;
+      }
+
+      function applySavedFilters() {
+        el("filterInput").value = combinedSavedFilterExpression();
+        applyFilter();
       }
 
       function chooseDefaults() {
@@ -1132,7 +1222,9 @@
 
       function clearFilter() {
         el("filterInput").value = "";
-        el("savedFilterSelect").value = "";
+        Array.from(el("savedFilterSelect").options).forEach((option) => {
+          option.selected = false;
+        });
         state.activeFilter = "";
         refreshChart();
       }
@@ -1571,6 +1663,66 @@
         requestAnimationFrame(() => chart.resize());
       }
 
+      function setupSidebarFilterResize() {
+        const section = document.querySelector(".sidebar-filter-section");
+        const resizer = el("sidebarFilterResizer");
+        const savedHeight = Number(localStorage.getItem("py_lucidum_sidebar_filter_height"));
+        if (Number.isFinite(savedHeight) && savedHeight > 0) {
+          setSidebarFilterHeight(savedHeight);
+        }
+
+        let dragging = false;
+        let startY = 0;
+        let startHeight = 0;
+        resizer.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          dragging = true;
+          startY = event.clientY;
+          startHeight = section?.getBoundingClientRect().height || 0;
+          resizer.classList.add("dragging");
+          document.body.classList.add("resizing-sidebar-filter");
+          resizer.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        resizer.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          setSidebarFilterHeight(startHeight + startY - event.clientY);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          resizer.classList.remove("dragging");
+          document.body.classList.remove("resizing-sidebar-filter");
+          window.getSelection()?.removeAllRanges();
+          const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-filter-height"));
+          if (Number.isFinite(height)) {
+            localStorage.setItem("py_lucidum_sidebar_filter_height", String(Math.round(height)));
+          }
+          if (event.pointerId !== undefined) {
+            try {
+              resizer.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+        }
+        resizer.addEventListener("pointerup", finishDrag);
+        resizer.addEventListener("pointercancel", finishDrag);
+      }
+
+      function setSidebarFilterHeight(rawHeight) {
+        const section = document.querySelector(".sidebar-filter-section");
+        const aside = section?.closest("aside");
+        const occupiedHeight = Array.from(aside?.children || [])
+          .filter((child) => child !== section)
+          .reduce((total, child) => total + child.getBoundingClientRect().height, 0);
+        const availableHeight = (aside?.getBoundingClientRect().height || window.innerHeight) - occupiedHeight - 8;
+        const minHeight = 168;
+        const maxHeight = Math.max(minHeight, availableHeight);
+        const height = Math.min(Math.max(rawHeight, minHeight), maxHeight);
+        document.documentElement.style.setProperty("--sidebar-filter-height", `${Math.round(height)}px`);
+      }
+
       function setupChartControlsResize() {
         const visualArea = document.querySelector(".visual-area");
         const resizer = el("chartControlsResizer");
@@ -1686,9 +1838,10 @@
 
       function bindControls() {
         setupSidebarResize();
+        setupSidebarFilterResize();
         setupChartControlsResize();
         setupChartControlHeightsResize();
-        document.querySelectorAll(".segmented").forEach((group) => {
+        document.querySelectorAll(".segmented, .filter-operator").forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
             if (group.dataset.control === "bandWidth" && event.target.dataset.action) {
@@ -1704,6 +1857,10 @@
             }
             if (group.dataset.control === "expectedSort") {
               renderExpectedNumerators();
+              return;
+            }
+            if (group.dataset.control === "filterOperator") {
+              applySavedFilters();
               return;
             }
             if (group.dataset.control === "bandWidth") {
@@ -1731,10 +1888,7 @@
             applyFilter();
           }
         });
-        el("savedFilterSelect").addEventListener("change", () => {
-          el("filterInput").value = el("savedFilterSelect").value;
-          applyFilter();
-        });
+        el("savedFilterSelect").addEventListener("change", applySavedFilters);
         el("chartTab").addEventListener("click", () => setView("chart"));
         el("tableTab").addEventListener("click", () => setView("table"));
         el("stopAppBtn").addEventListener("click", stopApp);
@@ -1755,6 +1909,8 @@
           refreshChart();
         });
         window.addEventListener("resize", () => {
+          const filterSection = document.querySelector(".sidebar-filter-section");
+          if (filterSection) setSidebarFilterHeight(filterSection.getBoundingClientRect().height);
           const controls = document.querySelector(".chart-side-controls");
           if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
           const firstPanel = controls?.querySelector(".chart-side-section");
