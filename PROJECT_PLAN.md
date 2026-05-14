@@ -4,30 +4,33 @@
 
 `py_lucidum` is an internal company data science tool for fast local exploration of large CSV and Parquet datasets. Users can launch it from the command line as `lucidum path.parquet` or from Python via `lucidum.serve(path)`, then open the generated tokenized browser URL.
 
-The current implementation is a package-first Python app with a FastAPI backend, DuckDB live aggregation, and a static browser UI using Apache ECharts. Parquet is the preferred working format for speed; CSV remains supported for convenience and import workflows. The codebase is being shaped as a shared workbench plus independently registered tools so the existing line-and-bar chart can run standalone or alongside future GLM, GBM, and UK mapping tools.
+The current implementation is a package-first Python app with a FastAPI backend, DuckDB live aggregation, and a static browser UI using Apache ECharts and Leaflet. Parquet is the preferred working format for speed; CSV remains supported for convenience and import workflows. The codebase is being shaped as a shared workbench plus independently registered tools so the existing line-and-bar chart and UK mapping tool can run standalone or alongside future GLM and GBM tools.
 
 ## Current Baseline
 
 - Package structure exists with `pyproject.toml`, `src/py_lucidum/`, CLI entry point `lucidum`, an importable app factory, and a static frontend.
-- The backend is split into shared `core` modules, an `app` factory package, and `tools` packages. The current implemented tool is `tools.line_bar`; placeholder packages exist for `tools.glm`, `tools.gbm`, and `tools.uk_map`.
+- The backend is split into shared `core` modules, an `app` factory package, and `tools` packages. The current implemented tools are `tools.line_bar` and `tools.uk_map`; placeholder packages exist for `tools.glm` and `tools.gbm`.
 - Repository hygiene excludes local datasets, Python build/cache artifacts, virtual environments, generated README previews, and OS metadata such as `.DS_Store`.
 - Backend supports:
-  - `GET /api/schema` for file path, row count, inferred column types, and numeric band suggestions.
+  - `GET /api/schema` for file path, file size, row count, inferred column types, defaults, saved filters, enabled tools, and numeric band suggestions.
+  - `GET /api/health` for lightweight token-protected browser heartbeat checks.
   - `POST /api/chart` for the legacy line-and-bar chart endpoint.
   - `POST /api/line-bar/chart` for the namespaced line-and-bar chart endpoint.
+  - `POST /api/uk-map/summary` for UK area/sector choropleth aggregation.
   - `POST /api/reload` to refresh the file snapshot and cached metadata.
+  - `POST /api/shutdown` to stop a CLI-launched local app from the browser.
 - The app supports local analyst mode today and is designed to grow into internal server mode with local or mounted server datasets.
 - Local development datasets live under `datasets/`, including `datasets/vans.csv`, `datasets/vans.parquet`, and `datasets/home.parquet`; this folder is ignored and not intended for publishing. Saved filter CSVs live under `specs/` and are tracked.
 - Public repository documentation lives in `README.md`. Detailed launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, initial selection overrides, saved filter files, and `--no-filters` launch mode.
-- A small standard-library `unittest` suite now covers the line-and-bar backend routes, saved-filter loading, filter validation, aggregation behavior, and compatibility re-exports without introducing a test dependency.
+- A small standard-library `unittest` suite now covers CLI behavior, static asset serving, health checks, line-and-bar routes, UK map aggregation, saved-filter loading, filter validation, aggregation behavior, and compatibility re-exports without introducing a required test dependency.
 
 ## Tool Architecture
 
 - Shared dataset responsibilities live in `py_lucidum.core`: DuckDB connection management, file relation SQL, schema inference, row counts, band suggestions, filter validation, saved-filter loading, and SQL helpers.
-- The app factory lives in `py_lucidum.app` and composes selected tools around a shared dataset context. `py_lucidum.app.create_app(...)` accepts a `tools` argument; the default is `line_bar`.
+- The app factory lives in `py_lucidum.app` and composes selected tools around a shared dataset context. `py_lucidum.app.create_app(...)` accepts a `tools` argument; the default enables both `line_bar` and `uk_map`.
 - Tool code lives under `py_lucidum.tools`. A tool should depend on `core` and the app registration context, but tools should not depend on each other.
 - The line-and-bar chart logic now lives in `py_lucidum.tools.line_bar`. `py_lucidum.query` remains as a compatibility re-export module for older imports, including the legacy `Dataset(...).chart(...)` path.
-- Future GLM, GBM, and UK mapping work should add routes, modelling/query code, and frontend assets inside their own tool packages. They should reuse shared filters and dataset metadata rather than importing line-and-bar internals.
+- Future GLM and GBM work should add routes, modelling/query code, and frontend assets inside their own tool packages. Cross-tool query helpers should move toward shared modules as reuse grows.
 - Supported tool names should be normalised at the app boundary, for example `line-bar` and `line_bar` both selecting the line-and-bar chart.
 
 ## Chart Behavior
@@ -63,14 +66,14 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - The R Lucidum line-and-bar tool is product inspiration, but the Python app should continue toward a cleaner, denser browser UI.
 - The chart is the focus: controls should stay compact, avoid unnecessary wrapping, and preserve vertical space.
 - Dark mode is supported.
-- The browser tab icon and in-app header mark are served from the project `favicon.ico`, with PNG favicon content supported and packaging configured to include it under the app static assets. Favicon references include a cache-busting query string. The current favicon uses a point-up blue hexagon, centred white `lucidum` wordmark, and surrounding gold stars that avoid overlapping the wordmark. The in-page header mark is displayed at 42px for readability while the header bar height remains fixed.
+- The browser tab icon and in-app header mark are served from the project `favicon.ico`, with PNG favicon content supported and packaging configured to include it under the app static assets. Local static assets are served with `Cache-Control: no-store` instead of manual cache-busting query strings. The current favicon uses a point-up blue hexagon, centred white `lucidum` wordmark, and surrounding gold stars that avoid overlapping the wordmark. The browser tab title and header use `lucidum`; the tab includes the dataset filename, and the header metadata shows dataset filename, on-disk file size, row count, and column count.
 - Chart animations are disabled so interactions update as fast as possible.
 - The sidebar is resizable so users can trade space between long column names and the chart.
 - Response controls sit above the x-axis feature list because response selection is usually the first choice in the workflow.
 - The x-axis feature list can be shown in original dataset column order or alphabetically without changing the selected chart sort.
 - Chart/Table view controls sit before the filter bar; saved-filter selections populate and apply the filter expression immediately, while manual filter edits require Enter or Apply. Chart-only density messages are shown in the chart's top-right corner instead of consuming filter-bar width.
-- A prominent Stop app button in the header calls a token-protected shutdown endpoint so local users can stop the running server from the browser; after shutdown, the page is greyed out with a clear stopped message.
-- CLI startup output repeats the full tokenized app URL in the final Uvicorn running message, avoids per-request access-log noise by default, and shuts down from Ctrl+C or the browser without a traceback.
+- A prominent Stop app button in the header calls a token-protected shutdown endpoint so local users can stop the running server from the browser; after shutdown, the page is greyed out with a clear stopped message. The browser also polls a token-protected health endpoint so the same stopped message appears after terminal `Ctrl+C`.
+- CLI startup output repeats the full tokenized app URL in the final Uvicorn running message, avoids per-request access-log noise by default, avoids false busy-port errors caused by stale local TCP state after shutdown, and shuts down from Ctrl+C or the browser without a traceback.
 - Table view uses compact row spacing to support scanning many grouped rows.
 - Bars widen for small numbers of x-axis categories while keeping visible spacing between groups.
 - Chart legend order is Actual response, Expected response when selected, then N. Actual is black in light mode and white in dark mode, Expected is red, N uses the bar colour, and grey sigma guides are never listed in the legend.
@@ -94,7 +97,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 
 - Unit tests should cover query correctness using small generated datasets: CSV and Parquet reads, numeric bins, date buckets, tail grouping, categorical “Other” grouping, response ratios, transforms, sorting, and sigma-bar calculations.
 - Current line-and-bar unit tests can be run with `.venv/bin/python -m unittest discover -s tests`.
-- Backend integration tests should exercise `GET /api/schema`, `POST /api/chart`, and `POST /api/reload` against temporary generated files, including token rejection and validation errors.
+- Backend integration tests should exercise `GET /api/schema`, `GET /api/health`, `POST /api/chart`, `POST /api/uk-map/summary`, and `POST /api/reload` against temporary generated files, including token rejection and validation errors.
 - Browser smoke tests should cover feature selection, response selection, chart/table switching, dark mode, x-axis control visibility, band stepping, labels, sigma bars, and invalid transform messages.
 - Performance tests should be opt-in and target generated 1m, 5m, and 10m row datasets where practical, measuring schema load, aggregation time, repeat-query time, memory use, returned row count, and payload size.
 - License checks should verify all runtime and frontend dependencies are open-source compatible.
@@ -103,7 +106,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 
 - Project name is `py_lucidum`; installed command is `lucidum`.
 - Preferred backend stack is FastAPI + DuckDB.
-- Current frontend is a static ECharts app; a React/Vite frontend can be reconsidered later if UI complexity justifies it.
+- Current frontend is a static ECharts and Leaflet app; a React/Vite frontend can be reconsidered later if UI complexity justifies it.
 - Repeat-query caching is allowed, but no persistent pre-aggregation or materialized cube is used.
 - Files are treated as fixed during a session until the user presses reload.
 - `PROJECT_PLAN.md` should be updated alongside every product or behavior change so it remains the durable source of project context.

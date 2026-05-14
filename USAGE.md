@@ -31,7 +31,7 @@ Saved filters: specs/filter_spec.csv
 Uvicorn running on http://127.0.0.1:8000/?token=... (Press CTRL+C to quit)
 ```
 
-Open that URL in the browser. Stop the server with `Ctrl+C` in the terminal, or use the red `Stop app` button in the browser header.
+Open that URL in the browser. Stop the server with `Ctrl+C` in the terminal, or use the red `Stop app` button in the browser header. In either case, an open browser tab greys out and shows a stopped message once the local server is gone.
 The same printed URL can also be opened in the Positron Viewer pane.
 
 Useful options:
@@ -168,6 +168,15 @@ POST /api/uk-map/summary
 GET  /tools/uk-map/static/geodata/...
 ```
 
+Shared app endpoints include:
+
+```text
+GET  /api/schema
+GET  /api/health
+POST /api/reload
+POST /api/shutdown
+```
+
 ## Line-And-Bar Weights
 
 The line-and-bar chart has one shared **Weight** selector:
@@ -238,6 +247,7 @@ Run the test suite:
 Useful code checks before committing:
 
 ```bash
+.venv/bin/python -m compileall src tests
 node --check src/py_lucidum/static/app.js
 git diff --check
 ```

@@ -131,6 +131,11 @@ def create_app(
         check_token(request)
         return schema_payload()
 
+    @app.get("/api/health")
+    def health(request: Request) -> dict[str, str]:
+        check_token(request)
+        return {"status": "ok"}
+
     @app.post("/api/reload")
     def reload_dataset(request: Request) -> dict[str, Any]:
         check_token(request)

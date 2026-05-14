@@ -55,7 +55,7 @@ Saved filters: specs/filter_spec.csv
 Uvicorn running on http://127.0.0.1:8000/?token=... (Press CTRL+C to quit)
 ```
 
-Open the full printed URL in your browser. Stop the server with `Ctrl+C` in the terminal or the red `Stop app` button in the browser header.
+Open the full printed URL in your browser. Stop the server with `Ctrl+C` in the terminal or the red `Stop app` button in the browser header. In either case, an open browser tab greys out and shows a stopped message once the local server is gone.
 
 CSV files also work:
 
@@ -208,6 +208,15 @@ The UK mapping tool exposes:
 ```text
 POST /api/uk-map/summary
 GET  /tools/uk-map/static/geodata/...
+```
+
+Shared app endpoints include:
+
+```text
+GET  /api/schema
+GET  /api/health
+POST /api/reload
+POST /api/shutdown
 ```
 
 ## Development

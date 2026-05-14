@@ -9,8 +9,12 @@ from typing import Any
 from py_lucidum.app import create_app
 
 
-def asgi_get(app: Any, path: str) -> tuple[int, dict[str, str], bytes]:
+def asgi_get(app: Any, path: str, headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], bytes]:
     messages: list[dict[str, Any]] = []
+    raw_headers = [
+        (key.lower().encode("latin-1"), value.encode("latin-1"))
+        for key, value in (headers or {}).items()
+    ]
 
     async def receive() -> dict[str, Any]:
         return {"type": "http.request", "body": b"", "more_body": False}
@@ -27,7 +31,7 @@ def asgi_get(app: Any, path: str) -> tuple[int, dict[str, str], bytes]:
         "path": path,
         "raw_path": path.encode("ascii"),
         "query_string": b"",
-        "headers": [],
+        "headers": raw_headers,
         "client": ("127.0.0.1", 12345),
         "server": ("testserver", 80),
     }
@@ -74,6 +78,45 @@ class StaticAssetTests(unittest.TestCase):
 
     def test_favicon_disables_cache(self) -> None:
         self.assert_no_store("/favicon.ico")
+
+
+class HealthEndpointTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.data_path = Path(self.tmp.name) / "sample.csv"
+        self.data_path.write_text("PostcodeArea,PostcodeSector,Actual\nAB,AB10 1,100\n", encoding="utf-8")
+
+    def test_health_route_is_registered(self) -> None:
+        app = create_app(self.data_path)
+        paths = {route.path for route in app.routes}
+
+        self.assertIn("/api/health", paths)
+
+    def test_health_returns_success_without_token_auth(self) -> None:
+        app = create_app(self.data_path, token="")
+        status, _, body = asgi_get(app, "/api/health")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b'{"status":"ok"}')
+
+    def test_health_rejects_missing_or_invalid_token(self) -> None:
+        app = create_app(self.data_path, token="dev-token")
+
+        missing_status, _, missing_body = asgi_get(app, "/api/health")
+        invalid_status, _, invalid_body = asgi_get(app, "/api/health", headers={"x-lucidum-token": "bad-token"})
+
+        self.assertEqual(missing_status, 401)
+        self.assertIn(b"Invalid or missing app token", missing_body)
+        self.assertEqual(invalid_status, 401)
+        self.assertIn(b"Invalid or missing app token", invalid_body)
+
+    def test_health_accepts_valid_token(self) -> None:
+        app = create_app(self.data_path, token="dev-token")
+        status, _, body = asgi_get(app, "/api/health", headers={"x-lucidum-token": "dev-token"})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b'{"status":"ok"}')
 
 
 if __name__ == "__main__":

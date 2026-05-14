@@ -123,6 +123,8 @@
       let mapLayerControl = null;
       let mapZoomControl = null;
       let mapHomeControl = null;
+      let serverHeartbeatTimer = null;
+      let stoppedOverlayShown = false;
       const el = (id) => document.getElementById(id);
 
       async function api(path, options = {}) {
@@ -144,6 +146,31 @@
           throw new Error(message);
         }
         return response.json();
+      }
+
+      function startServerHeartbeat() {
+        if (serverHeartbeatTimer) return;
+        serverHeartbeatTimer = window.setInterval(checkServerHealth, 2000);
+      }
+
+      function stopServerHeartbeat() {
+        if (!serverHeartbeatTimer) return;
+        window.clearInterval(serverHeartbeatTimer);
+        serverHeartbeatTimer = null;
+      }
+
+      async function checkServerHealth() {
+        if (stoppedOverlayShown) return;
+        try {
+          await fetch("/api/health", {
+            cache: "no-store",
+            headers: {
+              "x-lucidum-token": token,
+            },
+          });
+        } catch (_) {
+          showStoppedOverlay();
+        }
       }
 
       function setStatus(message, isError = false) {
@@ -592,6 +619,9 @@
       }
 
       function showStoppedOverlay() {
+        if (stoppedOverlayShown) return;
+        stoppedOverlayShown = true;
+        stopServerHeartbeat();
         document.body.classList.add("app-stopped");
         const overlay = document.createElement("div");
         overlay.className = "shutdown-overlay";
@@ -2226,6 +2256,7 @@
           updateAxisControls();
           setTool(state.tool, false);
           await refreshActiveTool({ force: true });
+          startServerHeartbeat();
         } catch (error) {
           setStatus(error.message, true);
         }
