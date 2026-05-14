@@ -73,15 +73,46 @@ class CliRuntimeTests(unittest.TestCase):
     def test_ensure_port_available_reports_busy_port(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
             port = int(sock.getsockname()[1])
 
             with self.assertRaisesRegex(RuntimeError, f"Port {port} is already in use"):
                 ensure_port_available("127.0.0.1", port)
 
+    def test_ensure_port_available_ignores_recent_closed_connection(self) -> None:
+        host = "127.0.0.1"
+        errors: list[BaseException] = []
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((host, 0))
+            listener.listen(1)
+            port = int(listener.getsockname()[1])
+
+            def connect_once() -> None:
+                try:
+                    with socket.create_connection((host, port), timeout=2) as client:
+                        client.sendall(b"x")
+                        client.recv(1)
+                except BaseException as exc:  # pragma: no cover - surfaced by assertion below.
+                    errors.append(exc)
+
+            thread = threading.Thread(target=connect_once, name="py-lucidum-port-test")
+            thread.start()
+            conn, _ = listener.accept()
+            with conn:
+                conn.recv(1)
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        ensure_port_available(host, port)
+
     def test_run_app_checks_busy_port_before_printing(self) -> None:
         app = SimpleNamespace(state=SimpleNamespace(token="", defaults={}))
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
             port = int(sock.getsockname()[1])
             stdout = io.StringIO()
 
@@ -93,6 +124,7 @@ class CliRuntimeTests(unittest.TestCase):
     def test_serve_checks_busy_port_before_printing_or_building_app(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
             port = int(sock.getsockname()[1])
             stdout = io.StringIO()
 
@@ -109,6 +141,7 @@ class CliRuntimeTests(unittest.TestCase):
     def test_main_reports_runtime_error_without_traceback(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
             port = int(sock.getsockname()[1])
             stderr = io.StringIO()
 
