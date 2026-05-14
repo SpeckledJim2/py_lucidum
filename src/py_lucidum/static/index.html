@@ -2415,8 +2415,13 @@
       }
 
       function syncFloatingMapControl() {
-        el("mapControlMetric").textContent = el("actualNumerator").value || "Actual";
-        el("mapControlFilter").textContent = state.activeFilter ? `v ${state.activeFilter}` : "v no filter";
+        const actualLabel = el("actualNumerator").selectedOptions[0]?.textContent || el("actualNumerator").value || "Actual";
+        const denominatorValue = el("denominator").value;
+        const denominatorLabel = denominatorValue && denominatorValue !== "__none__"
+          ? (el("denominator").selectedOptions[0]?.textContent || denominatorValue)
+          : "";
+        el("mapControlMetric").textContent = denominatorLabel ? `${actualLabel} / ${denominatorLabel}` : actualLabel;
+        el("mapControlFilter").textContent = state.activeFilter || "no filter";
         document.querySelectorAll(".map-palette-button").forEach((button) => {
           button.classList.toggle("active", button.dataset.palette === state.mapPalette);
         });
