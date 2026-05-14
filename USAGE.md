@@ -242,6 +242,14 @@ node --check src/py_lucidum/static/app.js
 git diff --check
 ```
 
+Optional browser smoke tests use Playwright to launch Chromium against a temporary local app:
+
+```bash
+.venv/bin/python -m pip install pytest pytest-playwright
+.venv/bin/python -m playwright install chromium
+PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest tests/test_browser_smoke.py
+```
+
 These launch paths are expected to work from the project root when `datasets/vans.parquet` exists:
 
 ```bash

@@ -226,6 +226,14 @@ node --check src/py_lucidum/static/app.js
 git diff --check
 ```
 
+Optional browser smoke tests require Playwright and a Chromium browser install:
+
+```bash
+.venv/bin/python -m pip install pytest pytest-playwright
+.venv/bin/python -m playwright install chromium
+PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest tests/test_browser_smoke.py
+```
+
 Project planning notes live in `PROJECT_PLAN.md`. More detailed launch notes live in `USAGE.md`.
 
 ## Notes
