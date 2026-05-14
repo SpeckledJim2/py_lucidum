@@ -51,7 +51,13 @@ class CliRuntimeTests(unittest.TestCase):
         app = SimpleNamespace(
             state=SimpleNamespace(
                 token="dev-token",
-                defaults={"x": "Driver Age", "actual": "AvgPrice1_5", "denominator": "Exposure", "unused": "ignored"},
+                defaults={
+                    "x": "Driver Age",
+                    "actual": "AvgPrice1_5",
+                    "denominator": "Exposure",
+                    "postcode_area": "Area",
+                    "unused": "ignored",
+                },
             )
         )
 
@@ -59,7 +65,7 @@ class CliRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             url,
-            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&denominator=Exposure",
+            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&denominator=Exposure&postcode_area=Area",
         )
 
     def test_ensure_port_available_reports_busy_port(self) -> None:

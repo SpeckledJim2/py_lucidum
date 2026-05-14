@@ -78,7 +78,11 @@ def _display_url_for_app(app: object, host: str, port: int) -> str:
     if token:
         params["token"] = token
     if isinstance(defaults, dict):
-        params.update({key: value for key, value in defaults.items() if key in {"x", "actual", "expected", "denominator"} and value})
+        params.update({
+            key: value
+            for key, value in defaults.items()
+            if key in {"x", "actual", "expected", "denominator", "postcode_area", "postcode_sector"} and value
+        })
     if params:
         return f"{url}?{urlencode(params)}"
     return url
@@ -143,6 +147,8 @@ def serve(
     actual: str | None = None,
     expected: str | None = None,
     denominator: str | None = None,
+    postcode_area: str | None = None,
+    postcode_sector: str | None = None,
     filters: str | Path | None = None,
     no_filters: bool = False,
     tools: str | Sequence[str] | None = None,
@@ -150,7 +156,14 @@ def serve(
     selected_port = port or find_free_port()
     ensure_port_available(host, selected_port)
     selected_token = token if token is not None else secrets.token_urlsafe(18)
-    defaults = {"x": x, "actual": actual, "expected": expected, "denominator": denominator}
+    defaults = {
+        "x": x,
+        "actual": actual,
+        "expected": expected,
+        "denominator": denominator,
+        "postcode_area": postcode_area,
+        "postcode_sector": postcode_sector,
+    }
     app = create_app(
         path,
         token=selected_token,
@@ -179,6 +192,8 @@ def serve_line_bar(
     actual: str | None = None,
     expected: str | None = None,
     denominator: str | None = None,
+    postcode_area: str | None = None,
+    postcode_sector: str | None = None,
     filters: str | Path | None = None,
     no_filters: bool = False,
 ) -> str:
@@ -192,6 +207,8 @@ def serve_line_bar(
         actual=actual,
         expected=expected,
         denominator=denominator,
+        postcode_area=postcode_area,
+        postcode_sector=postcode_sector,
         filters=filters,
         no_filters=no_filters,
         tools=["line_bar"],
@@ -223,6 +240,8 @@ def main() -> int:
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
     parser.add_argument("--denominator", default=None, help="Initial Weight column. Defaults to Average row value.")
+    parser.add_argument("--postcode-area", default=None, help="Postcode area column for UK mapping. Defaults to PostcodeArea.")
+    parser.add_argument("--postcode-sector", default=None, help="Postcode sector column for UK mapping. Defaults to PostcodeSector.")
     filter_group = parser.add_mutually_exclusive_group()
     filter_group.add_argument(
         "--filters",
@@ -234,7 +253,7 @@ def main() -> int:
         action="store_true",
         help="Disable saved filters and skip default filter_spec.csv discovery.",
     )
-    parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Currently supports line-bar.")
+    parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Supports line-bar and uk-map.")
     args = parser.parse_args()
     try:
         serve(
@@ -247,6 +266,8 @@ def main() -> int:
             actual=args.actual,
             expected=args.expected,
             denominator=args.denominator,
+            postcode_area=args.postcode_area,
+            postcode_sector=args.postcode_sector,
             filters=args.filters,
             no_filters=args.no_filters,
             tools=args.tools,

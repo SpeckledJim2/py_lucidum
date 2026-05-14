@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>py_lucidum</title>
     <link rel="icon" type="image/png" href="/favicon.ico?v=3" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
       :root {
         color-scheme: light;
@@ -74,6 +76,12 @@
       body.resizing-sidebar-filter,
       body.resizing-sidebar-filter * {
         cursor: row-resize !important;
+        user-select: none !important;
+      }
+
+      body.dragging-map-control,
+      body.dragging-map-control * {
+        cursor: move !important;
         user-select: none !important;
       }
 
@@ -291,6 +299,62 @@
         color: var(--muted);
       }
 
+      .tool-selector-section h2 {
+        margin: 0 0 6px;
+        font-size: 13px;
+      }
+
+      .tool-selector {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 5px;
+      }
+
+      .tool-option {
+        width: 100%;
+        min-height: 30px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 8px;
+        cursor: pointer;
+        font-size: 12px;
+        text-align: left;
+      }
+
+      .tool-option.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+
+      .tool-option:disabled {
+        color: var(--muted);
+        cursor: default;
+        opacity: 0.55;
+      }
+
+      .tool-icon {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
+      }
+
+      .tool-icon svg {
+        width: 18px;
+        height: 18px;
+        display: block;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
       .sidebar-filter-section {
         display: flex;
         flex-direction: column;
@@ -483,6 +547,10 @@
         min-height: 0;
       }
 
+      .visual-area.map-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       .chart-controls-resizer {
         background: linear-gradient(to right, var(--line), transparent);
         cursor: col-resize;
@@ -553,10 +621,384 @@
         height: 100%;
       }
 
+      .uk-map {
+        width: 100%;
+        height: 100%;
+        border-radius: 6px;
+        overflow: hidden;
+        background: #20272d;
+      }
+
+      .uk-map.map-bg-dark {
+        background: #20272d;
+      }
+
+      .uk-map.map-bg-light {
+        background: #ffffff;
+      }
+
+      .uk-map .leaflet-container,
+      .leaflet-container {
+        font: inherit;
+      }
+
+      .map-layer-control,
+      .map-home-control {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        box-shadow: var(--shadow);
+        color: var(--text);
+      }
+
+      .map-layer-control {
+        padding: 8px 10px;
+        font-size: 14px;
+      }
+
+      .map-layer-control label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 27px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .map-layer-control input {
+        width: 16px;
+        height: 16px;
+        accent-color: #0d7df2;
+        margin: 0;
+        flex: 0 0 auto;
+      }
+
+      .map-layer-control input:disabled + span {
+        color: var(--muted);
+      }
+
+      .map-layer-separator {
+        height: 1px;
+        margin: 8px -10px;
+        background: var(--line);
+      }
+
+      .map-home-control {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        color: var(--text);
+      }
+
+      .map-home-control svg {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .map-home-control:hover {
+        background: var(--panel-2);
+      }
+
+      .map-floating-control {
+        position: absolute;
+        top: 12px;
+        left: 148px;
+        z-index: 700;
+        width: min(540px, calc(100% - 190px));
+        border: 2px solid rgb(255 255 255 / 82%);
+        border-radius: 6px;
+        background: rgb(244 245 247 / 90%);
+        box-shadow: 0 6px 20px rgb(15 23 42 / 20%);
+        color: #333333;
+        padding: 9px;
+      }
+
+      body.dark .map-floating-control {
+        border-color: rgb(229 231 235 / 55%);
+        background: rgb(17 24 39 / 90%);
+        color: var(--text);
+      }
+
+      .map-floating-header {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 2px;
+        margin-bottom: 7px;
+        font-size: 14px;
+        cursor: move;
+        touch-action: none;
+      }
+
+      .map-floating-header strong {
+        font-size: 14px;
+        line-height: 1.1;
+      }
+
+      .map-floating-header span {
+        color: color-mix(in srgb, currentColor 80%, transparent);
+        font-size: 13px;
+        line-height: 1.1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .map-floating-row {
+        display: grid;
+        grid-template-columns: minmax(172px, 1fr) auto auto;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .postcode-search {
+        display: grid;
+        grid-template-columns: minmax(112px, 1fr) 34px 38px;
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+
+      .postcode-search input {
+        height: 32px;
+        border: 0;
+        border-radius: 0;
+        color: var(--text);
+        background: var(--panel);
+        font-size: 13px;
+      }
+
+      .postcode-search button {
+        height: 32px;
+        border: 0;
+        border-left: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--text);
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        font-size: 20px;
+        line-height: 1;
+      }
+
+      .postcode-search svg {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+      }
+
+      .map-palette-buttons,
+      .map-background-buttons {
+        display: flex;
+        flex: 0 0 auto;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        overflow: hidden;
+      }
+
+      .map-palette-button,
+      .map-background-button {
+        width: 46px;
+        height: 32px;
+        border: 0;
+        border-left: 1px solid var(--line);
+        background: var(--panel-2);
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        padding: 0;
+      }
+
+      .map-palette-button:first-child,
+      .map-background-button:first-child {
+        border-left: 0;
+      }
+
+      .map-palette-button.active,
+      .map-background-button.active {
+        background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+        box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 75%, transparent);
+      }
+
+      .palette-swatch {
+        width: 24px;
+        height: 20px;
+        display: block;
+      }
+
+      .palette-divergent {
+        background: linear-gradient(135deg, #1b7837 0%, #f7f7f7 50%, #b2182b 100%);
+      }
+
+      .palette-spectral {
+        background: linear-gradient(135deg, #2c7bb6 0%, #ffffbf 52%, #d7191c 100%);
+      }
+
+      .palette-viridis {
+        background: linear-gradient(135deg, #fde725 0%, #21918c 52%, #440154 100%);
+      }
+
+      .background-swatch {
+        width: 24px;
+        height: 22px;
+        display: block;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+      }
+
+      .background-light {
+        background: #ffffff;
+      }
+
+      .background-dark {
+        background: #000000;
+      }
+
+      .map-slider-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 108px);
+        gap: 10px 12px;
+        justify-content: space-between;
+      }
+
+      .map-slider-control {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 4px;
+        font-size: 12px;
+        min-width: 0;
+      }
+
+      .map-slider-control > span:first-child {
+        font-weight: 500;
+      }
+
+      .slider-scale {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: color-mix(in srgb, currentColor 76%, transparent);
+        font-size: 11px;
+      }
+
+      .slider-scale b {
+        min-width: 24px;
+        min-height: 20px;
+        border-radius: 4px;
+        background: rgb(209 213 219 / 78%);
+        color: #333333;
+        display: grid;
+        place-items: center;
+        font-weight: 500;
+        padding: 0 3px;
+        font-size: 11px;
+      }
+
+      .slider-scale b:nth-child(2) {
+        background: var(--accent);
+        color: white;
+      }
+
+      .map-slider-control input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+
+      .map-label {
+        color: #111827;
+        font-weight: 650;
+        line-height: 1.1;
+        text-align: center;
+        text-shadow:
+          -1px -1px 0 rgb(255 255 255 / 80%),
+          1px -1px 0 rgb(255 255 255 / 80%),
+          -1px 1px 0 rgb(255 255 255 / 80%),
+          1px 1px 0 rgb(255 255 255 / 80%);
+        white-space: nowrap;
+        pointer-events: none;
+      }
+
+      @media (max-width: 1280px) {
+        .map-floating-control {
+          left: 96px;
+          width: min(500px, calc(100% - 112px));
+        }
+
+        .map-slider-grid {
+          grid-template-columns: repeat(2, 108px);
+          justify-content: space-around;
+        }
+
+        .map-floating-row {
+          grid-template-columns: minmax(160px, 1fr) auto auto;
+        }
+      }
+
+      .map-legend {
+        position: absolute;
+        right: 12px;
+        bottom: 42px;
+        z-index: 500;
+        width: max-content;
+        min-width: 0;
+        max-width: 170px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--panel) 94%, transparent);
+        box-shadow: var(--shadow);
+        padding: 7px;
+        color: var(--text);
+        font-size: 11px;
+        pointer-events: none;
+      }
+
+      .map-legend h3 {
+        margin: 0 0 6px;
+        font-size: 12px;
+      }
+
+      .map-legend-row {
+        display: grid;
+        grid-template-columns: 15px max-content;
+        gap: 5px;
+        align-items: center;
+        margin-top: 3px;
+        white-space: nowrap;
+      }
+
+      .map-swatch {
+        width: 15px;
+        height: 10px;
+        border: 1px solid rgb(0 0 0 / 10%);
+      }
+
+      .map-popup {
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .map-popup strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
       .workspace-messages {
         position: absolute;
-        top: 8px;
-        right: 12px;
+        top: 18px;
+        right: 24px;
         z-index: 6;
         display: flex;
         flex-direction: column;
@@ -746,6 +1188,24 @@
             </div>
           </section>
 
+          <section id="toolSelectorSection" class="section tool-selector-section">
+            <h2>Tool</h2>
+            <div class="tool-selector">
+              <button id="lineBarTool" class="tool-option active" type="button" data-tool="line_bar">
+                <span class="tool-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false"><path d="M4 19h16M7 16V9m5 7V5m5 11v-4M6 11l4-4 4 5 4-3" /></svg>
+                </span>
+                <span>Line and bar</span>
+              </button>
+              <button id="ukMapTool" class="tool-option" type="button" data-tool="uk_map">
+                <span class="tool-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false"><path d="M9 18l-5 2V6l5-2 6 2 5-2v14l-5 2-6-2Zm0 0V4m6 16V6" /></svg>
+                </span>
+                <span>UK mapping</span>
+              </button>
+            </div>
+          </section>
+
           <section class="section sidebar-filter-section">
             <div id="sidebarFilterResizer" class="sidebar-filter-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize filter controls"></div>
             <h2>Filter</h2>
@@ -767,7 +1227,7 @@
         <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 
         <main>
-          <div class="toolbar">
+          <div id="lineBarToolbar" class="toolbar">
             <div id="sortControl" class="control">
               <h3>x-axis sort order</h3>
               <div class="segmented" data-control="sort">
@@ -842,8 +1302,8 @@
             <div id="status" class="status"></div>
           </div>
 
-          <div class="visual-area">
-            <div class="chart-side-controls">
+          <div id="visualArea" class="visual-area">
+            <div id="chartSideControls" class="chart-side-controls">
               <section class="chart-side-section feature-section">
                 <div class="section-title-row">
                   <h2>x-axis feature</h2>
@@ -875,7 +1335,7 @@
             <div id="chartControlsResizer" class="chart-controls-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chart controls"></div>
 
             <section class="workspace">
-              <div class="tabs workspace-tabs">
+              <div id="lineBarTabs" class="tabs workspace-tabs">
                 <button id="chartTab" class="tab active">Chart</button>
                 <button id="tableTab" class="tab">Table</button>
               </div>
@@ -885,6 +1345,64 @@
               </div>
               <div id="chart"></div>
               <div id="tableWrap" class="table-wrap hidden"></div>
+              <div id="ukMap" class="uk-map hidden"></div>
+              <div id="mapFloatingControl" class="map-floating-control hidden">
+                <div class="map-floating-header">
+                  <strong id="mapControlMetric">Actual</strong>
+                  <span id="mapControlFilter">no filter</span>
+                </div>
+                <div class="map-floating-row">
+                  <div class="postcode-search">
+                    <input id="mapPostcodeInput" placeholder="postcode..." />
+                    <button id="mapPostcodeClear" type="button" title="Clear postcode" aria-label="Clear postcode">&times;</button>
+                    <button id="mapPostcodeSearch" type="button" title="Search postcode" aria-label="Search postcode">
+                      <svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path></svg>
+                    </button>
+                  </div>
+                  <div class="map-palette-buttons" aria-label="Choropleth colour scheme">
+                    <button class="map-palette-button active" type="button" data-palette="divergent" title="Divergent">
+                      <span class="palette-swatch palette-divergent"></span>
+                    </button>
+                    <button class="map-palette-button" type="button" data-palette="spectral" title="Spectral">
+                      <span class="palette-swatch palette-spectral"></span>
+                    </button>
+                    <button class="map-palette-button" type="button" data-palette="viridis" title="Viridis">
+                      <span class="palette-swatch palette-viridis"></span>
+                    </button>
+                  </div>
+                  <div class="map-background-buttons" aria-label="Map background">
+                    <button class="map-background-button" type="button" data-map-background="light" title="White map background">
+                      <span class="background-swatch background-light"></span>
+                    </button>
+                    <button class="map-background-button active" type="button" data-map-background="dark" title="Dark grey map background">
+                      <span class="background-swatch background-dark"></span>
+                    </button>
+                  </div>
+                </div>
+                <div class="map-slider-grid">
+                  <label class="map-slider-control">
+                    <span>Line thickness</span>
+                    <span class="slider-scale"><b>0</b><b id="mapLineWeightValue">1</b><b>5</b></span>
+                    <input id="mapLineWeight" type="range" min="0" max="5" step="1" value="1" />
+                  </label>
+                  <label class="map-slider-control">
+                    <span>Opacity</span>
+                    <span class="slider-scale"><b>0</b><b id="mapOpacityValue">1</b><b>1</b></span>
+                    <input id="mapOpacity" type="range" min="0" max="1" step="0.2" value="1" />
+                  </label>
+                  <label class="map-slider-control">
+                    <span>Hot/not-spots</span>
+                    <span class="slider-scale"><b>-20</b><b id="mapHotspotsValue">0</b><b>20</b></span>
+                    <input id="mapHotspots" type="range" min="-20" max="20" step="5" value="0" />
+                  </label>
+                  <label class="map-slider-control">
+                    <span>Label size</span>
+                    <span class="slider-scale"><b>0</b><b id="mapLabelSizeValue">0</b><b>20</b></span>
+                    <input id="mapLabelSize" type="range" min="0" max="20" step="1" value="0" />
+                  </label>
+                </div>
+              </div>
+              <div id="mapLegend" class="map-legend hidden"></div>
             </section>
           </div>
         </main>
@@ -894,7 +1412,7 @@
     <script>
       function paramsFromLocation() {
         const standardParams = new URLSearchParams(location.search);
-        const expectedKeys = ["token", "x", "actual", "expected", "denominator"];
+        const expectedKeys = ["token", "tool", "x", "actual", "expected", "denominator", "postcode_area", "postcode_sector"];
         if (expectedKeys.some((key) => standardParams.has(key))) return standardParams;
         const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
         try {
@@ -917,15 +1435,31 @@
         dateBucket: "none",
         transform: "none",
         sigma: "0",
+        tool: "line_bar",
         view: "chart",
+        mapLevel: "area",
+        baseMap: "blank",
+        mapBackground: "dark",
+        mapPalette: "divergent",
+        mapLineWeight: 1,
+        mapOpacity: 1,
+        mapHotspots: 0,
+        mapLabelSize: 0,
         featureSort: "original",
         expectedSort: "original",
         filterOperator: "and",
         activeFilter: "",
         lastData: null,
+        lastMapData: null,
+        mapGeoJsonCache: {},
+        mapFitLevel: null,
+        preserveMapView: false,
+        pendingMapZoom: null,
+        mapControlPosition: null,
         tablePage: 1,
         bandFeature: null,
         chartRequestSeq: 0,
+        mapRequestSeq: 0,
       };
 
       const BAND_STEPS = makeBandSteps();
@@ -933,8 +1467,68 @@
       const LABEL_DENSITY_LIMIT = 200;
       const RESPONSE_AXIS_PADDING = 0.08;
       const RESPONSE_AXIS_TARGET_INTERVALS = 15;
+      const MAP_LEVELS = {
+        area: {
+          label: "areas",
+          singular: "area",
+          property: "PostcodeArea",
+          url: "/tools/uk-map/static/geodata/areas_MappaR.geojson",
+          defaultColumn: "PostcodeArea",
+        },
+        sector: {
+          label: "sectors",
+          singular: "sector",
+          property: "PostcodeSector",
+          url: "/tools/uk-map/static/geodata/sectors_MappaR.geojson",
+          defaultColumn: "PostcodeSector",
+        },
+      };
+      const MAP_PALETTES = {
+        divergent: ["#00441b", "#1b7837", "#5aae61", "#a6dba0", "#d9f0d3", "#fddbc7", "#f4a582", "#d6604d", "#b2182b", "#67001f"],
+        spectral: ["#2c7bb6", "#00a6ca", "#00ccbc", "#90eb9d", "#ffff8c", "#f9d057", "#f29e2e", "#e76818", "#d7191c", "#a50026"],
+        viridis: ["#fde725", "#b5de2b", "#6ece58", "#35b779", "#1f9e89", "#26828e", "#31688e", "#3e4989", "#482878", "#440154"],
+      };
+      const MAP_COLOR_BUCKETS = 100;
+      const MAP_LEGEND_BUCKETS = 10;
+      const MAP_MISSING_COLOR = "#e5e7eb";
+      const MAP_MUTED_COLOR = "#cbd5e1";
+      const MAP_CONTROL_POSITION_VERSION = "3";
+      const MAP_CONTROL_POSITION_KEYS = {
+        left: "py_lucidum_map_control_left",
+        top: "py_lucidum_map_control_top",
+        version: "py_lucidum_map_control_version",
+      };
+      const MAP_BASE_LAYERS = {
+        blank: { label: "Blank" },
+        esri: {
+          label: "Esri",
+          url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+          attribution: "Tiles &copy; Esri",
+        },
+        grey: {
+          label: "Grey",
+          url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+          attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+        },
+        osm: {
+          label: "OSM",
+          url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+          attribution: "&copy; OpenStreetMap contributors",
+        },
+        satellite: {
+          label: "Satellite",
+          url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          attribution: "Tiles &copy; Esri",
+        },
+      };
 
       const chart = echarts.init(document.getElementById("chart"));
+      let ukMap = null;
+      let ukMapLayer = null;
+      let ukMapLabelLayer = null;
+      let baseTileLayer = null;
+      let mapLayerControl = null;
+      let mapHomeControl = null;
       const el = (id) => document.getElementById(id);
 
       async function api(path, options = {}) {
@@ -966,7 +1560,8 @@
 
       function setChartMessage(message) {
         el("chartMessage").textContent = message || "";
-        el("chartMessage").classList.toggle("hidden", !message || state.view !== "chart");
+        const hiddenForView = state.tool === "line_bar" && state.view !== "chart";
+        el("chartMessage").classList.toggle("hidden", !message || hiddenForView);
       }
 
       function setGroupMeta(message) {
@@ -989,6 +1584,70 @@
 
       function selectedColumn() {
         return state.schema?.columns.find((c) => c.name === state.x);
+      }
+
+      function toolEnabled(id) {
+        return Boolean((state.schema?.tools || []).some((tool) => tool.id === id));
+      }
+
+      function refreshActiveTool() {
+        if (state.tool === "uk_map") {
+          return refreshMap();
+        }
+        return refreshChart();
+      }
+
+      function chooseDefaultTool() {
+        const requested = locationParams.get("tool");
+        if (requested && toolEnabled(requested)) return requested;
+        if (toolEnabled("line_bar")) return "line_bar";
+        if (toolEnabled("uk_map")) return "uk_map";
+        return "line_bar";
+      }
+
+      function renderToolSelector() {
+        const lineBarEnabled = toolEnabled("line_bar");
+        const ukMapEnabled = toolEnabled("uk_map");
+        el("lineBarTool").disabled = !lineBarEnabled;
+        el("ukMapTool").disabled = !ukMapEnabled;
+        el("lineBarTool").classList.toggle("hidden", !lineBarEnabled);
+        el("ukMapTool").classList.toggle("hidden", !ukMapEnabled);
+        el("toolSelectorSection").classList.toggle("hidden", !(lineBarEnabled || ukMapEnabled));
+      }
+
+      function setTool(tool, refresh = true) {
+        if (!toolEnabled(tool)) return;
+        state.tool = tool;
+        el("lineBarTool").classList.toggle("active", tool === "line_bar");
+        el("ukMapTool").classList.toggle("active", tool === "uk_map");
+        el("lineBarToolbar").classList.toggle("hidden", tool !== "line_bar");
+        el("visualArea").classList.toggle("map-mode", tool === "uk_map");
+        el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
+        el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
+        el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
+        el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
+        el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
+        setStatus("");
+        setChartMessage("");
+        if (tool === "line_bar") {
+          el("ukMap").classList.add("hidden");
+          el("mapLegend").classList.add("hidden");
+          setView(state.view);
+          updateAxisControls();
+          requestAnimationFrame(() => chart.resize());
+        } else {
+          el("chart").classList.add("hidden");
+          el("tableWrap").classList.add("hidden");
+          el("ukMap").classList.remove("hidden");
+          initMap();
+          syncFloatingMapControl();
+          syncMapControls();
+          requestAnimationFrame(() => {
+            clampMapFloatingControl();
+            resizeMap();
+          });
+        }
+        if (refresh && state.schema) refreshActiveTool();
       }
 
       function isNumericKind(kind) {
@@ -1217,7 +1876,7 @@
 
       function applyFilter() {
         state.activeFilter = el("filterInput").value.trim();
-        refreshChart();
+        refreshActiveTool();
       }
 
       function clearFilter() {
@@ -1226,7 +1885,7 @@
           option.selected = false;
         });
         state.activeFilter = "";
-        refreshChart();
+        refreshActiveTool();
       }
 
       async function stopApp() {
@@ -1303,6 +1962,600 @@
           setChartMessage("");
           setStatus(error.message, true);
         }
+      }
+
+      async function refreshMap() {
+        if (!state.schema || state.tool !== "uk_map") return;
+        const numerator = el("actualNumerator").value;
+        if (!numerator) {
+          setGroupMeta("Choose an Actual column");
+          setChartMessage("UK mapping needs a numeric Actual column.");
+          return;
+        }
+        const requestSeq = state.mapRequestSeq + 1;
+        state.mapRequestSeq = requestSeq;
+        setStatus("");
+        setChartMessage("");
+        setGroupMeta("Computing map...");
+        try {
+          const request = {
+            level: state.mapLevel,
+            numerator,
+            denominator: el("denominator").value,
+            filter: state.activeFilter,
+            areaColumn: postcodeColumn("area"),
+            sectorColumn: postcodeColumn("sector"),
+          };
+          const [data, geoJson] = await Promise.all([
+            api("/api/uk-map/summary", { method: "POST", body: JSON.stringify(request) }),
+            loadMapGeoJson(state.mapLevel),
+          ]);
+          if (requestSeq !== state.mapRequestSeq) return;
+          state.lastMapData = data;
+          updateMapMetricTitles(data);
+          renderMap(data, geoJson);
+        } catch (error) {
+          if (requestSeq !== state.mapRequestSeq) return;
+          state.pendingMapZoom = null;
+          setGroupMeta("Map failed");
+          setChartMessage(error.message);
+        }
+      }
+
+      function postcodeColumn(level) {
+        const key = level === "sector" ? "postcode_sector" : "postcode_area";
+        const fallback = MAP_LEVELS[level].defaultColumn;
+        return locationParams.get(key) || state.schema.defaults?.[key] || fallback;
+      }
+
+      async function loadMapGeoJson(level) {
+        if (state.mapGeoJsonCache[level]) return state.mapGeoJsonCache[level];
+        const config = MAP_LEVELS[level];
+        const response = await fetch(config.url);
+        if (!response.ok) {
+          throw new Error(`Could not load ${config.label} GeoJSON`);
+        }
+        const geoJson = await response.json();
+        const firstFeature = geoJson.features?.[0];
+        if (!firstFeature?.properties || !(config.property in firstFeature.properties)) {
+          throw new Error(`${config.label} GeoJSON is missing ${config.property}`);
+        }
+        state.mapGeoJsonCache[level] = geoJson;
+        return geoJson;
+      }
+
+      function initMap() {
+        if (ukMap) return;
+        ukMap = L.map("ukMap", {
+          preferCanvas: true,
+          zoomControl: true,
+        }).setView([54.5, -3.2], 5);
+        ukMap.on("zoomend", () => {
+          if (state.lastMapData?.level === "sector") redrawMapInPlace();
+        });
+        setBaseMap(state.baseMap);
+        addMapLayerControl();
+        addMapHomeControl();
+      }
+
+      function resizeMap() {
+        if (!ukMap) return;
+        ukMap.invalidateSize();
+      }
+
+      function setBaseMap(baseMap) {
+        state.baseMap = MAP_BASE_LAYERS[baseMap] ? baseMap : "blank";
+        if (!ukMap) return;
+        if (baseTileLayer) {
+          ukMap.removeLayer(baseTileLayer);
+          baseTileLayer = null;
+        }
+        const config = MAP_BASE_LAYERS[state.baseMap];
+        if (config.url) {
+          baseTileLayer = L.tileLayer(config.url, {
+            maxZoom: 19,
+            attribution: config.attribution || "",
+          }).addTo(ukMap);
+          baseTileLayer.bringToBack();
+        }
+        ukMap.getContainer().classList.toggle("blank-base", state.baseMap === "blank");
+        applyMapBackground();
+        syncMapControls();
+      }
+
+      function applyMapBackground() {
+        const container = ukMap?.getContainer();
+        if (!container) return;
+        container.classList.toggle("map-bg-dark", state.mapBackground === "dark");
+        container.classList.toggle("map-bg-light", state.mapBackground !== "dark");
+      }
+
+      function addMapLayerControl() {
+        if (!ukMap || mapLayerControl) return;
+        const LayerControl = L.Control.extend({
+          options: { position: "topleft" },
+          onAdd() {
+            const container = L.DomUtil.create("div", "map-layer-control leaflet-control");
+            container.innerHTML = `
+              ${Object.entries(MAP_BASE_LAYERS).map(([value, config]) => `
+                <label>
+                  <input type="radio" name="baseMap" value="${escapeHtml(value)}">
+                  <span>${escapeHtml(config.label)}</span>
+                </label>
+              `).join("")}
+              <div class="map-layer-separator"></div>
+              <label>
+                <input type="checkbox" name="mapOverlay" value="area">
+                <span>Area</span>
+              </label>
+              <label>
+                <input type="checkbox" name="mapOverlay" value="sector">
+                <span>Sector</span>
+              </label>
+              <label>
+                <input type="checkbox" name="mapOverlay" value="unit" disabled>
+                <span>Unit</span>
+              </label>
+            `;
+            L.DomEvent.disableClickPropagation(container);
+            L.DomEvent.disableScrollPropagation(container);
+            container.addEventListener("change", handleMapLayerControlChange);
+            return container;
+          },
+        });
+        mapLayerControl = new LayerControl();
+        mapLayerControl.addTo(ukMap);
+        syncMapControls();
+      }
+
+      function handleMapLayerControlChange(event) {
+        const target = event.target;
+        if (!target || target.tagName !== "INPUT") return;
+        if (target.name === "baseMap") {
+          setBaseMap(target.value);
+          return;
+        }
+        if (target.name === "mapOverlay" && (target.value === "area" || target.value === "sector")) {
+          if (!target.checked && target.value === state.mapLevel) {
+            target.checked = true;
+            return;
+          }
+          if (target.checked && target.value !== state.mapLevel) {
+            state.mapLevel = target.value;
+            state.preserveMapView = true;
+            syncMapControls();
+            refreshMap();
+          }
+        }
+      }
+
+      function syncMapControls() {
+        const container = document.querySelector(".map-layer-control");
+        if (!container) return;
+        container.querySelectorAll('input[name="baseMap"]').forEach((input) => {
+          input.checked = input.value === state.baseMap;
+        });
+        container.querySelectorAll('input[name="mapOverlay"]').forEach((input) => {
+          input.checked = input.value === state.mapLevel;
+        });
+      }
+
+      function addMapHomeControl() {
+        if (!ukMap || mapHomeControl) return;
+        const HomeControl = L.Control.extend({
+          options: { position: "topleft" },
+          onAdd() {
+            const button = L.DomUtil.create("button", "map-home-control leaflet-control");
+            button.type = "button";
+            button.title = "Reset map view";
+            button.setAttribute("aria-label", "Reset map view");
+            button.innerHTML = '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z"></path><path d="M3 12h18"></path><path d="M12 3c3 2.6 4.5 5.6 4.5 9S15 18.4 12 21c-3-2.6-4.5-5.6-4.5-9S9 5.6 12 3Z"></path></svg>';
+            L.DomEvent.disableClickPropagation(button);
+            button.addEventListener("click", (event) => {
+              event.preventDefault();
+              fitMapToLayer();
+            });
+            return button;
+          },
+        });
+        mapHomeControl = new HomeControl();
+        mapHomeControl.addTo(ukMap);
+      }
+
+      function fitMapToLayer() {
+        if (!ukMapLayer) {
+          ukMap?.setView([54.5, -3.2], 5);
+          return;
+        }
+        const bounds = ukMapLayer.getBounds();
+        if (bounds.isValid()) {
+          ukMap.fitBounds(bounds, { padding: [14, 14] });
+        }
+      }
+
+      function activeMapPalette() {
+        return MAP_PALETTES[state.mapPalette] || MAP_PALETTES.viridis;
+      }
+
+      function hexToRgb(hex) {
+        const match = String(hex || "").trim().match(/^#?([0-9a-f]{6})$/i);
+        if (!match) return null;
+        const value = Number.parseInt(match[1], 16);
+        return {
+          r: (value >> 16) & 255,
+          g: (value >> 8) & 255,
+          b: value & 255,
+        };
+      }
+
+      function rgbToHex({ r, g, b }) {
+        return `#${[r, g, b].map((channel) => {
+          const value = Math.min(255, Math.max(0, Math.round(channel)));
+          return value.toString(16).padStart(2, "0");
+        }).join("")}`;
+      }
+
+      function interpolateMapPalette(basePalette, count) {
+        const colors = basePalette.map(hexToRgb).filter(Boolean);
+        if (!colors.length || count <= 0) return [];
+        if (count === 1 || colors.length === 1) return [rgbToHex(colors[0])];
+        return Array.from({ length: count }, (_, index) => {
+          const position = (index * (colors.length - 1)) / (count - 1);
+          const lowerIndex = Math.floor(position);
+          const upperIndex = Math.min(colors.length - 1, Math.ceil(position));
+          const ratio = position - lowerIndex;
+          const lower = colors[lowerIndex];
+          const upper = colors[upperIndex];
+          return rgbToHex({
+            r: lower.r + (upper.r - lower.r) * ratio,
+            g: lower.g + (upper.g - lower.g) * ratio,
+            b: lower.b + (upper.b - lower.b) * ratio,
+          });
+        });
+      }
+
+      function averageHexColors(colors) {
+        const rgbs = colors.map(hexToRgb).filter(Boolean);
+        if (!rgbs.length) return MAP_MISSING_COLOR;
+        const total = rgbs.reduce((sum, color) => ({
+          r: sum.r + color.r,
+          g: sum.g + color.g,
+          b: sum.b + color.b,
+        }), { r: 0, g: 0, b: 0 });
+        return rgbToHex({
+          r: total.r / rgbs.length,
+          g: total.g / rgbs.length,
+          b: total.b / rgbs.length,
+        });
+      }
+
+      function legendPaletteFromMapPalette(mapPalette) {
+        return Array.from({ length: MAP_LEGEND_BUCKETS }, (_, index) => {
+          const start = Math.floor((index * mapPalette.length) / MAP_LEGEND_BUCKETS);
+          const end = Math.max(start + 1, Math.floor(((index + 1) * mapPalette.length) / MAP_LEGEND_BUCKETS));
+          return averageHexColors(mapPalette.slice(start, end));
+        });
+      }
+
+      function quantileThresholds(values, bucketCount) {
+        const thresholds = [];
+        if (!values.length || bucketCount <= 1) return thresholds;
+        for (let index = 1; index < bucketCount; index += 1) {
+          thresholds.push(values[Math.min(values.length - 1, Math.ceil((values.length * index) / bucketCount) - 1)]);
+        }
+        return thresholds;
+      }
+
+      function mapHotspotKeys(rows) {
+        const count = Number(state.mapHotspots);
+        if (!Number.isFinite(count) || count === 0) return null;
+        const rankedRows = rows
+          .filter((row) => row.key !== null && row.key !== undefined && finiteNumber(row.value) !== null)
+          .sort((a, b) => finiteNumber(a.value) - finiteNumber(b.value));
+        if (count > 0) rankedRows.reverse();
+        return new Set(rankedRows.slice(0, Math.abs(count)).map((row) => String(row.key)));
+      }
+
+      function mapLineWeightForLevel(level) {
+        const baseWeight = Number(state.mapLineWeight);
+        if (!Number.isFinite(baseWeight) || baseWeight <= 0) return 0;
+        if (level !== "sector" || !ukMap) return baseWeight;
+        const zoom = ukMap.getZoom();
+        if (zoom <= 6) return Math.min(baseWeight, 0.15);
+        if (zoom <= 7) return Math.min(baseWeight, 0.25);
+        if (zoom <= 8) return Math.min(baseWeight, 0.4);
+        if (zoom <= 9) return Math.min(baseWeight, 0.65);
+        if (zoom <= 10) return Math.min(baseWeight, 0.85);
+        return baseWeight;
+      }
+
+      function mapFeatureStyle(row, scale, hotspotKeys, level = state.mapLevel) {
+        const value = finiteNumber(row?.value);
+        const hasValue = value !== null;
+        const selected = hasValue && (!hotspotKeys || hotspotKeys.has(String(row.key)));
+        const muted = hasValue && !selected;
+        const lineWeight = mapLineWeightForLevel(level);
+        return {
+          color: "#000000",
+          opacity: lineWeight > 0 ? (muted ? 0.35 : 0.75) : 0,
+          weight: lineWeight,
+          fillColor: hasValue ? (muted ? MAP_MUTED_COLOR : scale.color(value)) : MAP_MISSING_COLOR,
+          fillOpacity: hasValue ? (muted ? Math.min(Number(state.mapOpacity), 0.22) : Number(state.mapOpacity)) : Math.min(Number(state.mapOpacity), 0.35),
+        };
+      }
+
+      function renderMap(data, geoJson) {
+        initMap();
+        syncFloatingMapControl();
+        const levelConfig = MAP_LEVELS[data.level] || MAP_LEVELS.area;
+        const summaries = new Map((data.rows || []).map((row) => [String(row.key), row]));
+        const scale = makeQuantileScale(data.rows || []);
+        const hotspotKeys = mapHotspotKeys(data.rows || []);
+        const featureCount = geoJson.features?.length || 0;
+        const matchedFeatureCount = (geoJson.features || []).reduce((count, feature) => {
+          const row = summaries.get(String(feature.properties?.[data.join_property] ?? ""));
+          return count + (finiteNumber(row?.value) === null ? 0 : 1);
+        }, 0);
+        if (ukMapLayer) {
+          ukMap.removeLayer(ukMapLayer);
+          ukMapLayer = null;
+        }
+        if (ukMapLabelLayer) {
+          ukMap.removeLayer(ukMapLabelLayer);
+          ukMapLabelLayer = null;
+        }
+        ukMapLayer = L.geoJSON(geoJson, {
+          style: (feature) => {
+            const row = summaries.get(String(feature.properties?.[data.join_property] ?? ""));
+            return mapFeatureStyle(row, scale, hotspotKeys, data.level);
+          },
+          onEachFeature: (feature, layer) => {
+            const key = String(feature.properties?.[data.join_property] ?? "");
+            const row = summaries.get(key);
+            const title = key || "Unknown";
+            const value = finiteNumber(row?.value);
+            layer.bindTooltip(`${title}: ${value === null ? "No data" : formatLineValue(value)}`, { sticky: true });
+            layer.bindPopup(mapPopupHtml(title, row, data));
+          },
+        }).addTo(ukMap);
+        renderMapLabels(data, summaries, hotspotKeys);
+
+        let searchWarning = "";
+        if (state.pendingMapZoom && state.pendingMapZoom.level === data.level) {
+          const zoomed = zoomToMapKey(state.pendingMapZoom.level, state.pendingMapZoom.key);
+          if (!zoomed) {
+            searchWarning = `Postcode ${state.pendingMapZoom.label} was not found.`;
+          }
+          state.pendingMapZoom = null;
+          state.mapFitLevel = data.level;
+          state.preserveMapView = false;
+        } else if (state.preserveMapView) {
+          state.mapFitLevel = data.level;
+          state.preserveMapView = false;
+        } else if (state.mapFitLevel !== data.level) {
+          const bounds = ukMapLayer.getBounds();
+          if (bounds.isValid()) {
+            ukMap.fitBounds(bounds, { padding: [14, 14] });
+            state.mapFitLevel = data.level;
+          }
+        }
+        renderMapLegend(scale, data.response?.label || "Actual");
+        const filteredRows = data.filtered_row_count ?? data.row_count;
+        const rowMeta = filteredRows === data.row_count
+          ? `${data.row_count.toLocaleString()} rows`
+          : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
+        setGroupMeta(`${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`);
+        const warnings = [...(data.warnings || [])];
+        if (searchWarning) {
+          warnings.push(searchWarning);
+        }
+        if (matchedFeatureCount === 0 && (data.rows || []).length) {
+          warnings.push(`No ${levelConfig.label} matched the GeoJSON ${levelConfig.property} values.`);
+        }
+        setChartMessage(warnings.filter(Boolean).join(" "));
+        requestAnimationFrame(() => resizeMap());
+      }
+
+      function updateMapMetricTitles(data) {
+        renderMetricTitle(el("actualMetricTitle"), "Actual", data.response?.value);
+        renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
+      }
+
+      function renderMapLabels(data, summaries, hotspotKeys) {
+        const fontSize = Number(state.mapLabelSize);
+        if (!Number.isFinite(fontSize) || fontSize <= 0 || !ukMapLayer) return;
+        ukMapLabelLayer = L.layerGroup().addTo(ukMap);
+        ukMapLayer.eachLayer((layer) => {
+          const key = String(layer.feature?.properties?.[data.join_property] ?? "");
+          const row = summaries.get(key);
+          const value = finiteNumber(row?.value);
+          if (value === null) return;
+          if (hotspotKeys && !hotspotKeys.has(key)) return;
+          const bounds = layer.getBounds?.();
+          if (!bounds?.isValid()) return;
+          const html = `<div class="map-label" style="font-size:${fontSize}px">${escapeHtml(key)}<br>${escapeHtml(formatLineValue(value))}</div>`;
+          L.marker(bounds.getCenter(), {
+            interactive: false,
+            icon: L.divIcon({
+              className: "",
+              html,
+              iconSize: [0, 0],
+              iconAnchor: [0, 0],
+            }),
+          }).addTo(ukMapLabelLayer);
+        });
+      }
+
+      function zoomToMapKey(level, key) {
+        if (!ukMapLayer) return false;
+        let targetLayer = null;
+        const property = MAP_LEVELS[level]?.property;
+        ukMapLayer.eachLayer((layer) => {
+          if (targetLayer) return;
+          if (String(layer.feature?.properties?.[property] ?? "") === key) {
+            targetLayer = layer;
+          }
+        });
+        if (!targetLayer) return false;
+        const bounds = targetLayer.getBounds?.();
+        if (bounds?.isValid()) {
+          ukMap.fitBounds(bounds, { padding: [30, 30], maxZoom: level === "sector" ? 13 : 9 });
+          return true;
+        }
+        return false;
+      }
+
+      function redrawMapInPlace() {
+        syncFloatingMapControl();
+        if (state.tool !== "uk_map" || !state.lastMapData) return;
+        const geoJson = state.mapGeoJsonCache[state.lastMapData.level];
+        if (!geoJson) return;
+        state.preserveMapView = true;
+        renderMap(state.lastMapData, geoJson);
+      }
+
+      function syncFloatingMapControl() {
+        el("mapControlMetric").textContent = el("actualNumerator").value || "Actual";
+        el("mapControlFilter").textContent = state.activeFilter ? `v ${state.activeFilter}` : "v no filter";
+        document.querySelectorAll(".map-palette-button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.palette === state.mapPalette);
+        });
+        document.querySelectorAll(".map-background-button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.mapBackground === state.mapBackground);
+        });
+        el("mapLineWeight").value = String(state.mapLineWeight);
+        el("mapOpacity").value = String(state.mapOpacity);
+        el("mapHotspots").value = String(state.mapHotspots);
+        el("mapLabelSize").value = String(state.mapLabelSize);
+        el("mapLineWeightValue").textContent = String(state.mapLineWeight);
+        el("mapOpacityValue").textContent = formatCompactSliderValue(state.mapOpacity);
+        el("mapHotspotsValue").textContent = String(state.mapHotspots);
+        el("mapLabelSizeValue").textContent = String(state.mapLabelSize);
+      }
+
+      function formatCompactSliderValue(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        return Number.isInteger(number) ? String(number) : String(Number(number.toFixed(1)));
+      }
+
+      function normalisePostcodeSearch(raw) {
+        const value = String(raw || "").trim().toUpperCase();
+        const compact = value.replace(/[^A-Z0-9]/g, "");
+        if (!compact) return null;
+        const areaMatch = compact.match(/^[A-Z]{1,2}/);
+        if (!areaMatch) return null;
+        const area = areaMatch[0];
+        if (/^[A-Z]{1,2}$/.test(compact)) {
+          return { level: "area", key: area, label: area };
+        }
+        const parts = value.replace(/[^A-Z0-9 ]/g, " ").trim().split(/\s+/).filter(Boolean);
+        let sector = "";
+        if (parts.length >= 2 && /\d/.test(parts[0]) && /^\d/.test(parts[1])) {
+          sector = `${parts[0]} ${parts[1][0]}`;
+        } else if (compact.length >= 5 && /\d[A-Z]{2}$/.test(compact)) {
+          sector = `${compact.slice(0, -3)} ${compact.slice(-3, -2)}`;
+        } else if (/\d$/.test(compact) && /\d/.test(compact.slice(0, -1))) {
+          sector = `${compact.slice(0, -1)} ${compact.slice(-1)}`;
+        }
+        if (sector) return { level: "sector", key: sector, label: sector };
+        return { level: "area", key: area, label: area };
+      }
+
+      async function searchMapPostcode() {
+        const search = normalisePostcodeSearch(el("mapPostcodeInput").value);
+        if (!search) {
+          setChartMessage("Enter a postcode area or sector.");
+          return;
+        }
+        el("mapPostcodeInput").value = search.label;
+        setChartMessage("");
+        state.pendingMapZoom = search;
+        if (state.mapLevel !== search.level) {
+          state.mapLevel = search.level;
+          syncMapControls();
+          await refreshMap();
+          return;
+        }
+        if (!state.lastMapData || state.lastMapData.level !== search.level) {
+          await refreshMap();
+          return;
+        }
+        const zoomed = zoomToMapKey(search.level, search.key);
+        if (!zoomed) {
+          setChartMessage(`Postcode ${search.label} was not found.`);
+        }
+        state.pendingMapZoom = null;
+      }
+
+      function mapPopupHtml(title, row, data) {
+        if (!row) {
+          return `<div class="map-popup"><strong>${escapeHtml(title)}</strong><div>No matching data</div></div>`;
+        }
+        const weightLabel = data.denominator?.bar_label || "Weight";
+        return `<div class="map-popup">
+          <strong>${escapeHtml(title)}</strong>
+          <div>${escapeHtml(data.response?.label || "Actual")}: ${escapeHtml(formatLineValue(row.value) || "No data")}</div>
+          <div>${escapeHtml(weightLabel)}: ${escapeHtml(formatNumber(row.denominator))}</div>
+          <div>Rows: ${escapeHtml(formatNumber(row.row_count))}</div>
+        </div>`;
+      }
+
+      function finiteNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : null;
+      }
+
+      function makeQuantileScale(rows) {
+        const palette = interpolateMapPalette(activeMapPalette(), MAP_COLOR_BUCKETS);
+        const values = rows
+          .map((row) => finiteNumber(row.value))
+          .filter((value) => value !== null)
+          .sort((a, b) => a - b);
+        const thresholds = quantileThresholds(values, palette.length);
+        return {
+          palette,
+          legendPalette: legendPaletteFromMapPalette(palette),
+          values,
+          thresholds,
+          legendThresholds: quantileThresholds(values, MAP_LEGEND_BUCKETS),
+          color(value) {
+            if (value === null) return MAP_MISSING_COLOR;
+            let bucket = 0;
+            while (bucket < thresholds.length && value > thresholds[bucket]) bucket += 1;
+            return palette[Math.min(bucket, palette.length - 1)];
+          },
+        };
+      }
+
+      function renderMapLegend(scale, title) {
+        const legend = el("mapLegend");
+        if (state.tool !== "uk_map" || !scale.values.length) {
+          legend.classList.add("hidden");
+          legend.innerHTML = "";
+          return;
+        }
+        const rows = [];
+        let lower = null;
+        for (let index = 0; index < scale.legendPalette.length; index += 1) {
+          const upper = scale.legendThresholds[index] ?? null;
+          const label = mapLegendLabel(lower, upper, index === scale.legendPalette.length - 1);
+          rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${scale.legendPalette[index]}"></span><span>${escapeHtml(label)}</span></div>`);
+          lower = upper;
+        }
+        if (Number(state.mapHotspots) !== 0) {
+          rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MUTED_COLOR}"></span><span>Not selected</span></div>`);
+        }
+        rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MISSING_COLOR}"></span><span>No data</span></div>`);
+        legend.innerHTML = rows.join("");
+        legend.classList.remove("hidden");
+      }
+
+      function mapLegendLabel(lower, upper, isLast) {
+        if (lower === null && upper === null) return "All values";
+        if (lower === null) return `≤ ${formatLineValue(upper)}`;
+        if (upper === null || isLast) return `> ${formatLineValue(lower)}`;
+        return `${formatLineValue(lower)}–${formatLineValue(upper)}`;
       }
 
       function renderChart(data) {
@@ -1603,10 +2856,13 @@
 
       function setView(view) {
         state.view = view;
+        if (state.tool !== "line_bar") return;
         el("chartTab").classList.toggle("active", view === "chart");
         el("tableTab").classList.toggle("active", view === "table");
         el("chart").classList.toggle("hidden", view !== "chart");
         el("tableWrap").classList.toggle("hidden", view !== "table");
+        el("ukMap").classList.add("hidden");
+        el("mapLegend").classList.add("hidden");
         el("chartMessage").classList.toggle("hidden", view !== "chart" || !el("chartMessage").textContent);
         if (view === "chart") chart.resize();
       }
@@ -1841,6 +3097,8 @@
         setupSidebarFilterResize();
         setupChartControlsResize();
         setupChartControlHeightsResize();
+        setupMapFloatingControlDrag();
+        bindMapFloatingControls();
         document.querySelectorAll(".segmented, .filter-operator").forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
@@ -1871,7 +3129,7 @@
           });
         });
         ["actualNumerator", "denominator"].forEach((id) => {
-          el(id).addEventListener("change", refreshChart);
+          el(id).addEventListener("change", refreshActiveTool);
         });
         el("expectedNumerator").addEventListener("change", () => {
           renderExpectedNumerators();
@@ -1891,31 +3149,199 @@
         el("savedFilterSelect").addEventListener("change", applySavedFilters);
         el("chartTab").addEventListener("click", () => setView("chart"));
         el("tableTab").addEventListener("click", () => setView("table"));
+        el("lineBarTool").addEventListener("click", () => setTool("line_bar"));
+        el("ukMapTool").addEventListener("click", () => setTool("uk_map"));
         el("stopAppBtn").addEventListener("click", stopApp);
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
           el("themeBtn").textContent = document.body.classList.contains("dark") ? "Light" : "Dark";
           if (state.lastData) renderChart(state.lastData);
+          if (state.tool === "uk_map") resizeMap();
         });
         el("reloadBtn").addEventListener("click", async () => {
           setStatus("");
           setGroupMeta("Reloading...");
           state.schema = await api("/api/reload", { method: "POST" });
           state.bandFeature = null;
+          state.mapFitLevel = null;
           renderSavedFilters();
+          renderToolSelector();
+          if (!toolEnabled(state.tool)) {
+            state.tool = chooseDefaultTool();
+          }
           renderExpectedNumerators();
           renderFeatures();
           updateAxisControls();
-          refreshChart();
+          setTool(state.tool, false);
+          refreshActiveTool();
         });
         window.addEventListener("resize", () => {
           const filterSection = document.querySelector(".sidebar-filter-section");
           if (filterSection) setSidebarFilterHeight(filterSection.getBoundingClientRect().height);
-          const controls = document.querySelector(".chart-side-controls");
-          if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
-          const firstPanel = controls?.querySelector(".chart-side-section");
-          if (firstPanel) setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height);
-          chart.resize();
+          if (state.tool === "line_bar") {
+            const controls = document.querySelector(".chart-side-controls");
+            if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
+            const firstPanel = controls?.querySelector(".chart-side-section");
+            if (firstPanel) setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height);
+            chart.resize();
+          } else {
+            clampMapFloatingControl();
+            resizeMap();
+          }
+        });
+      }
+
+      function setupMapFloatingControlDrag() {
+        const panel = el("mapFloatingControl");
+        const saved = restoreMapFloatingPosition();
+        if (saved) {
+          requestAnimationFrame(() => setMapFloatingPosition(saved.left, saved.top));
+        }
+
+        let dragging = false;
+        let startX = 0;
+        let startY = 0;
+        let startLeft = 0;
+        let startTop = 0;
+        panel.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0 || isMapFloatingInteractiveTarget(event.target)) return;
+          event.preventDefault();
+          dragging = true;
+          startX = event.clientX;
+          startY = event.clientY;
+          startLeft = panel.offsetLeft;
+          startTop = panel.offsetTop;
+          panel.classList.add("dragging");
+          document.body.classList.add("dragging-map-control");
+          panel.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        panel.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          setMapFloatingPosition(startLeft + event.clientX - startX, startTop + event.clientY - startY);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          panel.classList.remove("dragging");
+          document.body.classList.remove("dragging-map-control");
+          window.getSelection()?.removeAllRanges();
+          persistMapFloatingPosition();
+          if (event.pointerId !== undefined) {
+            try {
+              panel.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+        }
+        panel.addEventListener("pointerup", finishDrag);
+        panel.addEventListener("pointercancel", finishDrag);
+      }
+
+      function isMapFloatingInteractiveTarget(target) {
+        return Boolean(target?.closest?.("button, input, select, textarea, label, a"));
+      }
+
+      function restoreMapFloatingPosition() {
+        if (localStorage.getItem(MAP_CONTROL_POSITION_KEYS.version) !== MAP_CONTROL_POSITION_VERSION) {
+          clearMapFloatingPosition();
+          return null;
+        }
+        const left = Number(localStorage.getItem(MAP_CONTROL_POSITION_KEYS.left));
+        const top = Number(localStorage.getItem(MAP_CONTROL_POSITION_KEYS.top));
+        if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+        return { left, top };
+      }
+
+      function persistMapFloatingPosition() {
+        const position = state.mapControlPosition;
+        if (!position) return;
+        localStorage.setItem(MAP_CONTROL_POSITION_KEYS.left, String(Math.round(position.left)));
+        localStorage.setItem(MAP_CONTROL_POSITION_KEYS.top, String(Math.round(position.top)));
+        localStorage.setItem(MAP_CONTROL_POSITION_KEYS.version, MAP_CONTROL_POSITION_VERSION);
+      }
+
+      function clearMapFloatingPosition() {
+        localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.left);
+        localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.top);
+        localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.version);
+      }
+
+      function setMapFloatingPosition(rawLeft, rawTop) {
+        const panel = el("mapFloatingControl");
+        const workspace = panel.closest(".workspace");
+        const workspaceRect = workspace?.getBoundingClientRect();
+        if (!workspaceRect) return;
+        const margin = 8;
+        const maxLeft = Math.max(margin, workspaceRect.width - panel.offsetWidth - margin);
+        const maxTop = Math.max(margin, workspaceRect.height - panel.offsetHeight - margin);
+        const left = Math.min(Math.max(rawLeft, margin), maxLeft);
+        const top = Math.min(Math.max(rawTop, margin), maxTop);
+        panel.style.left = `${Math.round(left)}px`;
+        panel.style.top = `${Math.round(top)}px`;
+        panel.style.right = "auto";
+        state.mapControlPosition = { left, top };
+      }
+
+      function clampMapFloatingControl() {
+        const panel = el("mapFloatingControl");
+        if (state.mapControlPosition) {
+          setMapFloatingPosition(state.mapControlPosition.left, state.mapControlPosition.top);
+          return;
+        }
+        if (panel.style.left || panel.style.top) {
+          setMapFloatingPosition(panel.offsetLeft, panel.offsetTop);
+          return;
+        }
+        positionMapFloatingControlTopRight();
+      }
+
+      function positionMapFloatingControlTopRight() {
+        const panel = el("mapFloatingControl");
+        const workspace = panel.closest(".workspace");
+        const workspaceRect = workspace?.getBoundingClientRect();
+        if (!workspaceRect) return;
+        const rightInset = 24;
+        const topInset = 50;
+        setMapFloatingPosition(workspaceRect.width - panel.offsetWidth - rightInset, topInset);
+      }
+
+      function bindMapFloatingControls() {
+        document.querySelectorAll(".map-palette-button").forEach((button) => {
+          button.addEventListener("click", () => {
+            state.mapPalette = button.dataset.palette || "viridis";
+            redrawMapInPlace();
+          });
+        });
+        document.querySelectorAll(".map-background-button").forEach((button) => {
+          button.addEventListener("click", () => {
+            state.mapBackground = button.dataset.mapBackground === "dark" ? "dark" : "light";
+            applyMapBackground();
+            syncFloatingMapControl();
+          });
+        });
+        [
+          ["mapLineWeight", "mapLineWeight"],
+          ["mapOpacity", "mapOpacity"],
+          ["mapHotspots", "mapHotspots"],
+          ["mapLabelSize", "mapLabelSize"],
+        ].forEach(([id, stateKey]) => {
+          el(id).addEventListener("input", (event) => {
+            state[stateKey] = Number(event.target.value);
+            redrawMapInPlace();
+          });
+        });
+        el("mapPostcodeSearch").addEventListener("click", searchMapPostcode);
+        el("mapPostcodeClear").addEventListener("click", () => {
+          el("mapPostcodeInput").value = "";
+          setChartMessage("");
+        });
+        el("mapPostcodeInput").addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            searchMapPostcode();
+          }
         });
       }
 
@@ -1996,11 +3422,14 @@
           const path = state.schema.path.split("/").pop();
           el("datasetMeta").textContent = `${path} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
           chooseDefaults();
+          renderToolSelector();
+          state.tool = chooseDefaultTool();
           renderSavedFilters();
           renderExpectedNumerators();
           renderFeatures();
           updateAxisControls();
-          await refreshChart();
+          setTool(state.tool, false);
+          await refreshActiveTool();
         } catch (error) {
           setStatus(error.message, true);
         }

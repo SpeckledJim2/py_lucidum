@@ -1,8 +1,8 @@
 # py_lucidum
 
-`py_lucidum` is a local data exploration workbench for CSV and Parquet files. It starts a small FastAPI server, uses DuckDB for live aggregation, and opens an interactive browser UI for exploring grouped response values.
+`py_lucidum` is a local data exploration workbench for CSV and Parquet files. It starts a small FastAPI server, uses DuckDB for live aggregation, and opens an interactive browser UI for exploring grouped response values and UK postcode choropleths.
 
-The implemented tool today is a combined line-and-bar chart. The project structure is designed to grow into independently registered tools for GLM building, GBM building, and UK mapping.
+The implemented tools today are a combined line-and-bar chart and a UK mapping tool. The project structure is designed to grow into independently registered tools for GLM and GBM building as well.
 
 ## Current Status
 
@@ -18,13 +18,14 @@ Implemented:
 - Saved filters from `filter_spec.csv` or `specs/filter_spec.csv`.
 - Chart/table view switching.
 - Client-side table pagination for large grouped outputs.
+- UK postcode area and sector choropleth maps using bundled GeoJSON assets and Leaflet.
+- Map base-layer controls, postcode zoom search, palette controls, opacity/line/label controls, and hot/not-spot highlighting.
 - Optional token-protected local server URLs.
 
 Planned placeholders:
 
 - GLM building tool.
 - GBM building tool.
-- UK mapping tool.
 
 ## Installation
 
@@ -73,6 +74,7 @@ Parquet is recommended for normal use because DuckDB reads it much faster.
 .venv/bin/lucidum my_data.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction --denominator Exposure
 .venv/bin/lucidum my_data.parquet --filters path/to/filter_spec.csv
 .venv/bin/lucidum my_data.parquet --no-filters
+.venv/bin/lucidum my_data.parquet --postcode-area PostcodeArea --postcode-sector PostcodeSector
 .venv/bin/lucidum my_data.parquet --tools line-bar
 ```
 
@@ -82,7 +84,8 @@ Parquet is recommended for normal use because DuckDB reads it much faster.
 - `--x`, `--actual`, `--expected`, and `--denominator` set initial chart selections.
 - `--filters` points to a saved-filter CSV file.
 - `--no-filters` disables saved filters and skips default filter-spec discovery.
-- `--tools line-bar` explicitly enables the line-and-bar tool. This is currently also the default.
+- `--postcode-area` and `--postcode-sector` set the dataset columns used by the UK mapping tool. They default to `PostcodeArea` and `PostcodeSector`.
+- `--tools` selects enabled tools. By default both `line-bar` and `uk-map` are enabled; use `--tools line-bar` to launch only the chart/table tool.
 
 ## Python Usage
 
@@ -111,10 +114,16 @@ from py_lucidum.app import create_app
 app = create_app(
     "my_data.parquet",
     token="dev-token",
-    defaults={"x": "YoungestDriverAge", "actual": "AvgPrice1_5", "denominator": "Exposure"},
+    defaults={
+        "x": "YoungestDriverAge",
+        "actual": "AvgPrice1_5",
+        "denominator": "Exposure",
+        "postcode_area": "PostcodeArea",
+        "postcode_sector": "PostcodeSector",
+    },
     filters_path="path/to/filter_spec.csv",
     use_saved_filters=True,
-    tools=["line_bar"],
+    tools=["line_bar", "uk_map"],
 )
 
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
@@ -138,9 +147,20 @@ The line-and-bar chart uses one shared **Weight** selector for both response lin
 - The grey value next to the Weight label is the filtered total Weight used by the chart.
 - If rows are excluded because selected response values or Weight values are missing, the chart status text reports that. It also reports zero or negative Weight values.
 
+## UK Mapping
+
+The UK mapping tool is available from the sidebar tool selector when `uk-map` is enabled. It uses the selected Actual column, Weight denominator, and active filter in the same way as the line-and-bar chart.
+
+- The map can show postcode area or postcode sector choropleths. Dataset join columns default to `PostcodeArea` and `PostcodeSector`, configurable with `--postcode-area` and `--postcode-sector`.
+- Area and sector geometries are served from bundled GeoJSON assets under `py_lucidum.tools.uk_map.static`.
+- The map layer control offers Blank, Esri, Grey, OSM, and Satellite base maps. Blank uses the selected white/dark map background.
+- The floating map control supports postcode search (`PO`, `PO15 7`, or `PO15 7JT`), draggable placement, divergent/spectral/viridis palettes, line thickness, opacity, hot/not-spot highlighting, and polygon labels.
+- The divergent palette is the default. Colour orders run from green/blue/yellow at low values toward red/purple at high values, depending on the selected palette.
+- The legend shows ten quantile categories and omits the metric title so long metric names do not widen it.
+
 ## Filters
 
-The filter bar accepts DuckDB `WHERE` expressions:
+The sidebar filter box accepts DuckDB `WHERE` expressions:
 
 ```sql
 YoungestDriverAge > 40
@@ -169,9 +189,9 @@ The codebase is split into shared infrastructure and independent tools:
 py_lucidum.core                 shared DuckDB dataset, schema, filter, and SQL helpers
 py_lucidum.app                  FastAPI app factory and shared app context
 py_lucidum.tools.line_bar       implemented line-and-bar chart tool
+py_lucidum.tools.uk_map         implemented UK mapping tool
 py_lucidum.tools.glm            placeholder package for GLM building
 py_lucidum.tools.gbm            placeholder package for GBM building
-py_lucidum.tools.uk_map         placeholder package for UK mapping
 ```
 
 The line-and-bar chart exposes both endpoints:
@@ -183,9 +203,16 @@ POST /api/line-bar/chart
 
 `/api/chart` is retained for compatibility with the current frontend. New tool-specific integrations should prefer namespaced endpoints.
 
+The UK mapping tool exposes:
+
+```text
+POST /api/uk-map/summary
+GET  /tools/uk-map/static/geodata/...
+```
+
 ## Development
 
-Run the line-and-bar backend tests:
+Run the test suite:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
@@ -206,4 +233,4 @@ Project planning notes live in `PROJECT_PLAN.md`. More detailed launch notes liv
 - Local development datasets under `datasets/` are intentionally ignored by git.
 - Saved-filter CSVs under `specs/` are tracked.
 - The app treats input files as fixed during a session until the user presses Reload.
-- The current frontend is a static ECharts app. A larger frontend framework can be reconsidered later if the planned toolset makes it worthwhile.
+- The current frontend is a static ECharts and Leaflet app. A larger frontend framework can be reconsidered later if the planned toolset makes it worthwhile.

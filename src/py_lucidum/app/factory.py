@@ -22,10 +22,16 @@ TOOL_ALIASES = {
     "line-bar": "line_bar",
     "line_bar": "line_bar",
     "linebar": "line_bar",
+    "uk-map": "uk_map",
+    "uk_map": "uk_map",
+    "ukmap": "uk_map",
+    "map": "uk_map",
 }
 TOOL_METADATA = {
     "line_bar": {"id": "line_bar", "label": "Line and bar chart"},
+    "uk_map": {"id": "uk_map", "label": "UK mapping"},
 }
+DEFAULT_TOOLS = ["line_bar", "uk_map"]
 
 
 def favicon_media_type(path: Path) -> str:
@@ -37,13 +43,13 @@ def favicon_media_type(path: Path) -> str:
 
 def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
     if tools is None:
-        requested = ["line_bar"]
+        requested = DEFAULT_TOOLS
     elif isinstance(tools, str):
         requested = [part.strip() for part in tools.split(",") if part.strip()]
     else:
         requested = [str(part).strip() for part in tools if str(part).strip()]
     if not requested:
-        requested = ["line_bar"]
+        requested = DEFAULT_TOOLS
 
     enabled: list[str] = []
     for name in requested:
@@ -81,7 +87,7 @@ def create_app(
     app.state.defaults = {
         key: value
         for key, value in (defaults or {}).items()
-        if key in {"x", "actual", "expected", "denominator"} and value
+        if key in {"x", "actual", "expected", "denominator", "postcode_area", "postcode_sector"} and value
     }
 
     def check_token(request: Request) -> None:
@@ -143,5 +149,9 @@ def create_app(
         from py_lucidum.tools.line_bar import register as register_line_bar
 
         register_line_bar(app, context)
+    if "uk_map" in enabled_tools:
+        from py_lucidum.tools.uk_map import register as register_uk_map
+
+        register_uk_map(app, context)
 
     return app
