@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from py_lucidum.core import Dataset, load_saved_filters, resolve_filters_path
 
@@ -108,6 +109,8 @@ def create_app(
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.api_route("/favicon.ico", methods=["GET", "HEAD"])
     def favicon() -> FileResponse:
