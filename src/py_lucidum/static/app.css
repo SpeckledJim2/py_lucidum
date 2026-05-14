@@ -39,6 +39,8 @@
       html,
       body {
         height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
       }
 
       body {
@@ -88,6 +90,7 @@
 
       .app {
         height: 100vh;
+        height: 100dvh;
         display: grid;
         grid-template-rows: auto 1fr;
         overflow: hidden;
@@ -656,12 +659,71 @@
         font: inherit;
       }
 
+      .uk-map .leaflet-top.leaflet-left {
+        --map-control-size: 34px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 8px;
+        width: max-content;
+        max-width: calc(100% - 16px);
+        margin: 8px 0 0 8px;
+      }
+
+      .uk-map .leaflet-top.leaflet-left .leaflet-control {
+        margin: 0;
+      }
+
+      .uk-map .leaflet-top.leaflet-left::after {
+        content: "";
+        flex: 0 0 100%;
+        order: 1;
+        height: 0;
+      }
+
+      .uk-map .leaflet-top.leaflet-left .map-layer-control {
+        order: 0;
+      }
+
+      .uk-map .leaflet-top.leaflet-left .leaflet-control-zoom {
+        order: 2;
+      }
+
+      .uk-map .leaflet-top.leaflet-left .map-place-control {
+        order: 3;
+      }
+
       .map-layer-control,
-      .map-home-control {
+      .uk-map .leaflet-control-zoom,
+      .map-place-control {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 6px;
         box-shadow: var(--shadow);
+        color: var(--text);
+      }
+
+      .uk-map .leaflet-control-zoom {
+        overflow: hidden;
+      }
+
+      .uk-map .leaflet-control-zoom a {
+        width: var(--map-control-size);
+        height: var(--map-control-size);
+        line-height: var(--map-control-size);
+        background: var(--panel);
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--text);
+        font-size: 22px;
+      }
+
+      .uk-map .leaflet-control-zoom a:last-child {
+        border-bottom: 0;
+      }
+
+      .uk-map .leaflet-control-zoom a:hover {
+        background: var(--panel-2);
         color: var(--text);
       }
 
@@ -697,26 +759,43 @@
         background: var(--line);
       }
 
-      .map-home-control {
-        width: 34px;
-        height: 34px;
+      .map-place-control {
+        display: grid;
+        grid-template-rows: repeat(2, var(--map-control-size));
+        overflow: hidden;
+      }
+
+      .map-place-button {
+        width: var(--map-control-size);
+        height: var(--map-control-size);
         display: grid;
         place-items: center;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        padding: 0;
         cursor: pointer;
         color: var(--text);
       }
 
-      .map-home-control svg {
-        width: 18px;
-        height: 18px;
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 2;
-        stroke-linecap: round;
-        stroke-linejoin: round;
+      .map-place-button:last-child {
+        border-bottom: 0;
       }
 
-      .map-home-control:hover {
+      .map-place-button svg {
+        width: 20px;
+        height: 20px;
+        fill: #111827;
+      }
+
+      .map-place-button img {
+        width: 22px;
+        height: 22px;
+        display: block;
+        object-fit: contain;
+      }
+
+      .map-place-button:hover {
         background: var(--panel-2);
       }
 

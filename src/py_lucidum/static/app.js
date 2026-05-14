@@ -121,6 +121,7 @@
       let ukMapLabelLayer = null;
       let baseTileLayer = null;
       let mapLayerControl = null;
+      let mapZoomControl = null;
       let mapHomeControl = null;
       const el = (id) => document.getElementById(id);
 
@@ -776,13 +777,14 @@
         if (ukMap) return;
         ukMap = L.map("ukMap", {
           preferCanvas: true,
-          zoomControl: true,
+          zoomControl: false,
         }).setView([54.5, -3.2], 6);
         ukMap.on("zoomend", () => {
           if (state.lastMapData?.level === "sector") redrawMapInPlace();
         });
         setBaseMap(state.baseMap);
         addMapLayerControl();
+        addMapZoomControl();
         addMapHomeControl();
       }
 
@@ -888,22 +890,38 @@
         });
       }
 
+      function addMapZoomControl() {
+        if (!ukMap || mapZoomControl) return;
+        mapZoomControl = L.control.zoom({ position: "topleft" });
+        mapZoomControl.addTo(ukMap);
+      }
+
       function addMapHomeControl() {
         if (!ukMap || mapHomeControl) return;
         const HomeControl = L.Control.extend({
           options: { position: "topleft" },
           onAdd() {
-            const button = L.DomUtil.create("button", "map-home-control leaflet-control");
-            button.type = "button";
-            button.title = "Reset map view";
-            button.setAttribute("aria-label", "Reset map view");
-            button.innerHTML = '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z"></path><path d="M3 12h18"></path><path d="M12 3c3 2.6 4.5 5.6 4.5 9S15 18.4 12 21c-3-2.6-4.5-5.6-4.5-9S9 5.6 12 3Z"></path></svg>';
-            L.DomEvent.disableClickPropagation(button);
-            button.addEventListener("click", (event) => {
+            const container = L.DomUtil.create("div", "map-place-control leaflet-control");
+            const ukButton = L.DomUtil.create("button", "map-place-button", container);
+            ukButton.type = "button";
+            ukButton.title = "Fit UK map layer";
+            ukButton.setAttribute("aria-label", "Fit UK map layer");
+            ukButton.innerHTML = '<img src="/tools/uk-map/static/icons/UK.png" alt="">';
+            const londonButton = L.DomUtil.create("button", "map-place-button", container);
+            londonButton.type = "button";
+            londonButton.title = "Zoom to London";
+            londonButton.setAttribute("aria-label", "Zoom to London");
+            londonButton.innerHTML = '<img src="/tools/uk-map/static/icons/London.png" alt="">';
+            L.DomEvent.disableClickPropagation(container);
+            ukButton.addEventListener("click", (event) => {
               event.preventDefault();
               fitMapToLayer();
             });
-            return button;
+            londonButton.addEventListener("click", (event) => {
+              event.preventDefault();
+              ukMap?.setView([51.5074, -0.1278], 10);
+            });
+            return container;
           },
         });
         mapHomeControl = new HomeControl();
