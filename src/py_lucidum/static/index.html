@@ -1451,8 +1451,13 @@
         activeFilter: "",
         lastData: null,
         lastMapData: null,
+        toolCache: {
+          line_bar: { requestKey: null, data: null, presentation: null },
+          uk_map: { requestKey: null, data: null, presentation: null },
+        },
         mapGeoJsonCache: {},
         mapFitLevel: null,
+        renderedMapLevel: null,
         preserveMapView: false,
         pendingMapZoom: null,
         mapControlPosition: null,
@@ -1590,11 +1595,95 @@
         return Boolean((state.schema?.tools || []).some((tool) => tool.id === id));
       }
 
-      function refreshActiveTool() {
-        if (state.tool === "uk_map") {
-          return refreshMap();
+      function freshToolCache() {
+        return {
+          line_bar: { requestKey: null, data: null, presentation: null },
+          uk_map: { requestKey: null, data: null, presentation: null },
+        };
+      }
+
+      function clearToolCaches() {
+        state.toolCache = freshToolCache();
+        state.lastData = null;
+        state.lastMapData = null;
+        state.renderedMapLevel = null;
+      }
+
+      function toolCache(tool) {
+        if (!state.toolCache[tool]) {
+          state.toolCache[tool] = { requestKey: null, data: null, presentation: null };
         }
-        return refreshChart();
+        return state.toolCache[tool];
+      }
+
+      function normaliseForRequestKey(value) {
+        if (Array.isArray(value)) {
+          return value.map(normaliseForRequestKey);
+        }
+        if (value && typeof value === "object") {
+          return Object.keys(value).sort().reduce((result, key) => {
+            result[key] = normaliseForRequestKey(value[key]);
+            return result;
+          }, {});
+        }
+        return value;
+      }
+
+      function stableRequestKey(request) {
+        return JSON.stringify(normaliseForRequestKey(request));
+      }
+
+      function saveToolPresentation(tool, presentation) {
+        toolCache(tool).presentation = {
+          groupMeta: presentation.groupMeta || "",
+          status: presentation.status || "",
+          statusError: Boolean(presentation.statusError),
+          chartMessage: presentation.chartMessage || "",
+        };
+      }
+
+      function applyToolPresentation(tool) {
+        const presentation = toolCache(tool).presentation;
+        if (!presentation) return;
+        setGroupMeta(presentation.groupMeta);
+        setStatus(presentation.status, presentation.statusError);
+        setChartMessage(presentation.chartMessage);
+      }
+
+      function toolHandler(tool) {
+        if (tool === "uk_map") {
+          return {
+            buildRequest: buildMapRequest,
+            fetch: fetchMapData,
+            useCached: useCachedMapData,
+            handleMissingRequest: showMapMissingNumerator,
+          };
+        }
+        return {
+          buildRequest: buildChartRequest,
+          fetch: fetchChartData,
+          useCached: useCachedChartData,
+        };
+      }
+
+      async function refreshTool(tool, options = {}) {
+        const handler = toolHandler(tool);
+        const request = handler.buildRequest();
+        if (!request) {
+          handler.handleMissingRequest?.();
+          return null;
+        }
+        const requestKey = stableRequestKey(request);
+        const cache = toolCache(tool);
+        if (!options.force && cache.data && cache.requestKey === requestKey) {
+          await handler.useCached(cache, options);
+          return cache.data;
+        }
+        return handler.fetch(request, requestKey);
+      }
+
+      function refreshActiveTool(options = {}) {
+        return refreshTool(state.tool, options);
       }
 
       function chooseDefaultTool() {
@@ -1875,7 +1964,12 @@
       }
 
       function applyFilter() {
-        state.activeFilter = el("filterInput").value.trim();
+        const nextFilter = el("filterInput").value.trim();
+        if (nextFilter === state.activeFilter) {
+          refreshActiveTool();
+          return;
+        }
+        state.activeFilter = nextFilter;
         refreshActiveTool();
       }
 
@@ -1884,6 +1978,10 @@
         Array.from(el("savedFilterSelect").options).forEach((option) => {
           option.selected = false;
         });
+        if (state.activeFilter === "") {
+          refreshActiveTool();
+          return;
+        }
         state.activeFilter = "";
         refreshActiveTool();
       }
@@ -1917,18 +2015,12 @@
         document.body.append(overlay);
       }
 
-      async function refreshChart() {
-        if (!state.schema || !state.x) return;
-        const requestSeq = state.chartRequestSeq + 1;
-        state.chartRequestSeq = requestSeq;
-        setStatus("");
-        setChartMessage("");
-        setGroupMeta("Computing...");
-        updateAxisControls();
+      function buildChartRequest() {
+        if (!state.schema || !state.x) return null;
         const kind = selectedColumn()?.kind;
         const isDate = kind === "date" || kind === "datetime";
         const isNumeric = isNumericKind(kind);
-        const request = {
+        return {
           x: state.x,
           sort: state.sort,
           lowGroup: state.lowGroup,
@@ -1941,21 +2033,27 @@
           responses: currentResponses(),
           maxGroups: 10000,
         };
+      }
+
+      async function refreshChart(options = {}) {
+        return refreshTool("line_bar", options);
+      }
+
+      async function fetchChartData(request, requestKey) {
+        const requestSeq = state.chartRequestSeq + 1;
+        state.chartRequestSeq = requestSeq;
+        setStatus("");
+        setChartMessage("");
+        setGroupMeta("Computing...");
+        updateAxisControls();
         try {
           const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
           if (requestSeq !== state.chartRequestSeq) return;
-          state.lastData = data;
-          state.tablePage = 1;
-          updateMetricTitles(data);
-          const labelMessage = renderChart(data);
-          renderTable(data);
-          const filteredRows = data.filtered_row_count ?? data.row_count;
-          const rowMeta = filteredRows === data.row_count
-            ? `${data.row_count.toLocaleString()} rows`
-            : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
-          setGroupMeta(`${data.rows.length.toLocaleString()} groups · ${rowMeta}`);
-          setStatus([...(data.warnings || [])].filter(Boolean).join(" "));
-          setChartMessage(labelMessage);
+          const cache = toolCache("line_bar");
+          cache.requestKey = requestKey;
+          cache.data = data;
+          renderChartData(data, { resetTablePage: true });
+          return data;
         } catch (error) {
           if (requestSeq !== state.chartRequestSeq) return;
           setGroupMeta("Query failed");
@@ -1964,42 +2062,104 @@
         }
       }
 
-      async function refreshMap() {
-        if (!state.schema || state.tool !== "uk_map") return;
-        const numerator = el("actualNumerator").value;
-        if (!numerator) {
-          setGroupMeta("Choose an Actual column");
-          setChartMessage("UK mapping needs a numeric Actual column.");
+      function renderChartData(data, options = {}) {
+        state.lastData = data;
+        if (options.resetTablePage) {
+          state.tablePage = 1;
+        }
+        updateMetricTitles(data);
+        const labelMessage = renderChart(data);
+        renderTable(data);
+        const filteredRows = data.filtered_row_count ?? data.row_count;
+        const rowMeta = filteredRows === data.row_count
+          ? `${data.row_count.toLocaleString()} rows`
+          : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
+        const groupMeta = `${data.rows.length.toLocaleString()} groups · ${rowMeta}`;
+        const status = [...(data.warnings || [])].filter(Boolean).join(" ");
+        setGroupMeta(groupMeta);
+        setStatus(status);
+        setChartMessage(labelMessage);
+        saveToolPresentation("line_bar", { groupMeta, status, chartMessage: labelMessage });
+      }
+
+      function useCachedChartData(cache, options = {}) {
+        state.lastData = cache.data;
+        if (options.renderIfCached) {
+          renderChartData(cache.data);
           return;
         }
+        updateMetricTitles(cache.data);
+        applyToolPresentation("line_bar");
+        requestAnimationFrame(() => chart.resize());
+      }
+
+      function buildMapRequest() {
+        if (!state.schema) return null;
+        const numerator = el("actualNumerator").value;
+        if (!numerator) return null;
+        return {
+          level: state.mapLevel,
+          numerator,
+          denominator: el("denominator").value,
+          filter: state.activeFilter,
+          areaColumn: postcodeColumn("area"),
+          sectorColumn: postcodeColumn("sector"),
+        };
+      }
+
+      function showMapMissingNumerator() {
+        setGroupMeta("Choose an Actual column");
+        setChartMessage("UK mapping needs a numeric Actual column.");
+      }
+
+      async function refreshMap(options = {}) {
+        return refreshTool("uk_map", options);
+      }
+
+      async function fetchMapData(request, requestKey) {
         const requestSeq = state.mapRequestSeq + 1;
         state.mapRequestSeq = requestSeq;
         setStatus("");
         setChartMessage("");
         setGroupMeta("Computing map...");
         try {
-          const request = {
-            level: state.mapLevel,
-            numerator,
-            denominator: el("denominator").value,
-            filter: state.activeFilter,
-            areaColumn: postcodeColumn("area"),
-            sectorColumn: postcodeColumn("sector"),
-          };
           const [data, geoJson] = await Promise.all([
             api("/api/uk-map/summary", { method: "POST", body: JSON.stringify(request) }),
-            loadMapGeoJson(state.mapLevel),
+            loadMapGeoJson(request.level),
           ]);
           if (requestSeq !== state.mapRequestSeq) return;
-          state.lastMapData = data;
+          const cache = toolCache("uk_map");
+          cache.requestKey = requestKey;
+          cache.data = data;
           updateMapMetricTitles(data);
           renderMap(data, geoJson);
+          return data;
         } catch (error) {
           if (requestSeq !== state.mapRequestSeq) return;
           state.pendingMapZoom = null;
           setGroupMeta("Map failed");
           setChartMessage(error.message);
         }
+      }
+
+      async function useCachedMapData(cache) {
+        state.lastMapData = cache.data;
+        updateMapMetricTitles(cache.data);
+        syncFloatingMapControl();
+        applyToolPresentation("uk_map");
+        const geoJson = state.mapGeoJsonCache[cache.data.level];
+        if (!ukMapLayer || state.renderedMapLevel !== cache.data.level || state.pendingMapZoom) {
+          if (geoJson) {
+            state.preserveMapView = !state.pendingMapZoom;
+            renderMap(cache.data, geoJson);
+          } else {
+            const loadedGeoJson = await loadMapGeoJson(cache.data.level);
+            state.preserveMapView = !state.pendingMapZoom;
+            renderMap(cache.data, loadedGeoJson);
+          }
+          return;
+        }
+        requestAnimationFrame(() => resizeMap());
       }
 
       function postcodeColumn(level) {
@@ -2285,6 +2445,8 @@
       }
 
       function renderMap(data, geoJson) {
+        state.lastMapData = data;
+        state.renderedMapLevel = data.level;
         initMap();
         syncFloatingMapControl();
         const levelConfig = MAP_LEVELS[data.level] || MAP_LEVELS.area;
@@ -2344,7 +2506,8 @@
         const rowMeta = filteredRows === data.row_count
           ? `${data.row_count.toLocaleString()} rows`
           : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
-        setGroupMeta(`${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`);
+        const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`;
+        setGroupMeta(groupMeta);
         const warnings = [...(data.warnings || [])];
         if (searchWarning) {
           warnings.push(searchWarning);
@@ -2352,7 +2515,9 @@
         if (matchedFeatureCount === 0 && (data.rows || []).length) {
           warnings.push(`No ${levelConfig.label} matched the GeoJSON ${levelConfig.property} values.`);
         }
-        setChartMessage(warnings.filter(Boolean).join(" "));
+        const chartMessage = warnings.filter(Boolean).join(" ");
+        setChartMessage(chartMessage);
+        saveToolPresentation("uk_map", { groupMeta, chartMessage });
         requestAnimationFrame(() => resizeMap());
       }
 
@@ -3130,7 +3295,7 @@
               state.bandFeature = state.x;
               syncBandingControl();
             }
-            refreshChart();
+            refreshChart({ renderIfCached: group.dataset.control === "labels" });
           });
         });
         ["actualNumerator", "denominator"].forEach((id) => {
@@ -3169,6 +3334,7 @@
           state.schema = await api("/api/reload", { method: "POST" });
           state.bandFeature = null;
           state.mapFitLevel = null;
+          clearToolCaches();
           renderSavedFilters();
           renderToolSelector();
           if (!toolEnabled(state.tool)) {
@@ -3178,7 +3344,7 @@
           renderFeatures();
           updateAxisControls();
           setTool(state.tool, false);
-          refreshActiveTool();
+          refreshActiveTool({ force: true });
         });
         window.addEventListener("resize", () => {
           const filterSection = document.querySelector(".sidebar-filter-section");
@@ -3434,7 +3600,7 @@
           renderFeatures();
           updateAxisControls();
           setTool(state.tool, false);
-          await refreshActiveTool();
+          await refreshActiveTool({ force: true });
         } catch (error) {
           setStatus(error.message, true);
         }
