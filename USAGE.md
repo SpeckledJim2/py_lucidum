@@ -235,6 +235,13 @@ Run the test suite:
 .venv/bin/python -m unittest discover -s tests
 ```
 
+Useful code checks before committing:
+
+```bash
+node --check src/py_lucidum/static/app.js
+git diff --check
+```
+
 These launch paths are expected to work from the project root when `datasets/vans.parquet` exists:
 
 ```bash

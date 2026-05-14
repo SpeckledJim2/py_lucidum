@@ -293,6 +293,10 @@
         font-size: 13px;
       }
 
+      .tool-selector-section {
+        margin-bottom: 28px;
+      }
+
       .tool-selector {
         display: grid;
         grid-template-columns: 1fr;

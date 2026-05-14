@@ -222,7 +222,7 @@ Useful checks before committing:
 
 ```bash
 .venv/bin/python -m compileall src tests
-perl -0777 -ne 'print $1 if m{<script>(.*)</script>}s' src/py_lucidum/static/index.html | node --check -
+node --check src/py_lucidum/static/app.js
 git diff --check
 ```
 

@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-    <link rel="stylesheet" href="/static/app.css" />
+    <link rel="stylesheet" href="/static/app.css?v=2" />
   </head>
   <body>
     <div class="app">
@@ -23,17 +23,6 @@
 
       <div class="shell">
         <aside>
-          <section class="section">
-            <div class="metric-row">
-              <div id="actualMetricTitle" class="metric-title">Actual</div>
-              <select id="actualNumerator"></select>
-            </div>
-            <div class="metric-row">
-              <div id="weightMetricTitle" class="metric-title">Weight</div>
-              <select id="denominator"></select>
-            </div>
-          </section>
-
           <section id="toolSelectorSection" class="section tool-selector-section">
             <h2>Tool</h2>
             <div class="tool-selector">
@@ -49,6 +38,17 @@
                 </span>
                 <span>UK mapping</span>
               </button>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="metric-row">
+              <div id="actualMetricTitle" class="metric-title">Actual</div>
+              <select id="actualNumerator"></select>
+            </div>
+            <div class="metric-row">
+              <div id="weightMetricTitle" class="metric-title">Weight</div>
+              <select id="denominator"></select>
             </div>
           </section>
 
