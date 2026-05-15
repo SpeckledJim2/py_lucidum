@@ -34,6 +34,17 @@ TOOL_METADATA = {
     "uk_map": {"id": "uk_map", "label": "UK mapping"},
 }
 DEFAULT_TOOLS = ["line_bar", "uk_map"]
+DEFAULT_KEYS = {
+    "x",
+    "actual",
+    "expected",
+    "denominator",
+    "postcode_area",
+    "postcode_sector",
+    "postcode_unit",
+    "latitude",
+    "longitude",
+}
 
 
 def favicon_media_type(path: Path) -> str:
@@ -95,7 +106,7 @@ def create_app(
     app.state.defaults = {
         key: value
         for key, value in (defaults or {}).items()
-        if key in {"x", "actual", "expected", "denominator", "postcode_area", "postcode_sector"} and value
+        if key in DEFAULT_KEYS and value
     }
 
     def check_token(request: Request) -> None:

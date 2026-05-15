@@ -16,6 +16,19 @@ import uvicorn
 from .app import create_app
 
 
+DEFAULT_URL_KEYS = {
+    "x",
+    "actual",
+    "expected",
+    "denominator",
+    "postcode_area",
+    "postcode_sector",
+    "postcode_unit",
+    "latitude",
+    "longitude",
+}
+
+
 class LucidumServer(uvicorn.Server):
     def __init__(self, config: uvicorn.Config, display_url: str, stop_instruction: str) -> None:
         super().__init__(config)
@@ -82,7 +95,7 @@ def _display_url_for_app(app: object, host: str, port: int) -> str:
         params.update({
             key: value
             for key, value in defaults.items()
-            if key in {"x", "actual", "expected", "denominator", "postcode_area", "postcode_sector"} and value
+            if key in DEFAULT_URL_KEYS and value
         })
     if params:
         return f"{url}?{urlencode(params)}"
@@ -150,6 +163,9 @@ def serve(
     denominator: str | None = None,
     postcode_area: str | None = None,
     postcode_sector: str | None = None,
+    postcode_unit: str | None = None,
+    latitude: str | None = None,
+    longitude: str | None = None,
     filters: str | Path | None = None,
     no_filters: bool = False,
     tools: str | Sequence[str] | None = None,
@@ -164,6 +180,9 @@ def serve(
         "denominator": denominator,
         "postcode_area": postcode_area,
         "postcode_sector": postcode_sector,
+        "postcode_unit": postcode_unit,
+        "latitude": latitude,
+        "longitude": longitude,
     }
     app = create_app(
         path,
@@ -195,6 +214,9 @@ def serve_line_bar(
     denominator: str | None = None,
     postcode_area: str | None = None,
     postcode_sector: str | None = None,
+    postcode_unit: str | None = None,
+    latitude: str | None = None,
+    longitude: str | None = None,
     filters: str | Path | None = None,
     no_filters: bool = False,
 ) -> str:
@@ -210,6 +232,9 @@ def serve_line_bar(
         denominator=denominator,
         postcode_area=postcode_area,
         postcode_sector=postcode_sector,
+        postcode_unit=postcode_unit,
+        latitude=latitude,
+        longitude=longitude,
         filters=filters,
         no_filters=no_filters,
         tools=["line_bar"],
@@ -243,6 +268,9 @@ def main() -> int:
     parser.add_argument("--denominator", default=None, help="Initial Weight column. Defaults to Average row value.")
     parser.add_argument("--postcode-area", default=None, help="Postcode area column for UK mapping. Defaults to PostcodeArea.")
     parser.add_argument("--postcode-sector", default=None, help="Postcode sector column for UK mapping. Defaults to PostcodeSector.")
+    parser.add_argument("--postcode-unit", default=None, help="Postcode unit column for UK mapping points. Defaults to PostcodeUnit.")
+    parser.add_argument("--latitude", default=None, help="Latitude column for UK mapping points. Defaults to lat.")
+    parser.add_argument("--longitude", default=None, help="Longitude column for UK mapping points. Defaults to long.")
     filter_group = parser.add_mutually_exclusive_group()
     filter_group.add_argument(
         "--filters",
@@ -269,6 +297,9 @@ def main() -> int:
             denominator=args.denominator,
             postcode_area=args.postcode_area,
             postcode_sector=args.postcode_sector,
+            postcode_unit=args.postcode_unit,
+            latitude=args.latitude,
+            longitude=args.longitude,
             filters=args.filters,
             no_filters=args.no_filters,
             tools=args.tools,

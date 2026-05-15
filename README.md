@@ -1,6 +1,6 @@
 # py_lucidum
 
-`py_lucidum` is a local data exploration workbench for CSV and Parquet files. It starts a small FastAPI server, uses DuckDB for live aggregation, and opens an interactive browser UI for exploring grouped response values and UK postcode choropleths.
+`py_lucidum` is a local data exploration workbench for CSV and Parquet files. It starts a small FastAPI server, uses DuckDB for live aggregation, and opens an interactive browser UI for exploring grouped response values, UK postcode choropleths, and postcode unit points.
 
 The implemented tools today are a combined line-and-bar chart and a UK mapping tool. The project structure is designed to grow into independently registered tools for GLM and GBM building as well.
 
@@ -19,6 +19,7 @@ Implemented:
 - Chart/table view switching.
 - Client-side table pagination for large grouped outputs.
 - UK postcode area and sector choropleth maps using bundled GeoJSON assets and Leaflet.
+- UK postcode unit point maps using dataset latitude/longitude columns and a canvas Leaflet layer.
 - Map base-layer controls, postcode zoom search, palette controls, opacity/line/label controls, and hot/not-spot highlighting.
 - Optional token-protected local server URLs.
 
@@ -75,6 +76,7 @@ Parquet is recommended for normal use because DuckDB reads it much faster.
 .venv/bin/lucidum my_data.parquet --filters path/to/filter_spec.csv
 .venv/bin/lucidum my_data.parquet --no-filters
 .venv/bin/lucidum my_data.parquet --postcode-area PostcodeArea --postcode-sector PostcodeSector
+.venv/bin/lucidum my_data.parquet --postcode-unit PostcodeUnit --latitude lat --longitude long
 .venv/bin/lucidum my_data.parquet --tools line-bar
 ```
 
@@ -84,7 +86,8 @@ Parquet is recommended for normal use because DuckDB reads it much faster.
 - `--x`, `--actual`, `--expected`, and `--denominator` set initial chart selections.
 - `--filters` points to a saved-filter CSV file.
 - `--no-filters` disables saved filters and skips default filter-spec discovery.
-- `--postcode-area` and `--postcode-sector` set the dataset columns used by the UK mapping tool. They default to `PostcodeArea` and `PostcodeSector`.
+- `--postcode-area` and `--postcode-sector` set the dataset columns used by UK mapping choropleths. They default to `PostcodeArea` and `PostcodeSector`.
+- `--postcode-unit`, `--latitude`, and `--longitude` set the dataset columns used by UK mapping unit points. They default to `PostcodeUnit`, `lat`, and `long`.
 - `--tools` selects enabled tools. By default both `line-bar` and `uk-map` are enabled; use `--tools line-bar` to launch only the chart/table tool.
 
 ## Python Usage
@@ -120,6 +123,9 @@ app = create_app(
         "denominator": "Exposure",
         "postcode_area": "PostcodeArea",
         "postcode_sector": "PostcodeSector",
+        "postcode_unit": "PostcodeUnit",
+        "latitude": "lat",
+        "longitude": "long",
     },
     filters_path="path/to/filter_spec.csv",
     use_saved_filters=True,
@@ -151,10 +157,12 @@ The line-and-bar chart uses one shared **Weight** selector for both response lin
 
 The UK mapping tool is available from the sidebar tool selector when `uk-map` is enabled. It uses the selected Actual column, Weight denominator, and active filter in the same way as the line-and-bar chart.
 
-- The map can show postcode area or postcode sector choropleths. Dataset join columns default to `PostcodeArea` and `PostcodeSector`, configurable with `--postcode-area` and `--postcode-sector`.
+- The map can show postcode area or postcode sector choropleths, plus postcode unit points. Dataset join columns default to `PostcodeArea`, `PostcodeSector`, and `PostcodeUnit`, configurable with `--postcode-area`, `--postcode-sector`, and `--postcode-unit`.
+- Unit point coordinates default to numeric `lat` and `long` columns. Override them with `--latitude` and `--longitude`; if no point columns are configured and the defaults are absent, the Units layer is disabled.
 - Area and sector geometries are served from bundled GeoJSON assets under `py_lucidum.tools.uk_map.static`.
+- Unit points are grouped by postcode unit, average their latitude/longitude, and plot only units with a valid KPI and valid coordinates.
 - The map layer control offers Blank, Esri, Grey, OSM, and Satellite base maps. Blank uses the selected white/dark map background.
-- The floating map control supports postcode search (`PO`, `PO15 7`, or `PO15 7JT`), draggable placement, divergent/spectral/viridis palettes, line thickness, opacity, hot/not-spot highlighting, and polygon labels.
+- The floating map control supports area/sector postcode search (`PO`, `PO15 7`, or `PO15 7JT` normalised to `PO15 7`), draggable placement, divergent/spectral/viridis palettes, line thickness, opacity, hot/not-spot highlighting, and polygon labels.
 - The divergent palette is the default. Colour orders run from green/blue/yellow at low values toward red/purple at high values, depending on the selected palette.
 - The legend shows ten quantile categories and omits the metric title so long metric names do not widen it.
 
@@ -206,8 +214,8 @@ POST /api/line-bar/chart
 The UK mapping tool exposes:
 
 ```text
-POST /api/uk-map/summary
-GET  /tools/uk-map/static/geodata/...
+POST /api/uk-map/summary       area, sector, or unit aggregation
+GET  /tools/uk-map/static/geodata/...  area/sector GeoJSON assets
 ```
 
 Shared app endpoints include:

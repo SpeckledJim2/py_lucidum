@@ -16,13 +16,13 @@ The current implementation is a package-first Python app with a FastAPI backend,
   - `GET /api/health` for lightweight token-protected browser heartbeat checks.
   - `POST /api/chart` for the legacy line-and-bar chart endpoint.
   - `POST /api/line-bar/chart` for the namespaced line-and-bar chart endpoint.
-  - `POST /api/uk-map/summary` for UK area/sector choropleth aggregation.
+  - `POST /api/uk-map/summary` for UK area/sector choropleth aggregation and postcode unit point aggregation.
   - `POST /api/reload` to refresh the file snapshot and cached metadata.
   - `POST /api/shutdown` to stop a CLI-launched local app from the browser.
 - The app supports local analyst mode today and is designed to grow into internal server mode with local or mounted server datasets.
 - Local development datasets live under `datasets/`, including `datasets/vans.csv`, `datasets/vans.parquet`, and `datasets/home.parquet`; this folder is ignored and not intended for publishing. Saved filter CSVs live under `specs/` and are tracked.
-- Public repository documentation lives in `README.md`. Detailed launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, initial selection overrides, saved filter files, and `--no-filters` launch mode.
-- A small standard-library `unittest` suite now covers CLI behavior, static asset serving, health checks, line-and-bar routes, UK map aggregation, saved-filter loading, filter validation, aggregation behavior, and compatibility re-exports without introducing a required test dependency.
+- Public repository documentation lives in `README.md`. Detailed launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, initial selection overrides, UK map postcode/point column overrides, saved filter files, and `--no-filters` launch mode.
+- A small standard-library `unittest` suite now covers CLI behavior, static asset serving, health checks, line-and-bar routes, UK map aggregation including postcode unit points, saved-filter loading, filter validation, aggregation behavior, and compatibility re-exports without introducing a required test dependency.
 
 ## Tool Architecture
 
@@ -60,6 +60,15 @@ The current implementation is a package-first Python app with a FastAPI backend,
 - Table output renders directly up to 1,000 rows; larger result sets are paginated client-side in 1,000-row pages to avoid slow scrolling.
 - Initial selections are data-agnostic by default: x-axis uses the first dataset column, Actual / line 1 uses the first numeric column, and Expected / line 2 starts as None. CLI options, programmatic app defaults, and URL parameters can override `x`, `actual`, and `expected`.
 - Dataset operations serialize access to the shared DuckDB connection used by the local app process.
+
+## UK Mapping Behavior
+
+- The UK mapping tool uses the selected Actual column, Weight denominator, and active filter in the same way as the line-and-bar chart.
+- Area and sector layers join grouped KPI summaries to bundled GeoJSON assets using `PostcodeArea` and `PostcodeSector` by default, configurable with `--postcode-area` and `--postcode-sector`.
+- The Units layer groups by `PostcodeUnit` by default, averages numeric `lat` and `long` coordinates per unit, and plots only units with a valid KPI and valid coordinates. These columns are configurable with `--postcode-unit`, `--latitude`, and `--longitude`.
+- Unit points are rendered with a single canvas-backed Leaflet layer for browser performance, while area/sector geometry remains standard Leaflet GeoJSON.
+- If no unit point columns are configured and the default unit/coordinate columns are absent, the Units layer is disabled. Explicit invalid unit point columns produce a clear validation error when the Units layer is requested.
+- The same quantile palette, opacity, legend, and hot/not-spot controls apply to area, sector, and unit levels. Postcode search remains area/sector based; full postcode-like inputs are normalised to sectors.
 
 ## UI Direction
 

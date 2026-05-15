@@ -44,6 +44,7 @@ Useful options:
 .venv/bin/lucidum datasets/vans.parquet --filters specs/filter_spec.csv
 .venv/bin/lucidum datasets/home.parquet --no-filters --port 8000
 .venv/bin/lucidum datasets/home.parquet --postcode-area PostcodeArea --postcode-sector PostcodeSector
+.venv/bin/lucidum datasets/home.parquet --postcode-unit PostcodeUnit --latitude lat --longitude long
 .venv/bin/lucidum datasets/vans.parquet --tools line-bar
 ```
 
@@ -53,10 +54,11 @@ Useful options:
 - `--x`, `--actual`, `--expected`, and `--denominator` set the initial x-axis feature, Actual / line 1 feature, Expected / line 2 feature, and Weight column.
 - `--filters` sets the saved-filter CSV path. If omitted, the app loads `./filter_spec.csv` from the working directory when it exists, otherwise `./specs/filter_spec.csv` when it exists.
 - `--no-filters` disables saved filters and skips the default filter-spec lookup.
-- `--postcode-area` and `--postcode-sector` set the dataset columns used by the UK mapping tool. They default to `PostcodeArea` and `PostcodeSector`.
+- `--postcode-area` and `--postcode-sector` set the dataset columns used by the UK mapping choropleths. They default to `PostcodeArea` and `PostcodeSector`.
+- `--postcode-unit`, `--latitude`, and `--longitude` set the dataset columns used by UK mapping unit points. They default to `PostcodeUnit`, `lat`, and `long`.
 - `--tools` selects which tool components to enable. By default both `line-bar` and `uk-map` are enabled; use `--tools line-bar` to launch only the chart/table tool.
 - Without explicit defaults, the app starts with the first dataset column on the x-axis, the first numeric column as Actual / line 1, and no Expected / line 2.
-- URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=YoungestDriverAge&actual=AvgPrice1_5&expected=glm_prediction&denominator=Gross.Weight&postcode_area=PostcodeArea&postcode_sector=PostcodeSector`.
+- URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=YoungestDriverAge&actual=AvgPrice1_5&expected=glm_prediction&denominator=Gross.Weight&postcode_area=PostcodeArea&postcode_sector=PostcodeSector&postcode_unit=PostcodeUnit&latitude=lat&longitude=long`.
 
 ## Launch As A Python Module
 
@@ -120,6 +122,9 @@ app = create_app(
         "denominator": "Gross.Weight",
         "postcode_area": "PostcodeArea",
         "postcode_sector": "PostcodeSector",
+        "postcode_unit": "PostcodeUnit",
+        "latitude": "lat",
+        "longitude": "long",
     },
     filters_path="specs/filter_spec.csv",
     use_saved_filters=True,
@@ -164,8 +169,8 @@ POST /api/line-bar/chart
 The UK mapping tool uses:
 
 ```text
-POST /api/uk-map/summary
-GET  /tools/uk-map/static/geodata/...
+POST /api/uk-map/summary       area, sector, or unit aggregation
+GET  /tools/uk-map/static/geodata/...  area/sector GeoJSON assets
 ```
 
 Shared app endpoints include:
@@ -191,11 +196,13 @@ The line-and-bar chart has one shared **Weight** selector:
 
 Use the sidebar tool selector to switch to **UK mapping**. The map uses the selected Actual column, Weight denominator, and active filter in the same way as the line-and-bar chart.
 
-- Dataset postcode columns default to `PostcodeArea` and `PostcodeSector`. Override them with `--postcode-area` and `--postcode-sector` when needed.
-- Postcode area and sector GeoJSON assets are bundled with the app and served to Leaflet.
-- The map layer control provides Blank, Esri, Grey, OSM, and Satellite base maps, plus Area and Sector choropleth overlays.
+- Dataset postcode columns default to `PostcodeArea`, `PostcodeSector`, and `PostcodeUnit`. Override them with `--postcode-area`, `--postcode-sector`, and `--postcode-unit` when needed.
+- Unit point coordinates default to numeric `lat` and `long` columns. Override them with `--latitude` and `--longitude`; if no point columns are configured and the defaults are absent, the Units layer is disabled.
+- Postcode area and sector GeoJSON assets are bundled with the app and served to Leaflet. Unit points come from the dataset and are rendered with a fast canvas layer.
+- The map layer control provides Blank, Esri, Grey, OSM, and Satellite base maps, plus Area, Sector, and Units overlays.
 - The draggable floating map panel provides postcode zoom search, palette selection, white/dark blank-map backgrounds, line thickness, opacity, hot/not-spot highlighting, and polygon labels.
-- Postcode search accepts area (`PO`), sector (`PO15 7`), and full postcode-like inputs (`PO15 7JT`, normalised to `PO15 7` because unit-level geometry is not included yet).
+- Area and sector values are joined to bundled geometries. Unit values are grouped by postcode unit, average their latitude/longitude, and plot only units with a valid KPI and valid coordinates.
+- Postcode search accepts area (`PO`), sector (`PO15 7`), and full postcode-like inputs (`PO15 7JT`, normalised to `PO15 7`). Unit-level search is not implemented.
 - The divergent palette is selected on startup. Palette order is reversed from the usual low-red/high-green convention so low values are green/blue/yellow and high values move toward red/purple, depending on palette.
 - The legend shows ten quantile categories and omits the metric title so long metric names do not widen the legend.
 
@@ -271,6 +278,7 @@ These launch paths are expected to work from the project root when `datasets/van
 .venv/bin/lucidum datasets/vans.parquet --filters specs/filter_spec.csv
 .venv/bin/lucidum datasets/home.parquet --no-filters --port 8000
 .venv/bin/lucidum datasets/home.parquet --postcode-area PostcodeArea --postcode-sector PostcodeSector
+.venv/bin/lucidum datasets/home.parquet --postcode-unit PostcodeUnit --latitude lat --longitude long
 .venv/bin/lucidum datasets/vans.parquet --tools line-bar
 .venv/bin/python -m py_lucidum datasets/vans.parquet --port 8000
 ```

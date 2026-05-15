@@ -73,6 +73,20 @@ class StaticAssetTests(unittest.TestCase):
         self.assert_no_store("/static/app.js")
         self.assert_no_store("/static/app.css")
 
+    def test_app_js_contains_unit_point_map_controls(self) -> None:
+        _, body = self.assert_no_store("/static/app.js")
+        js = body.decode("utf-8")
+
+        self.assertIn('unitColumn: postcodeColumn("unit")', js)
+        self.assertIn('latitudeColumn: latitudeColumn()', js)
+        self.assertIn('longitudeColumn: longitudeColumn()', js)
+        self.assertIn("makeUnitPointLayer", js)
+        self.assertIn("unitPointRadiusForZoom", js)
+        self.assertIn("unitPointHitRadius(pointRadius)", js)
+        self.assertIn("if (pointRadius <= 1)", js)
+        self.assertIn("fillRect(point.x - pointRadius", js)
+        self.assertIn("<span>Units</span>", js)
+
     def test_uk_map_static_assets_disable_cache(self) -> None:
         self.assert_no_store("/tools/uk-map/static/icons/UK.png")
 

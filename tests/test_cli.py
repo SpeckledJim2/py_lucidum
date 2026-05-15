@@ -58,6 +58,9 @@ class CliRuntimeTests(unittest.TestCase):
                     "actual": "AvgPrice1_5",
                     "denominator": "Exposure",
                     "postcode_area": "Area",
+                    "postcode_unit": "Unit",
+                    "latitude": "lat_col",
+                    "longitude": "long_col",
                     "unused": "ignored",
                 },
             )
@@ -67,7 +70,7 @@ class CliRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             url,
-            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&denominator=Exposure&postcode_area=Area",
+            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&denominator=Exposure&postcode_area=Area&postcode_unit=Unit&latitude=lat_col&longitude=long_col",
         )
 
     def test_ensure_port_available_reports_busy_port(self) -> None:
@@ -137,6 +140,32 @@ class CliRuntimeTests(unittest.TestCase):
 
         create_app_mock.assert_not_called()
         self.assertEqual(stdout.getvalue(), "")
+
+    def test_serve_passes_unit_point_defaults(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+            app = SimpleNamespace(state=SimpleNamespace(token="", defaults={}))
+            stdout = io.StringIO()
+
+            with (
+                patch("py_lucidum.cli.create_app", return_value=app) as create_app_mock,
+                patch("py_lucidum.cli._start_app_server") as start_server_mock,
+                redirect_stdout(stdout),
+            ):
+                serve(
+                    data_path,
+                    token="",
+                    postcode_unit="Unit",
+                    latitude="lat_col",
+                    longitude="long_col",
+                )
+
+        defaults = create_app_mock.call_args.kwargs["defaults"]
+        self.assertEqual(defaults["postcode_unit"], "Unit")
+        self.assertEqual(defaults["latitude"], "lat_col")
+        self.assertEqual(defaults["longitude"], "long_col")
+        start_server_mock.assert_called_once()
 
     def test_main_reports_runtime_error_without_traceback(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

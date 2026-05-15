@@ -1,6 +1,6 @@
       function paramsFromLocation() {
         const standardParams = new URLSearchParams(location.search);
-        const expectedKeys = ["token", "tool", "x", "actual", "expected", "denominator", "postcode_area", "postcode_sector"];
+        const expectedKeys = ["token", "tool", "x", "actual", "expected", "denominator", "postcode_area", "postcode_sector", "postcode_unit", "latitude", "longitude"];
         if (expectedKeys.some((key) => standardParams.has(key))) return standardParams;
         const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
         try {
@@ -75,6 +75,12 @@
           url: "/tools/uk-map/static/geodata/sectors_MappaR.geojson",
           defaultColumn: "PostcodeSector",
         },
+        unit: {
+          label: "units",
+          singular: "unit",
+          property: "PostcodeUnit",
+          defaultColumn: "PostcodeUnit",
+        },
       };
       const MAP_PALETTES = {
         divergent: ["#00441b", "#1b7837", "#5aae61", "#a6dba0", "#d9f0d3", "#fddbc7", "#f4a582", "#d6604d", "#b2182b", "#67001f"],
@@ -85,6 +91,7 @@
       const MAP_LEGEND_BUCKETS = 10;
       const MAP_MISSING_COLOR = "#e5e7eb";
       const MAP_MUTED_COLOR = "#cbd5e1";
+      const MAP_POINT_GRID_SIZE = 18;
       const MAP_CONTROL_POSITION_VERSION = "3";
       const MAP_CONTROL_POSITION_KEYS = {
         left: "py_lucidum_map_control_left",
@@ -118,6 +125,7 @@
       const chart = echarts.init(document.getElementById("chart"));
       let ukMap = null;
       let ukMapLayer = null;
+      let ukMapPointLayer = null;
       let ukMapLabelLayer = null;
       let baseTileLayer = null;
       let mapLayerControl = null;
@@ -716,6 +724,7 @@
         if (!state.schema) return null;
         const numerator = el("actualNumerator").value;
         if (!numerator) return null;
+        if (state.mapLevel === "unit" && !mapLevelSelectable("unit")) return null;
         return {
           level: state.mapLevel,
           numerator,
@@ -723,6 +732,9 @@
           filter: state.activeFilter,
           areaColumn: postcodeColumn("area"),
           sectorColumn: postcodeColumn("sector"),
+          unitColumn: postcodeColumn("unit"),
+          latitudeColumn: latitudeColumn(),
+          longitudeColumn: longitudeColumn(),
         };
       }
 
@@ -744,7 +756,7 @@
         try {
           const [data, geoJson] = await Promise.all([
             api("/api/uk-map/summary", { method: "POST", body: JSON.stringify(request) }),
-            loadMapGeoJson(request.level),
+            request.level === "unit" ? Promise.resolve(null) : loadMapGeoJson(request.level),
           ]);
           if (requestSeq !== state.mapRequestSeq) return;
           const cache = toolCache("uk_map");
@@ -767,7 +779,13 @@
         syncFloatingMapControl();
         applyToolPresentation("uk_map");
         const geoJson = state.mapGeoJsonCache[cache.data.level];
-        if (!ukMapLayer || state.renderedMapLevel !== cache.data.level || state.pendingMapZoom) {
+        const activeLayer = cache.data.level === "unit" ? ukMapPointLayer : ukMapLayer;
+        if (!activeLayer || state.renderedMapLevel !== cache.data.level || state.pendingMapZoom) {
+          if (cache.data.level === "unit") {
+            state.preserveMapView = !state.pendingMapZoom;
+            renderMap(cache.data, null);
+            return;
+          }
           if (geoJson) {
             state.preserveMapView = !state.pendingMapZoom;
             renderMap(cache.data, geoJson);
@@ -782,9 +800,34 @@
       }
 
       function postcodeColumn(level) {
-        const key = level === "sector" ? "postcode_sector" : "postcode_area";
+        const key = level === "sector" ? "postcode_sector" : (level === "unit" ? "postcode_unit" : "postcode_area");
         const fallback = MAP_LEVELS[level].defaultColumn;
         return locationParams.get(key) || state.schema.defaults?.[key] || fallback;
+      }
+
+      function latitudeColumn() {
+        return locationParams.get("latitude") || state.schema.defaults?.latitude || "lat";
+      }
+
+      function longitudeColumn() {
+        return locationParams.get("longitude") || state.schema.defaults?.longitude || "long";
+      }
+
+      function configuredDefaultExists(key) {
+        return locationParams.has(key) || Object.prototype.hasOwnProperty.call(state.schema?.defaults || {}, key);
+      }
+
+      function unitPointColumnsExplicitlyConfigured() {
+        return ["postcode_unit", "latitude", "longitude"].some(configuredDefaultExists);
+      }
+
+      function unitPointColumnsAvailable() {
+        return columnExists(postcodeColumn("unit")) && numericColumnExists(latitudeColumn()) && numericColumnExists(longitudeColumn());
+      }
+
+      function mapLevelSelectable(level) {
+        if (level !== "unit") return true;
+        return unitPointColumnsAvailable() || unitPointColumnsExplicitlyConfigured();
       }
 
       async function loadMapGeoJson(level) {
@@ -873,8 +916,8 @@
                 <span>Sector</span>
               </label>
               <label>
-                <input type="checkbox" name="mapOverlay" value="unit" disabled>
-                <span>Unit</span>
+                <input type="checkbox" name="mapOverlay" value="unit">
+                <span>Units</span>
               </label>
             `;
             L.DomEvent.disableClickPropagation(container);
@@ -895,7 +938,7 @@
           setBaseMap(target.value);
           return;
         }
-        if (target.name === "mapOverlay" && (target.value === "area" || target.value === "sector")) {
+        if (target.name === "mapOverlay" && mapLevelSelectable(target.value)) {
           if (!target.checked && target.value === state.mapLevel) {
             target.checked = true;
             return;
@@ -916,6 +959,7 @@
           input.checked = input.value === state.baseMap;
         });
         container.querySelectorAll('input[name="mapOverlay"]').forEach((input) => {
+          input.disabled = !mapLevelSelectable(input.value);
           input.checked = input.value === state.mapLevel;
         });
       }
@@ -959,14 +1003,20 @@
       }
 
       function fitMapToLayer() {
-        if (!ukMapLayer) {
+        const bounds = activeMapBounds();
+        if (!bounds) {
           ukMap?.setView([54.5, -3.2], 6);
           return;
         }
-        const bounds = ukMapLayer.getBounds();
         if (bounds.isValid()) {
           ukMap.fitBounds(bounds, { padding: [14, 14] });
         }
+      }
+
+      function activeMapBounds() {
+        const layer = state.renderedMapLevel === "unit" ? ukMapPointLayer : ukMapLayer;
+        const bounds = layer?.getBounds?.();
+        return bounds?.isValid?.() ? bounds : null;
       }
 
       function activeMapPalette() {
@@ -1080,7 +1130,178 @@
         };
       }
 
+      function unitPointRadiusForZoom(zoom) {
+        const value = Number(zoom);
+        if (!Number.isFinite(value)) return 2.5;
+        if (value <= 5) return 1;
+        if (value <= 6) return 1.25;
+        if (value <= 7) return 1.75;
+        if (value <= 8) return 2.5;
+        if (value <= 10) return 3.25;
+        return 4;
+      }
+
+      function unitPointHitRadius(radius) {
+        return Math.max(radius + 4, 6);
+      }
+
+      function mapPointStyle(row, scale, hotspotKeys, radius) {
+        const value = finiteNumber(row?.value);
+        const selected = value !== null && (!hotspotKeys || hotspotKeys.has(String(row.key)));
+        const muted = value !== null && !selected;
+        const strokeOpacity = radius < 2 ? 0 : (radius < 3 ? 0.35 : 0.65);
+        return {
+          fillColor: muted ? MAP_MUTED_COLOR : scale.color(value),
+          fillOpacity: muted ? Math.min(Number(state.mapOpacity), 0.28) : Number(state.mapOpacity),
+          strokeOpacity: muted ? Math.min(strokeOpacity, 0.25) : strokeOpacity,
+        };
+      }
+
+      function makeUnitPointLayer(data, scale, hotspotKeys) {
+        return new (L.Layer.extend({
+          initialize(rows) {
+            this.rows = rows
+              .map((row) => ({
+                row,
+                latLng: L.latLng(Number(row.latitude), Number(row.longitude)),
+              }))
+              .filter((entry) => Number.isFinite(entry.latLng.lat) && Number.isFinite(entry.latLng.lng));
+            this.bounds = this.rows.length ? L.latLngBounds(this.rows.map((entry) => entry.latLng)) : L.latLngBounds([]);
+            this.tooltip = null;
+          },
+          onAdd(map) {
+            this.map = map;
+            this.canvas = L.DomUtil.create("canvas", "leaflet-unit-point-layer");
+            this.canvas.style.pointerEvents = "none";
+            const pane = map.getPanes().overlayPane;
+            pane.appendChild(this.canvas);
+            map.on("moveend zoomend resize viewreset", this.reset, this);
+            map.on("mousemove", this.handleMouseMove, this);
+            map.on("mouseout", this.closeTooltip, this);
+            map.on("click", this.handleClick, this);
+            this.reset();
+          },
+          onRemove(map) {
+            this.closeTooltip();
+            map.off("moveend zoomend resize viewreset", this.reset, this);
+            map.off("mousemove", this.handleMouseMove, this);
+            map.off("mouseout", this.closeTooltip, this);
+            map.off("click", this.handleClick, this);
+            this.canvas?.remove();
+            this.canvas = null;
+            this.map = null;
+          },
+          getBounds() {
+            return this.bounds;
+          },
+          reset() {
+            if (!this.map || !this.canvas) return;
+            const size = this.map.getSize();
+            const topLeft = this.map.containerPointToLayerPoint([0, 0]);
+            const ratio = window.devicePixelRatio || 1;
+            L.DomUtil.setPosition(this.canvas, topLeft);
+            this.canvas.width = Math.max(1, Math.round(size.x * ratio));
+            this.canvas.height = Math.max(1, Math.round(size.y * ratio));
+            this.canvas.style.width = `${size.x}px`;
+            this.canvas.style.height = `${size.y}px`;
+            const context = this.canvas.getContext("2d");
+            context.setTransform(ratio, 0, 0, ratio, 0, 0);
+            context.clearRect(0, 0, size.x, size.y);
+            this.hitGrid = new Map();
+            const pointRadius = unitPointRadiusForZoom(this.map.getZoom());
+            const hitRadius = unitPointHitRadius(pointRadius);
+            this.hitRadius = hitRadius;
+            for (const entry of this.rows) {
+              const point = this.map.latLngToLayerPoint(entry.latLng).subtract(topLeft);
+              if (point.x < -hitRadius || point.y < -hitRadius || point.x > size.x + hitRadius || point.y > size.y + hitRadius) {
+                continue;
+              }
+              const gridKey = `${Math.floor(point.x / MAP_POINT_GRID_SIZE)},${Math.floor(point.y / MAP_POINT_GRID_SIZE)}`;
+              if (!this.hitGrid.has(gridKey)) {
+                this.hitGrid.set(gridKey, []);
+              }
+              this.hitGrid.get(gridKey).push({ entry, point });
+              const style = mapPointStyle(entry.row, scale, hotspotKeys, pointRadius);
+              context.globalAlpha = Math.max(0, Math.min(1, style.fillOpacity));
+              context.fillStyle = style.fillColor;
+              if (pointRadius <= 1) {
+                const sizePx = pointRadius * 2;
+                context.fillRect(point.x - pointRadius, point.y - pointRadius, sizePx, sizePx);
+              } else {
+                context.beginPath();
+                context.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
+                context.fill();
+                if (style.strokeOpacity > 0) {
+                  context.globalAlpha = Math.max(0, Math.min(1, style.strokeOpacity));
+                  context.strokeStyle = "#000000";
+                  context.lineWidth = pointRadius < 3 ? 0.5 : 0.75;
+                  context.stroke();
+                }
+              }
+            }
+            context.globalAlpha = 1;
+          },
+          findNearest(containerPoint) {
+            if (!this.map || !this.hitGrid) return null;
+            const hitRadius = this.hitRadius || unitPointHitRadius(unitPointRadiusForZoom(this.map.getZoom()));
+            const radiusSquared = hitRadius * hitRadius;
+            let nearest = null;
+            let nearestDistance = radiusSquared;
+            const gridX = Math.floor(containerPoint.x / MAP_POINT_GRID_SIZE);
+            const gridY = Math.floor(containerPoint.y / MAP_POINT_GRID_SIZE);
+            for (let dxCell = -1; dxCell <= 1; dxCell += 1) {
+              for (let dyCell = -1; dyCell <= 1; dyCell += 1) {
+                const entries = this.hitGrid.get(`${gridX + dxCell},${gridY + dyCell}`) || [];
+                for (const candidate of entries) {
+                  const dx = candidate.point.x - containerPoint.x;
+                  const dy = candidate.point.y - containerPoint.y;
+                  const distance = dx * dx + dy * dy;
+                  if (distance <= nearestDistance) {
+                    nearest = candidate.entry;
+                    nearestDistance = distance;
+                  }
+                }
+              }
+            }
+            return nearest;
+          },
+          handleMouseMove(event) {
+            const nearest = this.findNearest(event.containerPoint);
+            if (!nearest) {
+              this.closeTooltip();
+              return;
+            }
+            const value = finiteNumber(nearest.row.value);
+            const text = `${nearest.row.key}: ${value === null ? "No data" : formatLineValue(value)}`;
+            if (!this.tooltip) {
+              this.tooltip = L.tooltip({ sticky: true, direction: "top", opacity: 0.9 });
+            }
+            this.tooltip.setLatLng(event.latlng).setContent(text);
+            if (!this.map.hasLayer(this.tooltip)) {
+              this.tooltip.addTo(this.map);
+            }
+          },
+          handleClick(event) {
+            const nearest = this.findNearest(event.containerPoint);
+            if (!nearest) return;
+            L.popup()
+              .setLatLng(nearest.latLng)
+              .setContent(mapPopupHtml(String(nearest.row.key || "Unknown"), nearest.row, data))
+              .openOn(this.map);
+          },
+          closeTooltip() {
+            if (this.tooltip && this.map?.hasLayer(this.tooltip)) {
+              this.map.removeLayer(this.tooltip);
+            }
+          },
+        }))(data.rows || []);
+      }
+
       function renderMap(data, geoJson) {
+        if (data.level === "unit") {
+          renderUnitMap(data);
+          return;
+        }
         state.lastMapData = data;
         state.renderedMapLevel = data.level;
         initMap();
@@ -1097,6 +1318,10 @@
         if (ukMapLayer) {
           ukMap.removeLayer(ukMapLayer);
           ukMapLayer = null;
+        }
+        if (ukMapPointLayer) {
+          ukMap.removeLayer(ukMapPointLayer);
+          ukMapPointLayer = null;
         }
         if (ukMapLabelLayer) {
           ukMap.removeLayer(ukMapLabelLayer);
@@ -1157,6 +1382,62 @@
         requestAnimationFrame(() => resizeMap());
       }
 
+      function renderUnitMap(data) {
+        state.lastMapData = data;
+        state.renderedMapLevel = data.level;
+        initMap();
+        syncFloatingMapControl();
+        const scale = makeQuantileScale(data.rows || []);
+        const hotspotKeys = mapHotspotKeys(data.rows || []);
+        if (ukMapLayer) {
+          ukMap.removeLayer(ukMapLayer);
+          ukMapLayer = null;
+        }
+        if (ukMapLabelLayer) {
+          ukMap.removeLayer(ukMapLabelLayer);
+          ukMapLabelLayer = null;
+        }
+        if (ukMapPointLayer) {
+          ukMap.removeLayer(ukMapPointLayer);
+          ukMapPointLayer = null;
+        }
+        ukMapPointLayer = makeUnitPointLayer(data, scale, hotspotKeys).addTo(ukMap);
+
+        if (state.preserveMapView) {
+          state.mapFitLevel = data.level;
+          state.preserveMapView = false;
+        } else if (state.mapFitLevel !== data.level) {
+          const bounds = ukMapPointLayer.getBounds();
+          if (bounds.isValid()) {
+            ukMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 13 });
+            state.mapFitLevel = data.level;
+          }
+        }
+        renderMapLegend(scale, data.response?.label || "Actual");
+        const filteredRows = data.filtered_row_count ?? data.row_count;
+        const rowMeta = filteredRows === data.row_count
+          ? `${data.row_count.toLocaleString()} rows`
+          : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
+        const pointSummary = data.point_summary || {};
+        const summaryCount = Number(pointSummary.summary_count ?? (data.rows || []).length);
+        const plottedCount = Number(pointSummary.plotted_count ?? (data.rows || []).length);
+        const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted · ${rowMeta}`;
+        setGroupMeta(groupMeta);
+        const warnings = [...(data.warnings || [])];
+        const missingValueCount = Number(pointSummary.missing_value_count || 0);
+        const missingCoordinateCount = Number(pointSummary.missing_coordinate_count || 0);
+        if (missingValueCount) {
+          warnings.push(`${missingValueCount.toLocaleString()} ${missingValueCount === 1 ? "unit has" : "units have"} no plottable KPI value.`);
+        }
+        if (missingCoordinateCount) {
+          warnings.push(`${missingCoordinateCount.toLocaleString()} ${missingCoordinateCount === 1 ? "unit has" : "units have"} no valid coordinates.`);
+        }
+        const chartMessage = warnings.filter(Boolean).join(" ");
+        setChartMessage(chartMessage);
+        saveToolPresentation("uk_map", { groupMeta, chartMessage });
+        requestAnimationFrame(() => resizeMap());
+      }
+
       function updateMapMetricTitles(data) {
         renderMetricTitle(el("actualMetricTitle"), "Actual", data.response?.value);
         renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
@@ -1209,6 +1490,11 @@
       function redrawMapInPlace() {
         syncFloatingMapControl();
         if (state.tool !== "uk_map" || !state.lastMapData) return;
+        if (state.lastMapData.level === "unit") {
+          state.preserveMapView = true;
+          renderMap(state.lastMapData, null);
+          return;
+        }
         const geoJson = state.mapGeoJsonCache[state.lastMapData.level];
         if (!geoJson) return;
         state.preserveMapView = true;
