@@ -73,6 +73,15 @@ class StaticAssetTests(unittest.TestCase):
         self.assert_no_store("/static/app.js")
         self.assert_no_store("/static/app.css")
 
+    def test_feature_picker_rows_are_compact(self) -> None:
+        _, body = self.assert_no_store("/static/app.css")
+        css = body.decode("utf-8")
+
+        self.assertIn("min-height: 20px;", css)
+        self.assertIn("padding: 1px 6px;", css)
+        self.assertIn("font-size: 11px;", css)
+        self.assertIn("font-size: 9px;", css)
+
     def test_app_js_contains_unit_point_map_controls(self) -> None:
         _, body = self.assert_no_store("/static/app.js")
         js = body.decode("utf-8")

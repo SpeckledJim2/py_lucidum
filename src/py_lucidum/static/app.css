@@ -252,11 +252,12 @@
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-        min-height: 23px;
-        padding: 3px 7px;
+        min-height: 20px;
+        padding: 1px 6px;
         cursor: pointer;
         text-align: left;
-        font-size: 12px;
+        font-size: 11px;
+        line-height: 1.15;
         min-width: 0;
         overflow: hidden;
       }
@@ -292,7 +293,7 @@
       .kind {
         color: var(--muted);
         flex: 0 0 auto;
-        font-size: 10px;
+        font-size: 9px;
       }
 
       .metric-row {
