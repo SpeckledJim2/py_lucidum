@@ -251,6 +251,96 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(serve_mock.call_args.kwargs["path"], demo_path)
         self.assertEqual(serve_mock.call_args.kwargs["port"], 8050)
 
+    def test_readme_quick_start_and_common_option_launches_are_wired(self) -> None:
+        demo_path = Path("/tmp/py-lucidum-demo.parquet")
+        cases = [
+            (
+                "quick_start_demo",
+                ["lucidum", "--demo", "--port", "8000"],
+                {"path": demo_path, "port": 8000},
+                True,
+            ),
+            (
+                "quick_start_source_demo_path",
+                ["lucidum", "datasets/motor_premiums.parquet", "--port", "8000"],
+                {"path": "datasets/motor_premiums.parquet", "port": 8000},
+                False,
+            ),
+            (
+                "open_browser",
+                ["lucidum", "--demo", "--open", "--port", "8000"],
+                {"path": demo_path, "open_browser": True, "port": 8000},
+                True,
+            ),
+            (
+                "bind_host",
+                ["lucidum", "--demo", "--host", "0.0.0.0", "--port", "8000"],
+                {"path": demo_path, "host": "0.0.0.0", "port": 8000},
+                True,
+            ),
+            (
+                "no_token",
+                ["lucidum", "--demo", "--no-token"],
+                {"path": demo_path, "token": ""},
+                True,
+            ),
+            (
+                "initial_selections",
+                [
+                    "lucidum",
+                    "--demo",
+                    "--x",
+                    "DRIVER_AGE",
+                    "--actual",
+                    "PREMIUM",
+                    "--denominator",
+                    "ANNUAL_MILEAGE",
+                ],
+                {
+                    "path": demo_path,
+                    "x": "DRIVER_AGE",
+                    "actual": "PREMIUM",
+                    "denominator": "ANNUAL_MILEAGE",
+                },
+                True,
+            ),
+            (
+                "filters",
+                ["lucidum", "--demo", "--filters", "specs/filter_spec.csv"],
+                {"path": demo_path, "filters": "specs/filter_spec.csv"},
+                True,
+            ),
+            (
+                "no_filters",
+                ["lucidum", "--demo", "--no-filters"],
+                {"path": demo_path, "no_filters": True},
+                True,
+            ),
+            (
+                "line_bar_tool",
+                ["lucidum", "--demo", "--tools", "line-bar"],
+                {"path": demo_path, "tools": "line-bar"},
+                True,
+            ),
+        ]
+
+        for name, argv, expected_kwargs, expects_demo_path in cases:
+            with self.subTest(name=name):
+                with (
+                    patch("sys.argv", argv),
+                    patch("py_lucidum.cli.demo_dataset_path", return_value=demo_path) as demo_path_mock,
+                    patch("py_lucidum.cli.serve", return_value="http://127.0.0.1:8000/") as serve_mock,
+                ):
+                    result = main()
+
+                self.assertEqual(result, 0)
+                if expects_demo_path:
+                    demo_path_mock.assert_called_once_with()
+                else:
+                    demo_path_mock.assert_not_called()
+                for key, value in expected_kwargs.items():
+                    self.assertEqual(serve_mock.call_args.kwargs[key], value)
+
     def test_main_passes_regular_file_path_without_demo_rewrite(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "ordinary.csv"
