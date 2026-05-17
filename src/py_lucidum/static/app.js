@@ -19,6 +19,7 @@
         sort: "alpha",
         lowGroup: "0",
         labels: "none",
+        sidebarVisible: true,
         bandWidth: "0",
         dateBucket: "none",
         transform: "none",
@@ -373,6 +374,29 @@
           });
         }
         if (refresh && state.schema) refreshActiveTool();
+      }
+
+      function setSidebarVisible(visible) {
+        state.sidebarVisible = Boolean(visible);
+        document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible);
+        el("appSidebar").setAttribute("aria-hidden", String(!state.sidebarVisible));
+        syncSidebarToggleButton();
+        requestAnimationFrame(() => {
+          if (state.tool === "line_bar") {
+            chart.resize();
+          } else {
+            clampMapFloatingControl();
+            resizeMap();
+          }
+        });
+      }
+
+      function syncSidebarToggleButton() {
+        const button = el("sidebarToggleBtn");
+        const label = state.sidebarVisible ? "Hide sidebar" : "Show sidebar";
+        button.setAttribute("aria-expanded", String(state.sidebarVisible));
+        button.setAttribute("aria-label", label);
+        button.title = label;
       }
 
       function isNumericKind(kind) {
@@ -2248,6 +2272,7 @@
         setupChartControlHeightsResize();
         setupMapFloatingControlDrag();
         bindMapFloatingControls();
+        syncSidebarToggleButton();
         document.querySelectorAll(".segmented, .filter-operator").forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
@@ -2300,6 +2325,7 @@
         el("tableTab").addEventListener("click", () => setView("table"));
         el("lineBarTool").addEventListener("click", () => setTool("line_bar"));
         el("ukMapTool").addEventListener("click", () => setTool("uk_map"));
+        el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
         el("stopAppBtn").addEventListener("click", stopApp);
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
@@ -2327,7 +2353,7 @@
         });
         window.addEventListener("resize", () => {
           const filterSection = document.querySelector(".sidebar-filter-section");
-          if (filterSection) setSidebarFilterHeight(filterSection.getBoundingClientRect().height);
+          if (filterSection && state.sidebarVisible) setSidebarFilterHeight(filterSection.getBoundingClientRect().height);
           if (state.tool === "line_bar") {
             const controls = document.querySelector(".chart-side-controls");
             if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);

@@ -19,6 +19,9 @@
           </a>
           <span>lucidum</span>
         </div>
+        <button id="sidebarToggleBtn" class="sidebar-toggle" type="button" aria-label="Hide sidebar" aria-controls="appSidebar" aria-expanded="true" title="Hide sidebar">
+          <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+        </button>
         <div id="datasetMeta" class="meta">Loading dataset...</div>
         <div class="spacer"></div>
         <button id="reloadBtn" class="ghost">Reload</button>
@@ -27,7 +30,7 @@
       </header>
 
       <div class="shell">
-        <aside>
+        <aside id="appSidebar">
           <section id="toolSelectorSection" class="section tool-selector-section">
             <h2>Tool</h2>
             <div class="tool-selector">
