@@ -45,6 +45,7 @@
         },
         mapGeoJsonCache: {},
         mapFitLevel: null,
+        mapStartupFitDone: false,
         renderedMapLevel: null,
         preserveMapView: false,
         pendingMapZoom: null,
@@ -240,6 +241,7 @@
         state.toolCache = freshToolCache();
         state.lastData = null;
         state.lastMapData = null;
+        state.mapStartupFitDone = false;
         state.renderedMapLevel = null;
       }
 
@@ -1398,16 +1400,20 @@
           }
           state.pendingMapZoom = null;
           state.mapFitLevel = data.level;
+          state.mapStartupFitDone = true;
           state.preserveMapView = false;
         } else if (state.preserveMapView) {
           state.mapFitLevel = data.level;
           state.preserveMapView = false;
         } else if (state.mapFitLevel !== data.level) {
-          const bounds = ukMapLayer.getBounds();
-          if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
-            didFitLayer = true;
-            state.mapFitLevel = data.level;
+          if (!state.mapStartupFitDone) {
+            const bounds = ukMapLayer.getBounds();
+            if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
+              didFitLayer = true;
+              state.mapStartupFitDone = true;
+            }
           }
+          state.mapFitLevel = data.level;
         }
         renderMapLegend(scale, data.response?.label || "Actual");
         const filteredRows = data.filtered_row_count ?? data.row_count;
@@ -1455,11 +1461,14 @@
           state.mapFitLevel = data.level;
           state.preserveMapView = false;
         } else if (state.mapFitLevel !== data.level) {
-          const bounds = ukMapPointLayer.getBounds();
-          if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
-            didFitLayer = true;
-            state.mapFitLevel = data.level;
+          if (!state.mapStartupFitDone) {
+            const bounds = ukMapPointLayer.getBounds();
+            if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
+              didFitLayer = true;
+              state.mapStartupFitDone = true;
+            }
           }
+          state.mapFitLevel = data.level;
         }
         renderMapLegend(scale, data.response?.label || "Actual");
         const filteredRows = data.filtered_row_count ?? data.row_count;

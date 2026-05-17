@@ -121,6 +121,9 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("zoomSnap: 0.25", js)
         self.assertIn("zoomDelta: 0.5", js)
         self.assertIn("const MAP_INITIAL_FIT_OPTIONS = { animate: false };", js)
+        self.assertIn("mapStartupFitDone: false", js)
+        self.assertIn("if (!state.mapStartupFitDone)", js)
+        self.assertIn("state.mapStartupFitDone = true;", js)
         self.assertIn("fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)", js)
         self.assertIn("scheduleMapResize({ refit: didFitLayer });", js)
 
