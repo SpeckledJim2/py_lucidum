@@ -103,17 +103,32 @@ import py_lucidum
 py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
 ```
 
+Launch your own Parquet dataset the same way:
+
+```python
+import py_lucidum
+
+py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
+```
+
+CSV files are also supported:
+
+```python
+py_lucidum.serve("path/to/my_data.csv", port=8000, open_browser=True)
+```
+
 In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.
 
-To launch only the line-and-bar tool:
+To launch only the line-and-bar tool, pass either the demo path or your own dataset path:
 
 ```python
 import py_lucidum
 
 py_lucidum.serve_line_bar(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
+py_lucidum.serve_line_bar("path/to/my_data.parquet", port=8000, open_browser=True)
 ```
 
-For ASGI usage:
+For ASGI usage, pass the same kind of dataset path to `create_app()`:
 
 ```python
 import py_lucidum

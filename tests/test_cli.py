@@ -167,6 +167,26 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(defaults["longitude"], "long_col")
         start_server_mock.assert_called_once()
 
+    def test_python_usage_serve_loads_user_csv_path(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "dummy.csv"
+            data_path.write_text("x,Actual\n1,10\n2,20\n", encoding="utf-8")
+            stdout = io.StringIO()
+
+            with (
+                patch("py_lucidum.cli._start_app_server") as start_server_mock,
+                redirect_stdout(stdout),
+            ):
+                url = serve(data_path, token="", port=8052, open_browser=False)
+            app = start_server_mock.call_args.args[0]
+            schema = app.state.dataset.schema()
+
+            self.assertEqual(url, "http://127.0.0.1:8052/")
+            self.assertIn(f"py_lucidum serving {data_path.resolve()}", stdout.getvalue())
+            start_server_mock.assert_called_once()
+            self.assertEqual([column["name"] for column in schema["columns"]], ["x", "Actual"])
+            self.assertEqual(schema["row_count"], 2)
+
     def test_main_reports_runtime_error_without_traceback(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
