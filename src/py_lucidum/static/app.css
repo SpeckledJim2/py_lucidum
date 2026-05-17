@@ -792,6 +792,17 @@
         object-fit: contain;
       }
 
+      .map-place-button img.map-place-icon-london {
+        width: 30px;
+        height: 30px;
+      }
+
+      body.dark .map-place-button img {
+        filter: invert(1) grayscale(1) brightness(1.7) contrast(1.08);
+        mix-blend-mode: screen;
+        opacity: 0.92;
+      }
+
       .map-place-button:hover {
         background: var(--panel-2);
       }

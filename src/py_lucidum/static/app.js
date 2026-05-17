@@ -1020,7 +1020,7 @@
             londonButton.type = "button";
             londonButton.title = "Zoom to London";
             londonButton.setAttribute("aria-label", "Zoom to London");
-            londonButton.innerHTML = '<img src="/tools/uk-map/static/icons/London.png" alt="">';
+            londonButton.innerHTML = '<img class="map-place-icon-london" src="/tools/uk-map/static/icons/London.png" alt="">';
             L.DomEvent.disableClickPropagation(container);
             ukButton.addEventListener("click", (event) => {
               event.preventDefault();

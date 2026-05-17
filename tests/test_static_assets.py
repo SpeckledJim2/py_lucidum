@@ -82,6 +82,20 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("font-size: 11px;", css)
         self.assertIn("font-size: 9px;", css)
 
+    def test_london_map_button_icon_fills_button(self) -> None:
+        _, css_body = self.assert_no_store("/static/app.css")
+        _, js_body = self.assert_no_store("/static/app.js")
+        css = css_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertIn('class="map-place-icon-london"', js)
+        self.assertIn(".map-place-button img.map-place-icon-london", css)
+        self.assertIn("width: 30px;", css)
+        self.assertIn("height: 30px;", css)
+        self.assertIn("body.dark .map-place-button img", css)
+        self.assertIn("mix-blend-mode: screen;", css)
+        self.assertIn("filter: invert(1) grayscale(1) brightness(1.7) contrast(1.08);", css)
+
     def test_app_js_contains_unit_point_map_controls(self) -> None:
         _, body = self.assert_no_store("/static/app.js")
         js = body.decode("utf-8")
