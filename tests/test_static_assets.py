@@ -98,6 +98,18 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("fillRect(point.x - pointRadius", js)
         self.assertIn("<span>Units</span>", js)
 
+    def test_app_js_refits_map_after_layout_resize(self) -> None:
+        _, body = self.assert_no_store("/static/app.js")
+        js = body.decode("utf-8")
+
+        self.assertIn("function scheduleMapResize({ refit = false } = {})", js)
+        self.assertIn("fitMapToLayer({ animate: false })", js)
+        self.assertIn("zoomSnap: 0.25", js)
+        self.assertIn("zoomDelta: 0.5", js)
+        self.assertIn("const MAP_INITIAL_FIT_OPTIONS = { animate: false };", js)
+        self.assertIn("fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)", js)
+        self.assertIn("scheduleMapResize({ refit: didFitLayer });", js)
+
     def test_uk_map_static_assets_disable_cache(self) -> None:
         self.assert_no_store("/tools/uk-map/static/icons/UK.png")
 

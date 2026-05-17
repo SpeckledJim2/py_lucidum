@@ -99,6 +99,9 @@
       const MAP_MISSING_COLOR = "#e5e7eb";
       const MAP_MUTED_COLOR = "#cbd5e1";
       const MAP_POINT_GRID_SIZE = 18;
+      const MAP_FIT_PADDING = [8, 8];
+      const MAP_UNIT_FIT_PADDING = [18, 18];
+      const MAP_INITIAL_FIT_OPTIONS = { animate: false };
       const MAP_CONTROL_POSITION_VERSION = "3";
       const MAP_CONTROL_POSITION_KEYS = {
         left: "py_lucidum_map_control_left",
@@ -867,6 +870,8 @@
         ukMap = L.map("ukMap", {
           preferCanvas: true,
           zoomControl: false,
+          zoomDelta: 0.5,
+          zoomSnap: 0.25,
         }).setView([54.5, -3.2], 6);
         ukMap.on("zoomend", () => {
           if (state.lastMapData?.level === "sector") redrawMapInPlace();
@@ -879,7 +884,21 @@
 
       function resizeMap() {
         if (!ukMap) return;
-        ukMap.invalidateSize();
+        ukMap.invalidateSize({ pan: false });
+      }
+
+      function scheduleMapResize({ refit = false } = {}) {
+        if (!ukMap) return;
+        requestAnimationFrame(() => {
+          resizeMap();
+          if (!refit) return;
+          requestAnimationFrame(() => {
+            if (state.tool === "uk_map") {
+              resizeMap();
+              fitMapToLayer({ animate: false });
+            }
+          });
+        });
       }
 
       function setBaseMap(baseMap) {
@@ -1018,15 +1037,26 @@
         mapHomeControl.addTo(ukMap);
       }
 
-      function fitMapToLayer() {
+      function fitMapToLayer(options = {}) {
         const bounds = activeMapBounds();
         if (!bounds) {
           ukMap?.setView([54.5, -3.2], 6);
           return;
         }
-        if (bounds.isValid()) {
-          ukMap.fitBounds(bounds, { padding: [14, 14] });
-        }
+        fitMapBounds(bounds, state.renderedMapLevel, options);
+      }
+
+      function fitMapBounds(bounds, level = state.renderedMapLevel, options = {}) {
+        if (!ukMap || !bounds?.isValid?.()) return false;
+        ukMap.fitBounds(bounds, mapFitOptions(level, options));
+        return true;
+      }
+
+      function mapFitOptions(level, options = {}) {
+        const fitOptions = level === "unit"
+          ? { padding: MAP_UNIT_FIT_PADDING, maxZoom: 13 }
+          : { padding: MAP_FIT_PADDING };
+        return { ...fitOptions, ...options };
       }
 
       function activeMapBounds() {
@@ -1360,6 +1390,7 @@
         renderMapLabels(data, summaries, hotspotKeys);
 
         let searchWarning = "";
+        let didFitLayer = false;
         if (state.pendingMapZoom && state.pendingMapZoom.level === data.level) {
           const zoomed = zoomToMapKey(state.pendingMapZoom.level, state.pendingMapZoom.key);
           if (!zoomed) {
@@ -1373,8 +1404,8 @@
           state.preserveMapView = false;
         } else if (state.mapFitLevel !== data.level) {
           const bounds = ukMapLayer.getBounds();
-          if (bounds.isValid()) {
-            ukMap.fitBounds(bounds, { padding: [14, 14] });
+          if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
+            didFitLayer = true;
             state.mapFitLevel = data.level;
           }
         }
@@ -1395,7 +1426,7 @@
         const chartMessage = warnings.filter(Boolean).join(" ");
         setChartMessage(chartMessage);
         saveToolPresentation("uk_map", { groupMeta, chartMessage });
-        requestAnimationFrame(() => resizeMap());
+        scheduleMapResize({ refit: didFitLayer });
       }
 
       function renderUnitMap(data) {
@@ -1419,13 +1450,14 @@
         }
         ukMapPointLayer = makeUnitPointLayer(data, scale, hotspotKeys).addTo(ukMap);
 
+        let didFitLayer = false;
         if (state.preserveMapView) {
           state.mapFitLevel = data.level;
           state.preserveMapView = false;
         } else if (state.mapFitLevel !== data.level) {
           const bounds = ukMapPointLayer.getBounds();
-          if (bounds.isValid()) {
-            ukMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 13 });
+          if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
+            didFitLayer = true;
             state.mapFitLevel = data.level;
           }
         }
@@ -1451,7 +1483,7 @@
         const chartMessage = warnings.filter(Boolean).join(" ");
         setChartMessage(chartMessage);
         saveToolPresentation("uk_map", { groupMeta, chartMessage });
-        requestAnimationFrame(() => resizeMap());
+        scheduleMapResize({ refit: didFitLayer });
       }
 
       function updateMapMetricTitles(data) {
