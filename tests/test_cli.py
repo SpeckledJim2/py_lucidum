@@ -204,6 +204,70 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertIn("lucidum: error: Dataset does not exist:", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
+    def test_main_requires_path_or_demo(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", ["lucidum"]),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            main()
+
+        self.assertEqual(exit_context.exception.code, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("path or --demo", stderr.getvalue())
+
+    def test_main_rejects_demo_with_path(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", ["lucidum", "data.parquet", "--demo"]),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            main()
+
+        self.assertEqual(exit_context.exception.code, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("choose either a dataset path or --demo", stderr.getvalue())
+
+    def test_main_uses_demo_dataset_path(self) -> None:
+        demo_path = Path("/tmp/py-lucidum-demo.parquet")
+
+        with (
+            patch("sys.argv", ["lucidum", "--demo", "--port", "8050"]),
+            patch("py_lucidum.cli.demo_dataset_path", return_value=demo_path) as demo_path_mock,
+            patch("py_lucidum.cli.serve", return_value="http://127.0.0.1:8050/") as serve_mock,
+        ):
+            result = main()
+
+        self.assertEqual(result, 0)
+        demo_path_mock.assert_called_once_with()
+        self.assertEqual(serve_mock.call_args.kwargs["path"], demo_path)
+        self.assertEqual(serve_mock.call_args.kwargs["port"], 8050)
+
+    def test_main_passes_regular_file_path_without_demo_rewrite(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "ordinary.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+
+            with (
+                patch("sys.argv", ["lucidum", str(data_path), "--port", "8051"]),
+                patch("py_lucidum.cli.demo_dataset_path") as demo_path_mock,
+                patch("py_lucidum.cli.serve", return_value="http://127.0.0.1:8051/") as serve_mock,
+            ):
+                result = main()
+
+        self.assertEqual(result, 0)
+        demo_path_mock.assert_not_called()
+        self.assertEqual(serve_mock.call_args.kwargs["path"], str(data_path))
+        self.assertEqual(serve_mock.call_args.kwargs["port"], 8051)
+
     def test_main_reports_unknown_tool_without_traceback(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()

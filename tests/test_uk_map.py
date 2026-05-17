@@ -24,6 +24,21 @@ class UkMapToolTests(unittest.TestCase):
             ",,ZZ1 1ZZ,A3,U4,999,-2,53,-1,500,50,1\n",
             encoding="utf-8",
         )
+        self.upper_data_path = self.root / "uppercase_sample.csv"
+        self.upper_data_path.write_text(
+            "POSTCODE_AREA,POSTCODE_SECTOR,POSTCODE_UNIT,LATITUDE,LONGITUDE,Actual,Weight\n"
+            "AB,AB10 1,AB10 1AA,57.1,-2.1,100,10\n"
+            "AB,AB10 1,AB10 1AA,57.3,-2.3,200,20\n"
+            "AL,AL1 1,AL1 1AA,51.7,-0.4,300,30\n",
+            encoding="utf-8",
+        )
+        self.mixed_coordinate_path = self.root / "mixed_coordinate_sample.csv"
+        self.mixed_coordinate_path.write_text(
+            "PostcodeUnit,latitude,LONGiTUDE,Actual\n"
+            "AB10 1AA,57.1,-2.1,100\n"
+            "AL1 1AA,51.7,-0.4,300\n",
+            encoding="utf-8",
+        )
 
     def request(self, **overrides: object) -> dict[str, object]:
         request: dict[str, object] = {
@@ -98,6 +113,33 @@ class UkMapToolTests(unittest.TestCase):
 
         self.assertEqual(result["join_column"], "CustomArea")
         self.assertEqual([row["key"] for row in result["rows"]], ["A1", "A2", "A3"])
+
+    def test_uppercase_postcode_aliases_are_used_as_defaults(self) -> None:
+        dataset = Dataset(self.upper_data_path)
+
+        area_result = summary(dataset, self.request())
+        sector_result = summary(dataset, self.request(level="sector"))
+        unit_result = summary(dataset, self.request(level="unit"))
+
+        self.assertEqual(area_result["join_column"], "POSTCODE_AREA")
+        self.assertEqual([row["key"] for row in area_result["rows"]], ["AB", "AL"])
+        self.assertEqual(sector_result["join_column"], "POSTCODE_SECTOR")
+        self.assertEqual([row["key"] for row in sector_result["rows"]], ["AB10 1", "AL1 1"])
+        self.assertEqual(unit_result["join_column"], "POSTCODE_UNIT")
+        self.assertEqual(
+            [(row["key"], row["latitude"], row["longitude"]) for row in unit_result["rows"]],
+            [("AB10 1AA", 57.2, -2.2), ("AL1 1AA", 51.7, -0.4)],
+        )
+
+    def test_coordinate_aliases_accept_lower_latitude_and_mixed_case_longitude(self) -> None:
+        dataset = Dataset(self.mixed_coordinate_path)
+        result = summary(dataset, self.request(level="unit"))
+
+        self.assertEqual(result["join_column"], "PostcodeUnit")
+        self.assertEqual(
+            [(row["key"], row["latitude"], row["longitude"]) for row in result["rows"]],
+            [("AB10 1AA", 57.1, -2.1), ("AL1 1AA", 51.7, -0.4)],
+        )
 
     def test_invalid_postcode_column_is_reported(self) -> None:
         dataset = Dataset(self.data_path)

@@ -1,7 +1,7 @@
 # Launching py_lucidum
 
-This project is currently developed against local example files such as `datasets/vans.parquet` and `datasets/home.parquet`.
-Those files are intentionally ignored by git because they are local development datasets.
+`py_lucidum` ships with one demo dataset: `datasets/motor_premiums.parquet`.
+Installed packages include the same file, so users can launch it with `--demo` without knowing where the package is installed.
 
 ## One-Time Setup
 
@@ -15,12 +15,12 @@ From the project root, create and install into a virtual environment:
 
 Use `/usr/bin/python3` on this machine because the installed Homebrew Python builds currently have a broken `pyexpat` dynamic library.
 
-## Launch From The Terminal
+## Launch The Demo
 
-Run the installed command:
+Run the installed command against the bundled demo dataset:
 
 ```bash
-.venv/bin/lucidum datasets/vans.parquet --port 8000
+.venv/bin/lucidum --demo --open --port 8000
 ```
 
 The app prints a URL like:
@@ -34,18 +34,24 @@ Uvicorn running on http://127.0.0.1:8000/?token=... (Press CTRL+C to quit)
 Open that URL in the browser. Stop the server with `Ctrl+C` in the terminal, or use the red `Stop app` button in the browser header. In either case, an open browser tab greys out and shows a stopped message once the local server is gone.
 The same printed URL can also be opened in the Positron Viewer pane.
 
-Useful options:
+From a source checkout, the demo file can also be loaded directly:
 
 ```bash
-.venv/bin/lucidum datasets/vans.parquet --open --port 8000
-.venv/bin/lucidum datasets/vans.parquet --host 0.0.0.0 --port 8000
-.venv/bin/lucidum datasets/vans.parquet --no-token
-.venv/bin/lucidum datasets/vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction --denominator Gross.Weight
-.venv/bin/lucidum datasets/vans.parquet --filters specs/filter_spec.csv
-.venv/bin/lucidum datasets/home.parquet --no-filters --port 8000
-.venv/bin/lucidum datasets/home.parquet --postcode-area PostcodeArea --postcode-sector PostcodeSector
-.venv/bin/lucidum datasets/home.parquet --postcode-unit PostcodeUnit --latitude lat --longitude long
-.venv/bin/lucidum datasets/vans.parquet --tools line-bar
+.venv/bin/lucidum datasets/motor_premiums.parquet --port 8000
+```
+
+Useful demo options:
+
+```bash
+.venv/bin/lucidum --demo --open --port 8000
+.venv/bin/lucidum --demo --host 0.0.0.0 --port 8000
+.venv/bin/lucidum --demo --no-token
+.venv/bin/lucidum --demo --x DRIVER_AGE --actual PREMIUM --denominator ANNUAL_MILEAGE
+.venv/bin/lucidum --demo --filters specs/filter_spec.csv
+.venv/bin/lucidum --demo --no-filters
+.venv/bin/lucidum --demo --postcode-area POSTCODE_AREA --postcode-sector POSTCODE_SECTOR
+.venv/bin/lucidum --demo --postcode-unit POSTCODE_UNIT --latitude LATITUDE --longitude LONGITUDE
+.venv/bin/lucidum --demo --tools line-bar
 ```
 
 - `--open` asks Python to open the generated URL with its configured browser or viewer handler. Positron may open it in the Viewer pane rather than an external browser.
@@ -54,18 +60,35 @@ Useful options:
 - `--x`, `--actual`, `--expected`, and `--denominator` set the initial x-axis feature, Actual / line 1 feature, Expected / line 2 feature, and Weight column.
 - `--filters` sets the saved-filter CSV path. If omitted, the app loads `./filter_spec.csv` from the working directory when it exists, otherwise `./specs/filter_spec.csv` when it exists.
 - `--no-filters` disables saved filters and skips the default filter-spec lookup.
-- `--postcode-area` and `--postcode-sector` set the dataset columns used by the UK mapping choropleths. They default to `PostcodeArea` and `PostcodeSector`.
-- `--postcode-unit`, `--latitude`, and `--longitude` set the dataset columns used by UK mapping unit points. They default to `PostcodeUnit`, `lat`, and `long`.
+- `--postcode-area` and `--postcode-sector` set the dataset columns used by UK mapping choropleths. Defaults resolve `PostcodeArea`/`POSTCODE_AREA` and `PostcodeSector`/`POSTCODE_SECTOR`.
+- `--postcode-unit`, `--latitude`, and `--longitude` set the dataset columns used by UK mapping unit points. Defaults resolve `PostcodeUnit`/`POSTCODE_UNIT`, `lat`/`latitude`/`LATITUDE`, and `long`/`longitude`/`LONGITUDE`.
 - `--tools` selects which tool components to enable. By default both `line-bar` and `uk-map` are enabled; use `--tools line-bar` to launch only the chart/table tool.
 - Without explicit defaults, the app starts with the first dataset column on the x-axis, the first numeric column as Actual / line 1, and no Expected / line 2.
-- URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=YoungestDriverAge&actual=AvgPrice1_5&expected=glm_prediction&denominator=Gross.Weight&postcode_area=PostcodeArea&postcode_sector=PostcodeSector&postcode_unit=PostcodeUnit&latitude=lat&longitude=long`.
+- URL parameters can also set the same initial selections, for example `http://127.0.0.1:8000/?x=DRIVER_AGE&actual=PREMIUM&denominator=ANNUAL_MILEAGE&postcode_area=POSTCODE_AREA&postcode_sector=POSTCODE_SECTOR&postcode_unit=POSTCODE_UNIT&latitude=LATITUDE&longitude=LONGITUDE`.
+
+## Launch Other Datasets
+
+Pass a normal file path to load another CSV or Parquet dataset:
+
+```bash
+.venv/bin/lucidum path/to/my_data.parquet --port 8000
+.venv/bin/lucidum path/to/my_data.csv --port 8000
+```
+
+Parquet is recommended for normal work because it is much faster than CSV in the current DuckDB backend.
+
+If your dataset uses different map columns, pass them explicitly:
+
+```bash
+.venv/bin/lucidum path/to/my_data.parquet --postcode-area Area --postcode-sector Sector --postcode-unit Unit --latitude latitude --longitude longitude
+```
 
 ## Launch As A Python Module
 
 This is equivalent to the console command:
 
 ```bash
-.venv/bin/python -m py_lucidum datasets/vans.parquet --port 8000
+.venv/bin/python -m py_lucidum --demo --port 8000
 ```
 
 ## Launch From A Python Console
@@ -75,7 +98,7 @@ From a Python shell started in the project root:
 ```python
 import py_lucidum
 
-py_lucidum.serve("datasets/vans.parquet", port=8000, open_browser=True)
+py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
 ```
 
 In a normal Python shell, this call starts the Uvicorn server and blocks until the server is stopped.
@@ -86,7 +109,7 @@ The line-and-bar chart can also be launched explicitly:
 ```python
 import py_lucidum
 
-py_lucidum.serve_line_bar("datasets/vans.parquet", port=8000, open_browser=True)
+py_lucidum.serve_line_bar(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
 ```
 
 ## Launch A Custom ASGI App Programmatically
@@ -97,7 +120,7 @@ For server-style usage from Python, create the ASGI app and pass it to the py_lu
 import py_lucidum
 from py_lucidum.app import create_app
 
-app = create_app("datasets/vans.parquet", token="dev-token")
+app = create_app(py_lucidum.demo_dataset_path(), token="dev-token")
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
 ```
 
@@ -113,18 +136,17 @@ Initial selections can be supplied programmatically:
 
 ```python
 app = create_app(
-    "datasets/vans.parquet",
+    py_lucidum.demo_dataset_path(),
     token="dev-token",
     defaults={
-        "x": "YoungestDriverAge",
-        "actual": "AvgPrice1_5",
-        "expected": "glm_prediction",
-        "denominator": "Gross.Weight",
-        "postcode_area": "PostcodeArea",
-        "postcode_sector": "PostcodeSector",
-        "postcode_unit": "PostcodeUnit",
-        "latitude": "lat",
-        "longitude": "long",
+        "x": "DRIVER_AGE",
+        "actual": "PREMIUM",
+        "denominator": "ANNUAL_MILEAGE",
+        "postcode_area": "POSTCODE_AREA",
+        "postcode_sector": "POSTCODE_SECTOR",
+        "postcode_unit": "POSTCODE_UNIT",
+        "latitude": "LATITUDE",
+        "longitude": "LONGITUDE",
     },
     filters_path="specs/filter_spec.csv",
     use_saved_filters=True,
@@ -135,10 +157,11 @@ app = create_app(
 If you specifically want raw Uvicorn, run it from a standalone Python script or terminal, not from an already-running Positron/Jupyter event loop:
 
 ```python
+import py_lucidum
 import uvicorn
 from py_lucidum.app import create_app
 
-app = create_app("datasets/vans.parquet", token="dev-token")
+app = create_app(py_lucidum.demo_dataset_path(), token="dev-token")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
@@ -196,8 +219,8 @@ The line-and-bar chart has one shared **Weight** selector:
 
 Use the sidebar tool selector to switch to **UK mapping**. The map uses the selected Actual column, Weight denominator, and active filter in the same way as the line-and-bar chart.
 
-- Dataset postcode columns default to `PostcodeArea`, `PostcodeSector`, and `PostcodeUnit`. Override them with `--postcode-area`, `--postcode-sector`, and `--postcode-unit` when needed.
-- Unit point coordinates default to numeric `lat` and `long` columns. Override them with `--latitude` and `--longitude`; if no point columns are configured and the defaults are absent, the Units layer is disabled.
+- Dataset postcode columns default to `PostcodeArea`, `PostcodeSector`, and `PostcodeUnit`, with uppercase aliases supported for `POSTCODE_AREA`, `POSTCODE_SECTOR`, and `POSTCODE_UNIT`. Override them with `--postcode-area`, `--postcode-sector`, and `--postcode-unit` when needed.
+- Unit point coordinates default to numeric `lat` and `long` columns, with `latitude`/`LATITUDE` and `longitude`/`LONGITUDE` aliases supported. Override them with `--latitude` and `--longitude`; if no point columns are configured and the defaults are absent, the Units layer is disabled.
 - Postcode area and sector GeoJSON assets are bundled with the app and served to Leaflet. Unit points come from the dataset and are rendered with a fast canvas layer.
 - The map layer control provides Blank, Esri, Grey, OSM, and Satellite base maps, plus Area, Sector, and Units overlays.
 - The draggable floating map panel provides postcode zoom search, palette selection, white/dark blank-map backgrounds, line thickness, opacity, hot/not-spot highlighting, and polygon labels.
@@ -210,31 +233,29 @@ Use the sidebar tool selector to switch to **UK mapping**. The map uses the sele
 
 The sidebar filter box accepts a DuckDB `WHERE` expression. Type the expression and press Enter or click Apply. Clear removes the active filter.
 
-Examples:
+Demo examples:
 
 ```sql
-YoungestDriverAge > 40
-"Gross.Weight" >= 3000
-UseofVan = 'Social'
-QuoteDate >= DATE '2024-01-01'
+DRIVER_AGE > 40
+ANNUAL_MILEAGE >= 20000
+VEHICLE_USAGE = 'Social only'
+QUOTE_DATE >= DATE '2017-01-01'
 ```
 
-Use double quotes for column names that contain punctuation, spaces, or other special characters, such as `"Gross.Weight"`.
+Use double quotes for column names that contain punctuation, spaces, or other special characters.
 
 Saved filters are read from `filter_spec.csv` in the working directory by default, falling back to `specs/filter_spec.csv` for the tidied project layout. Use `--filters path/to/filter_spec.csv` to choose another file, or `--no-filters` to start without any saved-filter dropdown entries. The file must have exactly these columns:
 
 ```csv
 name,expression
-Older drivers,YoungestDriverAge > 40
-Heavy vans,"""Gross.Weight"" >= 3000"
+Older drivers,DRIVER_AGE > 40
+High annual mileage,ANNUAL_MILEAGE >= 20000
 ```
 
 ## Notes
 
-- Prefer Parquet for normal work. It is much faster than CSV in the current DuckDB backend.
-- CSV files still work, for example `.venv/bin/lucidum datasets/vans.csv --port 8000`.
-- Local data files under `datasets/`, such as `datasets/vans.csv`, `datasets/vans.parquet`, and `datasets/home.parquet`, are ignored by `.gitignore`.
-- Saved-filter CSVs under `specs/`, including `specs/filter_spec.csv` and `specs/home_filter_spec.csv`, are tracked.
+- `datasets/motor_premiums.parquet` is the committed demo dataset; other local files under `datasets/` remain ignored by git.
+- Saved-filter CSVs under `specs/`, including `specs/filter_spec.csv`, are tracked.
 - The current prototype identifies integer columns separately from continuous numeric columns in the sidebar.
 - Initial x-axis and response selections are data-agnostic by default and can be overridden with CLI options or URL parameters.
 - Filters use DuckDB expression syntax and are applied before chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
@@ -267,20 +288,18 @@ Optional browser smoke tests use Playwright to launch Chromium against a tempora
 PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest tests/test_browser_smoke.py
 ```
 
-These launch paths are expected to work from the project root when `datasets/vans.parquet` exists:
+These launch paths are expected to work from the project root:
 
 ```bash
-.venv/bin/lucidum datasets/vans.parquet --port 8000
-.venv/bin/lucidum datasets/vans.parquet --open --port 8000
-.venv/bin/lucidum datasets/vans.parquet --host 0.0.0.0 --port 8000
-.venv/bin/lucidum datasets/vans.parquet --no-token
-.venv/bin/lucidum datasets/vans.parquet --x YoungestDriverAge --actual AvgPrice1_5 --expected glm_prediction --denominator Gross.Weight
-.venv/bin/lucidum datasets/vans.parquet --filters specs/filter_spec.csv
-.venv/bin/lucidum datasets/home.parquet --no-filters --port 8000
-.venv/bin/lucidum datasets/home.parquet --postcode-area PostcodeArea --postcode-sector PostcodeSector
-.venv/bin/lucidum datasets/home.parquet --postcode-unit PostcodeUnit --latitude lat --longitude long
-.venv/bin/lucidum datasets/vans.parquet --tools line-bar
-.venv/bin/python -m py_lucidum datasets/vans.parquet --port 8000
+.venv/bin/lucidum --demo --port 8000
+.venv/bin/lucidum --demo --open --port 8000
+.venv/bin/lucidum --demo --host 0.0.0.0 --port 8000
+.venv/bin/lucidum --demo --no-token
+.venv/bin/lucidum --demo --x DRIVER_AGE --actual PREMIUM --denominator ANNUAL_MILEAGE
+.venv/bin/lucidum --demo --filters specs/filter_spec.csv
+.venv/bin/lucidum --demo --tools line-bar
+.venv/bin/lucidum datasets/motor_premiums.parquet --port 8000
+.venv/bin/python -m py_lucidum --demo --port 8000
 ```
 
 The Python console and programmatic Uvicorn examples above should also start successfully and serve `GET /api/schema` when opened with the correct token, or without a token when no token is configured.

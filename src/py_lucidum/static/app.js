@@ -67,6 +67,7 @@
           property: "PostcodeArea",
           url: "/tools/uk-map/static/geodata/areas_MappaR.geojson",
           defaultColumn: "PostcodeArea",
+          aliases: ["PostcodeArea", "POSTCODE_AREA"],
         },
         sector: {
           label: "sectors",
@@ -74,13 +75,19 @@
           property: "PostcodeSector",
           url: "/tools/uk-map/static/geodata/sectors_MappaR.geojson",
           defaultColumn: "PostcodeSector",
+          aliases: ["PostcodeSector", "POSTCODE_SECTOR"],
         },
         unit: {
           label: "units",
           singular: "unit",
           property: "PostcodeUnit",
           defaultColumn: "PostcodeUnit",
+          aliases: ["PostcodeUnit", "POSTCODE_UNIT"],
         },
+      };
+      const COORDINATE_COLUMN_ALIASES = {
+        latitude: ["lat", "latitude", "LATITUDE"],
+        longitude: ["long", "longitude", "LONGITUDE", "LONGiTUDE"],
       };
       const MAP_PALETTES = {
         divergent: ["#00441b", "#1b7837", "#5aae61", "#a6dba0", "#d9f0d3", "#fddbc7", "#f4a582", "#d6604d", "#b2182b", "#67001f"],
@@ -802,15 +809,24 @@
       function postcodeColumn(level) {
         const key = level === "sector" ? "postcode_sector" : (level === "unit" ? "postcode_unit" : "postcode_area");
         const fallback = MAP_LEVELS[level].defaultColumn;
-        return locationParams.get(key) || state.schema.defaults?.[key] || fallback;
+        return configuredColumn(key) || resolveColumnAlias(fallback, MAP_LEVELS[level].aliases);
       }
 
       function latitudeColumn() {
-        return locationParams.get("latitude") || state.schema.defaults?.latitude || "lat";
+        return configuredColumn("latitude") || resolveColumnAlias("lat", COORDINATE_COLUMN_ALIASES.latitude);
       }
 
       function longitudeColumn() {
-        return locationParams.get("longitude") || state.schema.defaults?.longitude || "long";
+        return configuredColumn("longitude") || resolveColumnAlias("long", COORDINATE_COLUMN_ALIASES.longitude);
+      }
+
+      function configuredColumn(key) {
+        return locationParams.get(key) || state.schema.defaults?.[key] || "";
+      }
+
+      function resolveColumnAlias(requested, aliases) {
+        if (columnExists(requested)) return requested;
+        return aliases.find((alias) => columnExists(alias)) || requested;
       }
 
       function configuredDefaultExists(key) {

@@ -2,7 +2,7 @@
 
 ## Summary
 
-`py_lucidum` is an internal company data science tool for fast local exploration of large CSV and Parquet datasets. Users can launch it from the command line as `lucidum path.parquet` or from Python via `lucidum.serve(path)`, then open the generated tokenized browser URL.
+`py_lucidum` is an internal company data science tool for fast local exploration of large CSV and Parquet datasets. Users can launch the bundled synthetic demo with `lucidum --demo`, launch another file as `lucidum path.parquet`, or start it from Python via `py_lucidum.serve(path)`, then open the generated tokenized browser URL.
 
 The current implementation is a package-first Python app with a FastAPI backend, DuckDB live aggregation, and a static browser UI using Apache ECharts and Leaflet. Parquet is the preferred working format for speed; CSV remains supported for convenience and import workflows. The codebase is being shaped as a shared workbench plus independently registered tools so the existing line-and-bar chart and UK mapping tool can run standalone or alongside future GLM and GBM tools.
 
@@ -10,7 +10,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 
 - Package structure exists with `pyproject.toml`, `src/py_lucidum/`, CLI entry point `lucidum`, an importable app factory, and a static frontend.
 - The backend is split into shared `core` modules, an `app` factory package, and `tools` packages. The current implemented tools are `tools.line_bar` and `tools.uk_map`; placeholder packages exist for `tools.glm` and `tools.gbm`.
-- Repository hygiene excludes local datasets, Python build/cache artifacts, virtual environments, generated README previews, and OS metadata such as `.DS_Store`.
+- Repository hygiene excludes local datasets except the committed synthetic demo Parquet file, plus Python build/cache artifacts, virtual environments, generated README previews, and OS metadata such as `.DS_Store`.
 - Backend supports:
   - `GET /api/schema` for file path, file size, row count, inferred column types, defaults, saved filters, enabled tools, and numeric band suggestions.
   - `GET /api/health` for lightweight token-protected browser heartbeat checks.
@@ -20,9 +20,9 @@ The current implementation is a package-first Python app with a FastAPI backend,
   - `POST /api/reload` to refresh the file snapshot and cached metadata.
   - `POST /api/shutdown` to stop a CLI-launched local app from the browser.
 - The app supports local analyst mode today and is designed to grow into internal server mode with local or mounted server datasets.
-- Local development datasets live under `datasets/`, including `datasets/vans.csv`, `datasets/vans.parquet`, and `datasets/home.parquet`; this folder is ignored and not intended for publishing. Saved filter CSVs live under `specs/` and are tracked.
+- The committed demo dataset is `datasets/motor_premiums.parquet` and is packaged for `lucidum --demo`; other local development datasets under `datasets/` remain ignored and are not intended for publishing. Saved filter CSVs live under `specs/` and are tracked.
 - Public repository documentation lives in `README.md`. Detailed launch documentation lives in `USAGE.md` and covers the CLI, module entry point, Python console usage, programmatic Uvicorn usage, LAN binding, browser opening, no-token local mode, initial selection overrides, UK map postcode/point column overrides, saved filter files, and `--no-filters` launch mode.
-- A small standard-library `unittest` suite now covers CLI behavior, static asset serving, health checks, line-and-bar routes, UK map aggregation including postcode unit points, saved-filter loading, filter validation, aggregation behavior, and compatibility re-exports without introducing a required test dependency.
+- A small standard-library `unittest` suite now covers CLI behavior, demo dataset packaging, static asset serving, health checks, line-and-bar routes, UK map aggregation including postcode unit points, saved-filter loading, filter validation, aggregation behavior, and compatibility re-exports without introducing a required test dependency.
 
 ## Tool Architecture
 
@@ -64,8 +64,8 @@ The current implementation is a package-first Python app with a FastAPI backend,
 ## UK Mapping Behavior
 
 - The UK mapping tool uses the selected Actual column, Weight denominator, and active filter in the same way as the line-and-bar chart.
-- Area and sector layers join grouped KPI summaries to bundled GeoJSON assets using `PostcodeArea` and `PostcodeSector` by default, configurable with `--postcode-area` and `--postcode-sector`.
-- The Units layer groups by `PostcodeUnit` by default, averages numeric `lat` and `long` coordinates per unit, and plots only units with a valid KPI and valid coordinates. These columns are configurable with `--postcode-unit`, `--latitude`, and `--longitude`.
+- Area and sector layers join grouped KPI summaries to bundled GeoJSON assets using `PostcodeArea` and `PostcodeSector` by default, with uppercase aliases `POSTCODE_AREA` and `POSTCODE_SECTOR` supported. They remain configurable with `--postcode-area` and `--postcode-sector`.
+- The Units layer groups by `PostcodeUnit` by default, with uppercase alias `POSTCODE_UNIT` supported. It averages numeric `lat`/`latitude`/`LATITUDE` and `long`/`longitude`/`LONGITUDE` coordinates per unit and plots only units with a valid KPI and valid coordinates. These columns are configurable with `--postcode-unit`, `--latitude`, and `--longitude`.
 - Unit points are rendered with a single canvas-backed Leaflet layer for browser performance, while area/sector geometry remains standard Leaflet GeoJSON.
 - If no unit point columns are configured and the default unit/coordinate columns are absent, the Units layer is disabled. Explicit invalid unit point columns produce a clear validation error when the Units layer is requested.
 - The same quantile palette, opacity, legend, and hot/not-spot controls apply to area, sector, and unit levels. Postcode search remains area/sector based; full postcode-like inputs are normalised to sectors.
@@ -94,7 +94,7 @@ The current implementation is a package-first Python app with a FastAPI backend,
 
 ## Performance Notes
 
-- Benchmarks on the local 416,220-row `vans` dataset showed Parquet is materially faster than CSV for the same DuckDB queries.
+- Benchmarks on large local CSV and Parquet versions of the same dataset showed Parquet is materially faster for the same DuckDB queries.
 - Warm median timings from the current backend:
   - Schema load: CSV ~245ms, Parquet ~5ms.
   - Numeric age chart: CSV ~232ms, Parquet ~27ms.

@@ -1,6 +1,7 @@
 # Local development datasets
 datasets/*.csv
 datasets/*.parquet
+!datasets/motor_premiums.parquet
 
 # Python/cache/build artifacts
 __pycache__/

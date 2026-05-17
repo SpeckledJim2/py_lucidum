@@ -80,6 +80,8 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('unitColumn: postcodeColumn("unit")', js)
         self.assertIn('latitudeColumn: latitudeColumn()', js)
         self.assertIn('longitudeColumn: longitudeColumn()', js)
+        self.assertIn('aliases: ["PostcodeUnit", "POSTCODE_UNIT"]', js)
+        self.assertIn('longitude: ["long", "longitude", "LONGITUDE", "LONGiTUDE"]', js)
         self.assertIn("makeUnitPointLayer", js)
         self.assertIn("unitPointRadiusForZoom", js)
         self.assertIn("unitPointHitRadius(pointRadius)", js)

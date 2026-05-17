@@ -19,6 +19,7 @@ LEVELS = {
         "column_key": "postcode_area",
         "request_key": "areaColumn",
         "default_column": "PostcodeArea",
+        "aliases": ("PostcodeArea", "POSTCODE_AREA"),
         "join_property": "PostcodeArea",
         "label": "areas",
     },
@@ -26,6 +27,7 @@ LEVELS = {
         "column_key": "postcode_sector",
         "request_key": "sectorColumn",
         "default_column": "PostcodeSector",
+        "aliases": ("PostcodeSector", "POSTCODE_SECTOR"),
         "join_property": "PostcodeSector",
         "label": "sectors",
     },
@@ -33,6 +35,7 @@ LEVELS = {
         "column_key": "postcode_unit",
         "request_key": "unitColumn",
         "default_column": "PostcodeUnit",
+        "aliases": ("PostcodeUnit", "POSTCODE_UNIT"),
         "join_property": "PostcodeUnit",
         "label": "units",
     },
@@ -42,11 +45,13 @@ COORDINATE_COLUMNS = {
     "latitude": {
         "request_key": "latitudeColumn",
         "default_column": "lat",
+        "aliases": ("lat", "latitude", "LATITUDE"),
         "label": "latitude",
     },
     "longitude": {
         "request_key": "longitudeColumn",
         "default_column": "long",
+        "aliases": ("long", "longitude", "LONGITUDE", "LONGiTUDE"),
         "label": "longitude",
     },
 }
@@ -150,6 +155,7 @@ def normalise_join_column(
     request_key = str(level_info["request_key"])
     defaults_key = str(level_info["column_key"])
     default_column = str(level_info["default_column"])
+    configured = request.get(request_key) or request.get(defaults_key) or defaults.get(defaults_key)
     raw = (
         request.get(request_key)
         or request.get(defaults_key)
@@ -157,9 +163,14 @@ def normalise_join_column(
         or default_column
     )
     column = str(raw or "").strip()
-    if column not in columns:
+    if configured:
+        if column not in columns:
+            raise ValueError(f"Choose a valid {level.replace('_', ' ')} postcode column")
+        return column
+    resolved = resolve_alias_column(column, tuple(level_info["aliases"]), columns)
+    if not resolved:
         raise ValueError(f"Choose a valid {level.replace('_', ' ')} postcode column")
-    return column
+    return resolved
 
 
 def normalise_coordinate_column(
@@ -171,11 +182,30 @@ def normalise_coordinate_column(
     info = COORDINATE_COLUMNS[name]
     request_key = str(info["request_key"])
     default_column = str(info["default_column"])
-    raw = request.get(request_key) or request.get(name) or defaults.get(name) or default_column
+    configured = request.get(request_key) or request.get(name) or defaults.get(name)
+    raw = configured or default_column
     column = str(raw or "").strip()
-    if column not in columns or not is_numeric_kind(columns[column].kind):
+    if configured:
+        if column not in columns or not is_numeric_kind(columns[column].kind):
+            raise ValueError(f"Choose a valid numeric {info['label']} column")
+        return column
+    column = resolve_alias_column(column, tuple(info["aliases"]), columns) or ""
+    if not column or not is_numeric_kind(columns[column].kind):
         raise ValueError(f"Choose a valid numeric {info['label']} column")
     return column
+
+
+def resolve_alias_column(
+    requested: str,
+    aliases: tuple[str, ...],
+    columns: dict[str, ColumnInfo],
+) -> str | None:
+    if requested in columns:
+        return requested
+    for alias in aliases:
+        if alias in columns:
+            return alias
+    return None
 
 
 def map_rows(

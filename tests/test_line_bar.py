@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import duckdb
+
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset
 from py_lucidum.query import Dataset as LegacyDataset
@@ -109,6 +111,36 @@ class LineBarToolTests(unittest.TestCase):
         schema = dataset.schema()
 
         self.assertEqual(schema["file_size"], self.data_path.stat().st_size)
+
+    def test_regular_csv_file_path_loads_through_dataset_and_app(self) -> None:
+        dataset = Dataset(self.data_path)
+        schema = dataset.schema()
+        app = create_app(self.data_path, tools=["line_bar"], use_saved_filters=False)
+        app_schema = app.state.dataset.schema()
+
+        self.assertIn("YoungestDriverAge", {column["name"] for column in schema["columns"]})
+        self.assertIn("Actual", {column["name"] for column in app_schema["columns"]})
+
+    def test_regular_parquet_file_path_loads_through_dataset(self) -> None:
+        parquet_path = self.root / "ordinary.parquet"
+        con = duckdb.connect(database=":memory:")
+        con.execute(
+            f"""
+COPY (
+  SELECT
+    1::INTEGER AS id,
+    123.45::DOUBLE AS premium,
+    'AB'::VARCHAR AS postcode_area
+) TO '{parquet_path.as_posix()}' (FORMAT PARQUET)
+"""
+        )
+
+        schema = Dataset(parquet_path).schema()
+
+        self.assertEqual(
+            [column["name"] for column in schema["columns"]],
+            ["id", "premium", "postcode_area"],
+        )
 
     def test_chart_filters_and_aggregates_response_lines(self) -> None:
         dataset = Dataset(self.data_path)

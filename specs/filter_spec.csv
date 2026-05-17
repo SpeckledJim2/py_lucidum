@@ -1,11 +1,11 @@
 name,expression
-Older drivers,YoungestDriverAge > 40
-Young drivers,YoungestDriverAge < 25
-Recent quotes,QuoteDate >= DATE '2024-01-01'
-Long licence history,Least_LicenceLengthMonths >= 120
-No claims bonus,Proposer_NCB >= 5
-Home owners,ProposerHomeOwner = 1
-High annual mileage,AnnualMileage >= 20000
-Heavy vans,"""Gross.Weight"" >= 3000"
-PaymentType = 'Annually',PaymentType = 'Annually'
-Portsmouth postcode area,PostcodeArea = 'PO'
+Older drivers,DRIVER_AGE > 40
+Young drivers,DRIVER_AGE < 25
+Recent quotes,QUOTE_DATE >= DATE '2017-01-01'
+High annual mileage,ANNUAL_MILEAGE >= 20000
+Social only,VEHICLE_USAGE = 'Social only'
+Business use,VEHICLE_USAGE = 'Business use'
+Diesel,FUEL_TYPE = 'Diesel'
+No prior claims,PRIOR_CLAIMS = 0
+High no-claims bonus,NCD_YEARS >= 5
+Portsmouth postcode area,POSTCODE_AREA = 'PO'

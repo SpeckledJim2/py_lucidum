@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 import uvicorn
 
 from .app import create_app
+from .demo import demo_dataset_path
 
 
 DEFAULT_URL_KEYS = {
@@ -256,8 +257,9 @@ def saved_filters_status(app: object) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Launch py_lucidum for a local CSV or Parquet file.")
-    parser.add_argument("path", help="Path to a CSV or Parquet file")
+    parser = argparse.ArgumentParser(description="Launch py_lucidum for a local CSV, Parquet, or bundled demo file.")
+    parser.add_argument("path", nargs="?", help="Path to a CSV or Parquet file")
+    parser.add_argument("--demo", action="store_true", help="Launch the bundled motor_premiums.parquet demo dataset")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host, e.g. 127.0.0.1 or 0.0.0.0")
     parser.add_argument("--port", type=int, default=None, help="Bind port. Defaults to a free local port.")
     parser.add_argument("--no-token", action="store_true", help="Disable the token in the URL and API requests")
@@ -284,9 +286,14 @@ def main() -> int:
     )
     parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Supports line-bar and uk-map.")
     args = parser.parse_args()
+    if args.demo and args.path:
+        parser.error("choose either a dataset path or --demo, not both")
+    if not args.demo and not args.path:
+        parser.error("the following arguments are required: path or --demo")
+    path = demo_dataset_path() if args.demo else args.path
     try:
         serve(
-            path=args.path,
+            path=path,
             host=args.host,
             port=args.port,
             token="" if args.no_token else secrets.token_urlsafe(18),
