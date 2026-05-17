@@ -1,6 +1,6 @@
-# py_lucidum
+# lucidum
 
-`py_lucidum` is a local browser workbench for exploring CSV and Parquet datasets. It starts a small FastAPI server, uses DuckDB for live aggregation, and opens an interactive UI for grouped charts, filters, and UK postcode maps.
+`lucidum` is a local browser workbench for exploring CSV and Parquet datasets. It starts a small FastAPI server, uses DuckDB for live aggregation, and opens an interactive UI for grouped charts, filters, and UK postcode maps.
 
 The current app includes:
 
@@ -12,6 +12,16 @@ The current app includes:
 - Optional token-protected local URLs and a browser Stop app button.
 
 The repository includes one synthetic demo dataset at `datasets/motor_premiums.parquet`, and installed packages include the same file for `lucidum --demo`.
+
+## Demo Screenshots
+
+![lucidum UK mapping demo](docs/assets/lucidum-uk-map-demo.jpg)
+
+*UK postcode sector mapping using the bundled motor premiums dataset.*
+
+![lucidum line and bar demo](docs/assets/lucidum-line-bar-demo.jpg)
+
+*Line-and-bar analysis using the bundled motor premiums dataset.*
 
 ## Installation
 
