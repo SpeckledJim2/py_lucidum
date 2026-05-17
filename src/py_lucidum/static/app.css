@@ -365,13 +365,9 @@
         color: var(--muted);
       }
 
-      .tool-selector-section h2 {
-        margin: 0 0 6px;
-        font-size: 13px;
-      }
-
       .tool-selector-section {
         margin-bottom: 28px;
+        padding-top: 2px;
       }
 
       .tool-selector {

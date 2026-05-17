@@ -68,6 +68,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('id="sidebarToggleBtn"', html)
         self.assertIn('aria-controls="appSidebar"', html)
         self.assertIn('<aside id="appSidebar">', html)
+        self.assertNotIn("<h2>Tool</h2>", html)
         self.assertIn('href="/static/app.css"', html)
         self.assertIn('src="/static/app.js"', html)
         self.assertNotIn("?v=", html)
@@ -115,6 +116,12 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible)', js)
         self.assertIn('el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible))', js)
         self.assertIn('button.setAttribute("aria-expanded", String(state.sidebarVisible));', js)
+
+    def test_tool_selector_aligns_with_main_toolbar(self) -> None:
+        _, css_body = self.assert_no_store("/static/app.css")
+        css = css_body.decode("utf-8")
+
+        self.assertIn(".tool-selector-section {\n        margin-bottom: 28px;\n        padding-top: 2px;", css)
 
     def test_app_js_contains_unit_point_map_controls(self) -> None:
         _, body = self.assert_no_store("/static/app.js")
