@@ -35,6 +35,49 @@ From the project root:
 
 This installs the `lucidum` command.
 
+### Install once with pipx
+
+Use `pipx` if you want the `lucidum` command available from any project without activating this repository's `.venv`.
+
+`pipx` supports macOS, Linux, and Windows. The examples below use macOS/Linux shell syntax; on Windows, follow the official `pipx` Windows installation notes and use Windows paths. The `/usr/bin/python3` fallback shown below is macOS-specific.
+
+Install `pipx` once:
+
+```bash
+brew install pipx
+pipx ensurepath
+```
+
+Restart the terminal after `pipx ensurepath`, then install Lucidum from a local checkout:
+
+```bash
+pipx install /path/to/py_lucidum
+```
+
+Or install from GitHub once the repository is available there:
+
+```bash
+pipx install git+https://github.com/SpeckledJim2/py_lucidum.git
+```
+
+After that, launch any CSV or Parquet file from any project directory:
+
+```bash
+lucidum some_file.parquet --open
+lucidum some_file.csv --open
+```
+
+If `lucidum` is not found, either restart the terminal after `pipx ensurepath` or run the command directly from `~/.local/bin/lucidum`.
+
+If `pipx install` fails while creating `~/.local/pipx/shared`, the active Homebrew Python may have a broken `venv`/`ensurepip` setup. A practical workaround on macOS is to force `pipx` to use Apple's system Python:
+
+```bash
+rm -rf ~/.local/pipx/shared
+PIPX_DEFAULT_PYTHON=/usr/bin/python3 pipx install --force --python /usr/bin/python3 /path/to/py_lucidum
+```
+
+This is a per-user install, which is usually preferable to installing into the system Python with `sudo pip`.
+
 ## Quick Start
 
 Launch the bundled demo dataset:
@@ -66,6 +109,13 @@ Pass a CSV or Parquet file path:
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --port 8000
 .venv/bin/lucidum path/to/my_data.csv --port 8000
+```
+
+If you installed Lucidum with `pipx`, run it from any project directory without the `.venv/bin/` prefix:
+
+```bash
+lucidum path/to/my_data.parquet --open
+lucidum path/to/my_data.csv --open
 ```
 
 Parquet is recommended for normal use because DuckDB reads it much faster than CSV.
@@ -215,6 +265,20 @@ Optional browser smoke tests require Playwright and Chromium:
 .venv/bin/python -m pip install pytest pytest-playwright
 .venv/bin/python -m playwright install chromium
 PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest tests/test_browser_smoke.py
+```
+
+Optional `pipx` install test creates an isolated temporary `pipx` environment, installs the local checkout, and verifies the installed `lucidum` command can launch a CSV from another directory:
+
+```bash
+PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 .venv/bin/python -m pytest tests/test_pipx_install.py
+```
+
+If your default Homebrew Python cannot create virtual environments, point the test at Apple's system Python:
+
+```bash
+PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 \
+PY_LUCIDUM_PIPX_PYTHON=/usr/bin/python3 \
+.venv/bin/python -m pytest tests/test_pipx_install.py
 ```
 
 Maintainer and architecture notes live in `DEVELOPMENT.md`.

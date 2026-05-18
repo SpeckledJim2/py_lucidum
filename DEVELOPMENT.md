@@ -116,6 +116,14 @@ Optional full browser smoke check:
 PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest
 ```
 
+Optional `pipx` install check:
+
+```bash
+PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 .venv/bin/python -m pytest tests/test_pipx_install.py
+```
+
+Use `PY_LUCIDUM_PIPX_PYTHON=/usr/bin/python3` when Homebrew Python cannot create virtual environments.
+
 The current test suite should cover:
 
 - CLI argument behavior, token URL construction, and demo dataset selection.
