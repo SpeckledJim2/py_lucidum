@@ -162,10 +162,18 @@
         border-radius: 1px 0 0 1px;
       }
 
-      body.sidebar-collapsed .sidebar-toggle-icon::before {
-        left: 6px;
+      .sidebar-toggle-icon::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 4px;
         width: 2px;
-        border-radius: 0;
+        background: currentColor;
+      }
+
+      body.sidebar-collapsed .sidebar-toggle-icon::before {
+        background: transparent;
       }
 
       .meta {
