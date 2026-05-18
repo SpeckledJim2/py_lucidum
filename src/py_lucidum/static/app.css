@@ -493,6 +493,14 @@
         width: 100%;
         height: auto;
         min-height: 64px;
+        margin-bottom: 7px;
+      }
+
+      .saved-filter-list .feature {
+        font-size: 12px;
+        min-height: 22px;
+        padding: 2px 6px;
+        justify-content: flex-start;
       }
 
       .filter-operator {

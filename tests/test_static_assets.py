@@ -91,6 +91,29 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("font-size: 11px;", css)
         self.assertIn("font-size: 9px;", css)
 
+    def test_saved_filter_select_uses_feature_list_row_spacing(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        _, css_body = self.assert_no_store("/static/app.css")
+        _, js_body = self.assert_no_store("/static/app.js")
+        html = html_body.decode("utf-8")
+        css = css_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertIn('id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox"', html)
+        self.assertIn('aria-multiselectable="true"', html)
+        self.assertNotIn("<select id=\"savedFilterSelect\"", html)
+        self.assertIn("#savedFilterSelect {\n        flex: 1 1 auto;\n        width: 100%;\n        height: auto;\n        min-height: 64px;\n        margin-bottom: 7px;", css)
+        self.assertIn(".saved-filter-list .feature {\n        font-size: 12px;\n        min-height: 22px;\n        padding: 2px 6px;\n        justify-content: flex-start;", css)
+        self.assertIn('button.className = "feature saved-filter-option";', js)
+        self.assertIn('button.setAttribute("role", "option");', js)
+        self.assertIn('button.setAttribute("aria-selected", "false");', js)
+        self.assertIn("const multiSelect = event.metaKey || event.ctrlKey;", js)
+        self.assertIn('list.querySelectorAll(".saved-filter-option").forEach((option) => {', js)
+        self.assertIn("const isClickedOption = option === button;", js)
+        self.assertIn('option.classList.toggle("active", isClickedOption);', js)
+        self.assertIn('button.classList.toggle("active", !selected);', js)
+        self.assertIn('querySelectorAll(\'.saved-filter-option[aria-selected="true"]\')', js)
+
     def test_chart_search_inputs_have_clear_buttons(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")

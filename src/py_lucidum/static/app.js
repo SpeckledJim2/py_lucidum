@@ -530,18 +530,39 @@
       }
 
       function renderSavedFilters() {
-        const select = el("savedFilterSelect");
+        const list = el("savedFilterSelect");
         const filters = state.schema.filters || [];
-        select.innerHTML = "";
+        list.innerHTML = "";
         for (const filter of filters) {
-          select.append(new Option(filter.name, filter.expression));
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "feature saved-filter-option";
+          button.dataset.expression = filter.expression;
+          button.setAttribute("role", "option");
+          button.setAttribute("aria-selected", "false");
+          button.innerHTML = `<span>${escapeHtml(filter.name)}</span>`;
+          button.addEventListener("click", (event) => {
+            const multiSelect = event.metaKey || event.ctrlKey;
+            const selected = button.getAttribute("aria-selected") === "true";
+            if (!multiSelect) {
+              list.querySelectorAll(".saved-filter-option").forEach((option) => {
+                const isClickedOption = option === button;
+                option.setAttribute("aria-selected", String(isClickedOption));
+                option.classList.toggle("active", isClickedOption);
+              });
+            } else {
+              button.setAttribute("aria-selected", String(!selected));
+              button.classList.toggle("active", !selected);
+            }
+            applySavedFilters();
+          });
+          list.append(button);
         }
-        select.disabled = filters.length === 0;
       }
 
       function selectedSavedFilterExpressions() {
-        return Array.from(el("savedFilterSelect").selectedOptions)
-          .map((option) => option.value.trim())
+        return Array.from(el("savedFilterSelect").querySelectorAll('.saved-filter-option[aria-selected="true"]'))
+          .map((button) => button.dataset.expression.trim())
           .filter(Boolean);
       }
 
@@ -668,8 +689,9 @@
 
       function clearFilter() {
         el("filterInput").value = "";
-        Array.from(el("savedFilterSelect").options).forEach((option) => {
-          option.selected = false;
+        Array.from(el("savedFilterSelect").querySelectorAll(".saved-filter-option")).forEach((button) => {
+          button.setAttribute("aria-selected", "false");
+          button.classList.remove("active");
         });
         if (state.activeFilter === "") {
           refreshActiveTool();
@@ -2367,7 +2389,6 @@
             applyFilter();
           }
         });
-        el("savedFilterSelect").addEventListener("change", applySavedFilters);
         el("chartTab").addEventListener("click", () => setView("chart"));
         el("tableTab").addEventListener("click", () => setView("table"));
         el("lineBarTool").addEventListener("click", () => setTool("line_bar"));
