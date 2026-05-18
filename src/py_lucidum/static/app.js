@@ -2365,7 +2365,9 @@
         el("stopAppBtn").addEventListener("click", stopApp);
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
-          el("themeBtn").textContent = document.body.classList.contains("dark") ? "Light" : "Dark";
+          const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";
+          el("themeBtn").setAttribute("aria-label", label);
+          el("themeBtn").title = label;
           if (state.lastData) renderChart(state.lastData);
           if (state.tool === "uk_map") resizeMap();
         });

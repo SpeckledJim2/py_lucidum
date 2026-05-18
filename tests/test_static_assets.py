@@ -68,6 +68,11 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('id="sidebarToggleBtn"', html)
         self.assertIn('aria-controls="appSidebar"', html)
         self.assertIn('<aside id="appSidebar">', html)
+        self.assertIn('id="themeBtn"', html)
+        self.assertIn('aria-label="Switch to dark mode"', html)
+        self.assertIn("theme-icon-moon", html)
+        self.assertIn("theme-icon-sun", html)
+        self.assertNotIn('id="themeBtn" class="ghost">Dark</button>', html)
         self.assertNotIn("<h2>Tool</h2>", html)
         self.assertIn('href="/static/app.css"', html)
         self.assertIn('src="/static/app.js"', html)
@@ -85,6 +90,25 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("padding: 1px 6px;", css)
         self.assertIn("font-size: 11px;", css)
         self.assertIn("font-size: 9px;", css)
+
+    def test_theme_toggle_uses_icons_and_accessible_labels(self) -> None:
+        _, css_body = self.assert_no_store("/static/app.css")
+        _, js_body = self.assert_no_store("/static/app.js")
+        css = css_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertIn(".theme-toggle", css)
+        self.assertIn("width: 28px;", css)
+        self.assertIn("height: 24px;", css)
+        self.assertIn("min-height: 24px;", css)
+        self.assertIn(".theme-icon-moon", css)
+        self.assertIn(".theme-icon-sun", css)
+        self.assertIn("body.dark .theme-icon-moon", css)
+        self.assertIn("body.dark .theme-icon-sun", css)
+        self.assertIn('const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";', js)
+        self.assertIn('el("themeBtn").setAttribute("aria-label", label);', js)
+        self.assertIn('el("themeBtn").title = label;', js)
+        self.assertNotIn('.textContent = document.body.classList.contains("dark") ? "Light" : "Dark"', js)
 
     def test_line_bar_quantile_control_is_numeric_only(self) -> None:
         _, html_body = self.assert_no_store("/")

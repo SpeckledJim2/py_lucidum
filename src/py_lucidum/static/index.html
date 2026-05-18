@@ -25,7 +25,15 @@
         <div id="datasetMeta" class="meta">Loading dataset...</div>
         <div class="spacer"></div>
         <button id="reloadBtn" class="ghost">Reload</button>
-        <button id="themeBtn" class="ghost">Dark</button>
+        <button id="themeBtn" class="ghost theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+          <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M20 14.5A7.5 7.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"></path>
+          </svg>
+          <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"></path>
+          </svg>
+        </button>
         <button id="stopAppBtn" class="danger-action">Stop app</button>
       </header>
 
