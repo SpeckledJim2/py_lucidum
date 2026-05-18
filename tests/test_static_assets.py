@@ -91,6 +91,26 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("font-size: 11px;", css)
         self.assertIn("font-size: 9px;", css)
 
+    def test_chart_search_inputs_have_clear_buttons(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        _, css_body = self.assert_no_store("/static/app.css")
+        _, js_body = self.assert_no_store("/static/app.js")
+        html = html_body.decode("utf-8")
+        css = css_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertIn('<div class="chart-search-row">', html)
+        self.assertIn('id="featureSearchClear"', html)
+        self.assertIn('id="expectedSearchClear"', html)
+        self.assertIn('class="filter-action" type="button" title="Clear x-axis feature search" aria-label="Clear x-axis feature search"', html)
+        self.assertIn('class="filter-action" type="button" title="Clear Expected search" aria-label="Clear Expected search"', html)
+        self.assertIn("&times;</button>", html)
+        self.assertIn(".chart-search-row {\n        display: grid;\n        grid-template-columns: minmax(0, 1fr) 28px;\n        gap: 5px;\n        margin-bottom: 5px;", css)
+        self.assertIn("function clearSearchInput(inputId, render)", js)
+        self.assertIn('el("expectedSearchClear").addEventListener("click", () => clearSearchInput("expectedSearch", renderExpectedNumerators));', js)
+        self.assertIn('el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));', js)
+        self.assertIn("input.focus();", js)
+
     def test_theme_toggle_uses_icons_and_accessible_labels(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
         _, js_body = self.assert_no_store("/static/app.js")

@@ -630,6 +630,15 @@
         }
       }
 
+      function clearSearchInput(inputId, render) {
+        const input = el(inputId);
+        if (input.value) {
+          input.value = "";
+          render();
+        }
+        input.focus();
+      }
+
       function currentResponses() {
         const responses = [];
         if (el("actualNumerator").value) {
@@ -2348,6 +2357,8 @@
         });
         el("expectedSearch").addEventListener("input", renderExpectedNumerators);
         el("featureSearch").addEventListener("input", renderFeatures);
+        el("expectedSearchClear").addEventListener("click", () => clearSearchInput("expectedSearch", renderExpectedNumerators));
+        el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));
         el("filterApplyBtn").addEventListener("click", applyFilter);
         el("filterClearBtn").addEventListener("click", clearFilter);
         el("filterInput").addEventListener("keydown", (event) => {

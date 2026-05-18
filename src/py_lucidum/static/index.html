@@ -180,7 +180,10 @@
                     <button data-value="alpha">A-Z</button>
                   </div>
                 </div>
-                <input id="featureSearch" class="search" placeholder="search" />
+                <div class="chart-search-row">
+                  <input id="featureSearch" class="search" placeholder="search" />
+                  <button id="featureSearchClear" class="filter-action" type="button" title="Clear x-axis feature search" aria-label="Clear x-axis feature search">&times;</button>
+                </div>
                 <div id="featureList" class="feature-list"></div>
               </section>
 
@@ -195,7 +198,10 @@
                   </div>
                 </div>
                 <select id="expectedNumerator" class="hidden" aria-hidden="true" tabindex="-1"></select>
-                <input id="expectedSearch" class="search" placeholder="search" />
+                <div class="chart-search-row">
+                  <input id="expectedSearch" class="search" placeholder="search" />
+                  <button id="expectedSearchClear" class="filter-action" type="button" title="Clear Expected search" aria-label="Clear Expected search">&times;</button>
+                </div>
                 <div id="expectedList" class="feature-list"></div>
               </section>
             </div>
