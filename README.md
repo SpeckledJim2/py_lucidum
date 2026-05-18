@@ -13,188 +13,196 @@ The current app includes:
 
 The repository includes one synthetic demo dataset at `datasets/motor_premiums.parquet`, and installed packages include the same file for `lucidum --demo`.
 
-## Demo Screenshots
+<details>
+<summary><strong>Installation</strong></summary>
 
-![lucidum UK mapping demo](docs/assets/lucidum-uk-map-demo.jpg)
+  <h2>Installation</h2>
 
-*UK postcode sector mapping using the bundled motor premiums dataset.*
+  From the project root:
 
-![lucidum line and bar demo](docs/assets/lucidum-line-bar-demo.jpg)
+  ```bash
+  /usr/bin/python3 -m venv .venv
+  .venv/bin/python -m pip install --upgrade pip
+  .venv/bin/python -m pip install -e .
+  ```
 
-*Line-and-bar analysis using the bundled motor premiums dataset.*
+  This installs the `lucidum` command.
 
-## Installation
+  <h3>Install once with pipx</h3>
 
-From the project root:
+  Use `pipx` if you want the `lucidum` command available from any project without activating this repository's `.venv`.
 
-```bash
-/usr/bin/python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e .
-```
+  `pipx` supports macOS, Linux, and Windows. The examples below use macOS/Linux shell syntax; on Windows, follow the official `pipx` Windows installation notes and use Windows paths. The `/usr/bin/python3` fallback shown below is macOS-specific.
 
-This installs the `lucidum` command.
+  Install `pipx` once:
 
-### Install once with pipx
+  ```bash
+  brew install pipx
+  pipx ensurepath
+  ```
 
-Use `pipx` if you want the `lucidum` command available from any project without activating this repository's `.venv`.
+  Restart the terminal after `pipx ensurepath`, then install Lucidum from a local checkout:
 
-`pipx` supports macOS, Linux, and Windows. The examples below use macOS/Linux shell syntax; on Windows, follow the official `pipx` Windows installation notes and use Windows paths. The `/usr/bin/python3` fallback shown below is macOS-specific.
+  ```bash
+  pipx install /path/to/py_lucidum
+  ```
 
-Install `pipx` once:
+  Or install from GitHub once the repository is available there:
 
-```bash
-brew install pipx
-pipx ensurepath
-```
+  ```bash
+  pipx install git+https://github.com/SpeckledJim2/py_lucidum.git
+  ```
 
-Restart the terminal after `pipx ensurepath`, then install Lucidum from a local checkout:
+  After that, launch any CSV or Parquet file from any project directory:
 
-```bash
-pipx install /path/to/py_lucidum
-```
+  ```bash
+  lucidum some_file.parquet --open
+  lucidum some_file.csv --open
+  ```
 
-Or install from GitHub once the repository is available there:
+  If `lucidum` is not found, either restart the terminal after `pipx ensurepath` or run the command directly from `~/.local/bin/lucidum`.
 
-```bash
-pipx install git+https://github.com/SpeckledJim2/py_lucidum.git
-```
+  If `pipx install` fails while creating `~/.local/pipx/shared`, the active Homebrew Python may have a broken `venv`/`ensurepip` setup. A practical workaround on macOS is to force `pipx` to use Apple's system Python:
 
-After that, launch any CSV or Parquet file from any project directory:
+  ```bash
+  rm -rf ~/.local/pipx/shared
+  PIPX_DEFAULT_PYTHON=/usr/bin/python3 pipx install --force --python /usr/bin/python3 /path/to/py_lucidum
+  ```
 
-```bash
-lucidum some_file.parquet --open
-lucidum some_file.csv --open
-```
+  This is a per-user install, which is usually preferable to installing into the system Python with `sudo pip`.
 
-If `lucidum` is not found, either restart the terminal after `pipx ensurepath` or run the command directly from `~/.local/bin/lucidum`.
+</details>
 
-If `pipx install` fails while creating `~/.local/pipx/shared`, the active Homebrew Python may have a broken `venv`/`ensurepip` setup. A practical workaround on macOS is to force `pipx` to use Apple's system Python:
+<details open>
+<summary><strong>Usage, Features, and Development</strong></summary>
 
-```bash
-rm -rf ~/.local/pipx/shared
-PIPX_DEFAULT_PYTHON=/usr/bin/python3 pipx install --force --python /usr/bin/python3 /path/to/py_lucidum
-```
+  <h2>Demo Screenshots</h2>
 
-This is a per-user install, which is usually preferable to installing into the system Python with `sudo pip`.
+  ![lucidum UK mapping demo](docs/assets/lucidum-uk-map-demo.jpg)
 
-## Quick Start
+  *UK postcode sector mapping using the bundled motor premiums dataset.*
 
-Launch the bundled demo dataset:
+  ![lucidum line and bar demo](docs/assets/lucidum-line-bar-demo.jpg)
 
-```bash
-.venv/bin/lucidum --demo --port 8000
-```
+  *Line-and-bar analysis using the bundled motor premiums dataset.*
 
-The command prints a URL like:
+  <h2>Quick Start</h2>
 
-```text
-Open http://127.0.0.1:8000/?token=...
-Saved filters: specs/filter_spec.csv
-Uvicorn running on http://127.0.0.1:8000/?token=... (Press CTRL+C to quit)
-```
+  Launch the bundled demo dataset:
 
-Open the full printed URL in your browser. Stop the server with `Ctrl+C` in the terminal or the red `Stop app` button in the browser header. In either case, an open browser tab greys out and shows a stopped message once the local server is gone.
+  ```bash
+  .venv/bin/lucidum --demo --port 8000
+  ```
 
-From a source checkout, the same data can also be loaded directly:
+  The command prints a URL like:
 
-```bash
-.venv/bin/lucidum datasets/motor_premiums.parquet --port 8000
-```
+  ```text
+  Open http://127.0.0.1:8000/?token=...
+  Saved filters: specs/filter_spec.csv
+  Uvicorn running on http://127.0.0.1:8000/?token=... (Press CTRL+C to quit)
+  ```
 
-## Running Your Own Data
+  Open the full printed URL in your browser. Stop the server with `Ctrl+C` in the terminal or the red `Stop app` button in the browser header. In either case, an open browser tab greys out and shows a stopped message once the local server is gone.
 
-Pass a CSV or Parquet file path:
+  From a source checkout, the same data can also be loaded directly:
 
-```bash
-.venv/bin/lucidum path/to/my_data.parquet --port 8000
-.venv/bin/lucidum path/to/my_data.csv --port 8000
-```
+  ```bash
+  .venv/bin/lucidum datasets/motor_premiums.parquet --port 8000
+  ```
 
-If you installed Lucidum with `pipx`, run it from any project directory without the `.venv/bin/` prefix:
+  <h2>Running Your Own Data</h2>
 
-```bash
-lucidum path/to/my_data.parquet --open
-lucidum path/to/my_data.csv --open
-```
+  Pass a CSV or Parquet file path:
 
-Parquet is recommended for normal use because DuckDB reads it much faster than CSV.
+  ```bash
+  .venv/bin/lucidum path/to/my_data.parquet --port 8000
+  .venv/bin/lucidum path/to/my_data.csv --port 8000
+  ```
 
-If your UK mapping columns use different names, pass them explicitly:
+  If you installed Lucidum with `pipx`, run it from any project directory without the `.venv/bin/` prefix:
 
-```bash
-.venv/bin/lucidum path/to/my_data.parquet \
+  ```bash
+  lucidum path/to/my_data.parquet --open
+  lucidum path/to/my_data.csv --open
+  ```
+
+  Parquet is recommended for normal use because DuckDB reads it much faster than CSV.
+
+  If your UK mapping columns use different names, pass them explicitly:
+
+  ```bash
+  .venv/bin/lucidum path/to/my_data.parquet \
   --postcode-area Area \
   --postcode-sector Sector \
   --postcode-unit Unit \
   --latitude latitude \
   --longitude longitude
-```
+  ```
 
-## Common Options
+  <h2>Common Options</h2>
 
-```bash
-.venv/bin/lucidum --demo --open --port 8000
-.venv/bin/lucidum --demo --host 0.0.0.0 --port 8000
-.venv/bin/lucidum --demo --no-token
-.venv/bin/lucidum --demo --x DRIVER_AGE --actual PREMIUM --denominator ANNUAL_MILEAGE
-.venv/bin/lucidum --demo --filters specs/filter_spec.csv
-.venv/bin/lucidum --demo --no-filters
-.venv/bin/lucidum --demo --tools line-bar
-```
+  ```bash
+  .venv/bin/lucidum --demo --open --port 8000
+  .venv/bin/lucidum --demo --host 0.0.0.0 --port 8000
+  .venv/bin/lucidum --demo --no-token
+  .venv/bin/lucidum --demo --x DRIVER_AGE --actual PREMIUM --denominator ANNUAL_MILEAGE
+  .venv/bin/lucidum --demo --filters specs/filter_spec.csv
+  .venv/bin/lucidum --demo --no-filters
+  .venv/bin/lucidum --demo --tools line-bar
+  ```
 
-- `--open` asks Python to open the generated URL with its configured browser or viewer handler.
-- `--host 0.0.0.0` binds to all network interfaces for LAN testing. Keep the generated token enabled unless you have another access control layer.
-- `--no-token` disables URL/API token protection for local-only use.
-- `--x`, `--actual`, `--expected`, and `--denominator` set initial chart selections.
-- `--filters` points to a saved-filter CSV file. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
-- `--no-filters` disables saved-filter discovery.
-- `--tools` selects enabled tools. By default both `line-bar` and `uk-map` are enabled.
+  - `--open` asks Python to open the generated URL with its configured browser or viewer handler.
+  - `--host 0.0.0.0` binds to all network interfaces for LAN testing. Keep the generated token enabled unless you have another access control layer.
+  - `--no-token` disables URL/API token protection for local-only use.
+  - `--x`, `--actual`, `--expected`, and `--denominator` set initial chart selections.
+  - `--filters` points to a saved-filter CSV file. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
+  - `--no-filters` disables saved-filter discovery.
+  - `--tools` selects enabled tools. By default both `line-bar` and `uk-map` are enabled.
 
-UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected.
+  UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected.
 
-## Python Usage
+  <h2>Python Usage</h2>
 
-Launch the demo from Python:
+  Launch the demo from Python:
 
-```python
-import py_lucidum
+  ```python
+  import py_lucidum
 
-py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
-```
+  py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
+  ```
 
-Launch your own Parquet dataset the same way:
+  Launch your own Parquet dataset the same way:
 
-```python
-import py_lucidum
+  ```python
+  import py_lucidum
 
-py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
-```
+  py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
+  ```
 
-CSV files are also supported:
+  CSV files are also supported:
 
-```python
-py_lucidum.serve("path/to/my_data.csv", port=8000, open_browser=True)
-```
+  ```python
+  py_lucidum.serve("path/to/my_data.csv", port=8000, open_browser=True)
+  ```
 
-In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.
+  In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.
 
-To launch only the line-and-bar tool, pass either the demo path or your own dataset path:
+  To launch only the line-and-bar tool, pass either the demo path or your own dataset path:
 
-```python
-import py_lucidum
+  ```python
+  import py_lucidum
 
-py_lucidum.serve_line_bar(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
-py_lucidum.serve_line_bar("path/to/my_data.parquet", port=8000, open_browser=True)
-```
+  py_lucidum.serve_line_bar(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
+  py_lucidum.serve_line_bar("path/to/my_data.parquet", port=8000, open_browser=True)
+  ```
 
-For ASGI usage, pass the same kind of dataset path to `create_app()`:
+  For ASGI usage, pass the same kind of dataset path to `create_app()`:
 
-```python
-import py_lucidum
-from py_lucidum.app import create_app
+  ```python
+  import py_lucidum
+  from py_lucidum.app import create_app
 
-app = create_app(
+  app = create_app(
     py_lucidum.demo_dataset_path(),
     token="dev-token",
     defaults={
@@ -204,81 +212,83 @@ app = create_app(
     },
     filters_path="specs/filter_spec.csv",
     tools=["line_bar", "uk_map"],
-)
+  )
 
-py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
-```
+  py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
+  ```
 
-## Features
+  <h2>Features</h2>
 
-**Line and bar chart**
+  **Line and bar chart**
 
-- Select any feature for the x-axis.
-- Select Actual and optional Expected numeric response lines.
-- Use `Average row value` or a numeric Weight column as the denominator.
-- Bucket numeric and date axes, collapse low-weight groups, switch between chart and table views, and apply optional response transforms.
+  - Select any feature for the x-axis.
+  - Select Actual and optional Expected numeric response lines.
+  - Use `Average row value` or a numeric Weight column as the denominator.
+  - Bucket numeric and date axes, collapse low-weight groups, switch between chart and table views, and apply optional response transforms.
 
-**UK mapping**
+  **UK mapping**
 
-- Switch to UK mapping from the sidebar tool selector.
-- Show postcode area or sector choropleths, plus postcode unit points when unit and coordinate columns are available.
-- Use the floating map control for postcode search, palette selection, blank-map background, line thickness, opacity, hot/not-spot highlighting, and polygon labels.
+  - Switch to UK mapping from the sidebar tool selector.
+  - Show postcode area or sector choropleths, plus postcode unit points when unit and coordinate columns are available.
+  - Use the floating map control for postcode search, palette selection, blank-map background, line thickness, opacity, hot/not-spot highlighting, and polygon labels.
 
-**Filters and saved filters**
+  **Filters and saved filters**
 
-The filter box accepts DuckDB `WHERE` expressions:
+  The filter box accepts DuckDB `WHERE` expressions:
 
-```sql
-DRIVER_AGE > 40
-ANNUAL_MILEAGE >= 20000
-VEHICLE_USAGE = 'Social only'
-QUOTE_DATE >= DATE '2017-01-01'
-```
+  ```sql
+  DRIVER_AGE > 40
+  ANNUAL_MILEAGE >= 20000
+  VEHICLE_USAGE = 'Social only'
+  QUOTE_DATE >= DATE '2017-01-01'
+  ```
 
-Saved filters are CSV files with exactly these columns:
+  Saved filters are CSV files with exactly these columns:
 
-```csv
-name,expression
-Older drivers,DRIVER_AGE > 40
-High annual mileage,ANNUAL_MILEAGE >= 20000
-```
+  ```csv
+  name,expression
+  Older drivers,DRIVER_AGE > 40
+  High annual mileage,ANNUAL_MILEAGE >= 20000
+  ```
 
-## Development
+  <h2>Development</h2>
 
-Run the standard test suite:
+  Run the standard test suite:
 
-```bash
-.venv/bin/python -m unittest discover -s tests
-```
+  ```bash
+  .venv/bin/python -m unittest discover -s tests
+  ```
 
-Useful checks before committing:
+  Useful checks before committing:
 
-```bash
-.venv/bin/python -m compileall src tests
-node --check src/py_lucidum/static/app.js
-git diff --check
-```
+  ```bash
+  .venv/bin/python -m compileall src tests
+  node --check src/py_lucidum/static/app.js
+  git diff --check
+  ```
 
-Optional browser smoke tests require Playwright and Chromium:
+  Optional browser smoke tests require Playwright and Chromium:
 
-```bash
-.venv/bin/python -m pip install pytest pytest-playwright
-.venv/bin/python -m playwright install chromium
-PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest tests/test_browser_smoke.py
-```
+  ```bash
+  .venv/bin/python -m pip install pytest pytest-playwright
+  .venv/bin/python -m playwright install chromium
+  PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest tests/test_browser_smoke.py
+  ```
 
-Optional `pipx` install test creates an isolated temporary `pipx` environment, installs the local checkout, and verifies the installed `lucidum` command can launch a CSV from another directory:
+  Optional `pipx` install test creates an isolated temporary `pipx` environment, installs the local checkout, and verifies the installed `lucidum` command can launch a CSV from another directory:
 
-```bash
-PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 .venv/bin/python -m pytest tests/test_pipx_install.py
-```
+  ```bash
+  PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 .venv/bin/python -m pytest tests/test_pipx_install.py
+  ```
 
-If your default Homebrew Python cannot create virtual environments, point the test at Apple's system Python:
+  If your default Homebrew Python cannot create virtual environments, point the test at Apple's system Python:
 
-```bash
-PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 \
-PY_LUCIDUM_PIPX_PYTHON=/usr/bin/python3 \
-.venv/bin/python -m pytest tests/test_pipx_install.py
-```
+  ```bash
+  PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 \
+  PY_LUCIDUM_PIPX_PYTHON=/usr/bin/python3 \
+  .venv/bin/python -m pytest tests/test_pipx_install.py
+  ```
 
-Maintainer and architecture notes live in `DEVELOPMENT.md`.
+  Maintainer and architecture notes live in `DEVELOPMENT.md`.
+
+</details>
