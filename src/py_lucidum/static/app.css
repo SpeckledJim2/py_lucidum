@@ -3,6 +3,7 @@
         --bg: #eef2f7;
         --panel: #ffffff;
         --panel-2: #f8fafc;
+        --sidebar-bg: #dce4ef;
         --text: #1f2937;
         --muted: #667085;
         --line: #d7dde7;
@@ -20,6 +21,7 @@
         --bg: #0f172a;
         --panel: #151f32;
         --panel-2: #111827;
+        --sidebar-bg: #24334b;
         --text: #e5e7eb;
         --muted: #a8b3c7;
         --line: #2c3952;
@@ -204,7 +206,7 @@
       }
 
       aside {
-        background: var(--panel-2);
+        background: var(--sidebar-bg);
         padding: 8px;
         overflow: hidden;
         display: flex;

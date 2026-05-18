@@ -127,6 +127,9 @@ class StaticAssetTests(unittest.TestCase):
         css = css_body.decode("utf-8")
         js = js_body.decode("utf-8")
 
+        self.assertIn("--sidebar-bg: #dce4ef;", css)
+        self.assertIn("--sidebar-bg: #24334b;", css)
+        self.assertIn("background: var(--sidebar-bg);", css)
         self.assertIn(".sidebar-toggle-icon", css)
         self.assertIn("border: 0;", css)
         self.assertIn("width: 6px;", css)
