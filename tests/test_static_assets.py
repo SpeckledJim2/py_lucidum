@@ -100,6 +100,27 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("mix-blend-mode: screen;", css)
         self.assertIn("filter: invert(1) grayscale(1) brightness(1.7) contrast(1.08);", css)
 
+    def test_map_layer_control_uses_distinct_radio_groups(self) -> None:
+        _, css_body = self.assert_no_store("/static/app.css")
+        _, js_body = self.assert_no_store("/static/app.js")
+        css = css_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertIn('label: "Aerial"', js)
+        self.assertNotIn('label: "Satellite"', js)
+        self.assertIn('type="radio" name="baseMap"', js)
+        self.assertIn('type="radio" name="mapLevel" value="area"', js)
+        self.assertIn('type="radio" name="mapLevel" value="sector"', js)
+        self.assertIn('type="radio" name="mapLevel" value="unit"', js)
+        self.assertNotIn('name="mapOverlay"', js)
+        self.assertIn('target.name === "mapLevel"', js)
+        self.assertIn(".uk-map .leaflet-top.leaflet-left .map-place-control", css)
+        self.assertIn("grid-column: 3;", css)
+        self.assertIn("--map-control-row-gap: calc(var(--map-control-gap) * 2);", css)
+        self.assertIn("row-gap: var(--map-control-row-gap);", css)
+        self.assertIn(".uk-map .leaflet-control-attribution", css)
+        self.assertIn("font-size: 10px;", css)
+
     def test_sidebar_toggle_contract(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
         _, js_body = self.assert_no_store("/static/app.js")

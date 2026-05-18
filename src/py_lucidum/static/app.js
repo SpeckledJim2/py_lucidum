@@ -128,7 +128,7 @@
           attribution: "&copy; OpenStreetMap contributors",
         },
         satellite: {
-          label: "Satellite",
+          label: "Aerial",
           url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
           attribution: "Tiles &copy; Esri",
         },
@@ -969,15 +969,15 @@
               `).join("")}
               <div class="map-layer-separator"></div>
               <label>
-                <input type="checkbox" name="mapOverlay" value="area">
+                <input type="radio" name="mapLevel" value="area">
                 <span>Area</span>
               </label>
               <label>
-                <input type="checkbox" name="mapOverlay" value="sector">
+                <input type="radio" name="mapLevel" value="sector">
                 <span>Sector</span>
               </label>
               <label>
-                <input type="checkbox" name="mapOverlay" value="unit">
+                <input type="radio" name="mapLevel" value="unit">
                 <span>Units</span>
               </label>
             `;
@@ -999,17 +999,11 @@
           setBaseMap(target.value);
           return;
         }
-        if (target.name === "mapOverlay" && mapLevelSelectable(target.value)) {
-          if (!target.checked && target.value === state.mapLevel) {
-            target.checked = true;
-            return;
-          }
-          if (target.checked && target.value !== state.mapLevel) {
-            state.mapLevel = target.value;
-            state.preserveMapView = true;
-            syncMapControls();
-            refreshMap();
-          }
+        if (target.name === "mapLevel" && target.checked && mapLevelSelectable(target.value) && target.value !== state.mapLevel) {
+          state.mapLevel = target.value;
+          state.preserveMapView = true;
+          syncMapControls();
+          refreshMap();
         }
       }
 
@@ -1019,7 +1013,7 @@
         container.querySelectorAll('input[name="baseMap"]').forEach((input) => {
           input.checked = input.value === state.baseMap;
         });
-        container.querySelectorAll('input[name="mapOverlay"]').forEach((input) => {
+        container.querySelectorAll('input[name="mapLevel"]').forEach((input) => {
           input.disabled = !mapLevelSelectable(input.value);
           input.checked = input.value === state.mapLevel;
         });

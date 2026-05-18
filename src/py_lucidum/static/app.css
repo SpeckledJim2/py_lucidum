@@ -709,12 +709,20 @@
         font: inherit;
       }
 
+      .uk-map .leaflet-control-attribution {
+        font-size: 10px;
+        line-height: 1.2;
+        padding: 0 4px;
+      }
+
       .uk-map .leaflet-top.leaflet-left {
         --map-control-size: 34px;
         --map-control-gap: 8px;
+        --map-control-row-gap: calc(var(--map-control-gap) * 2);
         display: grid;
         grid-template-columns: var(--map-control-size) 1fr var(--map-control-size);
-        gap: var(--map-control-gap);
+        column-gap: var(--map-control-gap);
+        row-gap: var(--map-control-row-gap);
         width: max-content;
         max-width: calc(100% - 16px);
         margin: 8px 0 0 8px;
