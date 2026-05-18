@@ -21,6 +21,7 @@
         labels: "none",
         sidebarVisible: true,
         bandWidth: "0",
+        quantileMode: "off",
         dateBucket: "none",
         transform: "none",
         sigma: "0",
@@ -419,8 +420,25 @@
 
       function syncBandingControl() {
         syncSegmented("bandWidth", state.bandWidth);
+        el("bandLabel").textContent = state.quantileMode === "quantile" ? "Quantiles" : "Banding";
         const display = Number(state.bandWidth) > 0 ? state.bandWidth : "auto off";
         el("bandValue").textContent = `(${display})`;
+      }
+
+      function quantileCountForBandWidth(value = state.bandWidth) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number <= 0) return 1;
+        return Math.min(1000, Math.max(1, Math.round(number)));
+      }
+
+      function syncQuantileControl() {
+        syncSegmented("quantileMode", state.quantileMode);
+      }
+
+      function normalizeBandWidthForQuantiles() {
+        state.bandWidth = String(quantileCountForBandWidth());
+        state.bandFeature = state.x;
+        syncBandingControl();
       }
 
       function autoBandWidthForSelectedColumn() {
@@ -437,7 +455,7 @@
         } else {
           next = BAND_STEPS.find((step) => step > current) || current;
         }
-        state.bandWidth = formatBandWidth(next);
+        state.bandWidth = state.quantileMode === "quantile" ? String(quantileCountForBandWidth(next)) : formatBandWidth(next);
         state.bandFeature = state.x;
         syncBandingControl();
         refreshChart();
@@ -453,9 +471,13 @@
         el("expectedSortButton").classList.toggle("hidden", !hasExpected);
         el("dateControl").classList.toggle("hidden", !isDate);
         el("bandControl").classList.toggle("hidden", !isNumeric);
+        el("quantileControl").classList.toggle("hidden", !isNumeric);
         if (isNumeric && state.bandFeature !== state.x) {
           state.bandWidth = autoBandWidthForSelectedColumn();
           state.bandFeature = state.x;
+        }
+        if (isNumeric && state.quantileMode === "quantile") {
+          normalizeBandWidthForQuantiles();
         }
         if (!isCategorical || (state.sort === "expected" && !hasExpected)) {
           state.sort = "alpha";
@@ -469,10 +491,12 @@
         }
         if (!isNumeric) {
           state.bandWidth = "0";
+          state.quantileMode = "off";
           state.bandFeature = state.x;
           syncSegmented("bandWidth", "0");
         }
         syncBandingControl();
+        syncQuantileControl();
       }
 
       function fillMetricSelect(select, includeNone = false) {
@@ -688,6 +712,7 @@
           sort: state.sort,
           lowGroup: state.lowGroup,
           bandWidth: isNumeric ? Number(state.bandWidth) : 0,
+          quantileMode: isNumeric ? state.quantileMode : "off",
           dateBucket: isDate ? state.dateBucket : "none",
           transform: state.transform,
           sigma: Number(state.sigma),
@@ -2276,6 +2301,7 @@
             }
             group.querySelectorAll("button").forEach((button) => button.classList.remove("active"));
             event.target.classList.add("active");
+            const previousControlValue = state[group.dataset.control];
             state[group.dataset.control] = event.target.dataset.value;
             if (group.dataset.control === "featureSort") {
               renderFeatures();
@@ -2291,7 +2317,23 @@
             }
             if (group.dataset.control === "bandWidth") {
               state.bandFeature = state.x;
-              syncBandingControl();
+              if (state.quantileMode === "quantile") {
+                normalizeBandWidthForQuantiles();
+              } else {
+                syncBandingControl();
+              }
+            }
+            if (group.dataset.control === "quantileMode") {
+              if (state.quantileMode === "quantile" && previousControlValue !== "quantile") {
+                state.bandWidth = "10";
+                state.bandFeature = state.x;
+                syncBandingControl();
+              } else if (state.quantileMode === "quantile") {
+                normalizeBandWidthForQuantiles();
+              } else {
+                syncBandingControl();
+              }
+              syncQuantileControl();
             }
             refreshChart({ renderIfCached: group.dataset.control === "labels" });
           });

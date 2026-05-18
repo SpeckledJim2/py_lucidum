@@ -6,7 +6,7 @@ The current app includes:
 
 - A combined line-and-bar chart over any dataset feature.
 - One or two response lines with a shared Weight selector.
-- Numeric banding, date buckets, low-weight grouping, table view, and saved filters.
+- Numeric fixed-width or quantile banding, date buckets, low-weight grouping, table view, and saved filters.
 - UK postcode area and sector choropleths using bundled GeoJSON assets.
 - UK postcode unit points using dataset latitude/longitude columns.
 - Optional token-protected local URLs and a browser Stop app button.
@@ -224,7 +224,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   - Select any feature for the x-axis.
   - Select Actual and optional Expected numeric response lines.
   - Use `Average row value` or a numeric Weight column as the denominator.
-  - Bucket numeric and date axes, collapse low-weight groups, switch between chart and table views, and apply optional response transforms.
+  - Bucket numeric axes with fixed-width bands or quantiles, bucket date axes, collapse low-weight groups, switch between chart and table views, and apply optional response transforms.
 
   **UK mapping**
 

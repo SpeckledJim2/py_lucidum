@@ -110,7 +110,7 @@
               </div>
             </div>
             <div id="bandControl" class="control">
-              <h3>Banding <span id="bandValue"></span></h3>
+              <h3><span id="bandLabel">Banding</span> <span id="bandValue"></span></h3>
               <div class="segmented" data-control="bandWidth">
                 <button data-action="band-down">&lt;</button>
                 <button data-value="0" class="active">-</button>
@@ -119,6 +119,13 @@
                 <button data-value="5">5</button>
                 <button data-value="10">10</button>
                 <button data-action="band-up">&gt;</button>
+              </div>
+            </div>
+            <div id="quantileControl" class="control">
+              <h3>Quantile</h3>
+              <div class="segmented" data-control="quantileMode">
+                <button data-value="off" class="active">-</button>
+                <button data-value="quantile">Use quantiles</button>
               </div>
             </div>
             <div id="dateControl" class="control">

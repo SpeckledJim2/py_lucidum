@@ -17,12 +17,19 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         responses = normalise_responses(request.get("responses"), columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
         x_info = columns[x_col]
+        quantile_count = (
+            normalise_quantile_count(request.get("bandWidth"))
+            if use_quantiles(request.get("quantileMode")) and is_numeric_kind(x_info.kind)
+            else None
+        )
         x_sql = build_x_sql(
             x_col=x_col,
             kind=x_info.kind,
             band_width=request.get("bandWidth"),
             date_bucket=request.get("dateBucket"),
+            quantile_count=quantile_count,
         )
+        x_group_kind = "quantile" if quantile_count else x_info.kind
         sigma_multiplier = float(request.get("sigma") or 0)
         include_sigma = sigma_multiplier > 0 and len(responses) >= 2
         row_count = dataset.row_count()
@@ -38,10 +45,10 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         grouped_rows = apply_low_weight_grouping(
             rows=raw_rows,
             responses=responses,
-            x_kind=x_info.kind,
+            x_kind=x_group_kind,
             threshold=str(request.get("lowGroup") or "0"),
         )
-        sorted_rows = sort_rows(grouped_rows, x_info.kind, str(request.get("sort") or "alpha"))
+        sorted_rows = sort_rows(grouped_rows, x_group_kind, str(request.get("sort") or "alpha"))
         max_groups = int(request.get("maxGroups") or 10000)
         if len(sorted_rows) > max_groups:
             sorted_rows = sorted_rows[:max_groups]
@@ -103,10 +110,34 @@ def normalise_denominator(raw: Any, columns: dict[str, ColumnInfo]) -> dict[str,
     return {"column": value, "label": value, "bar_label": value}
 
 
-def build_x_sql(x_col: str, kind: str, band_width: Any, date_bucket: Any) -> dict[str, str]:
+def use_quantiles(value: Any) -> bool:
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "quantile", "quantiles"}
+
+
+def normalise_quantile_count(value: Any) -> int:
+    parsed = parse_positive_float(value)
+    if parsed is None:
+        return 1
+    count = int(math.floor(parsed + 0.5))
+    return min(1000, max(1, count))
+
+
+def build_x_sql(x_col: str, kind: str, band_width: Any, date_bucket: Any, quantile_count: int | None = None) -> dict[str, str]:
     col = quote_ident(x_col)
     if is_numeric_kind(kind):
         raw = f"TRY_CAST({col} AS DOUBLE)"
+        if quantile_count:
+            return {
+                "key": "__x_quantile",
+                "label": "CASE WHEN __x_quantile IS NULL THEN 'Missing' ELSE 'Q' || CAST(__x_quantile AS VARCHAR) END",
+                "sort": "COALESCE(__x_quantile, 1000001)",
+                "raw": raw,
+                "quantile_count": str(quantile_count),
+            }
         width = parse_positive_float(band_width)
         if width:
             key = f"FLOOR({raw} / {width}) * {width}"
@@ -254,20 +285,41 @@ sigma AS (
         sigma_join = ""
 
     where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    quantile_cte = ""
+    keyed_from = "base"
+    rownum_expr = "__rownum"
+    source_columns = "*"
+    if x_sql.get("quantile_count"):
+        quantile_cte = f""",
+quantiles AS (
+  SELECT
+    __rownum,
+    NTILE({x_sql['quantile_count']}) OVER (ORDER BY __x_raw, __rownum) AS __x_quantile
+  FROM (
+    SELECT
+      __rownum,
+      {x_sql['raw']} AS __x_raw
+    FROM base
+    WHERE {x_sql['raw']} IS NOT NULL
+  ) non_missing
+)"""
+        keyed_from = "base LEFT JOIN quantiles USING (__rownum)"
+        rownum_expr = "base.__rownum"
+        source_columns = "base.*"
     return f"""
 WITH base AS (
   SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}{where_sql}
-),
+){quantile_cte},
 keyed AS (
   SELECT
-    __rownum,
+    {rownum_expr} AS __rownum,
     {x_sql['key']} AS x_key,
     {x_sql['label']} AS x_label,
     {x_sql['sort']} AS x_sort,
-    CAST(hash(__rownum) % 20 AS INTEGER) AS __fold,
+    CAST(hash({rownum_expr}) % 20 AS INTEGER) AS __fold,
     {weight_expr} AS __weight_value,
-    *
-  FROM base
+    {source_columns}
+  FROM {keyed_from}
 ),
 agg AS (
   SELECT
@@ -454,11 +506,15 @@ def apply_low_weight_grouping(
 ) -> list[dict[str, Any]]:
     total_volume = sum(float(row.get("volume") or 0) for row in rows)
     threshold_value = parse_group_threshold(threshold, total_volume)
-    if threshold_value <= 0 or len(rows) < 3:
-        return [normalise_row(row, responses) for row in rows]
-
     normalised = [normalise_row(row, responses) for row in rows]
-    if x_kind in {"integer", "numeric", "date", "datetime"}:
+    missing_rows: list[dict[str, Any]] = []
+    if x_kind == "quantile":
+        missing_rows = [row for row in normalised if row["x"] == "Missing"]
+        normalised = [row for row in normalised if row["x"] != "Missing"]
+    if threshold_value <= 0 or len(normalised) < 3:
+        return normalised + missing_rows
+
+    if x_kind in {"integer", "numeric", "date", "datetime", "quantile"}:
         ordered = sorted(normalised, key=lambda r: (r["x_sort"] is None, r["x_sort"]))
         low: list[dict[str, Any]] = []
         high: list[dict[str, Any]] = []
@@ -490,7 +546,7 @@ def apply_low_weight_grouping(
             result.append(combine_rows(high, "High tail", responses, is_tail=True))
         else:
             result.extend(high)
-        return result
+        return result + missing_rows
 
     rare = [row for row in normalised if float(row["volume"] or 0) <= threshold_value]
     common = [row for row in normalised if float(row["volume"] or 0) > threshold_value]
@@ -656,6 +712,7 @@ __all__ = [
     "combine_sigma",
     "denominator_warnings",
     "normalise_denominator",
+    "normalise_quantile_count",
     "normalise_responses",
     "normalise_row",
     "parse_group_threshold",
@@ -664,4 +721,5 @@ __all__ = [
     "response_summary",
     "sort_rows",
     "transform_value",
+    "use_quantiles",
 ]

@@ -11,7 +11,7 @@ from py_lucidum.app import create_app
 from py_lucidum.core import Dataset
 from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
-from py_lucidum.tools.line_bar.query import chart
+from py_lucidum.tools.line_bar.query import chart, normalise_quantile_count
 
 
 class LineBarToolTests(unittest.TestCase):
@@ -243,6 +243,61 @@ COPY (
         date_result = chart(dataset, self.request("QuoteDate >= DATE '2024-02-01'"))
         self.assertEqual(date_result["filtered_row_count"], 2)
         self.assertEqual([row["x"] for row in date_result["rows"]], ["Business"])
+
+    def test_numeric_banding_without_quantiles_still_uses_fixed_width(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request.update({"x": "YoungestDriverAge", "bandWidth": "10", "quantileMode": "off"})
+
+        result = chart(dataset, request)
+
+        self.assertEqual([row["x"] for row in result["rows"]], ["30", "40", "50", "60"])
+        self.assertEqual([row["resp0"] for row in result["rows"]], [100, 200, 300, 400])
+
+    def test_numeric_quantile_banding_groups_non_missing_values(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request.update({"x": "YoungestDriverAge", "bandWidth": "4", "quantileMode": "quantile"})
+
+        result = chart(dataset, request)
+
+        self.assertEqual([row["x"] for row in result["rows"]], ["Q1", "Q2", "Q3", "Q4"])
+        self.assertEqual([row["volume"] for row in result["rows"]], [1, 1, 1, 1])
+        self.assertEqual([row["resp0"] for row in result["rows"]], [100, 200, 300, 400])
+
+    def test_numeric_quantile_banding_keeps_missing_values_separate(self) -> None:
+        self.data_path.write_text(
+            "Score,Actual,Expected\n"
+            "1,10,9\n"
+            ",20,19\n"
+            "2,30,29\n"
+            "3,40,39\n"
+            "4,50,49\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request.update({"x": "Score", "bandWidth": "2", "quantileMode": "quantile"})
+
+        result = chart(dataset, request)
+
+        self.assertEqual([row["x"] for row in result["rows"]], ["Q1", "Q2", "Missing"])
+        self.assertEqual([row["volume"] for row in result["rows"]], [2, 2, 1])
+        missing = result["rows"][2]
+        self.assertEqual(missing["resp0"], 20)
+        self.assertFalse(missing["is_tail"])
+
+        low_group_request = self.request()
+        low_group_request.update({"x": "Score", "bandWidth": "4", "quantileMode": "quantile", "lowGroup": "2"})
+        low_group_result = chart(dataset, low_group_request)
+        self.assertEqual([row["x"] for row in low_group_result["rows"]], ["Low tail", "High tail", "Missing"])
+        self.assertFalse(low_group_result["rows"][2]["is_tail"])
+
+    def test_quantile_count_rounds_and_clamps_to_supported_range(self) -> None:
+        self.assertEqual(normalise_quantile_count("0"), 1)
+        self.assertEqual(normalise_quantile_count("0.1"), 1)
+        self.assertEqual(normalise_quantile_count("2.6"), 3)
+        self.assertEqual(normalise_quantile_count("10000"), 1000)
 
     def test_grouped_numeric_tails_keep_sigma_bars(self) -> None:
         dataset = Dataset(self.data_path)

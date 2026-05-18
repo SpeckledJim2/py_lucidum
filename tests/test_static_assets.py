@@ -86,6 +86,29 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("font-size: 11px;", css)
         self.assertIn("font-size: 9px;", css)
 
+    def test_line_bar_quantile_control_is_numeric_only(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        _, js_body = self.assert_no_store("/static/app.js")
+        html = html_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertIn('id="bandControl"', html)
+        self.assertIn('id="quantileControl"', html)
+        self.assertLess(html.index('id="bandControl"'), html.index('id="quantileControl"'))
+        self.assertIn('<span id="bandLabel">Banding</span>', html)
+        self.assertIn("<h3>Quantile</h3>", html)
+        self.assertIn('<div class="segmented" data-control="quantileMode">', html)
+        self.assertIn('<button data-value="off" class="active">-</button>', html)
+        self.assertIn('<button data-value="quantile">Use quantiles</button>', html)
+        self.assertIn('quantileMode: "off"', js)
+        self.assertIn('el("bandLabel").textContent = state.quantileMode === "quantile" ? "Quantiles" : "Banding";', js)
+        self.assertIn('el("quantileControl").classList.toggle("hidden", !isNumeric);', js)
+        self.assertIn('quantileMode: isNumeric ? state.quantileMode : "off"', js)
+        self.assertIn('const previousControlValue = state[group.dataset.control];', js)
+        self.assertIn('state.quantileMode === "quantile" && previousControlValue !== "quantile"', js)
+        self.assertIn('state.bandWidth = "10";', js)
+        self.assertIn('function normalizeBandWidthForQuantiles()', js)
+
     def test_london_map_button_icon_fills_button(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
         _, js_body = self.assert_no_store("/static/app.js")

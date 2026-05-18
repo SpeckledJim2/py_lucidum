@@ -64,7 +64,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
 **Line and bar chart**
 
 - X-axis features can be integer, numeric, string/categorical, date, or datetime.
-- Numeric banding floors values to the selected band width.
+- Numeric banding floors values to the selected band width by default. With `quantileMode` enabled, the same banding value is rounded and clamped to `1..1000`, non-missing numeric values are grouped as `Q1`, `Q2`, etc., and missing x-axis values stay in a separate `Missing` group.
 - Date/datetime axes use calendar buckets.
 - Actual and Expected lines use a shared denominator. `Average row value` divides by valid row count; a numeric Weight column divides by `SUM(weight)`.
 - Low-weight grouping uses selected Weight total, not raw row count.
