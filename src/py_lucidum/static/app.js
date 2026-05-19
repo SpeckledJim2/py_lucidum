@@ -66,6 +66,10 @@
       const BAND_STEPS = makeBandSteps();
       const TABLE_PAGE_SIZE = 1000;
       const LABEL_DENSITY_LIMIT = 200;
+      const DATE_AXIS_TARGET_LABELS = 12;
+      const DATE_AXIS_MIN_MONTH_LABELS = 2;
+      const DATE_AXIS_MAX_MONTH_LABELS = 14;
+      const DATE_AXIS_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
       const RESPONSE_AXIS_PADDING = 0.08;
       const RESPONSE_AXIS_TARGET_INTERVALS = 15;
       const MAP_LEVELS = {
@@ -460,6 +464,10 @@
 
       function isNumericKind(kind) {
         return kind === "numeric" || kind === "integer";
+      }
+
+      function isDateKind(kind) {
+        return kind === "date" || kind === "datetime";
       }
 
       function syncSegmented(control, value) {
@@ -1946,7 +1954,8 @@
       function renderChart(data) {
         const labels = data.rows.map((r) => formatXLabel(r.x, data.x_kind));
         const labelMode = state.labels;
-        const xLabelPolicy = getXAxisLabelPolicy(labels);
+        const rawXValues = data.rows.map((r) => r.x);
+        const xLabelPolicy = getXAxisLabelPolicy(labels, data.x_kind, rawXValues);
         const dataLabelsAllowed = labels.length < LABEL_DENSITY_LIMIT;
         const showBarLabels = dataLabelsAllowed && (labelMode === "bar" || labelMode === "all");
         const showLineLabels = dataLabelsAllowed && (labelMode === "line" || labelMode === "all");
@@ -1995,6 +2004,7 @@
           lineStyle: { color: responseColors[index] || actualColor },
           itemStyle: { color: responseColors[index] || actualColor },
           data: data.rows.map((r) => r[`resp${index}`]),
+          showAllSymbol: true,
           label: { show: showLineLabels, fontSize: 10, formatter: formatLineLabel },
         }));
 
@@ -2054,10 +2064,11 @@
               axisLabel: {
                 show: xLabelPolicy.show,
                 color: getCss("--text"),
-                interval: 0,
+                interval: xLabelPolicy.interval,
+                formatter: xLabelPolicy.formatter,
                 hideOverlap: false,
-                showMinLabel: true,
-                showMaxLabel: true,
+                showMinLabel: xLabelPolicy.showMinLabel,
+                showMaxLabel: xLabelPolicy.showMaxLabel,
                 rotate: xLabelPolicy.rotate,
                 fontSize: xLabelPolicy.fontSize,
                 margin: 8,
@@ -2163,12 +2174,17 @@
         };
       }
 
-      function getXAxisLabelPolicy(labels) {
+      function getXAxisLabelPolicy(labels, kind = "", rawValues = labels) {
+        if (isDateKind(kind)) return getDateXAxisLabelPolicy(labels, rawValues);
         const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label).length), 0);
         const tooMany = labels.length >= LABEL_DENSITY_LIMIT;
         if (tooMany) {
           return {
             show: false,
+            interval: 0,
+            formatter: undefined,
+            showMinLabel: true,
+            showMaxLabel: true,
             rotate: 0,
             fontSize: 10,
             bottom: 44,
@@ -2182,10 +2198,74 @@
         const labelSpace = rotate ? Math.min(140, Math.max(58, Math.ceil(rotatedHeight) + 18)) : 38;
         return {
           show: true,
+          interval: 0,
+          formatter: undefined,
+          showMinLabel: true,
+          showMaxLabel: true,
           rotate,
           fontSize,
           bottom: labelSpace + dataZoomSpace,
         };
+      }
+
+      function getDateXAxisLabelPolicy(labels, rawValues) {
+        const parsedDates = rawValues.map(parseDateCategory);
+        const selectedIndexes = dateXAxisLabelIndexes(parsedDates, labels.length);
+        const selectedIndexSet = new Set(selectedIndexes);
+        const dataZoomSpace = labels.length > 120 ? 36 : 0;
+        return {
+          show: selectedIndexes.length > 0,
+          interval: (index) => selectedIndexSet.has(index),
+          formatter: (value, index) => formatDateAxisLabel(rawValues[index] ?? value, parsedDates[index]),
+          showMinLabel: selectedIndexSet.has(0) ? true : undefined,
+          showMaxLabel: selectedIndexSet.has(labels.length - 1) ? true : undefined,
+          rotate: 0,
+          fontSize: 10,
+          bottom: 38 + dataZoomSpace,
+        };
+      }
+
+      function dateXAxisLabelIndexes(parsedDates, count) {
+        if (count <= 0) return [];
+        const monthStartIndexes = parsedDates
+          .map((date, index) => (date && date.day === 1 ? index : null))
+          .filter((index) => index !== null);
+        if (monthStartIndexes.length >= DATE_AXIS_MIN_MONTH_LABELS) {
+          if (monthStartIndexes.length <= DATE_AXIS_MAX_MONTH_LABELS) return monthStartIndexes;
+          const stride = Math.ceil(monthStartIndexes.length / DATE_AXIS_TARGET_LABELS);
+          const indexes = monthStartIndexes.filter((_, position) => position % stride === 0);
+          return indexes.length >= DATE_AXIS_MIN_MONTH_LABELS ? indexes : sparseDateXAxisLabelIndexes(count);
+        }
+        return sparseDateXAxisLabelIndexes(count);
+      }
+
+      function sparseDateXAxisLabelIndexes(count) {
+        if (count <= DATE_AXIS_TARGET_LABELS) return Array.from({ length: count }, (_, index) => index);
+        const indexes = new Set([0, count - 1]);
+        const step = Math.ceil((count - 1) / (DATE_AXIS_TARGET_LABELS - 1));
+        for (let index = 0; index < count; index += step) {
+          indexes.add(index);
+        }
+        return Array.from(indexes).sort((a, b) => a - b);
+      }
+
+      function parseDateCategory(value) {
+        if (value === null || value === undefined) return null;
+        const match = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (!match) return null;
+        const year = Number(match[1]);
+        const month = Number(match[2]);
+        const day = Number(match[3]);
+        if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+        const checked = new Date(Date.UTC(year, month - 1, day));
+        if (checked.getUTCFullYear() !== year || checked.getUTCMonth() !== month - 1 || checked.getUTCDate() !== day) return null;
+        return { year, month, day };
+      }
+
+      function formatDateAxisLabel(value, parsedDate) {
+        if (!parsedDate) return String(value);
+        const month = DATE_AXIS_MONTHS[parsedDate.month - 1];
+        return `${parsedDate.day} ${month} ${parsedDate.year}`;
       }
 
       function getBarLayout(count) {
