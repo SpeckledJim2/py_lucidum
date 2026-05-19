@@ -1,11 +1,24 @@
-name,expression
-Older drivers,DRIVER_AGE > 40
-Young drivers,DRIVER_AGE < 25
-Recent quotes,QUOTE_DATE >= DATE '2017-01-01'
-High annual mileage,ANNUAL_MILEAGE >= 20000
-Social only,VEHICLE_USAGE = 'Social only'
-Business use,VEHICLE_USAGE = 'Business use'
-Diesel,FUEL_TYPE = 'Diesel'
-No prior claims,PRIOR_CLAIMS = 0
-High no-claims bonus,NCD_YEARS >= 5
-Portsmouth postcode area,POSTCODE_AREA = 'PO'
+theme,name,expression
+DRIVER AGE,Young drivers,DRIVER_AGE < 30
+DRIVER AGE,Middle aged drivers,DRIVER_AGE >= 30 AND DRIVER_AGE < 60
+DRIVER AGE,Older drivers,DRIVER_AGE > 70
+POSTCODE AREA,Portsmouth,POSTCODE_AREA = 'PO'
+POSTCODE AREA,Southampton,POSTCODE_AREA = 'SO'
+POSTCODE AREA,Birmingham,POSTCODE_AREA = 'B'
+POSTCODE AREA,Manchester,POSTCODE_AREA = 'M'
+VEHICLE PROFILE,Newer vehicles,VEHICLE_AGE <= 3
+VEHICLE PROFILE,Older vehicles,VEHICLE_AGE >= 10
+VEHICLE PROFILE,High value cars,CAR_VALUE >= 20000
+VEHICLE PROFILE,Diesel,FUEL_TYPE = 'Diesel'
+VEHICLE PROFILE,Business use,VEHICLE_USAGE = 'Business use'
+MILEAGE,Low annual mileage,ANNUAL_MILEAGE < 5000
+MILEAGE,High annual mileage,ANNUAL_MILEAGE >= 20000
+CLAIMS HISTORY,No prior claims,PRIOR_CLAIMS = 0
+CLAIMS HISTORY,Prior claims,PRIOR_CLAIMS > 0
+CLAIMS HISTORY,High no-claims bonus,NCD_YEARS >= 5
+QUOTE TIMING,Recent quotes,QUOTE_DATE >= DATE '2017-01-01'
+QUOTE TIMING,Earlier quotes,QUOTE_DATE < DATE '2017-01-01'
+POLICY PROFILE,Provisional licence,LICENCE_TYPE = 'Provisional Licence'
+POLICY PROFILE,Parked on road,OVERNIGHT_LOCATION = 'Road'
+MODEL SPLIT,Training rows,train_test = 0
+MODEL SPLIT,Test rows,train_test = 1

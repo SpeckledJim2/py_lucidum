@@ -58,6 +58,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - Without explicit defaults, the x-axis starts with the first dataset column, Actual starts with the first numeric column, and Expected starts as none.
 - CLI options, programmatic defaults, and URL parameters can override initial selections.
 - Saved filters load from an explicit `--filters` path, otherwise `./filter_spec.csv`, otherwise `./specs/filter_spec.csv`.
+- Saved-filter CSV files must have exactly `theme,name,expression` columns. CSV order controls theme order and row order.
 - `--no-filters` disables saved-filter discovery.
 - Filters are DuckDB `WHERE` expressions and apply before chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 

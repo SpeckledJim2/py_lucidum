@@ -25,12 +25,13 @@ def load_saved_filters(filters_path: str | Path | None, use_saved_filters: bool 
         return []
     with path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
-        if reader.fieldnames != ["name", "expression"]:
-            raise ValueError("filter_spec.csv must have exactly these columns: name,expression")
+        if reader.fieldnames != ["theme", "name", "expression"]:
+            raise ValueError("filter_spec.csv must have exactly these columns: theme,name,expression")
         filters: list[dict[str, str]] = []
         for row in reader:
+            theme = str(row.get("theme") or "").strip()
             name = str(row.get("name") or "").strip()
             expression = str(row.get("expression") or "").strip()
-            if name and expression:
-                filters.append({"name": name, "expression": expression})
+            if theme and name and expression:
+                filters.append({"theme": theme, "name": name, "expression": expression})
         return filters

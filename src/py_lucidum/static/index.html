@@ -69,7 +69,13 @@
 
           <section class="section sidebar-filter-section">
             <div id="sidebarFilterResizer" class="sidebar-filter-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize filter controls"></div>
-            <h2>Filter</h2>
+            <div class="filter-header">
+              <button id="filterCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse filter" aria-expanded="true" title="Collapse filter">
+                <span class="filter-collapse-icon" aria-hidden="true"></span>
+              </button>
+              <h2>FILTER</h2>
+              <span id="filterRowMeta" class="filter-row-meta"></span>
+            </div>
             <div class="filter-input-row">
               <input id="filterInput" placeholder="DuckDB WHERE expression" />
               <button id="filterApplyBtn" class="filter-action" type="button" title="Apply filter" aria-label="Apply filter">&#9654;</button>

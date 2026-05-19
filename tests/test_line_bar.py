@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import duckdb
 
 from py_lucidum.app import create_app
-from py_lucidum.core import Dataset
+from py_lucidum.core import Dataset, load_saved_filters
 from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
 from py_lucidum.tools.line_bar.query import chart, normalise_quantile_count
@@ -29,7 +29,10 @@ class LineBarToolTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.filters_path = self.root / "filter_spec.csv"
-        self.filters_path.write_text("name,expression\nOlder drivers,YoungestDriverAge > 40\n", encoding="utf-8")
+        self.filters_path.write_text(
+            "theme,name,expression\nDriver age,Older drivers,YoungestDriverAge > 40\n",
+            encoding="utf-8",
+        )
 
     def request(self, filter_expression: str = "") -> dict:
         return {
@@ -66,14 +69,17 @@ class LineBarToolTests(unittest.TestCase):
         self.assertIn("/static", paths)
         self.assertEqual(app.state.enabled_tools, ["line_bar"])
         self.assertEqual(app.state.defaults["denominator"], "Weight")
-        self.assertEqual(app.state.saved_filters, [{"name": "Older drivers", "expression": "YoungestDriverAge > 40"}])
+        self.assertEqual(
+            app.state.saved_filters,
+            [{"theme": "Driver age", "name": "Older drivers", "expression": "YoungestDriverAge > 40"}],
+        )
 
     def test_default_saved_filters_fall_back_to_specs_directory(self) -> None:
         self.filters_path.unlink()
         specs_dir = self.root / "specs"
         specs_dir.mkdir()
         (specs_dir / "filter_spec.csv").write_text(
-            "name,expression\nSpec older drivers,YoungestDriverAge > 40\n",
+            "theme,name,expression\nDriver age,Spec older drivers,YoungestDriverAge > 40\n",
             encoding="utf-8",
         )
         previous_cwd = Path.cwd()
@@ -85,14 +91,20 @@ class LineBarToolTests(unittest.TestCase):
 
         self.assertEqual(
             app.state.saved_filters,
-            [{"name": "Spec older drivers", "expression": "YoungestDriverAge > 40"}],
+            [{"theme": "Driver age", "name": "Spec older drivers", "expression": "YoungestDriverAge > 40"}],
         )
+
+    def test_old_two_column_saved_filter_csv_is_rejected(self) -> None:
+        self.filters_path.write_text("name,expression\nOld older drivers,YoungestDriverAge > 40\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "theme,name,expression"):
+            load_saved_filters(self.filters_path)
 
     def test_app_loads_with_saved_filters_disabled(self) -> None:
         specs_dir = self.root / "specs"
         specs_dir.mkdir()
         (specs_dir / "filter_spec.csv").write_text(
-            "name,expression\nSpec older drivers,YoungestDriverAge > 40\n",
+            "theme,name,expression\nDriver age,Spec older drivers,YoungestDriverAge > 40\n",
             encoding="utf-8",
         )
         previous_cwd = Path.cwd()

@@ -243,12 +243,14 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   QUOTE_DATE >= DATE '2017-01-01'
   ```
 
-  Saved filters are CSV files with exactly these columns:
+  Saved filters are grouped CSV files with exactly these columns:
 
   ```csv
-  name,expression
-  Older drivers,DRIVER_AGE > 40
-  High annual mileage,ANNUAL_MILEAGE >= 20000
+  theme,name,expression
+  DRIVER AGE,Young drivers,DRIVER_AGE < 30
+  DRIVER AGE,Older drivers,DRIVER_AGE > 70
+  POSTCODE AREA,Portsmouth,POSTCODE_AREA = 'PO'
+  MILEAGE,High annual mileage,ANNUAL_MILEAGE >= 20000
   ```
 
   <h2>Development</h2>

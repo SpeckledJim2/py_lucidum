@@ -448,9 +448,70 @@
         min-height: 0;
       }
 
-      .sidebar-filter-section h2 {
+      .sidebar-filter-section.filter-collapsed {
+        flex: 0 0 auto;
+        height: auto;
+      }
+
+      .sidebar-filter-section.filter-collapsed #sidebarFilterResizer,
+      .sidebar-filter-section.filter-collapsed .filter-input-row,
+      .sidebar-filter-section.filter-collapsed #savedFilterSelect,
+      .sidebar-filter-section.filter-collapsed .filter-operator {
+        display: none;
+      }
+
+      .filter-header {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
         margin: 0 0 6px;
+      }
+
+      .sidebar-filter-section.filter-collapsed .filter-header {
+        margin-bottom: 0;
+      }
+
+      .filter-header h2 {
+        margin: 0;
         font-size: 13px;
+      }
+
+      .filter-collapse-toggle {
+        width: 18px;
+        height: 20px;
+        border: 0;
+        background: transparent;
+        color: var(--text);
+        display: grid;
+        place-items: center;
+        padding: 0;
+        cursor: pointer;
+        flex: 0 0 auto;
+      }
+
+      .filter-collapse-icon {
+        width: 10px;
+        height: 10px;
+        border-right: 2px solid currentColor;
+        border-bottom: 2px solid currentColor;
+        transform: rotate(45deg) translate(-1px, -1px);
+        transform-origin: center;
+      }
+
+      .sidebar-filter-section.filter-collapsed .filter-collapse-icon {
+        transform: rotate(-45deg) translate(-1px, 1px);
+      }
+
+      .filter-row-meta {
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--muted);
+        font-size: 11px;
+        margin-left: auto;
       }
 
       .sidebar-filter-resizer {
@@ -497,10 +558,34 @@
       }
 
       .saved-filter-list .feature {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(72px, 45%);
         font-size: 12px;
         min-height: 22px;
         padding: 2px 6px;
-        justify-content: flex-start;
+        align-items: center;
+      }
+
+      .saved-filter-theme {
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in srgb, var(--panel-2) 82%, var(--accent));
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        line-height: 1.15;
+        padding: 5px 6px 3px;
+        text-transform: uppercase;
+      }
+
+      .saved-filter-expression {
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--muted);
+        font-size: 10px;
       }
 
       .filter-operator {

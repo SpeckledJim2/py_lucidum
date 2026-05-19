@@ -51,11 +51,14 @@ class DemoDatasetTests(unittest.TestCase):
         filters_path = Path(__file__).parents[1] / "specs" / "filter_spec.csv"
 
         with filters_path.open(newline="", encoding="utf-8-sig") as handle:
-            rows = list(csv.DictReader(handle))
+            reader = csv.DictReader(handle)
+            rows = list(reader)
 
         self.assertGreater(len(rows), 0)
+        self.assertEqual(reader.fieldnames, ["theme", "name", "expression"])
+        self.assertGreaterEqual(len({row["theme"] for row in rows}), 6)
         for row in rows:
-            with self.subTest(name=row["name"]):
+            with self.subTest(theme=row["theme"], name=row["name"]):
                 self.assertEqual(dataset.normalise_filter(row["expression"]), row["expression"])
 
 

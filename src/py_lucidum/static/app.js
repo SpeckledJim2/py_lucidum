@@ -38,6 +38,7 @@
         featureSort: "original",
         expectedSort: "original",
         filterOperator: "and",
+        filterCollapsed: false,
         activeFilter: "",
         lastData: null,
         lastMapData: null,
@@ -208,6 +209,21 @@
 
       function setGroupMeta(message) {
         el("groupMeta").textContent = message || "";
+      }
+
+      function formatRowMeta(rowCount, filteredRowCount = rowCount) {
+        const total = Number(rowCount);
+        if (!Number.isFinite(total)) return "";
+        const filtered = Number(filteredRowCount ?? total);
+        const shown = Number.isFinite(filtered) ? filtered : total;
+        return shown === total
+          ? `${total.toLocaleString()} rows`
+          : `${shown.toLocaleString()} / ${total.toLocaleString()} rows`;
+      }
+
+      function setFilterRowMeta(rowCount, filteredRowCount = rowCount) {
+        const meta = formatRowMeta(rowCount, filteredRowCount);
+        if (meta) el("filterRowMeta").textContent = meta;
       }
 
       function makeBandSteps() {
@@ -400,6 +416,20 @@
         button.title = label;
       }
 
+      function setFilterCollapsed(collapsed) {
+        state.filterCollapsed = Boolean(collapsed);
+        document.querySelector(".sidebar-filter-section")?.classList.toggle("filter-collapsed", state.filterCollapsed);
+        syncFilterCollapseButton();
+      }
+
+      function syncFilterCollapseButton() {
+        const button = el("filterCollapseBtn");
+        const label = state.filterCollapsed ? "Expand filter" : "Collapse filter";
+        button.setAttribute("aria-expanded", String(!state.filterCollapsed));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
       function isNumericKind(kind) {
         return kind === "numeric" || kind === "integer";
       }
@@ -533,14 +563,24 @@
         const list = el("savedFilterSelect");
         const filters = state.schema.filters || [];
         list.innerHTML = "";
+        let currentTheme = "";
         for (const filter of filters) {
+          const theme = filter.theme || "General";
+          if (theme !== currentTheme) {
+            const heading = document.createElement("div");
+            heading.className = "saved-filter-theme";
+            heading.setAttribute("role", "presentation");
+            heading.textContent = theme;
+            list.append(heading);
+            currentTheme = theme;
+          }
           const button = document.createElement("button");
           button.type = "button";
           button.className = "feature saved-filter-option";
           button.dataset.expression = filter.expression;
           button.setAttribute("role", "option");
           button.setAttribute("aria-selected", "false");
-          button.innerHTML = `<span>${escapeHtml(filter.name)}</span>`;
+          button.innerHTML = `<span class="saved-filter-name">${escapeHtml(filter.name)}</span><span class="saved-filter-expression">${escapeHtml(filter.expression)}</span>`;
           button.addEventListener("click", (event) => {
             const multiSelect = event.metaKey || event.ctrlKey;
             const selected = button.getAttribute("aria-selected") === "true";
@@ -789,12 +829,10 @@
         updateMetricTitles(data);
         const labelMessage = renderChart(data);
         renderTable(data);
-        const filteredRows = data.filtered_row_count ?? data.row_count;
-        const rowMeta = filteredRows === data.row_count
-          ? `${data.row_count.toLocaleString()} rows`
-          : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
+        const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
         const groupMeta = `${data.rows.length.toLocaleString()} groups · ${rowMeta}`;
         const status = [...(data.warnings || [])].filter(Boolean).join(" ");
+        setFilterRowMeta(data.row_count, data.filtered_row_count);
         setGroupMeta(groupMeta);
         setStatus(status);
         setChartMessage(labelMessage);
@@ -1490,11 +1528,9 @@
           state.mapFitLevel = data.level;
         }
         renderMapLegend(scale, data.response?.label || "Actual");
-        const filteredRows = data.filtered_row_count ?? data.row_count;
-        const rowMeta = filteredRows === data.row_count
-          ? `${data.row_count.toLocaleString()} rows`
-          : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
+        const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
         const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`;
+        setFilterRowMeta(data.row_count, data.filtered_row_count);
         setGroupMeta(groupMeta);
         const warnings = [...(data.warnings || [])];
         if (searchWarning) {
@@ -1545,14 +1581,12 @@
           state.mapFitLevel = data.level;
         }
         renderMapLegend(scale, data.response?.label || "Actual");
-        const filteredRows = data.filtered_row_count ?? data.row_count;
-        const rowMeta = filteredRows === data.row_count
-          ? `${data.row_count.toLocaleString()} rows`
-          : `${filteredRows.toLocaleString()} / ${data.row_count.toLocaleString()} rows`;
+        const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
         const pointSummary = data.point_summary || {};
         const summaryCount = Number(pointSummary.summary_count ?? (data.rows || []).length);
         const plottedCount = Number(pointSummary.plotted_count ?? (data.rows || []).length);
         const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted · ${rowMeta}`;
+        setFilterRowMeta(data.row_count, data.filtered_row_count);
         setGroupMeta(groupMeta);
         const warnings = [...(data.warnings || [])];
         const missingValueCount = Number(pointSummary.missing_value_count || 0);
@@ -2154,6 +2188,7 @@
         let startY = 0;
         let startHeight = 0;
         resizer.addEventListener("pointerdown", (event) => {
+          if (state.filterCollapsed) return;
           event.preventDefault();
           dragging = true;
           startY = event.clientY;
@@ -2190,6 +2225,7 @@
       }
 
       function setSidebarFilterHeight(rawHeight) {
+        if (state.filterCollapsed) return;
         const section = document.querySelector(".sidebar-filter-section");
         const aside = section?.closest("aside");
         const occupiedHeight = Array.from(aside?.children || [])
@@ -2323,6 +2359,7 @@
         setupMapFloatingControlDrag();
         bindMapFloatingControls();
         syncSidebarToggleButton();
+        syncFilterCollapseButton();
         document.querySelectorAll(".segmented, .filter-operator").forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
@@ -2394,6 +2431,7 @@
         el("lineBarTool").addEventListener("click", () => setTool("line_bar"));
         el("ukMapTool").addEventListener("click", () => setTool("uk_map"));
         el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
+        el("filterCollapseBtn").addEventListener("click", () => setFilterCollapsed(!state.filterCollapsed));
         el("stopAppBtn").addEventListener("click", stopApp);
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
@@ -2410,6 +2448,7 @@
           state.bandFeature = null;
           state.mapFitLevel = null;
           clearToolCaches();
+          setFilterRowMeta(state.schema.row_count);
           renderSavedFilters();
           renderToolSelector();
           if (!toolEnabled(state.tool)) {
@@ -2423,7 +2462,7 @@
         });
         window.addEventListener("resize", () => {
           const filterSection = document.querySelector(".sidebar-filter-section");
-          if (filterSection && state.sidebarVisible) setSidebarFilterHeight(filterSection.getBoundingClientRect().height);
+          if (filterSection && state.sidebarVisible && !state.filterCollapsed) setSidebarFilterHeight(filterSection.getBoundingClientRect().height);
           if (state.tool === "line_bar") {
             const controls = document.querySelector(".chart-side-controls");
             if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
@@ -2686,6 +2725,7 @@
           const fileMeta = fileSize ? `${path} · ${fileSize}` : path;
           document.title = path ? `lucidum · ${path}` : "lucidum";
           el("datasetMeta").textContent = `${fileMeta} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
+          setFilterRowMeta(state.schema.row_count);
           chooseDefaults();
           renderToolSelector();
           state.tool = chooseDefaultTool();
