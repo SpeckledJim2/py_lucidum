@@ -237,7 +237,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('id="filterSidebarClearBtn" class="filter-action filter-sidebar-clear" type="button" title="Clear filter" aria-label="Clear filter"', html)
         self.assertNotIn("filter-input-row", html)
         self.assertIn("grid-template-rows: auto minmax(0, 1fr) auto;", css)
-        self.assertIn(".layout-toggle-group {\n        display: flex;\n        align-items: center;\n        gap: 4px;", css)
+        self.assertIn(".layout-toggle-group {\n        display: flex;\n        align-items: center;\n        gap: 2px;", css)
         self.assertIn(".footer-toggle-icon {\n        width: 20px;\n        height: 22px;", css)
         self.assertIn("body.filter-footer-collapsed .footer-toggle-icon::before {\n        background: transparent;", css)
         self.assertIn(".filter-footer {\n        display: grid;\n        grid-template-columns: 28px 28px minmax(0, 1fr);", css)
