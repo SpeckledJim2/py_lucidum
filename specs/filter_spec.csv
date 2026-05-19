@@ -1,4 +1,6 @@
 theme,name,expression
+MODEL SPLIT,Training rows,train_test = 0
+MODEL SPLIT,Test rows,train_test = 1
 DRIVER AGE,Young drivers,DRIVER_AGE < 30
 DRIVER AGE,Middle aged drivers,DRIVER_AGE >= 30 AND DRIVER_AGE < 60
 DRIVER AGE,Older drivers,DRIVER_AGE > 70
@@ -20,5 +22,3 @@ QUOTE TIMING,Recent quotes,QUOTE_DATE >= DATE '2017-01-01'
 QUOTE TIMING,Earlier quotes,QUOTE_DATE < DATE '2017-01-01'
 POLICY PROFILE,Provisional licence,LICENCE_TYPE = 'Provisional Licence'
 POLICY PROFILE,Parked on road,OVERNIGHT_LOCATION = 'Road'
-MODEL SPLIT,Training rows,train_test = 0
-MODEL SPLIT,Test rows,train_test = 1

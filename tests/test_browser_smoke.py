@@ -63,8 +63,10 @@ class BrowserSmokeTests(unittest.TestCase):
             filters_path.write_text(
                 "theme,name,expression\n"
                 "DRIVER AGE,Young drivers,DRIVER_AGE < 30\n"
+                "DRIVER AGE,Middle aged drivers,DRIVER_AGE >= 30 AND DRIVER_AGE < 60\n"
                 "DRIVER AGE,Older drivers,DRIVER_AGE > 70\n"
-                "POSTCODE AREA,Portsmouth,POSTCODE_AREA = 'PO'\n",
+                "POSTCODE AREA,Portsmouth,POSTCODE_AREA = 'PO'\n"
+                "POSTCODE AREA,Southampton,POSTCODE_AREA = 'SO'\n",
                 encoding="utf-8",
             )
             base_url, server, thread = self.start_app(data_path, filters_path=filters_path, use_saved_filters=True)
@@ -171,10 +173,98 @@ class BrowserSmokeTests(unittest.TestCase):
                 driver_rows = page.locator('.saved-filter-option[data-filter-theme="DRIVER AGE"]')
                 postcode_rows = page.locator('.saved-filter-option[data-filter-theme="POSTCODE AREA"]')
 
+                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "false")
+                self.assertFalse(driver_heading.is_visible())
+                page.locator("#filterCollapseBtn").click()
+                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "true")
                 driver_heading.wait_for(timeout=10_000)
+                self.assertEqual(driver_heading.get_attribute("aria-expanded"), "false")
+                self.assertFalse(driver_rows.first.is_visible())
+                self.assertFalse(postcode_rows.first.is_visible())
+                driver_heading.click()
+                page.locator('.saved-filter-theme[data-filter-theme="POSTCODE AREA"]').click()
                 self.assertEqual(driver_heading.get_attribute("aria-expanded"), "true")
                 self.assertTrue(driver_rows.first.is_visible())
                 self.assertTrue(postcode_rows.first.is_visible())
+
+                self.assertTrue(page.locator('.filter-selection-mode button[data-value="single"]').evaluate("node => node.classList.contains('active')"))
+                page.locator('.filter-selection-mode button[data-value="multi"]').click()
+                driver_rows.first.click()
+                postcode_rows.first.click()
+                self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
+                self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "true")
+                self.assertIn("DRIVER_AGE < 30", page.locator("#filterInput").input_value())
+                self.assertIn("POSTCODE_AREA = 'PO'", page.locator("#filterInput").input_value())
+                self.assertEqual(page.locator("#filterInput").input_value(), "(DRIVER_AGE < 30) AND (POSTCODE_AREA = 'PO')")
+
+                driver_rows.first.click()
+                self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "false")
+                self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "true")
+                self.assertNotIn("DRIVER_AGE < 30", page.locator("#filterInput").input_value())
+                self.assertIn("POSTCODE_AREA = 'PO'", page.locator("#filterInput").input_value())
+                self.assertEqual(page.locator("#filterInput").input_value(), "POSTCODE_AREA = 'PO'")
+
+                postcode_rows.first.click()
+                driver_rows.nth(1).click()
+                postcode_rows.nth(1).click()
+                page.locator('.filter-operator button[data-value="or"]').click()
+                self.assertEqual(
+                    page.locator("#filterInput").input_value(),
+                    "(DRIVER_AGE >= 30 AND DRIVER_AGE < 60) OR (POSTCODE_AREA = 'SO')",
+                )
+
+                driver_rows.nth(2).click()
+                self.assertEqual(
+                    page.locator("#filterInput").input_value(),
+                    "(DRIVER_AGE >= 30 AND DRIVER_AGE < 60) OR (DRIVER_AGE > 70) OR (POSTCODE_AREA = 'SO')",
+                )
+                page.locator('.filter-selection-mode button[data-value="grouped"]').click()
+                self.assertFalse(page.locator('.filter-operator button[data-value="and"]').is_visible())
+                self.assertEqual(driver_rows.nth(1).get_attribute("aria-selected"), "true")
+                self.assertEqual(driver_rows.nth(2).get_attribute("aria-selected"), "true")
+                self.assertEqual(postcode_rows.nth(1).get_attribute("aria-selected"), "true")
+                self.assertEqual(
+                    page.locator("#filterInput").input_value(),
+                    "((DRIVER_AGE >= 30 AND DRIVER_AGE < 60) OR (DRIVER_AGE > 70)) AND (POSTCODE_AREA = 'SO')",
+                )
+                page.locator('.filter-selection-mode button[data-value="multi"]').click()
+                self.assertTrue(page.locator('.filter-operator button[data-value="and"]').is_visible())
+                self.assertEqual(
+                    page.locator("#filterInput").input_value(),
+                    "(DRIVER_AGE >= 30 AND DRIVER_AGE < 60) OR (DRIVER_AGE > 70) OR (POSTCODE_AREA = 'SO')",
+                )
+                page.locator('.filter-selection-mode button[data-value="grouped"]').click()
+                page.locator('.filter-selection-mode button[data-value="single"]').click()
+                self.assertEqual(driver_rows.nth(1).get_attribute("aria-selected"), "true")
+                self.assertEqual(driver_rows.nth(2).get_attribute("aria-selected"), "false")
+                self.assertEqual(postcode_rows.nth(1).get_attribute("aria-selected"), "false")
+                self.assertEqual(page.locator("#filterInput").input_value(), "DRIVER_AGE >= 30 AND DRIVER_AGE < 60")
+                page.locator('.filter-selection-mode button[data-value="grouped"]').click()
+                self.assertEqual(page.locator("#filterInput").input_value(), "DRIVER_AGE >= 30 AND DRIVER_AGE < 60")
+                page.locator('.filter-selection-mode button[data-value="single"]').click()
+
+                self.assertFalse(page.locator('.filter-operator button[data-value="and"]').is_visible())
+                self.assertTrue(page.locator("#filterSidebarClearBtn").is_visible())
+                page.locator("#filterCollapseBtn").click()
+                self.assertTrue(page.locator("#filterSidebarClearBtn").is_visible())
+                page.locator("#filterCollapseBtn").click()
+                driver_rows.first.click()
+                self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
+                self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "false")
+                postcode_rows.first.click()
+                self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "false")
+                self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "true")
+                page.locator("#filterSidebarClearBtn").click()
+                self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "false")
+                self.assertEqual(page.locator("#filterInput").input_value(), "")
+
+                footer_value = page.locator("#filterInput").input_value()
+                page.locator("#filterFooterToggleBtn").click()
+                self.assertEqual(page.locator("#filterFooter").get_attribute("aria-hidden"), "true")
+                self.assertFalse(page.locator("#filterInput").is_visible())
+                page.locator("#filterFooterToggleBtn").click()
+                self.assertEqual(page.locator("#filterFooter").get_attribute("aria-hidden"), "false")
+                self.assertEqual(page.locator("#filterInput").input_value(), footer_value)
 
                 driver_heading.click()
                 self.assertEqual(driver_heading.get_attribute("aria-expanded"), "false")

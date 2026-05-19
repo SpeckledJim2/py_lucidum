@@ -59,6 +59,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - CLI options, programmatic defaults, and URL parameters can override initial selections.
 - Saved filters load from an explicit `--filters` path, otherwise `./filter_spec.csv`, otherwise `./specs/filter_spec.csv`.
 - Saved-filter CSV files must have exactly `theme,name,expression` columns. CSV order controls theme order and row order.
+- The free-form DuckDB filter expression lives in the collapsible footer; hiding the footer does not clear the active filter.
+- Saved-filter rows support `Single`, `Multi`, and `Grouped` modes. `Single` keeps one selected row, `Multi` toggles rows and combines them with the active All/Any/Not all/None operator, and `Grouped` toggles rows while combining rows within a theme with `OR` and selected themes with `AND`.
 - `--no-filters` disables saved-filter discovery.
 - Filters are DuckDB `WHERE` expressions and apply before chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 

@@ -234,7 +234,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
 
   **Filters and saved filters**
 
-  The filter box accepts DuckDB `WHERE` expressions:
+  The footer filter box accepts DuckDB `WHERE` expressions:
 
   ```sql
   DRIVER_AGE > 40
@@ -247,11 +247,15 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
 
   ```csv
   theme,name,expression
+  MODEL SPLIT,Training rows,train_test = 0
+  MODEL SPLIT,Test rows,train_test = 1
   DRIVER AGE,Young drivers,DRIVER_AGE < 30
   DRIVER AGE,Older drivers,DRIVER_AGE > 70
   POSTCODE AREA,Portsmouth,POSTCODE_AREA = 'PO'
   MILEAGE,High annual mileage,ANNUAL_MILEAGE >= 20000
   ```
+
+  Saved-filter rows can be used in `Single` mode, where each click clears other saved filters, `Multi` mode, where each click toggles only that row and selected rows combine using the active All/Any/Not all/None mode, or `Grouped` mode, where rows within each theme combine with `OR` and selected themes combine with `AND`. The generated expression is written to the footer expression box.
 
   <h2>Development</h2>
 

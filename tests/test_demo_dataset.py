@@ -56,6 +56,10 @@ class DemoDatasetTests(unittest.TestCase):
 
         self.assertGreater(len(rows), 0)
         self.assertEqual(reader.fieldnames, ["theme", "name", "expression"])
+        self.assertEqual(rows[0]["theme"], "MODEL SPLIT")
+        self.assertEqual(rows[0]["name"], "Training rows")
+        self.assertEqual(rows[1]["theme"], "MODEL SPLIT")
+        self.assertEqual(rows[1]["name"], "Test rows")
         self.assertGreaterEqual(len({row["theme"] for row in rows}), 6)
         for row in rows:
             with self.subTest(theme=row["theme"], name=row["name"]):

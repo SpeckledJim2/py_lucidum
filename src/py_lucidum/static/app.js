@@ -38,8 +38,11 @@
         featureSort: "original",
         expectedSort: "original",
         filterOperator: "and",
-        filterCollapsed: false,
+        filterCollapsed: true,
+        filterFooterCollapsed: false,
+        filterSelectionMode: "single",
         collapsedSavedFilterThemes: new Set(),
+        savedFilterThemesInitialised: false,
         activeFilter: "",
         lastData: null,
         lastMapData: null,
@@ -417,6 +420,30 @@
         button.title = label;
       }
 
+      function setFilterFooterVisible(visible) {
+        state.filterFooterCollapsed = !visible;
+        document.body.classList.toggle("filter-footer-collapsed", state.filterFooterCollapsed);
+        el("filterFooter").setAttribute("aria-hidden", String(state.filterFooterCollapsed));
+        syncFilterFooterToggleButton();
+        requestAnimationFrame(() => {
+          if (state.tool === "line_bar") {
+            chart.resize();
+          } else {
+            clampMapFloatingControl();
+            resizeMap();
+          }
+        });
+      }
+
+      function syncFilterFooterToggleButton() {
+        const button = el("filterFooterToggleBtn");
+        const visible = !state.filterFooterCollapsed;
+        const label = visible ? "Hide filter footer" : "Show filter footer";
+        button.setAttribute("aria-expanded", String(visible));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
       function setFilterCollapsed(collapsed) {
         state.filterCollapsed = Boolean(collapsed);
         document.querySelector(".sidebar-filter-section")?.classList.toggle("filter-collapsed", state.filterCollapsed);
@@ -564,6 +591,10 @@
         const list = el("savedFilterSelect");
         const filters = state.schema.filters || [];
         const availableThemes = new Set(filters.map((filter) => filter.theme || "General"));
+        if (!state.savedFilterThemesInitialised) {
+          availableThemes.forEach((theme) => state.collapsedSavedFilterThemes.add(theme));
+          state.savedFilterThemesInitialised = true;
+        }
         for (const theme of state.collapsedSavedFilterThemes) {
           if (!availableThemes.has(theme)) state.collapsedSavedFilterThemes.delete(theme);
         }
@@ -594,10 +625,9 @@
           button.setAttribute("role", "option");
           button.setAttribute("aria-selected", "false");
           button.innerHTML = `<span class="saved-filter-name">${escapeHtml(filter.name)}</span><span class="saved-filter-expression">${escapeHtml(filter.expression)}</span>`;
-          button.addEventListener("click", (event) => {
-            const multiSelect = event.metaKey || event.ctrlKey;
+          button.addEventListener("click", () => {
             const selected = button.getAttribute("aria-selected") === "true";
-            if (!multiSelect) {
+            if (state.filterSelectionMode === "single") {
               list.querySelectorAll(".saved-filter-option").forEach((option) => {
                 const isClickedOption = option === button;
                 option.setAttribute("aria-selected", String(isClickedOption));
@@ -610,6 +640,32 @@
             applySavedFilters();
           });
           list.append(button);
+        }
+      }
+
+      function setFilterSelectionMode(mode, options = {}) {
+        const nextMode = mode === "single" || mode === "grouped" ? mode : "multi";
+        state.filterSelectionMode = nextMode;
+        document.body.classList.toggle("saved-filter-single-mode", nextMode === "single");
+        document.body.classList.toggle("saved-filter-grouped-mode", nextMode === "grouped");
+        const group = document.querySelector('.segmented[data-control="filterSelectionMode"]');
+        group?.querySelectorAll("button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.value === nextMode);
+        });
+        if (nextMode === "single") {
+          const filterOptions = Array.from(el("savedFilterSelect").querySelectorAll(".saved-filter-option"));
+          const selected = filterOptions.filter((button) => button.getAttribute("aria-selected") === "true");
+          if (selected.length > 1) {
+            const keep = selected[0];
+            filterOptions.forEach((button) => {
+              const active = button === keep;
+              button.setAttribute("aria-selected", String(active));
+              button.classList.toggle("active", active);
+            });
+          }
+        }
+        if (options.apply !== false) {
+          applySavedFilters();
         }
       }
 
@@ -632,18 +688,58 @@
         });
       }
 
-      function selectedSavedFilterExpressions() {
+      function selectedSavedFilterRows() {
         return Array.from(el("savedFilterSelect").querySelectorAll('.saved-filter-option[aria-selected="true"]'))
-          .map((button) => button.dataset.expression.trim())
-          .filter(Boolean);
+          .map((button) => ({
+            theme: button.dataset.filterTheme || "General",
+            expression: button.dataset.expression.trim(),
+          }))
+          .filter((row) => row.expression);
+      }
+
+      function selectedSavedFilterExpressions() {
+        return selectedSavedFilterRows().map((row) => row.expression);
+      }
+
+      function wrapFilterExpression(expression) {
+        return `(${expression})`;
+      }
+
+      function combinedFlatSavedFilterExpression(rows) {
+        const expressions = rows.map((row) => row.expression);
+        if (!expressions.length) return "";
+        const operator = state.filterOperator === "or" || state.filterOperator === "nor" ? "OR" : "AND";
+        const groupedExpressions = expressions.length > 1 ? expressions.map(wrapFilterExpression) : expressions;
+        const combined = groupedExpressions.join(` ${operator} `);
+        return state.filterOperator === "nand" || state.filterOperator === "nor" ? `NOT (${combined})` : combined;
+      }
+
+      function combinedGroupedSavedFilterExpression(rows) {
+        if (rows.length === 1) return rows[0].expression;
+        const groups = [];
+        const byTheme = new Map();
+        rows.forEach((row) => {
+          if (!byTheme.has(row.theme)) {
+            const group = [];
+            byTheme.set(row.theme, group);
+            groups.push(group);
+          }
+          byTheme.get(row.theme).push(row.expression);
+        });
+        return groups
+          .map((expressions) => {
+            const groupedExpressions = expressions.map(wrapFilterExpression).join(" OR ");
+            return expressions.length > 1 ? `(${groupedExpressions})` : groupedExpressions;
+          })
+          .join(" AND ");
       }
 
       function combinedSavedFilterExpression() {
-        const expressions = selectedSavedFilterExpressions();
-        if (!expressions.length) return "";
-        const operator = state.filterOperator === "or" || state.filterOperator === "nor" ? "OR" : "AND";
-        const combined = expressions.join(` ${operator} `);
-        return state.filterOperator === "nand" || state.filterOperator === "nor" ? `NOT (${combined})` : combined;
+        const rows = selectedSavedFilterRows();
+        if (!rows.length) return "";
+        return state.filterSelectionMode === "grouped"
+          ? combinedGroupedSavedFilterExpression(rows)
+          : combinedFlatSavedFilterExpression(rows);
       }
 
       function applySavedFilters() {
@@ -2392,7 +2488,9 @@
         bindMapFloatingControls();
         syncSidebarToggleButton();
         syncFilterCollapseButton();
-        document.querySelectorAll(".segmented, .filter-operator").forEach((group) => {
+        syncFilterFooterToggleButton();
+        setFilterSelectionMode(state.filterSelectionMode, { apply: false });
+        document.querySelectorAll(".segmented").forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
             if (group.dataset.control === "bandWidth" && event.target.dataset.action) {
@@ -2413,6 +2511,10 @@
             }
             if (group.dataset.control === "filterOperator") {
               applySavedFilters();
+              return;
+            }
+            if (group.dataset.control === "filterSelectionMode") {
+              setFilterSelectionMode(event.target.dataset.value);
               return;
             }
             if (group.dataset.control === "bandWidth") {
@@ -2463,7 +2565,9 @@
         el("lineBarTool").addEventListener("click", () => setTool("line_bar"));
         el("ukMapTool").addEventListener("click", () => setTool("uk_map"));
         el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
+        el("filterFooterToggleBtn").addEventListener("click", () => setFilterFooterVisible(state.filterFooterCollapsed));
         el("filterCollapseBtn").addEventListener("click", () => setFilterCollapsed(!state.filterCollapsed));
+        el("filterSidebarClearBtn").addEventListener("click", clearFilter);
         el("stopAppBtn").addEventListener("click", stopApp);
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
@@ -2481,6 +2585,7 @@
           state.mapFitLevel = null;
           clearToolCaches();
           setFilterRowMeta(state.schema.row_count);
+          state.savedFilterThemesInitialised = false;
           renderSavedFilters();
           renderToolSelector();
           if (!toolEnabled(state.tool)) {

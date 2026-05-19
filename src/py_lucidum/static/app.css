@@ -13,6 +13,9 @@
         --bar: #bfeefa;
         --tail: #72c7df;
         --danger: #b42318;
+        --saved-filter-theme-bg: #c8daec;
+        --saved-filter-theme-hover-bg: #b9d0e7;
+        --saved-filter-theme-text: #58677c;
         --shadow: 0 1px 2px rgb(15 23 42 / 8%);
       }
 
@@ -31,6 +34,9 @@
         --bar: #245b73;
         --tail: #3b91ad;
         --danger: #fca5a5;
+        --saved-filter-theme-bg: #30415c;
+        --saved-filter-theme-hover-bg: #38506f;
+        --saved-filter-theme-text: #c1ccdc;
         --shadow: none;
       }
 
@@ -94,7 +100,7 @@
         height: 100vh;
         height: 100dvh;
         display: grid;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: auto minmax(0, 1fr) auto;
         overflow: hidden;
       }
 
@@ -175,6 +181,65 @@
       }
 
       body.sidebar-collapsed .sidebar-toggle-icon::before {
+        background: transparent;
+      }
+
+      .layout-toggle-group {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 0 0 auto;
+      }
+
+      .footer-toggle {
+        width: 32px;
+        height: 32px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--text);
+        display: grid;
+        place-items: center;
+        padding: 0;
+        cursor: pointer;
+        flex: 0 0 auto;
+      }
+
+      .footer-toggle:hover {
+        background: var(--panel-2);
+      }
+
+      .footer-toggle-icon {
+        width: 20px;
+        height: 22px;
+        border: 2px solid currentColor;
+        border-radius: 4px;
+        position: relative;
+        display: block;
+      }
+
+      .footer-toggle-icon::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 6px;
+        background: currentColor;
+        border-radius: 0 0 1px 1px;
+      }
+
+      .footer-toggle-icon::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 4px;
+        height: 2px;
+        background: currentColor;
+      }
+
+      body.filter-footer-collapsed .footer-toggle-icon::before {
         background: transparent;
       }
 
@@ -454,9 +519,8 @@
       }
 
       .sidebar-filter-section.filter-collapsed #sidebarFilterResizer,
-      .sidebar-filter-section.filter-collapsed .filter-input-row,
-      .sidebar-filter-section.filter-collapsed #savedFilterSelect,
-      .sidebar-filter-section.filter-collapsed .filter-operator {
+      .sidebar-filter-section.filter-collapsed .filter-controls-row,
+      .sidebar-filter-section.filter-collapsed #savedFilterSelect {
         display: none;
       }
 
@@ -529,11 +593,31 @@
         background: var(--accent);
       }
 
-      .filter-input-row {
+      .filter-controls-row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 28px 28px;
-        gap: 5px;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 6px;
         margin-bottom: 7px;
+        align-items: center;
+      }
+
+      .filter-controls-row .segmented {
+        min-width: 0;
+      }
+
+      .filter-controls-row .segmented button {
+        min-height: 24px;
+        padding: 2px 6px;
+        font-size: 11px;
+      }
+
+      body.saved-filter-single-mode .filter-operator,
+      body.saved-filter-grouped-mode .filter-operator {
+        visibility: hidden;
+      }
+
+      .filter-operator {
+        justify-self: end;
       }
 
       .filter-action {
@@ -549,6 +633,12 @@
         line-height: 1;
       }
 
+      .filter-sidebar-clear {
+        width: 24px;
+        min-height: 24px;
+        font-size: 14px;
+      }
+
       #savedFilterSelect {
         flex: 1 1 auto;
         width: 100%;
@@ -559,11 +649,19 @@
 
       .saved-filter-list .feature {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(72px, 45%);
+        grid-template-columns: fit-content(52%) minmax(96px, 1fr);
         font-size: 12px;
         min-height: 22px;
         padding: 2px 6px;
         align-items: center;
+      }
+
+      body:not(.saved-filter-single-mode) .saved-filter-list .saved-filter-option:not(.active):hover {
+        background: transparent;
+      }
+
+      body.saved-filter-single-mode .saved-filter-list .saved-filter-option:not(.active):hover {
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
       }
 
       .saved-filter-list .saved-filter-option[hidden] {
@@ -578,8 +676,8 @@
         border-left: 0;
         border-right: 0;
         border-top: 0;
-        background: color-mix(in srgb, var(--panel-2) 82%, var(--accent));
-        color: var(--muted);
+        background: var(--saved-filter-theme-bg);
+        color: var(--saved-filter-theme-text);
         display: flex;
         align-items: center;
         gap: 5px;
@@ -594,7 +692,7 @@
       }
 
       .saved-filter-theme:hover {
-        background: color-mix(in srgb, var(--panel-2) 72%, var(--accent));
+        background: var(--saved-filter-theme-hover-bg);
       }
 
       .saved-filter-theme-icon {
@@ -627,39 +725,6 @@
         white-space: nowrap;
         color: var(--muted);
         font-size: 10px;
-      }
-
-      .filter-operator {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        margin-top: 0;
-      }
-
-      .filter-operator button {
-        min-height: 26px;
-        border: 1px solid var(--line);
-        border-right-width: 0;
-        border-radius: 0;
-        background: var(--panel-2);
-        color: var(--text);
-        padding: 2px 4px;
-        cursor: pointer;
-        font-size: 12px;
-      }
-
-      .filter-operator button:first-child {
-        border-radius: 0 0 0 5px;
-      }
-
-      .filter-operator button:last-child {
-        border-right-width: 1px;
-        border-radius: 0 0 5px 0;
-      }
-
-      .filter-operator button.active {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: white;
       }
 
       .toolbar {
@@ -775,6 +840,21 @@
 
       #filterInput {
         min-width: 0;
+      }
+
+      .filter-footer {
+        display: grid;
+        grid-template-columns: 28px 28px minmax(0, 1fr);
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+        padding: 8px 10px;
+        border-top: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      body.filter-footer-collapsed .filter-footer {
+        display: none;
       }
 
       .workspace {

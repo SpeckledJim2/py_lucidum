@@ -19,9 +19,14 @@
           </a>
           <span>lucidum</span>
         </div>
-        <button id="sidebarToggleBtn" class="sidebar-toggle" type="button" aria-label="Hide sidebar" aria-controls="appSidebar" aria-expanded="true" title="Hide sidebar">
-          <span class="sidebar-toggle-icon" aria-hidden="true"></span>
-        </button>
+        <div class="layout-toggle-group">
+          <button id="sidebarToggleBtn" class="sidebar-toggle" type="button" aria-label="Hide sidebar" aria-controls="appSidebar" aria-expanded="true" title="Hide sidebar">
+            <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+          </button>
+          <button id="filterFooterToggleBtn" class="footer-toggle" type="button" aria-label="Hide filter footer" aria-controls="filterFooter" aria-expanded="true" title="Hide filter footer">
+            <span class="footer-toggle-icon" aria-hidden="true"></span>
+          </button>
+        </div>
         <div id="datasetMeta" class="meta">Loading dataset...</div>
         <div class="spacer"></div>
         <button id="reloadBtn" class="ghost">Reload</button>
@@ -67,27 +72,30 @@
             </div>
           </section>
 
-          <section class="section sidebar-filter-section">
+          <section class="section sidebar-filter-section filter-collapsed">
             <div id="sidebarFilterResizer" class="sidebar-filter-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize filter controls"></div>
             <div class="filter-header">
-              <button id="filterCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse filter" aria-expanded="true" title="Collapse filter">
+              <button id="filterCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Expand filter" aria-expanded="false" title="Expand filter">
                 <span class="filter-collapse-icon" aria-hidden="true"></span>
               </button>
               <h2>FILTER</h2>
               <span id="filterRowMeta" class="filter-row-meta"></span>
+              <button id="filterSidebarClearBtn" class="filter-action filter-sidebar-clear" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
             </div>
-            <div class="filter-input-row">
-              <input id="filterInput" placeholder="DuckDB WHERE expression" />
-              <button id="filterApplyBtn" class="filter-action" type="button" title="Apply filter" aria-label="Apply filter">&#9654;</button>
-              <button id="filterClearBtn" class="filter-action" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
+            <div class="filter-controls-row">
+              <div class="segmented filter-selection-mode" data-control="filterSelectionMode" aria-label="Saved filter selection mode">
+                <button data-value="single" class="active" type="button">Single</button>
+                <button data-value="grouped" type="button">Grouped</button>
+                <button data-value="multi" type="button">Multi</button>
+              </div>
+              <div class="segmented filter-operator" data-control="filterOperator" aria-label="Saved filter operator">
+                <button data-value="and" class="active" type="button">All</button>
+                <button data-value="or" type="button">Any</button>
+                <button data-value="nand" type="button">Not all</button>
+                <button data-value="nor" type="button">None</button>
+              </div>
             </div>
             <div id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox" aria-label="Saved filters" aria-multiselectable="true"></div>
-            <div class="filter-operator" data-control="filterOperator">
-              <button data-value="and" class="active" type="button">AND</button>
-              <button data-value="or" type="button">OR</button>
-              <button data-value="nand" type="button">NAND</button>
-              <button data-value="nor" type="button">NOR</button>
-            </div>
           </section>
         </aside>
 
@@ -287,6 +295,11 @@
           </div>
         </main>
       </div>
+      <footer id="filterFooter" class="filter-footer">
+        <button id="filterClearBtn" class="filter-action" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
+        <button id="filterApplyBtn" class="filter-action" type="button" title="Apply filter" aria-label="Apply filter">&#9654;</button>
+        <input id="filterInput" placeholder="DuckDB WHERE expression" />
+      </footer>
     </div>
 
     <script src="/static/app.js"></script>
