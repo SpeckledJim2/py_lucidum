@@ -39,6 +39,7 @@
         expectedSort: "original",
         filterOperator: "and",
         filterCollapsed: false,
+        collapsedSavedFilterThemes: new Set(),
         activeFilter: "",
         lastData: null,
         lastMapData: null,
@@ -562,15 +563,25 @@
       function renderSavedFilters() {
         const list = el("savedFilterSelect");
         const filters = state.schema.filters || [];
+        const availableThemes = new Set(filters.map((filter) => filter.theme || "General"));
+        for (const theme of state.collapsedSavedFilterThemes) {
+          if (!availableThemes.has(theme)) state.collapsedSavedFilterThemes.delete(theme);
+        }
         list.innerHTML = "";
         let currentTheme = "";
         for (const filter of filters) {
           const theme = filter.theme || "General";
           if (theme !== currentTheme) {
-            const heading = document.createElement("div");
+            const collapsed = state.collapsedSavedFilterThemes.has(theme);
+            const heading = document.createElement("button");
+            heading.type = "button";
             heading.className = "saved-filter-theme";
-            heading.setAttribute("role", "presentation");
-            heading.textContent = theme;
+            heading.dataset.filterTheme = theme;
+            heading.setAttribute("aria-expanded", String(!collapsed));
+            heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${theme} saved filters`);
+            heading.title = `${collapsed ? "Expand" : "Collapse"} ${theme} saved filters`;
+            heading.innerHTML = `<span class="saved-filter-theme-icon" aria-hidden="true"></span><span class="saved-filter-theme-label">${escapeHtml(theme)}</span>`;
+            heading.addEventListener("click", () => toggleSavedFilterTheme(theme));
             list.append(heading);
             currentTheme = theme;
           }
@@ -578,6 +589,8 @@
           button.type = "button";
           button.className = "feature saved-filter-option";
           button.dataset.expression = filter.expression;
+          button.dataset.filterTheme = theme;
+          button.hidden = state.collapsedSavedFilterThemes.has(theme);
           button.setAttribute("role", "option");
           button.setAttribute("aria-selected", "false");
           button.innerHTML = `<span class="saved-filter-name">${escapeHtml(filter.name)}</span><span class="saved-filter-expression">${escapeHtml(filter.expression)}</span>`;
@@ -598,6 +611,25 @@
           });
           list.append(button);
         }
+      }
+
+      function toggleSavedFilterTheme(theme) {
+        const collapsed = !state.collapsedSavedFilterThemes.has(theme);
+        if (collapsed) {
+          state.collapsedSavedFilterThemes.add(theme);
+        } else {
+          state.collapsedSavedFilterThemes.delete(theme);
+        }
+        const list = el("savedFilterSelect");
+        list.querySelectorAll(".saved-filter-theme").forEach((heading) => {
+          if (heading.dataset.filterTheme !== theme) return;
+          heading.setAttribute("aria-expanded", String(!collapsed));
+          heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${theme} saved filters`);
+          heading.title = `${collapsed ? "Expand" : "Collapse"} ${theme} saved filters`;
+        });
+        list.querySelectorAll(".saved-filter-option").forEach((button) => {
+          if (button.dataset.filterTheme === theme) button.hidden = collapsed;
+        });
       }
 
       function selectedSavedFilterExpressions() {

@@ -46,8 +46,41 @@ class BrowserSmokeTests(unittest.TestCase):
                 server.should_exit = True
                 thread.join(timeout=5)
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_saved_filter_theme_headings_collapse_their_rows(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "DRIVER_AGE,POSTCODE_AREA,vehicle_age,price,value\n"
+                "25,PO,1,100,10\n"
+                "45,SO,2,200,20\n"
+                "75,B,3,300,30\n",
+                encoding="utf-8",
+            )
+            filters_path = tmp_path / "filters.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "DRIVER AGE,Young drivers,DRIVER_AGE < 30\n"
+                "DRIVER AGE,Older drivers,DRIVER_AGE > 70\n"
+                "POSTCODE AREA,Portsmouth,POSTCODE_AREA = 'PO'\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path, filters_path=filters_path, use_saved_filters=True)
+            try:
+                self.exercise_saved_filter_theme_collapse(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
     @staticmethod
-    def start_app(data_path: Path) -> tuple[str, uvicorn.Server, threading.Thread]:
+    def start_app(
+        data_path: Path,
+        *,
+        filters_path: Path | None = None,
+        use_saved_filters: bool = False,
+    ) -> tuple[str, uvicorn.Server, threading.Thread]:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = int(sock.getsockname()[1])
@@ -58,7 +91,8 @@ class BrowserSmokeTests(unittest.TestCase):
                 "actual": "price",
                 "denominator": "value",
             },
-            use_saved_filters=False,
+            filters_path=filters_path,
+            use_saved_filters=use_saved_filters,
         )
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         server = uvicorn.Server(config)
@@ -119,6 +153,38 @@ class BrowserSmokeTests(unittest.TestCase):
                 self.assertEqual(page_errors, [])
                 self.assertEqual(chart_requests, 1)
                 self.assertEqual(map_requests, 1)
+            finally:
+                browser.close()
+
+    def exercise_saved_filter_theme_collapse(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+
+                driver_heading = page.locator('.saved-filter-theme[data-filter-theme="DRIVER AGE"]')
+                driver_rows = page.locator('.saved-filter-option[data-filter-theme="DRIVER AGE"]')
+                postcode_rows = page.locator('.saved-filter-option[data-filter-theme="POSTCODE AREA"]')
+
+                driver_heading.wait_for(timeout=10_000)
+                self.assertEqual(driver_heading.get_attribute("aria-expanded"), "true")
+                self.assertTrue(driver_rows.first.is_visible())
+                self.assertTrue(postcode_rows.first.is_visible())
+
+                driver_heading.click()
+                self.assertEqual(driver_heading.get_attribute("aria-expanded"), "false")
+                self.assertFalse(driver_rows.first.is_visible())
+                self.assertTrue(postcode_rows.first.is_visible())
+
+                driver_heading.click()
+                self.assertEqual(driver_heading.get_attribute("aria-expanded"), "true")
+                self.assertTrue(driver_rows.first.is_visible())
+                self.assertEqual(page_errors, [])
             finally:
                 browser.close()
 
