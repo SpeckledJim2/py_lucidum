@@ -1171,6 +1171,23 @@
         white-space: nowrap;
       }
 
+      .map-floating-header #mapGroupMeta {
+        font-size: 10px;
+        line-height: 1.1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .map-floating-header #mapGroupMeta,
+      #mapControlFilter {
+        color: grey;
+      }
+
+      #mapControlFilter {
+        font-size: 10px;
+      }
+
       .map-floating-row {
         display: grid;
         grid-template-columns: minmax(172px, 1fr) auto auto;
@@ -1431,7 +1448,7 @@
       .workspace-meta,
       .chart-message {
         color: var(--muted);
-        font-size: 12px;
+        font-size: 10px;
       }
 
       .table-wrap {

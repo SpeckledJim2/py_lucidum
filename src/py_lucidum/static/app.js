@@ -215,8 +215,9 @@
         el("chartMessage").classList.toggle("hidden", !message || hiddenForView);
       }
 
-      function setGroupMeta(message) {
-        el("groupMeta").textContent = message || "";
+      function setGroupMeta(tool, message) {
+        const id = tool === "uk_map" ? "mapGroupMeta" : "lineBarGroupMeta";
+        el(id).textContent = message || "";
       }
 
       function formatRowMeta(rowCount, filteredRowCount = rowCount) {
@@ -307,7 +308,7 @@
       function applyToolPresentation(tool) {
         const presentation = toolCache(tool).presentation;
         if (!presentation) return;
-        setGroupMeta(presentation.groupMeta);
+        setGroupMeta(tool, presentation.groupMeta);
         setStatus(presentation.status, presentation.statusError);
         setChartMessage(presentation.chartMessage);
       }
@@ -376,6 +377,7 @@
         el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
         el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
+        el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
         setStatus("");
@@ -939,7 +941,7 @@
         state.chartRequestSeq = requestSeq;
         setStatus("");
         setChartMessage("");
-        setGroupMeta("Computing...");
+        setGroupMeta("line_bar", "Computing...");
         updateAxisControls();
         try {
           const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
@@ -951,7 +953,7 @@
           return data;
         } catch (error) {
           if (requestSeq !== state.chartRequestSeq) return;
-          setGroupMeta("Query failed");
+          setGroupMeta("line_bar", "Query failed");
           setChartMessage("");
           setStatus(error.message, true);
         }
@@ -969,7 +971,7 @@
         const groupMeta = `${data.rows.length.toLocaleString()} groups · ${rowMeta}`;
         const status = [...(data.warnings || [])].filter(Boolean).join(" ");
         setFilterRowMeta(data.row_count, data.filtered_row_count);
-        setGroupMeta(groupMeta);
+        setGroupMeta("line_bar", groupMeta);
         setStatus(status);
         setChartMessage(labelMessage);
         saveToolPresentation("line_bar", { groupMeta, status, chartMessage: labelMessage });
@@ -1005,7 +1007,7 @@
       }
 
       function showMapMissingNumerator() {
-        setGroupMeta("Choose an Actual column");
+        setGroupMeta("uk_map", "Choose an Actual column");
         setChartMessage("UK mapping needs a numeric Actual column.");
       }
 
@@ -1018,7 +1020,7 @@
         state.mapRequestSeq = requestSeq;
         setStatus("");
         setChartMessage("");
-        setGroupMeta("Computing map...");
+        setGroupMeta("uk_map", "Computing map...");
         try {
           const [data, geoJson] = await Promise.all([
             api("/api/uk-map/summary", { method: "POST", body: JSON.stringify(request) }),
@@ -1034,7 +1036,7 @@
         } catch (error) {
           if (requestSeq !== state.mapRequestSeq) return;
           state.pendingMapZoom = null;
-          setGroupMeta("Map failed");
+          setGroupMeta("uk_map", "Map failed");
           setChartMessage(error.message);
         }
       }
@@ -1667,7 +1669,7 @@
         const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
         const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`;
         setFilterRowMeta(data.row_count, data.filtered_row_count);
-        setGroupMeta(groupMeta);
+        setGroupMeta("uk_map", groupMeta);
         const warnings = [...(data.warnings || [])];
         if (searchWarning) {
           warnings.push(searchWarning);
@@ -1723,7 +1725,7 @@
         const plottedCount = Number(pointSummary.plotted_count ?? (data.rows || []).length);
         const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted · ${rowMeta}`;
         setFilterRowMeta(data.row_count, data.filtered_row_count);
-        setGroupMeta(groupMeta);
+        setGroupMeta("uk_map", groupMeta);
         const warnings = [...(data.warnings || [])];
         const missingValueCount = Number(pointSummary.missing_value_count || 0);
         const missingCoordinateCount = Number(pointSummary.missing_coordinate_count || 0);
@@ -2659,7 +2661,7 @@
         });
         el("reloadBtn").addEventListener("click", async () => {
           setStatus("");
-          setGroupMeta("Reloading...");
+          setGroupMeta(state.tool, "Reloading...");
           state.schema = await api("/api/reload", { method: "POST" });
           state.bandFeature = null;
           state.mapFitLevel = null;
