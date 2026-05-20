@@ -211,14 +211,25 @@
       }
 
       function setChartMessage(message) {
-        el("chartMessage").textContent = message || "";
+        const displayMessage = (message || "").replace(/\.$/, "");
+        el("chartMessage").textContent = displayMessage;
         const hiddenForView = state.tool === "line_bar" && state.view !== "chart";
-        el("chartMessage").classList.toggle("hidden", !message || hiddenForView);
+        el("chartMessage").classList.toggle("hidden", !displayMessage || hiddenForView);
       }
 
       function setGroupMeta(tool, message) {
         const id = tool === "uk_map" ? "mapGroupMeta" : "lineBarGroupMeta";
         el(id).textContent = message || "";
+      }
+
+      function activeFilterLabel() {
+        return state.activeFilter || "no filter";
+      }
+
+      function syncActiveFilterLabels() {
+        const label = activeFilterLabel();
+        el("lineBarFilter").textContent = label;
+        el("mapControlFilter").textContent = label;
       }
 
       function formatRowMeta(rowCount, filteredRowCount = rowCount) {
@@ -379,8 +390,10 @@
         el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
+        el("lineBarFilter").classList.toggle("hidden", tool !== "line_bar");
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
+        syncActiveFilterLabels();
         setStatus("");
         setChartMessage("");
         if (tool === "line_bar") {
@@ -859,10 +872,12 @@
       function applyFilter() {
         const nextFilter = el("filterInput").value.trim();
         if (nextFilter === state.activeFilter) {
+          syncActiveFilterLabels();
           refreshActiveTool();
           return;
         }
         state.activeFilter = nextFilter;
+        syncActiveFilterLabels();
         refreshActiveTool();
       }
 
@@ -873,10 +888,12 @@
           button.classList.remove("active");
         });
         if (state.activeFilter === "") {
+          syncActiveFilterLabels();
           refreshActiveTool();
           return;
         }
         state.activeFilter = "";
+        syncActiveFilterLabels();
         refreshActiveTool();
       }
 
@@ -1812,7 +1829,7 @@
           ? (el("denominator").selectedOptions[0]?.textContent || denominatorValue)
           : "";
         el("mapControlMetric").textContent = denominatorLabel ? `${actualLabel} / ${denominatorLabel}` : actualLabel;
-        el("mapControlFilter").textContent = state.activeFilter || "no filter";
+        syncActiveFilterLabels();
         document.querySelectorAll(".map-palette-button").forEach((button) => {
           button.classList.toggle("active", button.dataset.palette === state.mapPalette);
         });
@@ -2055,12 +2072,12 @@
               valueFormatter: (value) => formatNumber(value),
             },
             legend: {
-              top: 8,
+              top: 0,
               data: legendData,
               selectedMode: false,
               textStyle: { color: getCss("--text") },
             },
-            grid: { left: 72, right: 76, top: 64, bottom: xLabelPolicy.bottom, containLabel: false },
+            grid: { left: 72, right: 76, top: 56, bottom: xLabelPolicy.bottom, containLabel: false },
             xAxis: {
               type: "category",
               data: labels,
