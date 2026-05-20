@@ -1128,9 +1128,12 @@
       }
 
       .map-floating-control {
+        --map-floating-right: 24px;
+        --map-floating-top: 16px;
         position: absolute;
-        top: 12px;
-        left: 148px;
+        top: var(--map-floating-top);
+        right: var(--map-floating-right);
+        left: auto;
         z-index: 700;
         width: min(480px, calc(100% - 190px));
         border: 2px solid rgb(255 255 255 / 82%);
@@ -1149,12 +1152,18 @@
 
       .map-floating-header {
         display: grid;
-        grid-template-columns: 1fr;
-        gap: 2px;
+        grid-template-columns: minmax(0, 1fr) 24px;
+        gap: 2px 8px;
         margin-bottom: 7px;
         font-size: 14px;
         cursor: move;
         touch-action: none;
+      }
+
+      .map-floating-header strong,
+      .map-floating-header #mapGroupMeta,
+      .map-floating-header #mapControlFilter {
+        grid-column: 1;
       }
 
       .map-floating-header strong {
@@ -1186,6 +1195,37 @@
 
       #mapControlFilter {
         font-size: 10px;
+      }
+
+      .map-control-reset {
+        grid-column: 2;
+        grid-row: 1 / span 3;
+        align-self: start;
+        justify-self: end;
+        width: 24px;
+        height: 24px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--panel-2);
+        color: var(--text);
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        padding: 0;
+      }
+
+      .map-control-reset:hover {
+        background: var(--panel);
+      }
+
+      .map-control-reset svg {
+        width: 15px;
+        height: 15px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
       }
 
       .map-floating-row {
@@ -1369,7 +1409,7 @@
 
       @media (max-width: 1280px) {
         .map-floating-control {
-          left: 96px;
+          --map-floating-right: 16px;
           width: min(440px, calc(100% - 112px));
         }
 

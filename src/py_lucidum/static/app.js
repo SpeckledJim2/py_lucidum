@@ -57,6 +57,7 @@
         preserveMapView: false,
         pendingMapZoom: null,
         mapControlPosition: null,
+        mapControlMoved: false,
         tablePage: 1,
         bandFeature: null,
         chartRequestSeq: 0,
@@ -2699,6 +2700,7 @@
         const panel = el("mapFloatingControl");
         const saved = restoreMapFloatingPosition();
         if (saved) {
+          state.mapControlMoved = true;
           requestAnimationFrame(() => setMapFloatingPosition(saved.left, saved.top));
         }
 
@@ -2711,6 +2713,10 @@
           if (event.button !== 0 || isMapFloatingInteractiveTarget(event.target)) return;
           event.preventDefault();
           dragging = true;
+          if (!state.mapControlMoved) {
+            state.mapControlMoved = true;
+            setMapFloatingPosition(panel.offsetLeft, panel.offsetTop);
+          }
           startX = event.clientX;
           startY = event.clientY;
           startLeft = panel.offsetLeft;
@@ -2790,12 +2796,12 @@
 
       function clampMapFloatingControl() {
         const panel = el("mapFloatingControl");
-        if (state.mapControlPosition) {
-          setMapFloatingPosition(state.mapControlPosition.left, state.mapControlPosition.top);
-          return;
-        }
-        if (panel.style.left || panel.style.top) {
-          setMapFloatingPosition(panel.offsetLeft, panel.offsetTop);
+        if (state.mapControlMoved) {
+          if (state.mapControlPosition) {
+            setMapFloatingPosition(state.mapControlPosition.left, state.mapControlPosition.top);
+          } else {
+            setMapFloatingPosition(panel.offsetLeft, panel.offsetTop);
+          }
           return;
         }
         positionMapFloatingControlTopRight();
@@ -2803,15 +2809,24 @@
 
       function positionMapFloatingControlTopRight() {
         const panel = el("mapFloatingControl");
-        const workspace = panel.closest(".workspace");
-        const workspaceRect = workspace?.getBoundingClientRect();
-        if (!workspaceRect) return;
-        const rightInset = 24;
-        const topInset = 50;
-        setMapFloatingPosition(workspaceRect.width - panel.offsetWidth - rightInset, topInset);
+        const styles = getComputedStyle(panel);
+        const rightInset = styles.getPropertyValue("--map-floating-right").trim() || "24px";
+        const topInset = styles.getPropertyValue("--map-floating-top").trim() || "16px";
+        panel.style.left = "auto";
+        panel.style.right = rightInset;
+        panel.style.top = topInset;
+        state.mapControlPosition = null;
+      }
+
+      function resetMapFloatingControlPosition() {
+        clearMapFloatingPosition();
+        state.mapControlPosition = null;
+        state.mapControlMoved = false;
+        positionMapFloatingControlTopRight();
       }
 
       function bindMapFloatingControls() {
+        el("mapControlReset").addEventListener("click", resetMapFloatingControlPosition);
         document.querySelectorAll(".map-palette-button").forEach((button) => {
           button.addEventListener("click", () => {
             state.mapPalette = button.dataset.palette || "viridis";
