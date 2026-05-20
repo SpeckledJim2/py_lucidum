@@ -167,6 +167,37 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(defaults["longitude"], "long_col")
         start_server_mock.assert_called_once()
 
+    def test_serve_passes_kpi_options_and_reports_status(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            kpis_path = root / "kpi_spec.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+            kpis_path.write_text("group,name,actual,denominator,decimals,format\nY,Y,y,N,0,number\n", encoding="utf-8")
+            app = SimpleNamespace(
+                state=SimpleNamespace(
+                    token="",
+                    defaults={},
+                    use_saved_filters=False,
+                    resolved_filters_path=None,
+                    use_kpis=True,
+                    resolved_kpis_path=kpis_path,
+                )
+            )
+            stdout = io.StringIO()
+
+            with (
+                patch("py_lucidum.cli.create_app", return_value=app) as create_app_mock,
+                patch("py_lucidum.cli._start_app_server") as start_server_mock,
+                redirect_stdout(stdout),
+            ):
+                serve(data_path, token="", kpis=kpis_path, no_filters=True)
+
+        self.assertEqual(create_app_mock.call_args.kwargs["kpis_path"], kpis_path)
+        self.assertTrue(create_app_mock.call_args.kwargs["use_kpis"])
+        self.assertIn(f"KPIs: {kpis_path}", stdout.getvalue())
+        start_server_mock.assert_called_once()
+
     def test_python_usage_serve_loads_user_csv_path(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "dummy.csv"
@@ -337,6 +368,18 @@ class CliRuntimeTests(unittest.TestCase):
                 True,
             ),
             (
+                "kpis",
+                ["lucidum", "--demo", "--kpis", "specs/kpi_spec.csv"],
+                {"path": demo_path, "kpis": "specs/kpi_spec.csv"},
+                True,
+            ),
+            (
+                "no_kpis",
+                ["lucidum", "--demo", "--no-kpis"],
+                {"path": demo_path, "no_kpis": True},
+                True,
+            ),
+            (
                 "line_bar_tool",
                 ["lucidum", "--demo", "--tools", "line-bar"],
                 {"path": demo_path, "tools": "line-bar"},
@@ -415,6 +458,28 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(exit_context.exception.code, 1)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("lucidum: error: Filter specification file does not exist:", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_main_reports_missing_kpi_spec_without_traceback_or_startup_output(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            missing_kpis_path = root / "missing_kpi_spec.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with (
+                patch("sys.argv", ["lucidum", str(data_path), "--kpis", str(missing_kpis_path)]),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_context,
+            ):
+                main()
+
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("lucidum: error: KPI specification file does not exist:", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
 

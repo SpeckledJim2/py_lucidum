@@ -26,7 +26,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
   - `lucidum --demo`
   - `lucidum path/to/data.parquet`
   - `lucidum path/to/data.csv`
-  - common options include `--open`, `--host`, `--port`, `--no-token`, `--x`, `--actual`, `--expected`, `--denominator`, `--filters`, `--no-filters`, `--tools`, and UK map column overrides.
+  - common options include `--open`, `--host`, `--port`, `--no-token`, `--x`, `--actual`, `--expected`, `--denominator`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--tools`, and UK map column overrides.
 - Python:
   - `py_lucidum.serve(...)`
   - `py_lucidum.serve_line_bar(...)`
@@ -53,12 +53,16 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - Other local files under `datasets/` remain ignored.
 - Parquet is the preferred working format for speed; CSV remains supported for convenience.
 
-**Defaults and saved filters**
+**Defaults, saved filters, and KPIs**
 
 - Without explicit defaults, the x-axis starts with the first dataset column, Actual starts with the first numeric column, and Expected starts as none.
 - CLI options, programmatic defaults, and URL parameters can override initial selections.
 - Saved filters load from an explicit `--filters` path, otherwise `./filter_spec.csv`, otherwise `./specs/filter_spec.csv`.
 - Saved-filter CSV files must have exactly `theme,name,expression` columns. CSV order controls theme order and row order.
+- KPI specs load from an explicit `--kpis` path, otherwise `./kpi_spec.csv`, otherwise `./specs/kpi_spec.csv`.
+- KPI spec CSV files must have exactly `group,name,actual,denominator,decimals,format` columns. `denominator` aliases `N`, `Average row value`, empty, and `__none__` all mean average row value; `format` is `number`, `currency`, or `percent`.
+- KPI rows are a single-selection convenience layer over Actual and Weight. Manual Actual/Weight changes keep the KPI row active only when both selects exactly match a spec row.
+- KPI decimals and format apply to Actual and Expected response values in metric titles, line/bar labels and response axes, table response cells, map labels/tooltips/popups, and map legend values. Weight and row-count formatting is unchanged.
 - The free-form DuckDB filter expression lives in the collapsible footer; hiding the footer does not clear the active filter.
 - Saved-filter rows support `Single`, `Multi`, and `Grouped` modes. `Single` keeps one selected row, `Multi` toggles rows and combines them with the active All/Any/Not all/None operator, and `Grouped` toggles rows while combining rows within a theme with `OR` and selected themes with `AND`.
 - `--no-filters` disables saved-filter discovery.

@@ -169,10 +169,18 @@ def serve(
     longitude: str | None = None,
     filters: str | Path | None = None,
     no_filters: bool = False,
+    kpis: str | Path | None = None,
+    kpis_path: str | Path | None = None,
+    no_kpis: bool = False,
+    use_kpis: bool = True,
     tools: str | Sequence[str] | None = None,
 ) -> str:
     selected_port = port or find_free_port()
     ensure_port_available(host, selected_port)
+    if kpis and kpis_path and Path(kpis).expanduser() != Path(kpis_path).expanduser():
+        raise ValueError("Specify either kpis or kpis_path, not both")
+    selected_kpis_path = kpis_path or kpis
+    kpis_enabled = use_kpis and not no_kpis
     selected_token = token if token is not None else secrets.token_urlsafe(18)
     defaults = {
         "x": x,
@@ -192,12 +200,15 @@ def serve(
         filters_path=filters,
         use_saved_filters=not no_filters,
         tools=tools,
+        kpis_path=selected_kpis_path,
+        use_kpis=kpis_enabled,
     )
     url = _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
     print(f"py_lucidum serving {Path(path).resolve()}", flush=True)
     print(f"Open {url}", flush=True)
     print(f"Saved filters: {saved_filters_status(app)}", flush=True)
+    print(f"KPIs: {kpis_status(app)}", flush=True)
     _print_stop_status(run_in_background)
     _start_app_server(app, host, selected_port, url, open_browser, run_in_background)
     return url
@@ -220,6 +231,10 @@ def serve_line_bar(
     longitude: str | None = None,
     filters: str | Path | None = None,
     no_filters: bool = False,
+    kpis: str | Path | None = None,
+    kpis_path: str | Path | None = None,
+    no_kpis: bool = False,
+    use_kpis: bool = True,
 ) -> str:
     return serve(
         path=path,
@@ -238,6 +253,10 @@ def serve_line_bar(
         longitude=longitude,
         filters=filters,
         no_filters=no_filters,
+        kpis=kpis,
+        kpis_path=kpis_path,
+        no_kpis=no_kpis,
+        use_kpis=use_kpis,
         tools=["line_bar"],
     )
 
@@ -247,6 +266,20 @@ def saved_filters_status(app: object) -> str:
     if not getattr(state, "use_saved_filters", True):
         return "disabled"
     path = getattr(state, "resolved_filters_path", None)
+    if not path or not Path(path).exists():
+        return "none"
+    resolved = Path(path)
+    try:
+        return str(resolved.relative_to(Path.cwd()))
+    except ValueError:
+        return str(resolved)
+
+
+def kpis_status(app: object) -> str:
+    state = getattr(app, "state")
+    if not getattr(state, "use_kpis", True):
+        return "disabled"
+    path = getattr(state, "resolved_kpis_path", None)
     if not path or not Path(path).exists():
         return "none"
     resolved = Path(path)
@@ -284,6 +317,17 @@ def main() -> int:
         action="store_true",
         help="Disable saved filters and skip default filter_spec.csv discovery.",
     )
+    kpi_group = parser.add_mutually_exclusive_group()
+    kpi_group.add_argument(
+        "--kpis",
+        default=None,
+        help="Path to kpi_spec.csv. Defaults to ./kpi_spec.csv, then ./specs/kpi_spec.csv when present.",
+    )
+    kpi_group.add_argument(
+        "--no-kpis",
+        action="store_true",
+        help="Disable KPI specs and skip default kpi_spec.csv discovery.",
+    )
     parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Supports line-bar and uk-map.")
     args = parser.parse_args()
     if args.demo and args.path:
@@ -309,6 +353,8 @@ def main() -> int:
             longitude=args.longitude,
             filters=args.filters,
             no_filters=args.no_filters,
+            kpis=args.kpis,
+            no_kpis=args.no_kpis,
             tools=args.tools,
         )
     except (RuntimeError, ValueError, OSError) as error:

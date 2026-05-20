@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
-from py_lucidum.core import Dataset, load_saved_filters, resolve_filters_path
+from py_lucidum.core import Dataset, load_kpis, load_saved_filters, resolve_filters_path, resolve_kpis_path
 
 from .assets import NoStoreStaticFiles, no_store_file_response, no_store_html_response
 from .context import AppContext
@@ -92,8 +92,16 @@ def create_app(
     filters_path: str | Path | None = None,
     use_saved_filters: bool = True,
     tools: str | Sequence[str] | None = None,
+    kpis: str | Path | None = None,
+    kpis_path: str | Path | None = None,
+    use_kpis: bool = True,
+    no_kpis: bool = False,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
+    if kpis and kpis_path and Path(kpis).expanduser() != Path(kpis_path).expanduser():
+        raise ValueError("Specify either kpis or kpis_path, not both")
+    selected_kpis_path = kpis_path or kpis
+    kpis_enabled = use_kpis and not no_kpis
     dataset = Dataset(dataset_path)
     app = FastAPI(title="py_lucidum")
     app.state.dataset = dataset
@@ -102,6 +110,10 @@ def create_app(
     app.state.use_saved_filters = use_saved_filters
     app.state.resolved_filters_path = resolve_filters_path(filters_path, use_saved_filters=use_saved_filters)
     app.state.saved_filters = load_saved_filters(filters_path, use_saved_filters=use_saved_filters)
+    app.state.kpis_path = selected_kpis_path
+    app.state.use_kpis = kpis_enabled
+    app.state.resolved_kpis_path = resolve_kpis_path(selected_kpis_path, use_kpis=kpis_enabled)
+    app.state.kpis = load_kpis(selected_kpis_path, use_kpis=kpis_enabled)
     app.state.enabled_tools = enabled_tools
     app.state.defaults = {
         key: value
@@ -121,6 +133,7 @@ def create_app(
         payload = dict(app.state.dataset.schema())
         payload["defaults"] = app.state.defaults
         payload["filters"] = app.state.saved_filters
+        payload["kpis"] = app.state.kpis
         payload["tools"] = tool_payload(app.state.enabled_tools)
         return payload
 
@@ -158,6 +171,14 @@ def create_app(
         app.state.saved_filters = load_saved_filters(
             app.state.filters_path,
             use_saved_filters=app.state.use_saved_filters,
+        )
+        app.state.resolved_kpis_path = resolve_kpis_path(
+            app.state.kpis_path,
+            use_kpis=app.state.use_kpis,
+        )
+        app.state.kpis = load_kpis(
+            app.state.kpis_path,
+            use_kpis=app.state.use_kpis,
         )
         return schema_payload()
 

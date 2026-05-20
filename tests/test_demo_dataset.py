@@ -65,6 +65,28 @@ class DemoDatasetTests(unittest.TestCase):
             with self.subTest(theme=row["theme"], name=row["name"]):
                 self.assertEqual(dataset.normalise_filter(row["expression"]), row["expression"])
 
+    def test_default_kpi_spec_columns_validate_against_demo_dataset(self) -> None:
+        dataset = Dataset(py_lucidum.demo_dataset_path())
+        schema = dataset.schema()
+        numeric_columns = {column["name"] for column in schema["columns"] if column["kind"] in {"integer", "numeric"}}
+        kpis_path = Path(__file__).parents[1] / "specs" / "kpi_spec.csv"
+
+        with kpis_path.open(newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+
+        self.assertGreater(len(rows), 0)
+        self.assertEqual(reader.fieldnames, ["group", "name", "actual", "denominator", "decimals", "format"])
+        self.assertGreaterEqual(len({row["group"] for row in rows}), 3)
+        for row in rows:
+            with self.subTest(group=row["group"], name=row["name"]):
+                self.assertIn(row["actual"], numeric_columns)
+                denominator = row["denominator"].strip()
+                if denominator.upper() != "N" and denominator not in {"", "__none__", "Average row value"}:
+                    self.assertIn(denominator, numeric_columns)
+                self.assertGreaterEqual(int(row["decimals"]), 0)
+                self.assertIn(row["format"], {"number", "currency", "percent"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -99,6 +99,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   ```text
   Open http://127.0.0.1:8000/?token=...
   Saved filters: specs/filter_spec.csv
+  KPIs: specs/kpi_spec.csv
   Uvicorn running on http://127.0.0.1:8000/?token=... (Press CTRL+C to quit)
   ```
 
@@ -148,6 +149,8 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   .venv/bin/lucidum --demo --x DRIVER_AGE --actual PREMIUM --denominator ANNUAL_MILEAGE
   .venv/bin/lucidum --demo --filters specs/filter_spec.csv
   .venv/bin/lucidum --demo --no-filters
+  .venv/bin/lucidum --demo --kpis specs/kpi_spec.csv
+  .venv/bin/lucidum --demo --no-kpis
   .venv/bin/lucidum --demo --tools line-bar
   ```
 
@@ -157,6 +160,8 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   - `--x`, `--actual`, `--expected`, and `--denominator` set initial chart selections.
   - `--filters` points to a saved-filter CSV file. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
   - `--no-filters` disables saved-filter discovery.
+  - `--kpis` points to a KPI spec CSV file. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
+  - `--no-kpis` disables KPI spec discovery.
   - `--tools` selects enabled tools. By default both `line-bar` and `uk-map` are enabled.
 
   UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected.
@@ -187,6 +192,8 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
 
   In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.
 
+  Programmatic launches accept the same KPI spec controls as the CLI, using `kpis` or `kpis_path` for a CSV path and `no_kpis=True` or `use_kpis=False` to disable KPI discovery.
+
   To launch only the line-and-bar tool, pass either the demo path or your own dataset path:
 
   ```python
@@ -211,6 +218,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
         "denominator": "ANNUAL_MILEAGE",
     },
     filters_path="specs/filter_spec.csv",
+    kpis_path="specs/kpi_spec.csv",
     tools=["line_bar", "uk_map"],
   )
 
@@ -256,6 +264,19 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   ```
 
   Saved-filter rows can be used in `Single` mode, where each click clears other saved filters, `Multi` mode, where each click toggles only that row and selected rows combine using the active All/Any/Not all/None mode, or `Grouped` mode, where rows within each theme combine with `OR` and selected themes combine with `AND`. The generated expression is written to the footer expression box.
+
+  **KPIs**
+
+  KPI specs are grouped CSV files with exactly these columns:
+
+  ```csv
+  group,name,actual,denominator,decimals,format
+  VEHICLE,Vehicle age,VEHICLE_AGE,N,1,number
+  DRIVER,Driver age,DRIVER_AGE,N,1,number
+  FINANCIAL,Premium,PREMIUM,N,2,currency
+  ```
+
+  `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`. Selecting a KPI in the sidebar sets the Actual and Weight controls and applies the KPI decimals/format to response values in the line/bar chart and UK map.
 
   <h2>Development</h2>
 

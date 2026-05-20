@@ -37,6 +37,11 @@
         mapLabelSize: 0,
         featureSort: "original",
         expectedSort: "original",
+        kpiCollapsed: false,
+        collapsedKpiGroups: new Set(),
+        kpiGroupsInitialised: false,
+        activeKpiKey: "",
+        activeKpiFormat: null,
         filterOperator: "and",
         filterCollapsed: true,
         filterFooterCollapsed: false,
@@ -609,6 +614,160 @@
 
       function requestedDefault(name) {
         return locationParams.get(name) || state.schema.defaults?.[name] || "";
+      }
+
+      function normaliseKpiDenominator(value) {
+        const denominator = String(value || "").trim();
+        if (!denominator || denominator.toLowerCase() === "n" || denominator.toLowerCase() === "average row value" || denominator === "__none__") {
+          return "__none__";
+        }
+        return denominator;
+      }
+
+      function kpiKey(kpi) {
+        if (!kpi) return "";
+        return `${kpi.actual}\u0000${normaliseKpiDenominator(kpi.denominator)}`;
+      }
+
+      function denominatorDisplayName(value) {
+        const denominator = normaliseKpiDenominator(value);
+        if (denominator === "__none__") return "N";
+        return denominator;
+      }
+
+      function availableKpis() {
+        return (state.schema?.kpis || [])
+          .map((kpi) => ({
+            group: String(kpi.group || "General").trim() || "General",
+            name: String(kpi.name || "").trim(),
+            actual: String(kpi.actual || "").trim(),
+            denominator: normaliseKpiDenominator(kpi.denominator),
+            decimals: Number(kpi.decimals),
+            format: String(kpi.format || "number").toLowerCase(),
+          }))
+          .filter((kpi) => (
+            kpi.name &&
+            numericColumnExists(kpi.actual) &&
+            (kpi.denominator === "__none__" || numericColumnExists(kpi.denominator)) &&
+            Number.isInteger(kpi.decimals) &&
+            kpi.decimals >= 0 &&
+            ["number", "currency", "percent"].includes(kpi.format)
+          ));
+      }
+
+      function selectedKpiForCurrentMetric() {
+        const actual = el("actualNumerator").value;
+        const denominator = normaliseKpiDenominator(el("denominator").value);
+        return availableKpis().find((kpi) => kpi.actual === actual && kpi.denominator === denominator) || null;
+      }
+
+      function setActiveKpiState(kpi) {
+        state.activeKpiKey = kpi ? kpiKey(kpi) : "";
+        state.activeKpiFormat = kpi ? { decimals: kpi.decimals, format: kpi.format } : null;
+      }
+
+      function syncKpiSelectionFromMetrics() {
+        setActiveKpiState(selectedKpiForCurrentMetric());
+        syncKpiActiveRows();
+      }
+
+      function syncKpiActiveRows() {
+        el("kpiSelect").querySelectorAll(".kpi-option").forEach((button) => {
+          const active = button.dataset.kpiKey === state.activeKpiKey;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-selected", String(active));
+        });
+      }
+
+      function setKpiCollapsed(collapsed) {
+        state.kpiCollapsed = Boolean(collapsed);
+        document.querySelector(".sidebar-kpi-section")?.classList.toggle("kpi-collapsed", state.kpiCollapsed);
+        const button = el("kpiCollapseBtn");
+        button.setAttribute("aria-expanded", String(!state.kpiCollapsed));
+        button.setAttribute("aria-label", state.kpiCollapsed ? "Expand KPIs" : "Collapse KPIs");
+        button.title = state.kpiCollapsed ? "Expand KPIs" : "Collapse KPIs";
+      }
+
+      function renderKpis() {
+        const list = el("kpiSelect");
+        const kpis = availableKpis();
+        const availableGroups = new Set(kpis.map((kpi) => kpi.group));
+        const selected = selectedKpiForCurrentMetric();
+        setActiveKpiState(selected);
+        if (!state.kpiGroupsInitialised) {
+          availableGroups.forEach((group) => state.collapsedKpiGroups.add(group));
+          const openGroup = selected?.group || kpis[0]?.group;
+          if (openGroup) state.collapsedKpiGroups.delete(openGroup);
+          state.kpiGroupsInitialised = true;
+        }
+        for (const group of state.collapsedKpiGroups) {
+          if (!availableGroups.has(group)) state.collapsedKpiGroups.delete(group);
+        }
+        list.innerHTML = "";
+        let currentGroup = "";
+        for (const kpi of kpis) {
+          const group = kpi.group || "General";
+          if (group !== currentGroup) {
+            const collapsed = state.collapsedKpiGroups.has(group);
+            const heading = document.createElement("button");
+            heading.type = "button";
+            heading.className = "saved-filter-theme kpi-theme";
+            heading.dataset.kpiGroup = group;
+            heading.setAttribute("aria-expanded", String(!collapsed));
+            heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} KPIs`);
+            heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} KPIs`;
+            heading.innerHTML = `<span class="saved-filter-theme-icon" aria-hidden="true"></span><span class="saved-filter-theme-label">${escapeHtml(group)}</span>`;
+            heading.addEventListener("click", () => toggleKpiGroup(group));
+            list.append(heading);
+            currentGroup = group;
+          }
+          const button = document.createElement("button");
+          const key = kpiKey(kpi);
+          const active = key === state.activeKpiKey;
+          button.type = "button";
+          button.className = `feature kpi-option${active ? " active" : ""}`;
+          button.dataset.kpiKey = key;
+          button.dataset.kpiGroup = group;
+          button.hidden = state.collapsedKpiGroups.has(group);
+          button.setAttribute("role", "option");
+          button.setAttribute("aria-selected", String(active));
+          button.innerHTML = `<span class="saved-filter-name">${escapeHtml(kpi.name)}</span><span class="kpi-detail">${escapeHtml(`${kpi.actual} / ${denominatorDisplayName(kpi.denominator)}`)}</span>`;
+          button.addEventListener("click", () => selectKpi(kpi));
+          list.append(button);
+        }
+      }
+
+      function toggleKpiGroup(group) {
+        const collapsed = !state.collapsedKpiGroups.has(group);
+        if (collapsed) {
+          state.collapsedKpiGroups.add(group);
+        } else {
+          state.collapsedKpiGroups.delete(group);
+        }
+        const list = el("kpiSelect");
+        list.querySelectorAll(".kpi-theme").forEach((heading) => {
+          if (heading.dataset.kpiGroup !== group) return;
+          heading.setAttribute("aria-expanded", String(!collapsed));
+          heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} KPIs`);
+          heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} KPIs`;
+        });
+        list.querySelectorAll(".kpi-option").forEach((button) => {
+          if (button.dataset.kpiGroup === group) button.hidden = collapsed;
+        });
+      }
+
+      function selectKpi(kpi) {
+        const actual = el("actualNumerator");
+        const denominator = el("denominator");
+        const nextDenominator = normaliseKpiDenominator(kpi.denominator);
+        const changed = actual.value !== kpi.actual || denominator.value !== nextDenominator;
+        actual.value = kpi.actual;
+        denominator.value = nextDenominator;
+        setActiveKpiState(kpi);
+        renderKpis();
+        if (changed) {
+          refreshActiveTool();
+        }
       }
 
       function renderSavedFilters() {
@@ -2069,7 +2228,7 @@
             color: [actualColor, expectedColor, nColor],
             tooltip: {
               trigger: "axis",
-              valueFormatter: (value) => formatNumber(value),
+              formatter: (params) => formatChartTooltip(params, weightLabel),
             },
             legend: {
               top: 0,
@@ -2096,7 +2255,7 @@
               axisLine: { lineStyle: { color: getCss("--line") } },
             },
             yAxis: [
-              { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
+              { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatLineValue(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
               { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
             ],
             dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
@@ -2114,6 +2273,18 @@
           ? "X-axis and chart labels"
           : xLabelsHidden ? "X-axis labels" : "Chart labels";
         return `${labelTarget} hidden as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories.`;
+      }
+
+      function formatChartTooltip(params, weightLabel) {
+        const items = Array.isArray(params) ? params : [params];
+        if (!items.length) return "";
+        const lines = [escapeHtml(items[0].axisValueLabel ?? items[0].name ?? "")];
+        items.forEach((item) => {
+          const value = Array.isArray(item.value) ? item.value[1] : item.value;
+          const formatter = item.seriesName === weightLabel ? formatNumber : formatLineValue;
+          lines.push(`${item.marker || ""}${escapeHtml(item.seriesName)}: ${escapeHtml(formatter(value))}`);
+        });
+        return lines.join("<br/>");
       }
 
       function updateMetricTitles(data) {
@@ -2314,7 +2485,7 @@
         const pageRows = needsPagination ? data.rows.slice(start, start + TABLE_PAGE_SIZE) : data.rows;
         const rows = pageRows
           .map((r) => {
-            const values = data.responses.map((_, i) => `<td>${formatNumber(r[`resp${i}`])}</td>`).join("");
+            const values = data.responses.map((_, i) => `<td>${formatLineValue(r[`resp${i}`])}</td>`).join("");
             return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
           })
           .join("");
@@ -2587,6 +2758,7 @@
         setupMapFloatingControlDrag();
         bindMapFloatingControls();
         syncSidebarToggleButton();
+        setKpiCollapsed(state.kpiCollapsed);
         syncFilterCollapseButton();
         syncFilterFooterToggleButton();
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
@@ -2641,7 +2813,10 @@
           });
         });
         ["actualNumerator", "denominator"].forEach((id) => {
-          el(id).addEventListener("change", refreshActiveTool);
+          el(id).addEventListener("change", () => {
+            syncKpiSelectionFromMetrics();
+            refreshActiveTool();
+          });
         });
         el("expectedNumerator").addEventListener("change", () => {
           renderExpectedNumerators();
@@ -2666,6 +2841,7 @@
         el("ukMapTool").addEventListener("click", () => setTool("uk_map"));
         el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
         el("filterFooterToggleBtn").addEventListener("click", () => setFilterFooterVisible(state.filterFooterCollapsed));
+        el("kpiCollapseBtn").addEventListener("click", () => setKpiCollapsed(!state.kpiCollapsed));
         el("filterCollapseBtn").addEventListener("click", () => setFilterCollapsed(!state.filterCollapsed));
         el("filterSidebarClearBtn").addEventListener("click", clearFilter);
         el("stopAppBtn").addEventListener("click", stopApp);
@@ -2686,7 +2862,9 @@
           clearToolCaches();
           setFilterRowMeta(state.schema.row_count);
           state.savedFilterThemesInitialised = false;
+          state.kpiGroupsInitialised = false;
           renderSavedFilters();
+          renderKpis();
           renderToolSelector();
           if (!toolEnabled(state.tool)) {
             state.tool = chooseDefaultTool();
@@ -2916,6 +3094,19 @@
         if (value === null || value === undefined || Number.isNaN(value)) return "";
         const number = Number(value);
         if (!Number.isFinite(number)) return "";
+        if (state.activeKpiFormat) {
+          const decimals = Number(state.activeKpiFormat.decimals);
+          const fractionDigits = Number.isInteger(decimals) ? Math.max(0, Math.min(12, decimals)) : 2;
+          const formatted = Math.abs(number).toLocaleString(undefined, {
+            minimumFractionDigits: fractionDigits,
+            maximumFractionDigits: fractionDigits,
+          });
+          const sign = number < 0 ? "-" : "";
+          if (state.activeKpiFormat.format === "currency") return `${sign}£${formatted}`;
+          const signed = `${sign}${formatted}`;
+          if (state.activeKpiFormat.format === "percent") return `${signed}%`;
+          return signed;
+        }
         const abs = Math.abs(number);
         let fractionDigits = 2;
         if (abs !== 0 && abs < 0.01) fractionDigits = 6;
@@ -2978,6 +3169,7 @@
           el("datasetMeta").textContent = `${fileMeta} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
           setFilterRowMeta(state.schema.row_count);
           chooseDefaults();
+          renderKpis();
           renderToolSelector();
           state.tool = chooseDefaultTool();
           renderSavedFilters();

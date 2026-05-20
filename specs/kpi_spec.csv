@@ -1,0 +1,7 @@
+group,name,actual,denominator,decimals,format
+VEHICLE,Vehicle age,VEHICLE_AGE,N,1,number
+VEHICLE,Vehicle category,VEHICLE_CATEGORY,N,0,number
+DRIVER,Driver age,DRIVER_AGE,N,1,number
+DRIVER,NCD years,NCD_YEARS,N,1,number
+FINANCIAL,Premium,PREMIUM,N,2,currency
+FINANCIAL,Car value,CAR_VALUE,N,0,currency

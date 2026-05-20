@@ -76,12 +76,41 @@ class BrowserSmokeTests(unittest.TestCase):
                 server.should_exit = True
                 thread.join(timeout=5)
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_kpi_rows_select_metrics_and_survive_tool_switch(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value\n"
+                "AB,AB10 1,1,100,10\n"
+                "AB,AB10 1,2,200,20\n"
+                "AL,AL1 1,3,300,30\n",
+                encoding="utf-8",
+            )
+            kpis_path = tmp_path / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "PRICE,Price,price,N,2,currency\n"
+                "VALUE,Value,value,N,1,number\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path, kpis_path=kpis_path, use_kpis=True)
+            try:
+                self.exercise_kpi_selection(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
     @staticmethod
     def start_app(
         data_path: Path,
         *,
         filters_path: Path | None = None,
         use_saved_filters: bool = False,
+        kpis_path: Path | None = None,
+        use_kpis: bool = False,
     ) -> tuple[str, uvicorn.Server, threading.Thread]:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -95,6 +124,8 @@ class BrowserSmokeTests(unittest.TestCase):
             },
             filters_path=filters_path,
             use_saved_filters=use_saved_filters,
+            kpis_path=kpis_path,
+            use_kpis=use_kpis,
         )
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         server = uvicorn.Server(config)
@@ -274,6 +305,38 @@ class BrowserSmokeTests(unittest.TestCase):
                 driver_heading.click()
                 self.assertEqual(driver_heading.get_attribute("aria-expanded"), "true")
                 self.assertTrue(driver_rows.first.is_visible())
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
+
+    def exercise_kpi_selection(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#kpiSelect .kpi-theme").first.wait_for(timeout=10_000)
+
+                value_heading = page.locator('.kpi-theme[data-kpi-group="VALUE"]')
+                value_row = page.locator('.kpi-option[data-kpi-group="VALUE"]')
+                if value_heading.get_attribute("aria-expanded") == "false":
+                    value_heading.click()
+                value_row.click()
+
+                self.assertEqual(page.locator("#actualNumerator").input_value(), "value")
+                self.assertEqual(page.locator("#denominator").input_value(), "__none__")
+                self.assertEqual(value_row.get_attribute("aria-selected"), "true")
+
+                page.locator("#ukMapTool").click()
+                page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
+                page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#lineBarTool").click()
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()

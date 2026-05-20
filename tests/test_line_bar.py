@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import duckdb
 
 from py_lucidum.app import create_app
-from py_lucidum.core import Dataset, load_saved_filters
+from py_lucidum.core import Dataset, load_kpis, load_saved_filters
 from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
 from py_lucidum.tools.line_bar.query import chart, normalise_quantile_count
@@ -31,6 +31,12 @@ class LineBarToolTests(unittest.TestCase):
         self.filters_path = self.root / "filter_spec.csv"
         self.filters_path.write_text(
             "theme,name,expression\nDriver age,Older drivers,YoungestDriverAge > 40\n",
+            encoding="utf-8",
+        )
+        self.kpis_path = self.root / "kpi_spec.csv"
+        self.kpis_path.write_text(
+            "group,name,actual,denominator,decimals,format\n"
+            "Pricing,Actual average,Actual,N,2,number\n",
             encoding="utf-8",
         )
 
@@ -58,6 +64,7 @@ class LineBarToolTests(unittest.TestCase):
             token="dev-token",
             defaults={"denominator": "Weight"},
             filters_path=self.filters_path,
+            kpis_path=self.kpis_path,
             tools=["line_bar"],
         )
         paths = {route.path for route in app.routes}
@@ -72,6 +79,10 @@ class LineBarToolTests(unittest.TestCase):
         self.assertEqual(
             app.state.saved_filters,
             [{"theme": "Driver age", "name": "Older drivers", "expression": "YoungestDriverAge > 40"}],
+        )
+        self.assertEqual(
+            app.state.kpis,
+            [{"group": "Pricing", "name": "Actual average", "actual": "Actual", "denominator": "__none__", "decimals": 2, "format": "number"}],
         )
 
     def test_default_saved_filters_fall_back_to_specs_directory(self) -> None:
@@ -93,6 +104,51 @@ class LineBarToolTests(unittest.TestCase):
             app.state.saved_filters,
             [{"theme": "Driver age", "name": "Spec older drivers", "expression": "YoungestDriverAge > 40"}],
         )
+
+    def test_default_kpis_fall_back_to_specs_directory(self) -> None:
+        self.kpis_path.unlink()
+        specs_dir = self.root / "specs"
+        specs_dir.mkdir()
+        (specs_dir / "kpi_spec.csv").write_text(
+            "group,name,actual,denominator,decimals,format\n"
+            "Pricing,Weighted actual,Actual,Weight,1,currency\n",
+            encoding="utf-8",
+        )
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            app = create_app(self.data_path, token="dev-token", tools=["line_bar"], use_saved_filters=False)
+        finally:
+            os.chdir(previous_cwd)
+
+        self.assertEqual(
+            app.state.kpis,
+            [{"group": "Pricing", "name": "Weighted actual", "actual": "Actual", "denominator": "Weight", "decimals": 1, "format": "currency"}],
+        )
+
+    def test_kpi_spec_parses_denominator_aliases(self) -> None:
+        self.kpis_path.write_text(
+            "group,name,actual,denominator,decimals,format\n"
+            "Pricing,Average actual,Actual,Average row value,2,currency\n"
+            "Pricing,Expected average,Expected,,1,percent\n"
+            "Pricing,Actual per row,Actual,__none__,0,number\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            load_kpis(self.kpis_path),
+            [
+                {"group": "Pricing", "name": "Average actual", "actual": "Actual", "denominator": "__none__", "decimals": 2, "format": "currency"},
+                {"group": "Pricing", "name": "Expected average", "actual": "Expected", "denominator": "__none__", "decimals": 1, "format": "percent"},
+                {"group": "Pricing", "name": "Actual per row", "actual": "Actual", "denominator": "__none__", "decimals": 0, "format": "number"},
+            ],
+        )
+
+    def test_kpi_spec_rejects_invalid_header(self) -> None:
+        self.kpis_path.write_text("name,actual,denominator,decimals,format\nActual average,Actual,N,2,number\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "group,name,actual,denominator,decimals,format"):
+            load_kpis(self.kpis_path)
 
     def test_old_two_column_saved_filter_csv_is_rejected(self) -> None:
         self.filters_path.write_text("name,expression\nOld older drivers,YoungestDriverAge > 40\n", encoding="utf-8")
@@ -117,6 +173,18 @@ class LineBarToolTests(unittest.TestCase):
         self.assertEqual(app.state.saved_filters, [])
         self.assertIsNone(app.state.resolved_filters_path)
         self.assertFalse(app.state.use_saved_filters)
+
+    def test_app_loads_with_kpis_disabled(self) -> None:
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            app = create_app(self.data_path, token="dev-token", tools=["line_bar"], use_kpis=False)
+        finally:
+            os.chdir(previous_cwd)
+
+        self.assertEqual(app.state.kpis, [])
+        self.assertIsNone(app.state.resolved_kpis_path)
+        self.assertFalse(app.state.use_kpis)
 
     def test_dataset_schema_includes_file_size(self) -> None:
         dataset = Dataset(self.data_path)
