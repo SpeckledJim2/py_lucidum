@@ -425,7 +425,7 @@
       function setSidebarVisible(visible) {
         state.sidebarVisible = Boolean(visible);
         document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible);
-        el("appSidebar").setAttribute("aria-hidden", String(!state.sidebarVisible));
+        el("appSidebar").removeAttribute("aria-hidden");
         syncSidebarToggleButton();
         requestAnimationFrame(() => {
           if (state.tool === "line_bar") {
@@ -439,7 +439,7 @@
 
       function syncSidebarToggleButton() {
         const button = el("sidebarToggleBtn");
-        const label = state.sidebarVisible ? "Hide sidebar" : "Show sidebar";
+        const label = state.sidebarVisible ? "Collapse sidebar" : "Expand sidebar";
         button.setAttribute("aria-expanded", String(state.sidebarVisible));
         button.setAttribute("aria-label", label);
         button.title = label;
@@ -2896,6 +2896,7 @@
           const previousSavedFilterSelection = savedFilterSelectionSnapshot();
           const previousCollapsedSavedFilterThemes = new Set(state.collapsedSavedFilterThemes);
           const previousSavedFilterThemesInitialised = state.savedFilterThemesInitialised;
+          const previousSidebarVisible = state.sidebarVisible;
           const preserveMapViewOnReload = state.tool === "uk_map" && Boolean(ukMap);
           state.schema = await api("/api/reload", { method: "POST" });
           const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
@@ -2923,6 +2924,7 @@
           renderFeatures();
           updateAxisControls();
           setTool(state.tool, false);
+          setSidebarVisible(previousSidebarVisible);
           refreshActiveTool({ force: true });
         });
         window.addEventListener("resize", () => {

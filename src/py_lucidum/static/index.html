@@ -20,7 +20,7 @@
           <span>lucidum</span>
         </div>
         <div class="layout-toggle-group">
-          <button id="sidebarToggleBtn" class="sidebar-toggle" type="button" aria-label="Hide sidebar" aria-controls="appSidebar" aria-expanded="true" title="Hide sidebar">
+          <button id="sidebarToggleBtn" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-controls="appSidebar" aria-expanded="true" title="Collapse sidebar">
             <span class="sidebar-toggle-icon" aria-hidden="true"></span>
           </button>
           <button id="filterFooterToggleBtn" class="footer-toggle" type="button" aria-label="Hide filter footer" aria-controls="filterFooter" aria-expanded="true" title="Hide filter footer">
@@ -46,17 +46,17 @@
         <aside id="appSidebar">
           <section id="toolSelectorSection" class="section tool-selector-section">
             <div class="tool-selector">
-              <button id="lineBarTool" class="tool-option active" type="button" data-tool="line_bar">
+              <button id="lineBarTool" class="tool-option active" type="button" data-tool="line_bar" aria-label="Line and bar" title="Line and bar">
                 <span class="tool-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" focusable="false"><path d="M4 19h16M7 16V9m5 7V5m5 11v-4M6 11l4-4 4 5 4-3" /></svg>
                 </span>
-                <span>Line and bar</span>
+                <span class="tool-label">Line and bar</span>
               </button>
-              <button id="ukMapTool" class="tool-option" type="button" data-tool="uk_map">
+              <button id="ukMapTool" class="tool-option" type="button" data-tool="uk_map" aria-label="UK mapping" title="UK mapping">
                 <span class="tool-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" focusable="false"><path d="M9 18l-5 2V6l5-2 6 2 5-2v14l-5 2-6-2Zm0 0V4m6 16V6" /></svg>
                 </span>
-                <span>UK mapping</span>
+                <span class="tool-label">UK mapping</span>
               </button>
             </div>
           </section>

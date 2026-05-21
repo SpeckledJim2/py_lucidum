@@ -172,6 +172,23 @@ class BrowserSmokeTests(unittest.TestCase):
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
 
+                page.locator("#sidebarToggleBtn").click()
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
+                self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))
+                self.assertTrue(page.locator("#lineBarTool").is_visible())
+                self.assertTrue(page.locator("#ukMapTool").is_visible())
+                self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
+                self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
+                self.assertFalse(page.locator("#sidebarResizer").is_visible())
+
+                page.locator("#reloadBtn").click()
+                page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"')
+                self.assertTrue(page.locator("#lineBarTool").is_visible())
+                self.assertTrue(page.locator("#ukMapTool").is_visible())
+                self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
+                self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
+                self.assertFalse(page.locator("#sidebarResizer").is_visible())
+
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
@@ -180,11 +197,16 @@ class BrowserSmokeTests(unittest.TestCase):
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
 
+                page.locator("#sidebarToggleBtn").click()
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
+                self.assertTrue(page.locator(".sidebar-kpi-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-filter-section").is_visible())
+
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
 
                 self.assertEqual(page_errors, [])
-                self.assertEqual(chart_requests, 1)
+                self.assertEqual(chart_requests, 2)
                 self.assertEqual(map_requests, 1)
             finally:
                 browser.close()
