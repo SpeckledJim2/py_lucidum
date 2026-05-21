@@ -87,6 +87,22 @@ class StaticAssetTests(unittest.TestCase):
         self.assert_no_store("/static/app.js")
         self.assert_no_store("/static/app.css")
 
+    def test_stop_app_confirmation_uses_custom_favicon_dialog(self) -> None:
+        _, css_body = self.assert_no_store("/static/app.css")
+        _, js_body = self.assert_no_store("/static/app.js")
+        css = css_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertIn("function confirmStopApp()", js)
+        self.assertIn('overlay.className = "stop-confirm-overlay";', js)
+        self.assertIn('class="stop-confirm-icon" src="/favicon.ico" alt=""', js)
+        self.assertIn('role="dialog" aria-modal="true" aria-labelledby="stopConfirmTitle"', js)
+        self.assertIn('if (!(await confirmStopApp())) return;', js)
+        self.assertNotIn("window.confirm", js)
+        self.assertIn(".stop-confirm-content {\n        display: grid;\n        grid-template-columns: 38px minmax(0, 1fr);", css)
+        self.assertIn(".stop-confirm-icon {\n        width: 38px;\n        height: 38px;", css)
+        self.assertIn(".stop-confirm-actions {\n        display: flex;\n        justify-content: flex-end;", css)
+
     def test_feature_picker_rows_are_compact(self) -> None:
         _, body = self.assert_no_store("/static/app.css")
         css = body.decode("utf-8")

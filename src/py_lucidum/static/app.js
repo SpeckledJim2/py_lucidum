@@ -1092,8 +1092,45 @@
         refreshActiveTool();
       }
 
+      function confirmStopApp() {
+        return new Promise((resolve) => {
+          const overlay = document.createElement("div");
+          overlay.className = "stop-confirm-overlay";
+          overlay.innerHTML = `
+            <div class="stop-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="stopConfirmTitle">
+              <div class="stop-confirm-content">
+                <img class="stop-confirm-icon" src="/favicon.ico" alt="">
+                <p id="stopConfirmTitle">Stop the local py_lucidum server?</p>
+              </div>
+              <div class="stop-confirm-actions">
+                <button class="ghost stop-confirm-cancel" type="button">Cancel</button>
+                <button class="ghost stop-confirm-ok" type="button">OK</button>
+              </div>
+            </div>
+          `;
+          const cancelButton = overlay.querySelector(".stop-confirm-cancel");
+          const okButton = overlay.querySelector(".stop-confirm-ok");
+          let closed = false;
+          const close = (confirmed) => {
+            if (closed) return;
+            closed = true;
+            window.removeEventListener("keydown", handleKeydown);
+            overlay.remove();
+            resolve(confirmed);
+          };
+          function handleKeydown(event) {
+            if (event.key === "Escape") close(false);
+          }
+          cancelButton.addEventListener("click", () => close(false));
+          okButton.addEventListener("click", () => close(true));
+          window.addEventListener("keydown", handleKeydown);
+          document.body.append(overlay);
+          cancelButton.focus();
+        });
+      }
+
       async function stopApp() {
-        if (!window.confirm("Stop the local py_lucidum server?")) return;
+        if (!(await confirmStopApp())) return;
         const button = el("stopAppBtn");
         button.disabled = true;
         button.textContent = "Stopping...";
