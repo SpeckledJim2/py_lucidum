@@ -1776,13 +1776,19 @@
       }
 
       function mapHotspotKeys(rows) {
-        const count = Number(state.mapHotspots);
-        if (!Number.isFinite(count) || count === 0) return null;
-        const rankedRows = rows
-          .filter((row) => row.key !== null && row.key !== undefined && finiteNumber(row.value) !== null)
-          .sort((a, b) => finiteNumber(a.value) - finiteNumber(b.value));
-        if (count > 0) rankedRows.reverse();
-        return new Set(rankedRows.slice(0, Math.abs(count)).map((row) => String(row.key)));
+        const fraction = Number(state.mapHotspots);
+        if (!Number.isFinite(fraction) || fraction === 0) return null;
+        const validRows = rows
+          .map((row, index) => ({ row, index, value: finiteNumber(row.value) }))
+          .filter(({ row, value }) => row.key !== null && row.key !== undefined && value !== null);
+        if (!validRows.length) return null;
+        const direction = fraction > 0 ? -1 : 1;
+        validRows.sort((a, b) => {
+          if (a.value !== b.value) return (a.value - b.value) * direction;
+          return a.index - b.index;
+        });
+        const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * Math.abs(fraction))));
+        return new Set(validRows.slice(0, count).map(({ row }) => String(row.key)));
       }
 
       function mapLineWeightForLevel(level) {
@@ -2210,7 +2216,7 @@
         el("mapLabelSize").value = String(state.mapLabelSize);
         el("mapLineWeightValue").textContent = String(state.mapLineWeight);
         el("mapOpacityValue").textContent = formatCompactSliderValue(state.mapOpacity);
-        el("mapHotspotsValue").textContent = String(state.mapHotspots);
+        el("mapHotspotsValue").textContent = formatPercentSliderValue(state.mapHotspots);
         el("mapLabelSizeValue").textContent = String(state.mapLabelSize);
       }
 
@@ -2218,6 +2224,13 @@
         const number = Number(value);
         if (!Number.isFinite(number)) return "";
         return Number.isInteger(number) ? String(number) : String(Number(number.toFixed(1)));
+      }
+
+      function formatPercentSliderValue(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        if (number === 0) return "0";
+        return `${Number((number * 100).toFixed(0))}%`;
       }
 
       function normalisePostcodeSearch(raw) {
@@ -3232,7 +3245,7 @@
       function positionMapFloatingControlTopRight() {
         const panel = el("mapFloatingControl");
         const styles = getComputedStyle(panel);
-        const rightInset = styles.getPropertyValue("--map-floating-right").trim() || "24px";
+        const rightInset = styles.getPropertyValue("--map-floating-right").trim() || "19px";
         const topInset = styles.getPropertyValue("--map-floating-top").trim() || "16px";
         panel.style.left = "auto";
         panel.style.right = rightInset;

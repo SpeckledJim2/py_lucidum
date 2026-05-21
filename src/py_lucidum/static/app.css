@@ -1332,7 +1332,7 @@
       }
 
       .map-floating-control {
-        --map-floating-right: 24px;
+        --map-floating-right: 19px;
         --map-floating-top: 16px;
         position: absolute;
         top: var(--map-floating-top);
@@ -1531,9 +1531,8 @@
 
       .map-slider-grid {
         display: grid;
-        grid-template-columns: repeat(4, 78px);
-        gap: 8px 8px;
-        justify-content: space-between;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px 16px;
       }
 
       .map-slider-control {
@@ -1595,13 +1594,12 @@
 
       @media (max-width: 1280px) {
         .map-floating-control {
-          --map-floating-right: 16px;
+          --map-floating-right: 11px;
           width: min(390px, calc(100% - 112px));
         }
 
         .map-slider-grid {
-          grid-template-columns: repeat(2, 78px);
-          justify-content: space-around;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
         .map-floating-row {
