@@ -13,6 +13,10 @@
 
       const locationParams = paramsFromLocation();
       const token = locationParams.get("token") || "";
+      const ACTION_RENDER_LABELS = {
+        line_bar: "Chart render",
+        uk_map: "Map render",
+      };
       const state = {
         schema: null,
         x: null,
@@ -55,6 +59,7 @@
           line_bar: { requestKey: null, data: null, presentation: null },
           uk_map: { requestKey: null, data: null, presentation: null },
         },
+        actionTimings: freshActionTimings(),
         mapGeoJsonCache: {},
         mapFitLevel: null,
         mapStartupFitDone: false,
@@ -281,12 +286,21 @@
         };
       }
 
+      function freshActionTimings() {
+        return {
+          line_bar: { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" },
+          uk_map: { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" },
+        };
+      }
+
       function clearToolCaches() {
         state.toolCache = freshToolCache();
+        state.actionTimings = freshActionTimings();
         state.lastData = null;
         state.lastMapData = null;
         state.mapStartupFitDone = false;
         state.renderedMapLevel = null;
+        syncActionTimingMonitor();
       }
 
       function toolCache(tool) {
@@ -294,6 +308,115 @@
           state.toolCache[tool] = { requestKey: null, data: null, presentation: null };
         }
         return state.toolCache[tool];
+      }
+
+      function actionTiming(tool) {
+        if (!state.actionTimings[tool]) {
+          state.actionTimings[tool] = { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" };
+        }
+        return state.actionTimings[tool];
+      }
+
+      function formatDurationNumber(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        return String(Math.round(number));
+      }
+
+      function formatActionTimingValue(valueNs, status = "idle") {
+        if (status === "running") return "running";
+        if (status === "failed") return "failed";
+        if (valueNs === null || valueNs === undefined) return "--";
+        const ns = Number(valueNs);
+        if (!Number.isFinite(ns)) return "--";
+        const roundedNs = Math.max(0, Math.round(ns));
+        if (roundedNs < 1000) return `${roundedNs}ns`;
+        if (roundedNs < 1_000_000) return `${formatDurationNumber(roundedNs / 1000)}us`;
+        return `${formatDurationNumber(roundedNs / 1_000_000)}ms`;
+      }
+
+      function formatDuckDbTimingValue(timing) {
+        if (timing.duckdbStatus === "running") return "running";
+        if (timing.duckdbStatus === "failed") return "failed";
+        const duckdbNs = Number(timing.duckdbNs);
+        if (Number.isFinite(duckdbNs)) return formatActionTimingValue(duckdbNs);
+        const duckdbMs = Number(timing.duckdbMs);
+        return Number.isFinite(duckdbMs) ? `${formatDurationNumber(Math.max(0, duckdbMs))}ms` : "--";
+      }
+
+      function formatRenderTimingValue(timing) {
+        if (timing.renderStatus === "rendering") return "rendering...";
+        return formatActionTimingValue(timing.renderNs);
+      }
+
+      function syncActionTimingMonitor(tool = state.tool) {
+        const timing = actionTiming(tool);
+        const renderLabel = ACTION_RENDER_LABELS[tool] || "Render";
+        el("actionTimingMonitor").textContent = `DuckDB: ${formatDuckDbTimingValue(timing)}, ${renderLabel}: ${formatRenderTimingValue(timing)}`;
+      }
+
+      function startToolTiming(tool) {
+        const timing = actionTiming(tool);
+        timing.duckdbNs = null;
+        timing.duckdbMs = null;
+        timing.duckdbStatus = "running";
+        timing.renderNs = null;
+        timing.renderStatus = "idle";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function setDuckDbTiming(tool, timings = {}) {
+        const timing = actionTiming(tool);
+        const duckdbNs = Number(timings.duckdb_ns);
+        const duckdbMs = Number(timings.duckdb_ms);
+        timing.duckdbNs = Number.isFinite(duckdbNs) ? Math.max(0, Math.round(duckdbNs)) : null;
+        timing.duckdbMs = timing.duckdbNs === null && Number.isFinite(duckdbMs) ? Math.max(0, duckdbMs) : null;
+        timing.duckdbStatus = "idle";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function setToolTimingFailed(tool) {
+        const timing = actionTiming(tool);
+        timing.duckdbNs = null;
+        timing.duckdbMs = null;
+        timing.duckdbStatus = "failed";
+        timing.renderNs = null;
+        timing.renderStatus = "idle";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function setRenderTimingRunning(tool) {
+        const timing = actionTiming(tool);
+        timing.renderNs = null;
+        timing.renderStatus = "rendering";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function setRenderTiming(tool, valueMs) {
+        const timing = actionTiming(tool);
+        const number = Number(valueMs);
+        timing.renderNs = Number.isFinite(number) ? Math.max(0, Math.round(number * 1_000_000)) : null;
+        timing.renderStatus = "idle";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function measureToolRender(tool, renderCallback) {
+        const started = performance.now();
+        setRenderTimingRunning(tool);
+        try {
+          const result = renderCallback();
+          requestAnimationFrame(() => {
+            setRenderTiming(tool, performance.now() - started);
+          });
+          return result;
+        } catch (error) {
+          setRenderTiming(tool, null);
+          throw error;
+        }
+      }
+
+      function syncDuckDbTimingFromData(tool, data) {
+        setDuckDbTiming(tool, data?.timings || {});
       }
 
       function normaliseForRequestKey(value) {
@@ -399,6 +522,7 @@
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
         syncActiveFilterLabels();
+        syncActionTimingMonitor(tool);
         setStatus("");
         setChartMessage("");
         if (tool === "line_bar") {
@@ -1195,6 +1319,7 @@
         setStatus("");
         setChartMessage("");
         setGroupMeta("line_bar", "Computing...");
+        startToolTiming("line_bar");
         updateAxisControls();
         try {
           const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
@@ -1202,10 +1327,12 @@
           const cache = toolCache("line_bar");
           cache.requestKey = requestKey;
           cache.data = data;
-          renderChartData(data, { resetTablePage: true });
+          syncDuckDbTimingFromData("line_bar", data);
+          measureToolRender("line_bar", () => renderChartData(data, { resetTablePage: true }));
           return data;
         } catch (error) {
           if (requestSeq !== state.chartRequestSeq) return;
+          setToolTimingFailed("line_bar");
           setGroupMeta("line_bar", "Query failed");
           setChartMessage("");
           setStatus(error.message, true);
@@ -1233,12 +1360,14 @@
       function useCachedChartData(cache, options = {}) {
         state.lastData = cache.data;
         if (options.renderIfCached) {
-          renderChartData(cache.data);
+          measureToolRender("line_bar", () => renderChartData(cache.data));
           return;
         }
-        updateMetricTitles(cache.data);
-        applyToolPresentation("line_bar");
-        requestAnimationFrame(() => chart.resize());
+        measureToolRender("line_bar", () => {
+          updateMetricTitles(cache.data);
+          applyToolPresentation("line_bar");
+          requestAnimationFrame(() => chart.resize());
+        });
       }
 
       function buildMapRequest() {
@@ -1274,6 +1403,7 @@
         setStatus("");
         setChartMessage("");
         setGroupMeta("uk_map", "Computing map...");
+        startToolTiming("uk_map");
         try {
           const [data, geoJson] = await Promise.all([
             api("/api/uk-map/summary", { method: "POST", body: JSON.stringify(request) }),
@@ -1283,11 +1413,13 @@
           const cache = toolCache("uk_map");
           cache.requestKey = requestKey;
           cache.data = data;
+          syncDuckDbTimingFromData("uk_map", data);
           updateMapMetricTitles(data);
           renderMap(data, geoJson);
           return data;
         } catch (error) {
           if (requestSeq !== state.mapRequestSeq) return;
+          setToolTimingFailed("uk_map");
           state.pendingMapZoom = null;
           setGroupMeta("uk_map", "Map failed");
           setChartMessage(error.message);
@@ -1317,7 +1449,7 @@
           }
           return;
         }
-        requestAnimationFrame(() => resizeMap());
+        measureToolRender("uk_map", () => requestAnimationFrame(() => resizeMap()));
       }
 
       function postcodeColumn(level) {
@@ -1849,6 +1981,10 @@
       }
 
       function renderMap(data, geoJson) {
+        return measureToolRender("uk_map", () => renderMapContents(data, geoJson));
+      }
+
+      function renderMapContents(data, geoJson) {
         if (data.level === "unit") {
           renderUnitMap(data);
           return;
@@ -2837,6 +2973,7 @@
         setKpiCollapsed(state.kpiCollapsed);
         syncFilterCollapseButton();
         syncFilterFooterToggleButton();
+        syncActionTimingMonitor();
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
         document.querySelectorAll(".segmented").forEach((group) => {
           group.addEventListener("click", (event) => {
@@ -2926,8 +3063,8 @@
           const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";
           el("themeBtn").setAttribute("aria-label", label);
           el("themeBtn").title = label;
-          if (state.lastData) renderChart(state.lastData);
-          if (state.tool === "uk_map") resizeMap();
+          if (state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
+          if (state.tool === "uk_map") measureToolRender("uk_map", () => resizeMap());
         });
         el("reloadBtn").addEventListener("click", async () => {
           setStatus("");

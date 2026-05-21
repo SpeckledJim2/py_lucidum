@@ -265,6 +265,12 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
 
   Saved-filter rows can be used in `Single` mode, where each click clears other saved filters, `Multi` mode, where each click toggles only that row and selected rows combine using the active All/Any/Not all/None mode, or `Grouped` mode, where rows within each theme combine with `OR` and selected themes combine with `AND`. The generated expression is written to the footer expression box.
 
+  **Performance timings**
+
+  The footer shows approximate diagnostic timings for the active tool, for example `DuckDB: 430us, Chart render: 147ms` or `DuckDB: 26ms, Map render: 120ms`. Timing values can use `ns`, `us`, or `ms` depending on the measured duration. `DuckDB` is measured on the Python server for the active tool API request. It includes the server-side query function, including DuckDB filter validation, row counts, summaries, aggregations, and small Python result shaping. It does not include browser-to-server network latency, JSON transfer or parsing, chart drawing, map drawing, GeoJSON loading, or map tile loading.
+
+  `Chart render` is measured in the browser after data has arrived, while updating the Line/Bar chart and table UI. `Map render` is measured in the browser after data and the required GeoJSON are available, while updating the Leaflet map layers, legend, and labels. Cached UI rerenders can update the render timing without running a new DuckDB query, so the DuckDB value may be the last cached query time. Collapsing the filter footer hides the timing monitor along with the filter input.
+
   **KPIs**
 
   KPI specs are grouped CSV files with exactly these columns:

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 import duckdb
 
@@ -12,6 +15,37 @@ from py_lucidum.core import Dataset, load_kpis, load_saved_filters
 from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
 from py_lucidum.tools.line_bar.query import chart, normalise_quantile_count
+
+
+def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
+    messages: list[dict[str, Any]] = []
+    body = json.dumps(payload).encode("utf-8")
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
+    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in start["headers"]}
+    return start["status"], headers, response_body
 
 
 class LineBarToolTests(unittest.TestCase):
@@ -84,6 +118,21 @@ class LineBarToolTests(unittest.TestCase):
             app.state.kpis,
             [{"group": "Pricing", "name": "Actual average", "actual": "Actual", "denominator": "__none__", "decimals": 2, "format": "number"}],
         )
+
+    def test_chart_endpoint_includes_duckdb_timing(self) -> None:
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/chart", self.request())
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["x"], "UseofVan")
+        self.assertIn("rows", payload)
+        self.assertIn("response_summaries", payload)
+        self.assertIsInstance(payload["timings"]["duckdb_ns"], int)
+        self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
+        self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
+        self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
 
     def test_default_saved_filters_fall_back_to_specs_directory(self) -> None:
         self.filters_path.unlink()

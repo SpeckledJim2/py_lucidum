@@ -1,12 +1,46 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from py_lucidum.app import create_app, normalise_tools
 from py_lucidum.core import Dataset
 from py_lucidum.tools.uk_map.query import summary
+
+
+def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
+    messages: list[dict[str, Any]] = []
+    body = json.dumps(payload).encode("utf-8")
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
+    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in start["headers"]}
+    return start["status"], headers, response_body
 
 
 class UkMapToolTests(unittest.TestCase):
@@ -73,6 +107,21 @@ class UkMapToolTests(unittest.TestCase):
         self.assertEqual(app.state.defaults["postcode_unit"], "CustomUnit")
         self.assertEqual(app.state.defaults["latitude"], "CustomLat")
         self.assertEqual(app.state.defaults["longitude"], "CustomLong")
+
+    def test_summary_endpoint_includes_duckdb_timing(self) -> None:
+        app = create_app(self.data_path, token="", tools=["uk_map"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/uk-map/summary", self.request())
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["level"], "area")
+        self.assertIn("rows", payload)
+        self.assertIn("response", payload)
+        self.assertIsInstance(payload["timings"]["duckdb_ns"], int)
+        self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
+        self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
+        self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
 
     def test_area_summary_uses_average_row_value(self) -> None:
         dataset = Dataset(self.data_path)

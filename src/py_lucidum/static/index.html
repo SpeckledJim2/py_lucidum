@@ -311,9 +311,12 @@
         </main>
       </div>
       <footer id="filterFooter" class="filter-footer">
-        <button id="filterClearBtn" class="filter-action" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
-        <button id="filterApplyBtn" class="filter-action" type="button" title="Apply filter" aria-label="Apply filter">&#9654;</button>
-        <input id="filterInput" placeholder="DuckDB WHERE expression" />
+        <div class="footer-filter-controls">
+          <button id="filterClearBtn" class="filter-action" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
+          <button id="filterApplyBtn" class="filter-action" type="button" title="Apply filter" aria-label="Apply filter">&#9654;</button>
+          <input id="filterInput" placeholder="DuckDB WHERE expression" />
+        </div>
+        <div id="actionTimingMonitor" class="action-timing-monitor" aria-live="polite">DuckDB: --, Chart render: --</div>
       </footer>
     </div>
 

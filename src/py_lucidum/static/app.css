@@ -1029,13 +1029,32 @@
 
       .filter-footer {
         display: grid;
-        grid-template-columns: 28px 28px minmax(0, 1fr);
-        gap: 6px;
+        grid-template-columns: minmax(0, 4fr) minmax(120px, 1fr);
+        gap: 10px;
         align-items: center;
         min-width: 0;
         padding: 8px 10px;
         border-top: 1px solid var(--line);
         background: var(--panel);
+      }
+
+      .footer-filter-controls {
+        display: grid;
+        grid-template-columns: 28px 28px minmax(0, 1fr);
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+      }
+
+      .action-timing-monitor {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.1;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       body.filter-footer-collapsed .filter-footer {

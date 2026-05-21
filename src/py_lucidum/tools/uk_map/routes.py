@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -21,7 +22,14 @@ def register(app: FastAPI, context: AppContext) -> None:
         context.check_token(request)
         payload = await request.json()
         try:
-            return summary(context.dataset, payload, defaults=getattr(app.state, "defaults", {}))
+            started = time.perf_counter_ns()
+            result = summary(context.dataset, payload, defaults=getattr(app.state, "defaults", {}))
+            elapsed_ns = time.perf_counter_ns() - started
+            result["timings"] = {
+                "duckdb_ns": elapsed_ns,
+                "duckdb_ms": round(elapsed_ns / 1_000_000),
+            }
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
