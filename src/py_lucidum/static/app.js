@@ -33,7 +33,6 @@
         view: "chart",
         mapLevel: "area",
         baseMap: "blank",
-        mapBackground: "dark",
         mapPalette: "divergent",
         mapLineWeight: 1,
         mapOpacity: 1,
@@ -1567,8 +1566,9 @@
       function applyMapBackground() {
         const container = ukMap?.getContainer();
         if (!container) return;
-        container.classList.toggle("map-bg-dark", state.mapBackground === "dark");
-        container.classList.toggle("map-bg-light", state.mapBackground !== "dark");
+        const dark = document.body.classList.contains("dark");
+        container.classList.toggle("map-bg-dark", dark);
+        container.classList.toggle("map-bg-light", !dark);
       }
 
       function addMapLayerControl() {
@@ -2203,9 +2203,6 @@
         syncActiveFilterLabels();
         document.querySelectorAll(".map-palette-button").forEach((button) => {
           button.classList.toggle("active", button.dataset.palette === state.mapPalette);
-        });
-        document.querySelectorAll(".map-background-button").forEach((button) => {
-          button.classList.toggle("active", button.dataset.mapBackground === state.mapBackground);
         });
         el("mapLineWeight").value = String(state.mapLineWeight);
         el("mapOpacity").value = String(state.mapOpacity);
@@ -3063,6 +3060,7 @@
           const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";
           el("themeBtn").setAttribute("aria-label", label);
           el("themeBtn").title = label;
+          applyMapBackground();
           if (state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
           if (state.tool === "uk_map") measureToolRender("uk_map", () => resizeMap());
         });
@@ -3255,13 +3253,6 @@
           button.addEventListener("click", () => {
             state.mapPalette = button.dataset.palette || "viridis";
             redrawMapInPlace();
-          });
-        });
-        document.querySelectorAll(".map-background-button").forEach((button) => {
-          button.addEventListener("click", () => {
-            state.mapBackground = button.dataset.mapBackground === "dark" ? "dark" : "light";
-            applyMapBackground();
-            syncFloatingMapControl();
           });
         });
         [

@@ -448,8 +448,10 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("formatXLabel(r.x, data.x_kind)", js)
 
     def test_theme_toggle_uses_icons_and_accessible_labels(self) -> None:
+        _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
         _, js_body = self.assert_no_store("/static/app.js")
+        html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
         js = js_body.decode("utf-8")
 
@@ -461,9 +463,19 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn(".theme-icon-sun", css)
         self.assertIn("body.dark .theme-icon-moon", css)
         self.assertIn("body.dark .theme-icon-sun", css)
+        self.assertNotIn("map-background-buttons", html)
+        self.assertNotIn("map-background-button", css)
+        self.assertNotIn("background-swatch", css)
+        self.assertNotIn("mapBackground", js)
+        self.assertNotIn("data-map-background", js)
+        self.assertIn("function applyMapBackground()", js)
+        self.assertIn('const dark = document.body.classList.contains("dark");', js)
+        self.assertIn('container.classList.toggle("map-bg-dark", dark);', js)
+        self.assertIn('container.classList.toggle("map-bg-light", !dark);', js)
         self.assertIn('const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";', js)
         self.assertIn('el("themeBtn").setAttribute("aria-label", label);', js)
         self.assertIn('el("themeBtn").title = label;', js)
+        self.assertIn("applyMapBackground();", js)
         self.assertNotIn('.textContent = document.body.classList.contains("dark") ? "Light" : "Dark"', js)
 
     def test_line_bar_quantile_control_is_numeric_only(self) -> None:
@@ -504,11 +516,23 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("filter: invert(1) grayscale(1) brightness(1.7) contrast(1.08);", css)
 
     def test_map_layer_control_uses_distinct_radio_groups(self) -> None:
+        _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
         _, js_body = self.assert_no_store("/static/app.js")
+        html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
         js = js_body.decode("utf-8")
 
+        self.assertIn("<span>Max/Min</span>", html)
+        self.assertNotIn("Hot/not-spots", html)
+        self.assertIn("width: min(430px, calc(100% - 190px));", css)
+        self.assertIn("grid-template-columns: repeat(4, 78px);", css)
+        self.assertIn("gap: 8px 8px;", css)
+        self.assertIn("font-size: 10px;", css)
+        self.assertIn(".slider-scale b {\n        min-width: 20px;\n        min-height: 18px;", css)
+        self.assertIn("padding: 0 2px;\n        font-size: 10px;", css)
+        self.assertIn("width: min(390px, calc(100% - 112px));", css)
+        self.assertIn("grid-template-columns: repeat(2, 78px);", css)
         self.assertIn('label: "Aerial"', js)
         self.assertNotIn('label: "Satellite"', js)
         self.assertIn('type="radio" name="baseMap"', js)

@@ -220,6 +220,9 @@ class BrowserSmokeTests(unittest.TestCase):
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                 page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-pane')")
+                page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')")
+                page.locator("#themeBtn").click()
+                page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-dark')")
                 page.wait_for_function(
                     """
                     () => {
