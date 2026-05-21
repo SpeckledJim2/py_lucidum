@@ -1774,6 +1774,7 @@
         margin-left: auto;
         color: var(--muted);
         font-size: 12px;
+        flex: 0 0 auto;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1800,8 +1801,18 @@
         border-radius: 8px;
         background: var(--panel);
         box-shadow: 0 12px 40px rgb(15 23 42 / 24%);
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr);
+        gap: 16px;
+        align-items: center;
         padding: 18px;
-        text-align: center;
+        text-align: left;
+      }
+
+      .shutdown-icon {
+        width: 42px;
+        height: 42px;
+        object-fit: contain;
       }
 
       .shutdown-message h1 {

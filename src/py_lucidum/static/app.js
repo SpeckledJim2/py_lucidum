@@ -1100,7 +1100,7 @@
             <div class="stop-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="stopConfirmTitle">
               <div class="stop-confirm-content">
                 <img class="stop-confirm-icon" src="/favicon.ico" alt="">
-                <p id="stopConfirmTitle">Stop the local py_lucidum server?</p>
+                <p id="stopConfirmTitle">Stop the local lucidum server?</p>
               </div>
               <div class="stop-confirm-actions">
                 <button class="ghost stop-confirm-cancel" type="button">Cancel</button>
@@ -1154,8 +1154,11 @@
         overlay.className = "shutdown-overlay";
         overlay.innerHTML = `
           <div class="shutdown-message" role="status" aria-live="polite">
-            <h1>py_lucidum has stopped</h1>
-            <p>The local server is no longer running. You can close this browser tab.</p>
+            <img class="shutdown-icon" src="/favicon.ico" alt="">
+            <div>
+              <h1>lucidum has stopped</h1>
+              <p>The local server is no longer running. You can close this browser tab.</p>
+            </div>
           </div>
         `;
         document.body.append(overlay);
@@ -3269,6 +3272,7 @@
           await refreshActiveTool({ force: true });
           startServerHeartbeat();
         } catch (error) {
+          el("datasetMeta").textContent = "Dataset failed to load";
           setStatus(error.message, true);
         }
       }

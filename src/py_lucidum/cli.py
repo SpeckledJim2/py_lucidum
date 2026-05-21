@@ -84,8 +84,7 @@ def _run_server(server: uvicorn.Server, run_in_background: bool | None = None) -
         pass
 
 
-def _display_url_for_app(app: object, host: str, port: int) -> str:
-    url = f"http://{host}:{port}/"
+def _query_string_for_app(app: object) -> str:
     state = getattr(app, "state", None)
     token = getattr(state, "token", None)
     defaults = getattr(state, "defaults", {})
@@ -98,9 +97,39 @@ def _display_url_for_app(app: object, host: str, port: int) -> str:
             for key, value in defaults.items()
             if key in DEFAULT_URL_KEYS and value
         })
-    if params:
-        return f"{url}?{urlencode(params)}"
+    return urlencode(params)
+
+
+def _url_for_app(app: object, host: str, port: int) -> str:
+    url = f"http://{host}:{port}/"
+    query_string = _query_string_for_app(app)
+    if query_string:
+        return f"{url}?{query_string}"
     return url
+
+
+def _is_wildcard_host(host: str) -> bool:
+    return host in {"0.0.0.0", "::", "[::]"}
+
+
+def _display_url_for_app(app: object, host: str, port: int) -> str:
+    display_host = "127.0.0.1" if _is_wildcard_host(host) else host
+    return _url_for_app(app, display_host, port)
+
+
+def _lan_url_hint_for_app(app: object, host: str, port: int) -> str | None:
+    if not _is_wildcard_host(host):
+        return None
+    return _url_for_app(app, "<this-computer-ip>", port)
+
+
+def _print_open_urls(app: object, host: str, port: int, display_url: str) -> None:
+    lan_url = _lan_url_hint_for_app(app, host, port)
+    if not lan_url:
+        print(f"Open {display_url}", flush=True)
+        return
+    print(f"Open locally {display_url}", flush=True)
+    print(f"Open from another device on your LAN: {lan_url}", flush=True)
 
 
 def _stop_instruction(run_in_background: bool) -> str:
@@ -146,7 +175,10 @@ def run_app(
     ensure_port_available(host, selected_port)
     display_url = url or _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
-    print(f"Open {display_url}", flush=True)
+    if url:
+        print(f"Open {display_url}", flush=True)
+    else:
+        _print_open_urls(app, host, selected_port, display_url)
     _print_stop_status(run_in_background)
     _start_app_server(app, host, selected_port, display_url, open_browser, run_in_background)
     return display_url
@@ -206,7 +238,7 @@ def serve(
     url = _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
     print(f"py_lucidum serving {Path(path).resolve()}", flush=True)
-    print(f"Open {url}", flush=True)
+    _print_open_urls(app, host, selected_port, url)
     print(f"Saved filters: {saved_filters_status(app)}", flush=True)
     print(f"KPIs: {kpis_status(app)}", flush=True)
     _print_stop_status(run_in_background)

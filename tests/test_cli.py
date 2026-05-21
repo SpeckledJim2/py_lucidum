@@ -12,7 +12,16 @@ from unittest.mock import patch
 
 import uvicorn
 
-from py_lucidum.cli import LucidumServer, _display_url_for_app, _run_server, ensure_port_available, main, run_app, serve
+from py_lucidum.cli import (
+    LucidumServer,
+    _display_url_for_app,
+    _lan_url_hint_for_app,
+    _run_server,
+    ensure_port_available,
+    main,
+    run_app,
+    serve,
+)
 
 
 class FakeServer:
@@ -73,6 +82,24 @@ class CliRuntimeTests(unittest.TestCase):
             "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&denominator=Exposure&postcode_area=Area&postcode_unit=Unit&latitude=lat_col&longitude=long_col",
         )
 
+    def test_display_url_for_wildcard_bind_uses_localhost_and_lan_hint(self) -> None:
+        app = SimpleNamespace(
+            state=SimpleNamespace(
+                token="dev-token",
+                defaults={"x": "Driver Age"},
+            )
+        )
+
+        self.assertEqual(
+            _display_url_for_app(app, "0.0.0.0", 8000),
+            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age",
+        )
+        self.assertEqual(
+            _lan_url_hint_for_app(app, "0.0.0.0", 8000),
+            "http://<this-computer-ip>:8000/?token=dev-token&x=Driver+Age",
+        )
+        self.assertIsNone(_lan_url_hint_for_app(app, "127.0.0.1", 8000))
+
     def test_ensure_port_available_reports_busy_port(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
@@ -123,6 +150,24 @@ class CliRuntimeTests(unittest.TestCase):
                 run_app(app, port=port)
 
         self.assertEqual(stdout.getvalue(), "")
+
+    def test_run_app_prints_lan_hint_for_wildcard_bind(self) -> None:
+        app = SimpleNamespace(state=SimpleNamespace(token="dev-token", defaults={}))
+        stdout = io.StringIO()
+
+        with (
+            patch("py_lucidum.cli._start_app_server") as start_server_mock,
+            redirect_stdout(stdout),
+        ):
+            url = run_app(app, host="0.0.0.0", port=8055)
+
+        self.assertEqual(url, "http://127.0.0.1:8055/?token=dev-token")
+        self.assertIn("Open locally http://127.0.0.1:8055/?token=dev-token", stdout.getvalue())
+        self.assertIn(
+            "Open from another device on your LAN: http://<this-computer-ip>:8055/?token=dev-token",
+            stdout.getvalue(),
+        )
+        start_server_mock.assert_called_once_with(app, "0.0.0.0", 8055, url, False, False)
 
     def test_serve_checks_busy_port_before_printing_or_building_app(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -197,6 +242,68 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertTrue(create_app_mock.call_args.kwargs["use_kpis"])
         self.assertIn(f"KPIs: {kpis_path}", stdout.getvalue())
         start_server_mock.assert_called_once()
+
+    def test_serve_prints_lan_hint_for_wildcard_bind(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+            app = SimpleNamespace(
+                state=SimpleNamespace(
+                    token="dev-token",
+                    defaults={"x": "Driver Age"},
+                    use_saved_filters=False,
+                    resolved_filters_path=None,
+                    use_kpis=False,
+                    resolved_kpis_path=None,
+                )
+            )
+            stdout = io.StringIO()
+
+            with (
+                patch("py_lucidum.cli.create_app", return_value=app),
+                patch("py_lucidum.cli._start_app_server") as start_server_mock,
+                redirect_stdout(stdout),
+            ):
+                url = serve(data_path, host="0.0.0.0", port=8053, token="dev-token", x="Driver Age")
+
+        self.assertEqual(url, "http://127.0.0.1:8053/?token=dev-token&x=Driver+Age")
+        output = stdout.getvalue()
+        self.assertIn("Open locally http://127.0.0.1:8053/?token=dev-token&x=Driver+Age", output)
+        self.assertIn(
+            "Open from another device on your LAN: http://<this-computer-ip>:8053/?token=dev-token&x=Driver+Age",
+            output,
+        )
+        self.assertNotIn("Open http://0.0.0.0:8053", output)
+        start_server_mock.assert_called_once_with(app, "0.0.0.0", 8053, url, False, False)
+
+    def test_serve_prints_simple_open_for_concrete_bind(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+            app = SimpleNamespace(
+                state=SimpleNamespace(
+                    token="",
+                    defaults={},
+                    use_saved_filters=False,
+                    resolved_filters_path=None,
+                    use_kpis=False,
+                    resolved_kpis_path=None,
+                )
+            )
+            stdout = io.StringIO()
+
+            with (
+                patch("py_lucidum.cli.create_app", return_value=app),
+                patch("py_lucidum.cli._start_app_server") as start_server_mock,
+                redirect_stdout(stdout),
+            ):
+                url = serve(data_path, host="127.0.0.1", port=8054, token="")
+
+        self.assertEqual(url, "http://127.0.0.1:8054/")
+        self.assertIn("Open http://127.0.0.1:8054/", stdout.getvalue())
+        self.assertNotIn("Open locally", stdout.getvalue())
+        self.assertNotIn("Open from another device on your LAN", stdout.getvalue())
+        start_server_mock.assert_called_once_with(app, "127.0.0.1", 8054, url, False, False)
 
     def test_python_usage_serve_loads_user_csv_path(self) -> None:
         with TemporaryDirectory() as tmp_dir:

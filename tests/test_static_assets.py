@@ -96,12 +96,40 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("function confirmStopApp()", js)
         self.assertIn('overlay.className = "stop-confirm-overlay";', js)
         self.assertIn('class="stop-confirm-icon" src="/favicon.ico" alt=""', js)
+        self.assertIn("Stop the local lucidum server?", js)
+        self.assertNotIn("Stop the local py_lucidum server?", js)
         self.assertIn('role="dialog" aria-modal="true" aria-labelledby="stopConfirmTitle"', js)
         self.assertIn('if (!(await confirmStopApp())) return;', js)
         self.assertNotIn("window.confirm", js)
         self.assertIn(".stop-confirm-content {\n        display: grid;\n        grid-template-columns: 38px minmax(0, 1fr);", css)
         self.assertIn(".stop-confirm-icon {\n        width: 38px;\n        height: 38px;", css)
         self.assertIn(".stop-confirm-actions {\n        display: flex;\n        justify-content: flex-end;", css)
+
+    def test_stopped_overlay_uses_favicon_message_layout(self) -> None:
+        _, css_body = self.assert_no_store("/static/app.css")
+        _, js_body = self.assert_no_store("/static/app.js")
+        css = css_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertIn('class="shutdown-icon" src="/favicon.ico" alt=""', js)
+        self.assertIn("<h1>lucidum has stopped</h1>", js)
+        self.assertNotIn("<h1>py_lucidum has stopped</h1>", js)
+        self.assertIn(".shutdown-message {\n        width: min(420px, 100%);", css)
+        self.assertIn("display: grid;\n        grid-template-columns: 42px minmax(0, 1fr);", css)
+        self.assertIn("text-align: left;", css)
+        self.assertIn(".shutdown-icon {\n        width: 42px;\n        height: 42px;", css)
+
+    def test_boot_schema_failure_updates_header_and_status(self) -> None:
+        _, js_body = self.assert_no_store("/static/app.js")
+        js = js_body.decode("utf-8")
+
+        self.assertIn('state.schema = await api("/api/schema");', js)
+        self.assertIn('el("datasetMeta").textContent = "Dataset failed to load";', js)
+        self.assertIn("setStatus(error.message, true);", js)
+        self.assertIn(
+            'el("datasetMeta").textContent = "Dataset failed to load";\n          setStatus(error.message, true);',
+            js,
+        )
 
     def test_feature_picker_rows_are_compact(self) -> None:
         _, body = self.assert_no_store("/static/app.css")

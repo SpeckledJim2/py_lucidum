@@ -103,6 +103,23 @@ class BrowserSmokeTests(unittest.TestCase):
                 server.should_exit = True
                 thread.join(timeout=5)
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_missing_token_boot_error_is_visible(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value\n"
+                "AB,AB10 1,1,100,10\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path, token="dev-token")
+            try:
+                self.exercise_missing_token_boot_error(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
     @staticmethod
     def start_app(
         data_path: Path,
@@ -111,6 +128,7 @@ class BrowserSmokeTests(unittest.TestCase):
         use_saved_filters: bool = False,
         kpis_path: Path | None = None,
         use_kpis: bool = False,
+        token: str | None = None,
     ) -> tuple[str, uvicorn.Server, threading.Thread]:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -126,6 +144,7 @@ class BrowserSmokeTests(unittest.TestCase):
             use_saved_filters=use_saved_filters,
             kpis_path=kpis_path,
             use_kpis=use_kpis,
+            token=token,
         )
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         server = uvicorn.Server(config)
@@ -208,6 +227,21 @@ class BrowserSmokeTests(unittest.TestCase):
                 self.assertEqual(page_errors, [])
                 self.assertEqual(chart_requests, 2)
                 self.assertEqual(map_requests, 1)
+            finally:
+                browser.close()
+
+    def exercise_missing_token_boot_error(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("Dataset failed to load").wait_for(timeout=10_000)
+                page.locator("#status").get_by_text("Invalid or missing app token").wait_for(timeout=10_000)
+                self.assertEqual(page_errors, [])
             finally:
                 browser.close()
 
