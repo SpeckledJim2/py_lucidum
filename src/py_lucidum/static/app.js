@@ -664,6 +664,7 @@
       function setActiveKpiState(kpi) {
         state.activeKpiKey = kpi ? kpiKey(kpi) : "";
         state.activeKpiFormat = kpi ? { decimals: kpi.decimals, format: kpi.format } : null;
+        el("kpiSelectedMeta").textContent = kpi ? kpi.name : "";
       }
 
       function syncKpiSelectionFromMetrics() {
@@ -770,6 +771,39 @@
         }
       }
 
+      function savedFilterSpecSignature(filters = state.schema?.filters || []) {
+        return JSON.stringify((filters || []).map((filter) => ({
+          theme: String(filter.theme || "General"),
+          name: String(filter.name || ""),
+          expression: String(filter.expression || "").trim(),
+        })));
+      }
+
+      function savedFilterRowKey(row) {
+        return [row.theme || "General", row.name || "", row.expression || ""].map(String).join("\u0000");
+      }
+
+      function savedFilterButtonKey(button) {
+        return savedFilterRowKey({
+          theme: button.dataset.filterTheme || "General",
+          name: button.dataset.filterName || "",
+          expression: button.dataset.expression || "",
+        });
+      }
+
+      function savedFilterSelectionSnapshot() {
+        return new Set(selectedSavedFilterRows().map(savedFilterRowKey));
+      }
+
+      function restoreSavedFilterSelection(selectedKeys) {
+        if (!selectedKeys?.size) return;
+        el("savedFilterSelect").querySelectorAll(".saved-filter-option").forEach((button) => {
+          const active = selectedKeys.has(savedFilterButtonKey(button));
+          button.setAttribute("aria-selected", String(active));
+          button.classList.toggle("active", active);
+        });
+      }
+
       function renderSavedFilters() {
         const list = el("savedFilterSelect");
         const filters = state.schema.filters || [];
@@ -802,8 +836,9 @@
           const button = document.createElement("button");
           button.type = "button";
           button.className = "feature saved-filter-option";
-          button.dataset.expression = filter.expression;
+          button.dataset.expression = filter.expression || "";
           button.dataset.filterTheme = theme;
+          button.dataset.filterName = filter.name || "";
           button.hidden = state.collapsedSavedFilterThemes.has(theme);
           button.setAttribute("role", "option");
           button.setAttribute("aria-selected", "false");
@@ -875,6 +910,7 @@
         return Array.from(el("savedFilterSelect").querySelectorAll('.saved-filter-option[aria-selected="true"]'))
           .map((button) => ({
             theme: button.dataset.filterTheme || "General",
+            name: button.dataset.filterName || "",
             expression: button.dataset.expression.trim(),
           }))
           .filter((row) => row.expression);
@@ -2856,14 +2892,28 @@
         el("reloadBtn").addEventListener("click", async () => {
           setStatus("");
           setGroupMeta(state.tool, "Reloading...");
+          const previousFilterSignature = savedFilterSpecSignature();
+          const previousSavedFilterSelection = savedFilterSelectionSnapshot();
+          const previousCollapsedSavedFilterThemes = new Set(state.collapsedSavedFilterThemes);
+          const previousSavedFilterThemesInitialised = state.savedFilterThemesInitialised;
+          const preserveMapViewOnReload = state.tool === "uk_map" && Boolean(ukMap);
           state.schema = await api("/api/reload", { method: "POST" });
+          const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
           state.bandFeature = null;
           state.mapFitLevel = null;
           clearToolCaches();
+          if (preserveMapViewOnReload) state.preserveMapView = true;
           setFilterRowMeta(state.schema.row_count);
-          state.savedFilterThemesInitialised = false;
+          if (filtersUnchanged) {
+            state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
+            state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
+          } else {
+            state.collapsedSavedFilterThemes = new Set();
+            state.savedFilterThemesInitialised = false;
+          }
           state.kpiGroupsInitialised = false;
           renderSavedFilters();
+          if (filtersUnchanged) restoreSavedFilterSelection(previousSavedFilterSelection);
           renderKpis();
           renderToolSelector();
           if (!toolEnabled(state.tool)) {

@@ -443,7 +443,7 @@
         align-items: baseline;
         justify-content: space-between;
         gap: 8px;
-        font-weight: 650;
+        font-weight: 400;
         font-size: 12px;
       }
 
@@ -483,7 +483,18 @@
 
       .kpi-header h2 {
         margin: 0;
-        font-size: 13px;
+        font-size: 12px;
+      }
+
+      .kpi-selected-meta {
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--muted);
+        font-size: 11px;
+        margin-left: auto;
       }
 
       .kpi-controls {
@@ -530,7 +541,7 @@
       }
 
       .tool-selector-section {
-        margin-bottom: 28px;
+        margin-bottom: 14px;
         padding-top: 2px;
       }
 
@@ -620,7 +631,7 @@
 
       .filter-header h2 {
         margin: 0;
-        font-size: 13px;
+        font-size: 12px;
       }
 
       .filter-collapse-toggle {
@@ -637,10 +648,10 @@
       }
 
       .filter-collapse-icon {
-        width: 10px;
-        height: 10px;
-        border-right: 2px solid currentColor;
-        border-bottom: 2px solid currentColor;
+        width: 9px;
+        height: 9px;
+        border-right: 1.75px solid currentColor;
+        border-bottom: 1.75px solid currentColor;
         transform: rotate(45deg) translate(-1px, -1px);
         transform-origin: center;
       }
@@ -1021,6 +1032,10 @@
         font-size: 13px;
         font-weight: 650;
         line-height: 1.2;
+      }
+
+      .chart-side-section h2.metric-title {
+        font-weight: 400;
       }
 
       .chart-side-section .feature-list {

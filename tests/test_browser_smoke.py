@@ -305,6 +305,27 @@ class BrowserSmokeTests(unittest.TestCase):
                 driver_heading.click()
                 self.assertEqual(driver_heading.get_attribute("aria-expanded"), "true")
                 self.assertTrue(driver_rows.first.is_visible())
+
+                driver_rows.first.click()
+                self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
+                self.assertEqual(page.locator("#filterInput").input_value(), "DRIVER_AGE < 30")
+                page.locator("#reloadBtn").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                        const heading = document.querySelector('.saved-filter-theme[data-filter-theme="DRIVER AGE"]');
+                        const row = document.querySelector('.saved-filter-option[data-filter-theme="DRIVER AGE"]');
+                        return heading &&
+                            row &&
+                            heading.getAttribute("aria-expanded") === "true" &&
+                            row.getAttribute("aria-selected") === "true";
+                    }
+                    """
+                )
+                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "true")
+                self.assertTrue(driver_rows.first.is_visible())
+                self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
+                self.assertEqual(page.locator("#filterInput").input_value(), "DRIVER_AGE < 30")
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()
