@@ -83,20 +83,26 @@ class BrowserSmokeTests(unittest.TestCase):
             tmp_path = Path(tmp_dir)
             data_path = tmp_path / "sample.csv"
             data_path.write_text(
-                "PostcodeArea,PostcodeSector,vehicle_age,price,value\n"
-                "AB,AB10 1,1,100,10\n"
-                "AB,AB10 1,2,200,20\n"
-                "AL,AL1 1,3,300,30\n",
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,rate\n"
+                "AB,AB10 1,1,100,10,0.1\n"
+                "AB,AB10 1,2,200,20,0.2\n"
+                "AL,AL1 1,3,300,30,0.3\n",
                 encoding="utf-8",
             )
             kpis_path = tmp_path / "kpi_spec.csv"
             kpis_path.write_text(
                 "group,name,actual,denominator,decimals,format\n"
                 "PRICE,Price,price,N,2,currency\n"
-                "VALUE,Value,value,N,1,number\n",
+                "VALUE,Value,value,N,1,number\n"
+                "RATE,Rate,rate,N,1,percent\n",
                 encoding="utf-8",
             )
-            base_url, server, thread = self.start_app(data_path, kpis_path=kpis_path, use_kpis=True)
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "vehicle_age"},
+                kpis_path=kpis_path,
+                use_kpis=True,
+            )
             try:
                 self.exercise_kpi_selection(base_url)
             finally:
@@ -129,13 +135,14 @@ class BrowserSmokeTests(unittest.TestCase):
         kpis_path: Path | None = None,
         use_kpis: bool = False,
         token: str | None = None,
+        defaults: dict[str, str] | None = None,
     ) -> tuple[str, uvicorn.Server, threading.Thread]:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = int(sock.getsockname()[1])
         app = create_app(
             data_path,
-            defaults={
+            defaults=defaults or {
                 "x": "vehicle_age",
                 "actual": "price",
                 "denominator": "value",
@@ -451,6 +458,10 @@ class BrowserSmokeTests(unittest.TestCase):
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.locator("#lineBarTool").click()
                 page.locator("#kpiSelect .kpi-theme").first.wait_for(timeout=10_000)
+                price_row = page.locator('.kpi-option[data-kpi-group="PRICE"]')
+                self.assertEqual(page.locator("#actualNumerator").input_value(), "price")
+                self.assertEqual(page.locator("#denominator").input_value(), "__none__")
+                self.assertEqual(price_row.get_attribute("aria-selected"), "true")
 
                 value_heading = page.locator('.kpi-theme[data-kpi-group="VALUE"]')
                 value_row = page.locator('.kpi-option[data-kpi-group="VALUE"]')
@@ -461,6 +472,15 @@ class BrowserSmokeTests(unittest.TestCase):
                 self.assertEqual(page.locator("#actualNumerator").input_value(), "value")
                 self.assertEqual(page.locator("#denominator").input_value(), "__none__")
                 self.assertEqual(value_row.get_attribute("aria-selected"), "true")
+
+                rate_heading = page.locator('.kpi-theme[data-kpi-group="RATE"]')
+                rate_row = page.locator('.kpi-option[data-kpi-group="RATE"]')
+                if rate_heading.get_attribute("aria-expanded") == "false":
+                    rate_heading.click()
+                rate_row.click()
+                page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#actualNumerator").input_value(), "rate")
+                self.assertEqual(rate_row.get_attribute("aria-selected"), "true")
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)

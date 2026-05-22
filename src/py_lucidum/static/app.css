@@ -522,7 +522,7 @@
 
       .kpi-list .feature {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(80px, 1fr);
+        grid-template-columns: fit-content(52%) minmax(96px, 1fr);
         font-size: 12px;
         min-height: 22px;
         padding: 2px 6px;

@@ -289,7 +289,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   FINANCIAL,Premium,PREMIUM,N,2,currency
   ```
 
-  `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`. Selecting a KPI in the sidebar sets the Actual and Weight controls and applies the KPI decimals/format to response values in the line/bar chart and UK map.
+  `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`; percent formatting treats `0.1` as `10%`. Selecting a KPI in the sidebar sets the Actual and Weight controls and applies the KPI decimals/format to response values in the line/bar chart and UK map.
 
   <h2>Development</h2>
 

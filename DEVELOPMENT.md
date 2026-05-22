@@ -63,7 +63,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - Saved filters load from an explicit `--filters` path, otherwise `./filter_spec.csv`, otherwise `./specs/filter_spec.csv`.
 - Saved-filter CSV files must have exactly `theme,name,expression` columns. CSV order controls theme order and row order.
 - KPI specs load from an explicit `--kpis` path, otherwise `./kpi_spec.csv`, otherwise `./specs/kpi_spec.csv`.
-- KPI spec CSV files must have exactly `group,name,actual,denominator,decimals,format` columns. `denominator` aliases `N`, `Average row value`, empty, and `__none__` all mean average row value; `format` is `number`, `currency`, or `percent`.
+- KPI spec CSV files must have exactly `group,name,actual,denominator,decimals,format` columns. `denominator` aliases `N`, `Average row value`, empty, and `__none__` all mean average row value; `format` is `number`, `currency`, or `percent`. Percent formatting displays proportions as percentages, so `0.1` displays as `10%`.
 - KPI rows are a single-selection convenience layer over Actual and Weight. Manual Actual/Weight changes keep the KPI row active only when both selects exactly match a spec row.
 - KPI decimals and format apply to Actual and Expected response values in metric titles, line/bar labels and response axes, table response cells, map labels/tooltips/popups, and map legend values. Weight and row-count formatting is unchanged.
 - The free-form DuckDB filter expression lives in the collapsible footer; hiding the footer does not clear the active filter.

@@ -795,6 +795,10 @@
         return locationParams.get(name) || state.schema.defaults?.[name] || "";
       }
 
+      function hasRequestedDefault(name) {
+        return locationParams.has(name) || Boolean(state.schema.defaults?.[name]);
+      }
+
       function normaliseKpiDenominator(value) {
         const denominator = String(value || "").trim();
         if (!denominator || denominator.toLowerCase() === "n" || denominator.toLowerCase() === "average row value" || denominator === "__none__") {
@@ -1157,6 +1161,15 @@
         el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
         el("expectedNumerator").value = numericColumnExists(requestedExpected) ? requestedExpected : "";
         el("denominator").value = numericColumnExists(requestedDenominator) ? requestedDenominator : "__none__";
+        applyInitialKpiDefault();
+      }
+
+      function applyInitialKpiDefault() {
+        if (hasRequestedDefault("actual") || hasRequestedDefault("denominator")) return;
+        const firstKpi = availableKpis()[0];
+        if (!firstKpi) return;
+        el("actualNumerator").value = firstKpi.actual;
+        el("denominator").value = firstKpi.denominator;
       }
 
       function renderExpectedNumerators() {
@@ -3885,11 +3898,12 @@
         if (state.activeKpiFormat) {
           const decimals = Number(state.activeKpiFormat.decimals);
           const fractionDigits = Number.isInteger(decimals) ? Math.max(0, Math.min(12, decimals)) : 2;
-          const formatted = Math.abs(number).toLocaleString(undefined, {
+          const displayNumber = state.activeKpiFormat.format === "percent" ? number * 100 : number;
+          const formatted = Math.abs(displayNumber).toLocaleString(undefined, {
             minimumFractionDigits: fractionDigits,
             maximumFractionDigits: fractionDigits,
           });
-          const sign = number < 0 ? "-" : "";
+          const sign = displayNumber < 0 ? "-" : "";
           if (state.activeKpiFormat.format === "currency") return `${sign}£${formatted}`;
           const signed = `${sign}${formatted}`;
           if (state.activeKpiFormat.format === "percent") return `${signed}%`;
