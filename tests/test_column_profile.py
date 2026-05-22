@@ -7,6 +7,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+import duckdb
+
 from py_lucidum.app import create_app, normalise_tools
 from py_lucidum.core import Dataset
 from py_lucidum.tools.column_profile.query import profile, profile_detail
@@ -144,14 +146,26 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(payload["missing_count"], 0)
         self.assertEqual(payload["non_missing_count"], 2)
         self.assertEqual(payload["distinct_count"], 2)
-        self.assertEqual(len(payload["histogram"]), 20)
+        self.assertEqual(len(payload["histogram"]), 2)
         self.assertEqual(sum(bin["count"] for bin in payload["histogram"]), 2)
+        self.assertEqual([(bin["lower"], bin["upper"]) for bin in payload["histogram"]], [(1, 1), (2, 2)])
         self.assertEqual(payload["stats"]["min"], 1)
         self.assertEqual(payload["stats"]["median"], 1.5)
         self.assertEqual(payload["stats"]["mean"], 1.5)
         self.assertEqual(payload["stats"]["max"], 2)
-        self.assertGreater(payload["entropy_score"], 0)
-        self.assertLess(payload["entropy_score"], 1)
+        self.assertEqual(payload["zero_count"], 0)
+
+    def test_profile_detail_uses_twenty_bins_for_high_cardinality_numeric_columns(self) -> None:
+        data_path = self.root / "high_cardinality.csv"
+        rows = ["Value"]
+        rows.extend(str(value) for value in range(101))
+        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+        payload = profile_detail(Dataset(data_path), {"column": "Value", "filter": ""})
+
+        self.assertEqual(payload["distinct_count"], 101)
+        self.assertEqual(len(payload["histogram"]), 20)
+        self.assertEqual(sum(bin["count"] for bin in payload["histogram"]), 101)
 
     def test_profile_detail_returns_categorical_value_counts(self) -> None:
         payload = profile_detail(Dataset(self.data_path), {"column": "Segment", "filter": ""})
@@ -162,8 +176,7 @@ class ColumnProfileToolTests(unittest.TestCase):
             {"value": "B", "count": 1},
             {"value": "C", "count": 1},
         ])
-        self.assertGreater(payload["entropy_score"], 0)
-        self.assertLess(payload["entropy_score"], 1)
+        self.assertEqual(payload["blank_count"], 0)
 
     def test_profile_detail_returns_date_histogram_and_percentiles(self) -> None:
         payload = profile_detail(Dataset(self.data_path), {"column": "QuoteDate", "filter": ""})
@@ -176,45 +189,35 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(payload["stats"]["median"], "2024-01-02T00:00:00")
         self.assertEqual(payload["stats"]["max"], "2024-01-04")
 
-    def test_profile_detail_returns_categorical_entropy_scores(self) -> None:
-        data_path = self.root / "entropy.csv"
+    def test_profile_detail_returns_categorical_blank_count(self) -> None:
+        data_path = self.root / "blanks.parquet"
+        con = duckdb.connect(database=":memory:")
+        con.execute("CREATE TABLE blanks AS SELECT * FROM (VALUES ('A'), (''), (NULL), ('B'), ('')) AS rows(Segment)")
+        con.execute(f"COPY blanks TO '{data_path}' (FORMAT PARQUET)")
+
+        payload = profile_detail(Dataset(data_path), {"column": "Segment", "filter": ""})
+
+        self.assertEqual(payload["kind"], "categorical")
+        self.assertEqual(payload["missing_count"], 1)
+        self.assertEqual(payload["blank_count"], 2)
+
+    def test_profile_detail_returns_numeric_zero_count(self) -> None:
+        data_path = self.root / "zeros.csv"
         data_path.write_text(
-            "Constant,Balanced,Skewed,Subset\n"
-            "A,A,A,keep\n"
-            "A,A,A,keep\n"
-            "A,B,A,drop\n"
-            "A,B,B,drop\n",
+            "Value,Subset\n"
+            "0,keep\n"
+            "1,keep\n"
+            "0,drop\n"
+            ",keep\n",
             encoding="utf-8",
         )
-        dataset = Dataset(data_path)
 
-        constant = profile_detail(dataset, {"column": "Constant", "filter": ""})
-        balanced = profile_detail(dataset, {"column": "Balanced", "filter": ""})
-        skewed = profile_detail(dataset, {"column": "Skewed", "filter": ""})
-        filtered = profile_detail(dataset, {"column": "Balanced", "filter": "Subset = 'keep'"})
+        payload = profile_detail(Dataset(data_path), {"column": "Value", "filter": "Subset = 'keep'"})
 
-        self.assertEqual(constant["entropy_score"], 0)
-        self.assertAlmostEqual(balanced["entropy_score"], 1.0)
-        self.assertGreater(skewed["entropy_score"], 0)
-        self.assertLess(skewed["entropy_score"], 1)
-        self.assertEqual(filtered["entropy_score"], 0)
-
-    def test_profile_detail_returns_numeric_entropy_scores(self) -> None:
-        data_path = self.root / "numeric_entropy.csv"
-        rows = ["Value,Constant,Subset"]
-        rows.extend(f"{value},5,all" for value in range(20))
-        rows.extend(f"{value},5,low" for value in range(10))
-        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
-        dataset = Dataset(data_path)
-
-        even = profile_detail(dataset, {"column": "Value", "filter": "Subset = 'all'"})
-        constant = profile_detail(dataset, {"column": "Constant", "filter": ""})
-        filtered = profile_detail(dataset, {"column": "Value", "filter": "Subset = 'low'"})
-
-        self.assertAlmostEqual(even["entropy_score"], 1.0)
-        self.assertEqual(constant["entropy_score"], 0)
-        self.assertGreater(filtered["entropy_score"], 0)
-        self.assertLess(filtered["entropy_score"], even["entropy_score"])
+        self.assertEqual(payload["kind"], "integer")
+        self.assertEqual(payload["filtered_row_count"], 3)
+        self.assertEqual(payload["missing_count"], 1)
+        self.assertEqual(payload["zero_count"], 1)
 
     def test_profile_endpoint_rejects_invalid_filter(self) -> None:
         app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)

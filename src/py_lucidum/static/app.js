@@ -1639,22 +1639,53 @@
             <span><strong>${nonMissing.toLocaleString()}</strong> non-missing</span>
             <span><strong>${distinct.toLocaleString()}</strong> distinct</span>
             <span class="${missing > 0 ? "profile-detail-missing" : ""}"><strong>${missing.toLocaleString()}</strong> missing${missing > 0 ? ` (${formatProfilePercent(missingRate)})` : ""}</span>
-            <span><strong>${escapeHtml(formatProfileEntropy(data.entropy_score))}</strong> entropy</span>
+            ${profileDetailSpecialCountHtml(data)}
           </div>
         `;
+      }
+
+      function profileDetailSpecialCountHtml(data) {
+        if (isNumericKind(data.kind)) {
+          return profileDetailCountBadgeHtml(Number(data.zero_count || 0), "zero", "profile-detail-zero");
+        }
+        if (data.kind === "categorical") {
+          return profileDetailCountBadgeHtml(Number(data.blank_count || 0), "blank", "profile-detail-blank");
+        }
+        return "";
+      }
+
+      function profileDetailCountBadgeHtml(count, label, flagClass) {
+        const safeCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+        const className = safeCount > 0 ? ` class="${flagClass}"` : "";
+        return `<span${className}><strong>${safeCount.toLocaleString()}</strong> ${escapeHtml(label)}</span>`;
       }
 
       function profileDetailHistogramHtml(histogram) {
         const bins = Array.isArray(histogram) ? histogram : [];
         const maxCount = Math.max(0, ...bins.map((bin) => Number(bin.count || 0)));
         if (!bins.length) return '<div class="profile-detail-empty">No non-missing values.</div>';
+        const showLabels = bins.length < 50;
+        const labelStyle = showLabels ? ` style="--profile-bin-label-size:${profileHistogramLabelFontSize(bins.length)}px"` : "";
         const bars = bins.map((bin) => {
           const count = Number(bin.count || 0);
           const height = maxCount ? Math.max(2, Math.round((count / maxCount) * 100)) : 0;
-          const label = `${formatProfileValue(bin.lower)} to ${formatProfileValue(bin.upper)}: ${count.toLocaleString()}`;
-          return `<div class="profile-detail-bin" title="${escapeHtml(label)}"><span style="height:${height}%"></span></div>`;
+          const lower = formatProfileValue(bin.lower);
+          const upper = formatProfileValue(bin.upper);
+          const range = lower === upper ? lower : `${lower} to ${upper}`;
+          const label = `${range}: ${count.toLocaleString()}`;
+          const binLabel = showLabels ? `<span class="profile-detail-bin-label">${escapeHtml(profileHistogramBinLabel(bin))}</span>` : "";
+          return `<div class="profile-detail-bin" data-profile-bin-title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><span class="profile-detail-bin-bar" style="height:${height}%"></span>${binLabel}</div>`;
         }).join("");
-        return `<div class="profile-detail-histogram" aria-label="Histogram">${bars}</div>`;
+        return `<div class="profile-detail-histogram${showLabels ? " profile-detail-histogram-labelled" : ""}"${labelStyle} aria-label="Histogram">${bars}</div>`;
+      }
+
+      function profileHistogramBinLabel(bin) {
+        return formatProfileValue(bin.lower);
+      }
+
+      function profileHistogramLabelFontSize(binCount) {
+        const count = Math.max(1, Number(binCount) || 1);
+        return Math.max(4, Math.min(9, 240 / count)).toFixed(2);
       }
 
       function profileDetailStatKeys(kind) {
@@ -1720,9 +1751,59 @@
       }
 
       function bindProfileDetail() {
+        profileDetailPane()?.querySelectorAll(".profile-detail-bin[data-profile-bin-title]").forEach((bin) => {
+          bin.addEventListener("pointerenter", showProfileHistogramTooltip);
+          bin.addEventListener("pointermove", positionProfileHistogramTooltip);
+          bin.addEventListener("pointerleave", hideProfileHistogramTooltip);
+          bin.addEventListener("pointercancel", hideProfileHistogramTooltip);
+        });
         profileDetailPane()?.querySelectorAll("[data-profile-detail-sort]").forEach((button) => {
           button.addEventListener("click", () => setProfileDetailSort(button.dataset.profileDetailSort));
         });
+      }
+
+      function profileHistogramTooltip() {
+        let tooltip = document.getElementById("profileHistogramTooltip");
+        if (!tooltip) {
+          tooltip = document.createElement("div");
+          tooltip.id = "profileHistogramTooltip";
+          tooltip.className = "profile-histogram-tooltip";
+          tooltip.hidden = true;
+          document.body.appendChild(tooltip);
+        }
+        return tooltip;
+      }
+
+      function showProfileHistogramTooltip(event) {
+        const label = event.currentTarget?.dataset?.profileBinTitle || "";
+        if (!label) return;
+        const tooltip = profileHistogramTooltip();
+        tooltip.textContent = label;
+        tooltip.hidden = false;
+        tooltip.classList.add("visible");
+        positionProfileHistogramTooltip(event);
+      }
+
+      function positionProfileHistogramTooltip(event) {
+        const tooltip = document.getElementById("profileHistogramTooltip");
+        if (!tooltip || tooltip.hidden) return;
+        const offset = 10;
+        const margin = 8;
+        const rect = tooltip.getBoundingClientRect();
+        const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+        let left = event.clientX + offset;
+        let top = event.clientY - rect.height - offset;
+        if (top < margin) top = event.clientY + offset;
+        left = Math.min(Math.max(margin, left), maxLeft);
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${Math.max(margin, top)}px`;
+      }
+
+      function hideProfileHistogramTooltip() {
+        const tooltip = document.getElementById("profileHistogramTooltip");
+        if (!tooltip) return;
+        tooltip.hidden = true;
+        tooltip.classList.remove("visible");
       }
 
       function setProfileDetailSort(key) {
@@ -1846,12 +1927,6 @@
         const number = Number(value);
         if (!Number.isFinite(number)) return "";
         return `${(number * 100).toFixed(1)}%`;
-      }
-
-      function formatProfileEntropy(value) {
-        const number = Number(value);
-        if (!Number.isFinite(number)) return "0.000";
-        return Math.max(0, Math.min(1, number)).toFixed(3);
       }
 
       function buildChartRequest() {

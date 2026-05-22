@@ -12,6 +12,7 @@ PROFILE_TOP_VALUE_LIMIT = 5
 PROFILE_HISTOGRAM_BINS = 10
 PROFILE_DETAIL_TOP_VALUE_LIMIT = 2000
 PROFILE_DETAIL_HISTOGRAM_BINS = 20
+PROFILE_DETAIL_EXACT_LEVEL_BIN_LIMIT = 100
 
 
 def profile(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
@@ -58,19 +59,21 @@ def profile_detail(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         }
 
         if is_numeric_kind(column.kind):
-            histogram = numeric_distribution(
-                dataset,
-                column,
-                filter_sql,
-                stats,
-                bin_count=PROFILE_DETAIL_HISTOGRAM_BINS,
+            bin_count = numeric_detail_bin_count(distinct_count)
+            histogram = (
+                numeric_level_distribution(dataset, column, filter_sql)
+                if bin_count == distinct_count
+                else numeric_distribution(
+                    dataset,
+                    column,
+                    filter_sql,
+                    stats,
+                    bin_count=bin_count,
+                )
             )
             detail["histogram"] = histogram
             detail["stats"] = numeric_detail_stats(dataset, column, filter_sql)
-            detail["entropy_score"] = json_number(entropy_from_counts(
-                [bin["count"] for bin in histogram],
-                PROFILE_DETAIL_HISTOGRAM_BINS,
-            ))
+            detail["zero_count"] = numeric_zero_count(dataset, column, filter_sql)
         elif column.kind in {"date", "datetime"}:
             histogram = temporal_distribution(
                 dataset,
@@ -80,10 +83,6 @@ def profile_detail(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             )
             detail["histogram"] = histogram
             detail["stats"] = temporal_detail_stats(dataset, column, filter_sql)
-            detail["entropy_score"] = json_number(entropy_from_counts(
-                [bin["count"] for bin in histogram],
-                PROFILE_DETAIL_HISTOGRAM_BINS,
-            ))
         else:
             detail["value_counts"] = top_column_values(
                 dataset,
@@ -91,14 +90,40 @@ def profile_detail(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
                 filter_sql,
                 limit=PROFILE_DETAIL_TOP_VALUE_LIMIT,
             )
-            detail["entropy_score"] = json_number(categorical_entropy_score(
-                dataset,
-                column,
-                filter_sql,
-                distinct_count,
-            ))
+            detail["blank_count"] = categorical_blank_count(dataset, column, filter_sql)
 
         return detail
+
+
+def numeric_detail_bin_count(distinct_count: int) -> int:
+    if 0 < distinct_count <= PROFILE_DETAIL_EXACT_LEVEL_BIN_LIMIT:
+        return distinct_count
+    return PROFILE_DETAIL_HISTOGRAM_BINS
+
+
+def numeric_level_distribution(
+    dataset: Dataset,
+    column: ColumnInfo,
+    filter_sql: str,
+) -> list[dict[str, Any]]:
+    column_sql = quote_ident(column.name)
+    sql = f"""
+WITH {base_cte(dataset, filter_sql)}
+SELECT {column_sql} AS value, COUNT(*) AS count
+FROM base
+WHERE {column_sql} IS NOT NULL
+GROUP BY {column_sql}
+ORDER BY {column_sql}
+"""
+    return [
+        {
+            "bin": index,
+            "lower": json_value(value),
+            "upper": json_value(value),
+            "count": int(count or 0),
+        }
+        for index, (value, count) in enumerate(dataset.con.execute(sql).fetchall())
+    ]
 
 
 def profile_column(
@@ -185,55 +210,36 @@ LIMIT {safe_limit}
     ]
 
 
-def categorical_entropy_score(
+def numeric_zero_count(
     dataset: Dataset,
     column: ColumnInfo,
     filter_sql: str,
-    distinct_count: int,
-) -> float:
-    if distinct_count <= 1:
-        return 0.0
+) -> int:
     column_sql = quote_ident(column.name)
     sql = f"""
-WITH {base_cte(dataset, filter_sql)},
-counts AS (
-  SELECT COUNT(*) AS value_count
-  FROM base
-  WHERE {column_sql} IS NOT NULL
-  GROUP BY {column_sql}
-),
-totals AS (
-  SELECT SUM(value_count) AS total_count, COUNT(*) AS group_count
-  FROM counts
-)
-SELECT
-  CASE
-    WHEN total_count IS NULL OR total_count <= 0 OR group_count <= 1 THEN 0
-    ELSE -SUM((CAST(value_count AS DOUBLE) / total_count) * LN(CAST(value_count AS DOUBLE) / total_count)) / LN(group_count)
-  END AS entropy_score
-FROM counts, totals
-GROUP BY total_count, group_count
+WITH {base_cte(dataset, filter_sql)}
+SELECT COUNT(*) AS count
+FROM base
+WHERE {column_sql} = 0
 """
     row = dataset.con.execute(sql).fetchone()
-    return clamp_entropy(row[0] if row else 0)
+    return int(row[0] if row else 0)
 
 
-def entropy_from_counts(counts: list[int], normaliser_count: int) -> float:
-    total = sum(int(count or 0) for count in counts)
-    if total <= 0 or normaliser_count <= 1:
-        return 0.0
-    positive_counts = [int(count or 0) for count in counts if int(count or 0) > 0]
-    if len(positive_counts) <= 1:
-        return 0.0
-    entropy = -sum((count / total) * math.log(count / total) for count in positive_counts)
-    return clamp_entropy(entropy / math.log(normaliser_count))
-
-
-def clamp_entropy(value: Any) -> float:
-    number = finite_float(value)
-    if number is None:
-        return 0.0
-    return min(1.0, max(0.0, number))
+def categorical_blank_count(
+    dataset: Dataset,
+    column: ColumnInfo,
+    filter_sql: str,
+) -> int:
+    column_sql = quote_ident(column.name)
+    sql = f"""
+WITH {base_cte(dataset, filter_sql)}
+SELECT COUNT(*) AS count
+FROM base
+WHERE CAST({column_sql} AS VARCHAR) = ''
+"""
+    row = dataset.con.execute(sql).fetchone()
+    return int(row[0] if row else 0)
 
 
 def numeric_distribution(

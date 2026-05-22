@@ -232,6 +232,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
 
   - Review every dataset column in a filtered profile table.
   - See inferred type, missing count, exact distinct count, and min/max for numeric and date columns.
+  - Inspect detail counts for numeric zeros and categorical blank strings separately from missing values.
   - The profile respects the same footer and saved filters as the chart and map tools.
 
   **Line and bar chart**

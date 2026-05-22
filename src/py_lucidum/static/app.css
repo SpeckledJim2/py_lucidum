@@ -2032,37 +2032,86 @@
         color: var(--text);
       }
 
-      .profile-detail-counts .profile-detail-missing {
+      .profile-detail-counts .profile-detail-missing,
+      .profile-detail-counts .profile-detail-zero,
+      .profile-detail-counts .profile-detail-blank {
         border-color: #f59e0b;
         background: color-mix(in srgb, #f59e0b 18%, var(--panel));
         color: var(--text);
       }
 
       .profile-detail-histogram {
-        display: grid;
-        grid-template-columns: repeat(20, minmax(3px, 1fr));
-        align-items: end;
-        gap: 3px;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: flex-end;
+        gap: 1px;
         height: 112px;
+        min-width: 0;
+        overflow: hidden;
         border-bottom: 1px solid var(--line);
         padding: 6px 0 0;
+      }
+
+      .profile-detail-histogram-labelled {
+        height: 136px;
       }
 
       .profile-detail-bin {
         display: flex;
         align-items: flex-end;
+        flex: 1 1 0;
+        position: relative;
         height: 100%;
         min-width: 0;
         background: color-mix(in srgb, var(--accent) 9%, var(--panel));
         border-radius: 3px 3px 0 0;
       }
 
-      .profile-detail-bin span {
+      .profile-detail-histogram-labelled .profile-detail-bin {
+        padding-bottom: 14px;
+      }
+
+      .profile-detail-bin-bar {
         display: block;
         width: 100%;
         min-height: 0;
         border-radius: 3px 3px 0 0;
         background: linear-gradient(to top, var(--accent), var(--accent-2));
+      }
+
+      .profile-detail-bin-label {
+        position: absolute;
+        right: 0;
+        bottom: 3px;
+        left: 0;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: var(--profile-bin-label-size, 7px);
+        line-height: 1;
+        pointer-events: none;
+        text-align: center;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .profile-histogram-tooltip {
+        position: fixed;
+        z-index: 1000;
+        max-width: min(280px, calc(100vw - 16px));
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: color-mix(in srgb, var(--panel) 96%, var(--text));
+        box-shadow: 0 8px 24px rgb(15 23 42 / 18%);
+        color: var(--text);
+        font-size: 11px;
+        line-height: 1.2;
+        padding: 5px 7px;
+        pointer-events: none;
+        white-space: nowrap;
+      }
+
+      .profile-histogram-tooltip[hidden] {
+        display: none;
       }
 
       .profile-stats-table {
