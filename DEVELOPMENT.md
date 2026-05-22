@@ -14,6 +14,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.app` owns the FastAPI factory, shared app context, token checks, static asset serving, favicon serving, schema/reload/health/shutdown endpoints, and tool registration.
 - `py_lucidum.cli` owns the `lucidum` command, free-port selection, token URL construction, background server handling for notebook-style runtimes, and browser opening.
 - `py_lucidum.demo` resolves the bundled synthetic demo dataset from either the source tree or installed package resources.
+- `py_lucidum.tools.column_profile` implements filtered column summary/detail profiling and routes.
 - `py_lucidum.tools.line_bar` implements chart aggregation and line/bar routes.
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
 - `py_lucidum.tools.glm` and `py_lucidum.tools.gbm` are placeholders for future tools.
@@ -38,6 +39,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
   - `GET /api/health`
   - `POST /api/reload`
   - `POST /api/shutdown`
+  - `POST /api/column-profile/summary`
+  - `POST /api/column-profile/detail`
   - `POST /api/chart`
   - `POST /api/line-bar/chart`
   - `POST /api/uk-map/summary`
@@ -66,7 +69,14 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - The free-form DuckDB filter expression lives in the collapsible footer; hiding the footer does not clear the active filter.
 - Saved-filter rows support `Single`, `Multi`, and `Grouped` modes. `Single` keeps one selected row, `Multi` toggles rows and combines them with the active All/Any/Not all/None operator, and `Grouped` toggles rows while combining rows within a theme with `OR` and selected themes with `AND`.
 - `--no-filters` disables saved-filter discovery.
-- Filters are DuckDB `WHERE` expressions and apply before chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
+- Filters are DuckDB `WHERE` expressions and apply before column profiling, chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
+
+**Column profile**
+
+- Column profile is the first default tool when enabled.
+- Summary requests return every dataset column with inferred kind, DuckDB type, filtered missing count, exact distinct count, and min/max for numeric/date-like columns.
+- Detail requests return value counts for categorical columns and histogram/stat tables for numeric/date-like columns.
+- Profile requests respect the same active footer/saved-filter expression as the other tools.
 
 **Line and bar chart**
 
@@ -136,9 +146,10 @@ The current test suite should cover:
 - CLI argument behavior, token URL construction, and demo dataset selection.
 - Demo dataset path resolution from source and package resources.
 - Static asset serving, favicon behavior, health checks, reload, and shutdown.
+- Column profile summary/detail routes, filter handling, distinct/missing counts, histograms, and entropy scores.
 - Line-and-bar aggregation, filters, transforms, grouping, sorting, saved filters, CSV reads, and Parquet reads.
 - UK map area, sector, and unit aggregation, alias defaults, coordinate validation, and custom column defaults.
-- Browser smoke behavior for loading chart and map tools without unexpected extra API requests.
+- Browser smoke behavior for loading profile, chart, and map tools without unexpected extra API requests.
 
 ## Future Work
 

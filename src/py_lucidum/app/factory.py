@@ -21,19 +21,25 @@ STATIC_DIR = PACKAGE_ROOT / "static"
 FAVICON_PATHS = (PROJECT_ROOT / "favicon.ico", STATIC_DIR / "favicon.ico")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 TOOL_ALIASES = {
+    "column-profile": "column_profile",
+    "column_profile": "column_profile",
+    "columnprofile": "column_profile",
+    "columns": "column_profile",
     "line-bar": "line_bar",
     "line_bar": "line_bar",
     "linebar": "line_bar",
+    "profile": "column_profile",
     "uk-map": "uk_map",
     "uk_map": "uk_map",
     "ukmap": "uk_map",
     "map": "uk_map",
 }
 TOOL_METADATA = {
+    "column_profile": {"id": "column_profile", "label": "Column profile"},
     "line_bar": {"id": "line_bar", "label": "Line and bar chart"},
     "uk_map": {"id": "uk_map", "label": "UK mapping"},
 }
-DEFAULT_TOOLS = ["line_bar", "uk_map"]
+DEFAULT_TOOLS = ["column_profile", "line_bar", "uk_map"]
 DEFAULT_KEYS = {
     "x",
     "actual",
@@ -192,6 +198,10 @@ def create_app(
         return {"message": "py_lucidum is stopping"}
 
     context = AppContext(dataset=dataset, check_token=check_token)
+    if "column_profile" in enabled_tools:
+        from py_lucidum.tools.column_profile import register as register_column_profile
+
+        register_column_profile(app, context)
     if "line_bar" in enabled_tools:
         from py_lucidum.tools.line_bar import register as register_line_bar
 

@@ -1,11 +1,12 @@
 # lucidum
 
-`lucidum` is a local browser workbench for exploring CSV and Parquet datasets. It starts a small FastAPI server, uses DuckDB for live aggregation, and opens an interactive UI for grouped charts, filters, and UK postcode maps.
+`lucidum` is a local browser workbench for exploring CSV and Parquet datasets. It starts a small FastAPI server, uses DuckDB for live profiling and aggregation, and opens an interactive UI for column summaries, grouped charts, filters, and UK postcode maps.
 
 The current app includes:
 
 - A combined line-and-bar chart over any dataset feature.
 - One or two response lines with a shared Weight selector.
+- A column profile table with filtered missing counts, distinct counts, and ranges.
 - Numeric fixed-width or quantile banding, date buckets, low-weight grouping, table view, and saved filters.
 - UK postcode area and sector choropleths using bundled GeoJSON assets.
 - UK postcode unit points using dataset latitude/longitude columns.
@@ -162,7 +163,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   - `--no-filters` disables saved-filter discovery.
   - `--kpis` points to a KPI spec CSV file. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
   - `--no-kpis` disables KPI spec discovery.
-  - `--tools` selects enabled tools. By default both `line-bar` and `uk-map` are enabled.
+  - `--tools` selects enabled tools. By default `column-profile`, `line-bar`, and `uk-map` are enabled.
 
   UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected.
 
@@ -219,13 +220,19 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
     },
     filters_path="specs/filter_spec.csv",
     kpis_path="specs/kpi_spec.csv",
-    tools=["line_bar", "uk_map"],
+    tools=["column_profile", "line_bar", "uk_map"],
   )
 
   py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
   ```
 
   <h2>Features</h2>
+
+  **Column profile**
+
+  - Review every dataset column in a filtered profile table.
+  - See inferred type, missing count, exact distinct count, and min/max for numeric and date columns.
+  - The profile respects the same footer and saved filters as the chart and map tools.
 
   **Line and bar chart**
 
@@ -267,9 +274,9 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
 
   **Performance timings**
 
-  The footer shows approximate diagnostic timings for the active tool, for example `DuckDB: 430us, Chart render: 147ms` or `DuckDB: 26ms, Map render: 120ms`. Timing values can use `ns`, `us`, or `ms` depending on the measured duration. `DuckDB` is measured on the Python server for the active tool API request. It includes the server-side query function, including DuckDB filter validation, row counts, summaries, aggregations, and small Python result shaping. It does not include browser-to-server network latency, JSON transfer or parsing, chart drawing, map drawing, GeoJSON loading, or map tile loading.
+  The footer shows approximate diagnostic timings for the active tool, for example `DuckDB: 430us, Profile render: 25ms`, `DuckDB: 430us, Chart render: 147ms`, or `DuckDB: 26ms, Map render: 120ms`. Timing values can use `ns`, `us`, or `ms` depending on the measured duration. `DuckDB` is measured on the Python server for the active tool API request. It includes the server-side query function, including DuckDB filter validation, row counts, summaries, aggregations, and small Python result shaping. It does not include browser-to-server network latency, JSON transfer or parsing, profile table rendering, chart drawing, map drawing, GeoJSON loading, or map tile loading.
 
-  `Chart render` is measured in the browser after data has arrived, while updating the Line/Bar chart and table UI. `Map render` is measured in the browser after data and the required GeoJSON are available, while updating the Leaflet map layers, legend, and labels. Cached UI rerenders can update the render timing without running a new DuckDB query, so the DuckDB value may be the last cached query time. Collapsing the filter footer hides the timing monitor along with the filter input.
+  `Profile render` is measured in the browser after column summaries arrive, while updating the profile table. `Chart render` is measured in the browser after data has arrived, while updating the Line/Bar chart and table UI. `Map render` is measured in the browser after data and the required GeoJSON are available, while updating the Leaflet map layers, legend, and labels. Cached UI rerenders can update the render timing without running a new DuckDB query, so the DuckDB value may be the last cached query time. Collapsing the filter footer hides the timing monitor along with the filter input.
 
   **KPIs**
 

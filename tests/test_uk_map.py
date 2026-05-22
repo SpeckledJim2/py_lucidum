@@ -85,12 +85,13 @@ class UkMapToolTests(unittest.TestCase):
         return request
 
     def test_default_tools_include_uk_map(self) -> None:
-        self.assertEqual(normalise_tools(None), ["line_bar", "uk_map"])
+        self.assertEqual(normalise_tools(None), ["column_profile", "line_bar", "uk_map"])
 
         app = create_app(self.data_path, token="dev-token")
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["line_bar", "uk_map"])
+        self.assertEqual(app.state.enabled_tools, ["column_profile", "line_bar", "uk_map"])
+        self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/uk-map/summary", paths)
         self.assertIn("/tools/uk-map/static", paths)
 

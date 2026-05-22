@@ -14,6 +14,7 @@
       const locationParams = paramsFromLocation();
       const token = locationParams.get("token") || "";
       const ACTION_RENDER_LABELS = {
+        column_profile: "Profile render",
         line_bar: "Chart render",
         uk_map: "Map render",
       };
@@ -29,7 +30,7 @@
         dateBucket: "none",
         transform: "none",
         sigma: "0",
-        tool: "line_bar",
+        tool: "column_profile",
         view: "chart",
         mapLevel: "area",
         baseMap: "blank",
@@ -52,9 +53,15 @@
         collapsedSavedFilterThemes: new Set(),
         savedFilterThemesInitialised: false,
         activeFilter: "",
+        profileSort: { key: "", direction: "asc" },
+        profileDetailSort: { key: "count", direction: "desc" },
+        selectedProfileColumn: "",
+        lastProfileData: null,
+        lastProfileDetailData: null,
         lastData: null,
         lastMapData: null,
         toolCache: {
+          column_profile: freshProfileCache(),
           line_bar: { requestKey: null, data: null, presentation: null },
           uk_map: { requestKey: null, data: null, presentation: null },
         },
@@ -69,6 +76,8 @@
         mapControlMoved: false,
         tablePage: 1,
         bandFeature: null,
+        profileRequestSeq: 0,
+        profileDetailRequestSeq: 0,
         chartRequestSeq: 0,
         mapRequestSeq: 0,
       };
@@ -227,7 +236,9 @@
       }
 
       function setGroupMeta(tool, message) {
-        const id = tool === "uk_map" ? "mapGroupMeta" : "lineBarGroupMeta";
+        const id = tool === "uk_map"
+          ? "mapGroupMeta"
+          : (tool === "column_profile" ? "profileGroupMeta" : "lineBarGroupMeta");
         el(id).textContent = message || "";
       }
 
@@ -237,6 +248,7 @@
 
       function syncActiveFilterLabels() {
         const label = activeFilterLabel();
+        el("profileFilter").textContent = label;
         el("lineBarFilter").textContent = label;
         el("mapControlFilter").textContent = label;
       }
@@ -278,8 +290,13 @@
         return Boolean((state.schema?.tools || []).some((tool) => tool.id === id));
       }
 
+      function freshProfileCache() {
+        return { requestKey: null, data: null, presentation: null, details: new Map() };
+      }
+
       function freshToolCache() {
         return {
+          column_profile: freshProfileCache(),
           line_bar: { requestKey: null, data: null, presentation: null },
           uk_map: { requestKey: null, data: null, presentation: null },
         };
@@ -287,6 +304,7 @@
 
       function freshActionTimings() {
         return {
+          column_profile: { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" },
           line_bar: { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" },
           uk_map: { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" },
         };
@@ -295,6 +313,9 @@
       function clearToolCaches() {
         state.toolCache = freshToolCache();
         state.actionTimings = freshActionTimings();
+        state.lastProfileData = null;
+        state.lastProfileDetailData = null;
+        state.profileDetailRequestSeq += 1;
         state.lastData = null;
         state.lastMapData = null;
         state.mapStartupFitDone = false;
@@ -302,9 +323,19 @@
         syncActionTimingMonitor();
       }
 
+      function clearProfileDetailCache() {
+        const cache = toolCache("column_profile");
+        cache.details = new Map();
+        state.lastProfileDetailData = null;
+        state.profileDetailRequestSeq += 1;
+      }
+
       function toolCache(tool) {
         if (!state.toolCache[tool]) {
-          state.toolCache[tool] = { requestKey: null, data: null, presentation: null };
+          state.toolCache[tool] = tool === "column_profile" ? freshProfileCache() : { requestKey: null, data: null, presentation: null };
+        }
+        if (tool === "column_profile" && !(state.toolCache[tool].details instanceof Map)) {
+          state.toolCache[tool].details = new Map();
         }
         return state.toolCache[tool];
       }
@@ -453,6 +484,13 @@
       }
 
       function toolHandler(tool) {
+        if (tool === "column_profile") {
+          return {
+            buildRequest: buildProfileRequest,
+            fetch: fetchProfileData,
+            useCached: useCachedProfileData,
+          };
+        }
         if (tool === "uk_map") {
           return {
             buildRequest: buildMapRequest,
@@ -491,46 +529,58 @@
       function chooseDefaultTool() {
         const requested = locationParams.get("tool");
         if (requested && toolEnabled(requested)) return requested;
+        if (toolEnabled("column_profile")) return "column_profile";
         if (toolEnabled("line_bar")) return "line_bar";
         if (toolEnabled("uk_map")) return "uk_map";
-        return "line_bar";
+        return "column_profile";
       }
 
       function renderToolSelector() {
+        const profileEnabled = toolEnabled("column_profile");
         const lineBarEnabled = toolEnabled("line_bar");
         const ukMapEnabled = toolEnabled("uk_map");
+        el("profileTool").disabled = !profileEnabled;
         el("lineBarTool").disabled = !lineBarEnabled;
         el("ukMapTool").disabled = !ukMapEnabled;
+        el("profileTool").classList.toggle("hidden", !profileEnabled);
         el("lineBarTool").classList.toggle("hidden", !lineBarEnabled);
         el("ukMapTool").classList.toggle("hidden", !ukMapEnabled);
-        el("toolSelectorSection").classList.toggle("hidden", !(lineBarEnabled || ukMapEnabled));
+        el("toolSelectorSection").classList.toggle("hidden", !(profileEnabled || lineBarEnabled || ukMapEnabled));
       }
 
       function setTool(tool, refresh = true) {
         if (!toolEnabled(tool)) return;
         state.tool = tool;
+        el("profileTool").classList.toggle("active", tool === "column_profile");
         el("lineBarTool").classList.toggle("active", tool === "line_bar");
         el("ukMapTool").classList.toggle("active", tool === "uk_map");
+        document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile");
         el("lineBarToolbar").classList.toggle("hidden", tool !== "line_bar");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
+        el("visualArea").classList.toggle("profile-mode", tool === "column_profile");
         el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
         el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
+        el("profileGroupMeta").classList.toggle("hidden", tool !== "column_profile");
+        el("profileFilter").classList.toggle("hidden", tool !== "column_profile");
         el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarFilter").classList.toggle("hidden", tool !== "line_bar");
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
+        el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
         syncActiveFilterLabels();
         syncActionTimingMonitor(tool);
         setStatus("");
         setChartMessage("");
         if (tool === "line_bar") {
+          el("profileWrap").classList.add("hidden");
           el("ukMap").classList.add("hidden");
           el("mapLegend").classList.add("hidden");
           setView(state.view);
           updateAxisControls();
           requestAnimationFrame(() => chart.resize());
-        } else {
+        } else if (tool === "uk_map") {
+          el("profileWrap").classList.add("hidden");
           el("chart").classList.add("hidden");
           el("tableWrap").classList.add("hidden");
           el("ukMap").classList.remove("hidden");
@@ -541,6 +591,12 @@
             clampMapFloatingControl();
             resizeMap();
           });
+        } else {
+          el("chart").classList.add("hidden");
+          el("tableWrap").classList.add("hidden");
+          el("ukMap").classList.add("hidden");
+          el("mapLegend").classList.add("hidden");
+          el("profileWrap").classList.remove("hidden");
         }
         if (refresh && state.schema) refreshActiveTool();
       }
@@ -553,7 +609,7 @@
         requestAnimationFrame(() => {
           if (state.tool === "line_bar") {
             chart.resize();
-          } else {
+          } else if (state.tool === "uk_map") {
             clampMapFloatingControl();
             resizeMap();
           }
@@ -576,7 +632,7 @@
         requestAnimationFrame(() => {
           if (state.tool === "line_bar") {
             chart.resize();
-          } else {
+          } else if (state.tool === "uk_map") {
             clampMapFloatingControl();
             resizeMap();
           }
@@ -1195,6 +1251,7 @@
           return;
         }
         state.activeFilter = nextFilter;
+        clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshActiveTool();
       }
@@ -1211,6 +1268,7 @@
           return;
         }
         state.activeFilter = "";
+        clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshActiveTool();
       }
@@ -1285,6 +1343,502 @@
           </div>
         `;
         document.body.append(overlay);
+      }
+
+      function buildProfileRequest() {
+        if (!state.schema) return null;
+        return {
+          filter: state.activeFilter,
+        };
+      }
+
+      function buildProfileDetailRequest(columnName = state.selectedProfileColumn) {
+        if (!state.schema || !columnName) return null;
+        return {
+          column: columnName,
+          filter: state.activeFilter,
+        };
+      }
+
+      async function fetchProfileData(request, requestKey) {
+        const requestSeq = state.profileRequestSeq + 1;
+        state.profileRequestSeq = requestSeq;
+        state.profileDetailRequestSeq += 1;
+        setStatus("");
+        setChartMessage("");
+        setGroupMeta("column_profile", "Computing profile...");
+        startToolTiming("column_profile");
+        try {
+          const data = await api("/api/column-profile/summary", { method: "POST", body: JSON.stringify(request) });
+          if (requestSeq !== state.profileRequestSeq) return;
+          const cache = toolCache("column_profile");
+          if (cache.requestKey !== requestKey) cache.details = new Map();
+          cache.requestKey = requestKey;
+          cache.data = data;
+          syncDuckDbTimingFromData("column_profile", data);
+          measureToolRender("column_profile", () => renderProfileData(data));
+          return data;
+        } catch (error) {
+          if (requestSeq !== state.profileRequestSeq) return;
+          setToolTimingFailed("column_profile");
+          setGroupMeta("column_profile", "Profile failed");
+          setChartMessage("");
+          setStatus(error.message, true);
+        }
+      }
+
+      function useCachedProfileData(cache) {
+        state.lastProfileData = cache.data;
+        measureToolRender("column_profile", () => {
+          renderProfileData(cache.data);
+          applyToolPresentation("column_profile");
+        });
+      }
+
+      function renderProfileData(data) {
+        state.lastProfileData = data;
+        const columns = sortedProfileColumns(data.columns || []);
+        ensureSelectedProfileColumn(columns);
+        renderProfileTable(data, columns);
+        const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
+        const groupMeta = `${(data.columns || []).length.toLocaleString()} columns · ${rowMeta}`;
+        setFilterRowMeta(data.row_count, data.filtered_row_count);
+        setGroupMeta("column_profile", groupMeta);
+        setStatus("");
+        setChartMessage("");
+        saveToolPresentation("column_profile", { groupMeta });
+        if (state.selectedProfileColumn) {
+          renderProfileDetailLoading(state.selectedProfileColumn);
+          scheduleProfileDetailRefresh(state.selectedProfileColumn);
+        } else {
+          renderProfileDetailEmpty("Select a column to view details.");
+        }
+      }
+
+      function renderProfileTable(data, columns = sortedProfileColumns(data.columns || [])) {
+        ensureSelectedProfileColumn(columns);
+        const rows = columns.map((column) => `
+          <tr class="profile-summary-row${column.name === state.selectedProfileColumn ? " selected" : ""}" data-profile-column="${escapeHtml(column.name)}" tabindex="0" aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}">
+            <td class="profile-column-name">${escapeHtml(column.name)}</td>
+            <td>${profileTypeBadgeHtml(column)}</td>
+            <td>${profileMissingHtml(column)}</td>
+            <td>${profileDistinctHtml(column, data.filtered_row_count)}</td>
+            <td>${profileRangeHtml(column)}</td>
+          </tr>
+        `).join("");
+        const empty = columns.length
+          ? ""
+          : '<div class="profile-empty">No columns were found in the loaded dataset.</div>';
+        const currentDetail = el("profileDetailPane")?.innerHTML || profileDetailEmptyHtml("Select a column to view details.");
+        el("profileWrap").innerHTML = `
+          <div class="profile-summary-pane">
+            <div class="profile-table-scroll">
+              <table class="profile-table">
+                <thead>
+                  <tr>
+                    ${profileSortHeaderHtml("name", "Column")}
+                    ${profileSortHeaderHtml("type", "Type")}
+                    ${profileSortHeaderHtml("missing", "Missing")}
+                    ${profileSortHeaderHtml("distinct", "Distinct")}
+                    <th>Min / Max</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+            ${empty}
+          </div>
+          <aside id="profileDetailPane" class="profile-detail-pane" aria-live="polite">${currentDetail}</aside>
+        `;
+        bindProfileTable();
+      }
+
+      function bindProfileTable() {
+        el("profileWrap").querySelectorAll("[data-profile-sort]").forEach((button) => {
+          button.addEventListener("click", () => setProfileSort(button.dataset.profileSort));
+        });
+        el("profileWrap").querySelectorAll("[data-profile-column]").forEach((row) => {
+          row.addEventListener("click", () => selectProfileColumn(row.dataset.profileColumn || ""));
+          row.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            selectProfileColumn(row.dataset.profileColumn || "");
+          });
+        });
+      }
+
+      function profileSortHeaderHtml(key, label) {
+        const active = state.profileSort.key === key;
+        const direction = active ? state.profileSort.direction : "";
+        const ariaSort = active ? (direction === "desc" ? "descending" : "ascending") : "none";
+        const indicator = active ? (direction === "desc" ? "v" : "^") : "";
+        return `<th aria-sort="${ariaSort}">
+          <button class="profile-sort-button" type="button" data-profile-sort="${key}">
+            <span>${escapeHtml(label)}</span><span class="profile-sort-indicator" aria-hidden="true">${indicator}</span>
+          </button>
+        </th>`;
+      }
+
+      function setProfileSort(key) {
+        if (!["name", "type", "missing", "distinct"].includes(key)) return;
+        if (state.profileSort.key === key) {
+          state.profileSort.direction = state.profileSort.direction === "asc" ? "desc" : "asc";
+        } else {
+          state.profileSort = { key, direction: "asc" };
+        }
+        if (state.lastProfileData) {
+          const columns = sortedProfileColumns(state.lastProfileData.columns || []);
+          ensureSelectedProfileColumn(columns);
+          renderProfileTable(state.lastProfileData, columns);
+        }
+      }
+
+      function ensureSelectedProfileColumn(columns) {
+        if (!columns.length) {
+          state.selectedProfileColumn = "";
+          return;
+        }
+        if (!columns.some((column) => column.name === state.selectedProfileColumn)) {
+          state.selectedProfileColumn = columns[0].name;
+        }
+      }
+
+      function selectProfileColumn(columnName) {
+        if (!state.lastProfileData || !columnName) return;
+        const exists = (state.lastProfileData.columns || []).some((column) => column.name === columnName);
+        if (!exists) return;
+        const changed = state.selectedProfileColumn !== columnName;
+        if (!changed) return;
+        state.selectedProfileColumn = columnName;
+        syncProfileSelectedRows();
+        renderProfileDetailLoading(columnName);
+        refreshSelectedProfileDetail();
+      }
+
+      function syncProfileSelectedRows() {
+        el("profileWrap").querySelectorAll("[data-profile-column]").forEach((row) => {
+          const selected = row.dataset.profileColumn === state.selectedProfileColumn;
+          row.classList.toggle("selected", selected);
+          row.setAttribute("aria-selected", String(selected));
+        });
+      }
+
+      function scheduleProfileDetailRefresh(columnName) {
+        window.setTimeout(() => {
+          if (state.selectedProfileColumn === columnName) refreshSelectedProfileDetail();
+        }, 0);
+      }
+
+      async function refreshSelectedProfileDetail() {
+        const request = buildProfileDetailRequest();
+        const columnName = request?.column || "";
+        const detailRequestSeq = state.profileDetailRequestSeq + 1;
+        state.profileDetailRequestSeq = detailRequestSeq;
+        if (!request || !columnName) {
+          renderProfileDetailEmpty("Select a column to view details.");
+          return null;
+        }
+        const requestKey = stableRequestKey(request);
+        const cache = toolCache("column_profile");
+        const cached = cache.details.get(requestKey);
+        if (cached) {
+          measureToolRender("column_profile", () => renderProfileDetail(cached));
+          return cached;
+        }
+        renderProfileDetailLoading(columnName);
+        startToolTiming("column_profile");
+        try {
+          const data = await api("/api/column-profile/detail", { method: "POST", body: JSON.stringify(request) });
+          if (detailRequestSeq !== state.profileDetailRequestSeq || state.selectedProfileColumn !== columnName) return null;
+          cache.details.set(requestKey, data);
+          syncDuckDbTimingFromData("column_profile", data);
+          measureToolRender("column_profile", () => renderProfileDetail(data));
+          return data;
+        } catch (error) {
+          if (detailRequestSeq !== state.profileDetailRequestSeq) return null;
+          setToolTimingFailed("column_profile");
+          renderProfileDetailError(error.message);
+          setStatus(error.message, true);
+          return null;
+        }
+      }
+
+      function profileDetailPane() {
+        return el("profileDetailPane");
+      }
+
+      function profileDetailEmptyHtml(message) {
+        return `<div class="profile-detail-state">${escapeHtml(message)}</div>`;
+      }
+
+      function renderProfileDetailEmpty(message) {
+        const pane = profileDetailPane();
+        if (pane) pane.innerHTML = profileDetailEmptyHtml(message);
+      }
+
+      function renderProfileDetailLoading(columnName) {
+        const pane = profileDetailPane();
+        if (!pane) return;
+        pane.innerHTML = `
+          <div class="profile-detail-state">
+            <strong>${escapeHtml(columnName)}</strong>
+            <span>Loading profile...</span>
+          </div>
+        `;
+      }
+
+      function renderProfileDetailError(message) {
+        const pane = profileDetailPane();
+        if (!pane) return;
+        pane.innerHTML = `<div class="profile-detail-state profile-detail-error">${escapeHtml(message || "Profile detail failed")}</div>`;
+      }
+
+      function renderProfileDetail(data) {
+        state.lastProfileDetailData = data;
+        const isNumeric = isNumericKind(data.kind);
+        const isTemporal = data.kind === "date" || data.kind === "datetime";
+        const body = isNumeric || isTemporal
+          ? `${profileDetailHistogramHtml(data.histogram || [])}${profileStatsTableHtml(data.stats || {}, profileDetailStatKeys(data.kind))}`
+          : profileValueCountsHtml(data.value_counts || [], data.filtered_row_count);
+        const pane = profileDetailPane();
+        if (!pane) return;
+        pane.innerHTML = `
+          <div class="profile-detail-header">
+            <div>
+              <h3 id="profileDetailTitle">${escapeHtml(data.name)}</h3>
+              <div class="profile-detail-subtitle">${profileTypeBadgeHtml(data)} <span>${escapeHtml(data.duckdb_type || data.kind || "")}</span></div>
+            </div>
+          </div>
+          ${profileDetailCountsHtml(data)}
+          ${body}
+        `;
+        bindProfileDetail();
+      }
+
+      function profileDetailCountsHtml(data) {
+        const filtered = Number(data.filtered_row_count || 0);
+        const nonMissing = Number(data.non_missing_count || 0);
+        const missing = Number(data.missing_count || 0);
+        const distinct = Number(data.distinct_count || 0);
+        const missingRate = filtered ? missing / filtered : 0;
+        return `
+          <div class="profile-detail-counts">
+            <span><strong>${nonMissing.toLocaleString()}</strong> non-missing</span>
+            <span><strong>${distinct.toLocaleString()}</strong> distinct</span>
+            <span class="${missing > 0 ? "profile-detail-missing" : ""}"><strong>${missing.toLocaleString()}</strong> missing${missing > 0 ? ` (${formatProfilePercent(missingRate)})` : ""}</span>
+            <span><strong>${escapeHtml(formatProfileEntropy(data.entropy_score))}</strong> entropy</span>
+          </div>
+        `;
+      }
+
+      function profileDetailHistogramHtml(histogram) {
+        const bins = Array.isArray(histogram) ? histogram : [];
+        const maxCount = Math.max(0, ...bins.map((bin) => Number(bin.count || 0)));
+        if (!bins.length) return '<div class="profile-detail-empty">No non-missing values.</div>';
+        const bars = bins.map((bin) => {
+          const count = Number(bin.count || 0);
+          const height = maxCount ? Math.max(2, Math.round((count / maxCount) * 100)) : 0;
+          const label = `${formatProfileValue(bin.lower)} to ${formatProfileValue(bin.upper)}: ${count.toLocaleString()}`;
+          return `<div class="profile-detail-bin" title="${escapeHtml(label)}"><span style="height:${height}%"></span></div>`;
+        }).join("");
+        return `<div class="profile-detail-histogram" aria-label="Histogram">${bars}</div>`;
+      }
+
+      function profileDetailStatKeys(kind) {
+        if (kind === "date" || kind === "datetime") return ["min", "p25", "median", "p75", "max"];
+        return ["min", "p1", "p5", "p25", "median", "mean", "p75", "p95", "p99", "max", "sd"];
+      }
+
+      function profileStatsTableHtml(stats, keys) {
+        const rows = keys.map((key) => `
+          <tr>
+            <th>${escapeHtml(profileStatLabel(key))}</th>
+            <td>${escapeHtml(formatProfileValue(stats[key]))}</td>
+          </tr>
+        `).join("");
+        return `<table class="profile-stats-table"><tbody>${rows}</tbody></table>`;
+      }
+
+      function profileStatLabel(key) {
+        return {
+          p1: "P1",
+          p5: "P5",
+          p25: "P25",
+          p75: "P75",
+          p95: "P95",
+          p99: "P99",
+          sd: "SD",
+        }[key] || key.charAt(0).toUpperCase() + key.slice(1);
+      }
+
+      function profileValueCountsHtml(rows, filteredRowCount) {
+        if (!rows.length) return '<div class="profile-detail-empty">No non-missing values.</div>';
+        const filtered = Number(filteredRowCount || 0);
+        const tableRows = sortedProfileValueCounts(rows).map((row) => {
+          const count = Number(row.count || 0);
+          const percent = filtered ? formatProfilePercentFixed(count / filtered) : "";
+          return `
+            <tr>
+              <td>${escapeHtml(formatProfileValue(row.value))}</td>
+              <td><span class="profile-count-value">${count.toLocaleString()}</span><span class="profile-count-percent">${escapeHtml(percent)}</span></td>
+            </tr>
+          `;
+        }).join("");
+        return `
+          <div class="profile-count-table-scroll">
+            <table class="profile-count-table">
+              <thead><tr>${profileDetailSortHeaderHtml("value", "Value")}${profileDetailSortHeaderHtml("count", "Rows")}</tr></thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      function profileDetailSortHeaderHtml(key, label) {
+        const active = state.profileDetailSort.key === key;
+        const direction = active ? state.profileDetailSort.direction : "";
+        const ariaSort = active ? (direction === "desc" ? "descending" : "ascending") : "none";
+        const indicator = active ? (direction === "desc" ? "v" : "^") : "";
+        return `<th aria-sort="${ariaSort}">
+          <button class="profile-count-sort-button" type="button" data-profile-detail-sort="${key}">
+            <span>${escapeHtml(label)}</span><span class="profile-sort-indicator" aria-hidden="true">${indicator}</span>
+          </button>
+        </th>`;
+      }
+
+      function bindProfileDetail() {
+        profileDetailPane()?.querySelectorAll("[data-profile-detail-sort]").forEach((button) => {
+          button.addEventListener("click", () => setProfileDetailSort(button.dataset.profileDetailSort));
+        });
+      }
+
+      function setProfileDetailSort(key) {
+        if (!["value", "count"].includes(key)) return;
+        if (state.profileDetailSort.key === key) {
+          state.profileDetailSort.direction = state.profileDetailSort.direction === "asc" ? "desc" : "asc";
+        } else {
+          state.profileDetailSort = { key, direction: key === "count" ? "desc" : "asc" };
+        }
+        if (state.lastProfileDetailData && !isNumericKind(state.lastProfileDetailData.kind)) {
+          measureToolRender("column_profile", () => renderProfileDetail(state.lastProfileDetailData));
+        }
+      }
+
+      function sortedProfileValueCounts(rows) {
+        const key = state.profileDetailSort.key || "count";
+        const direction = state.profileDetailSort.direction === "asc" ? 1 : -1;
+        return [...rows]
+          .map((row, index) => ({ row, index }))
+          .sort((left, right) => {
+            let compared = 0;
+            if (key === "value") {
+              compared = compareProfileText(formatProfileValue(left.row.value), formatProfileValue(right.row.value));
+            } else {
+              compared = Number(left.row.count || 0) - Number(right.row.count || 0);
+            }
+            return compared ? compared * direction : left.index - right.index;
+          })
+          .map((entry) => entry.row);
+      }
+
+      function sortedProfileColumns(columns) {
+        const key = state.profileSort.key;
+        if (!key) return [...columns];
+        const direction = state.profileSort.direction === "desc" ? -1 : 1;
+        return columns
+          .map((column, index) => ({ column, index }))
+          .sort((left, right) => {
+            const compared = compareProfileColumns(left.column, right.column, key);
+            return compared ? compared * direction : left.index - right.index;
+          })
+          .map((entry) => entry.column);
+      }
+
+      function compareProfileColumns(left, right, key) {
+        if (key === "missing" || key === "distinct") {
+          const field = key === "missing" ? "missing_count" : "distinct_count";
+          const leftValue = Number(left[field] || 0);
+          const rightValue = Number(right[field] || 0);
+          return leftValue === rightValue ? compareProfileText(left.name, right.name) : leftValue - rightValue;
+        }
+        if (key === "type") {
+          const leftType = `${left.kind || ""}\u0000${left.duckdb_type || ""}`;
+          const rightType = `${right.kind || ""}\u0000${right.duckdb_type || ""}`;
+          const compared = compareProfileText(leftType, rightType);
+          return compared || compareProfileText(left.name, right.name);
+        }
+        return compareProfileText(left.name, right.name);
+      }
+
+      function compareProfileText(left, right) {
+        return String(left || "").localeCompare(String(right || ""), undefined, { sensitivity: "base", numeric: true });
+      }
+
+      function profileTypeBadgeHtml(column) {
+        const kind = column.kind || "unknown";
+        return `<span class="profile-type" title="${escapeHtml(column.duckdb_type || kind)}">${escapeHtml(kind)}</span>`;
+      }
+
+      function profileMissingHtml(column) {
+        const missing = Number(column.missing_count || 0);
+        if (!Number.isFinite(missing) || missing <= 0) {
+          return '<span class="profile-missing-count">0</span>';
+        }
+        const rate = Number(column.missing_rate || 0);
+        const percent = Number.isFinite(rate) ? ` (${formatProfilePercent(rate)})` : "";
+        return `<span class="profile-badge profile-badge-warning profile-missing-count">${missing.toLocaleString()}${percent}</span>`;
+      }
+
+      function profileDistinctHtml(column, filteredRowCount) {
+        const distinct = Number(column.distinct_count || 0);
+        const filtered = Number(filteredRowCount || 0);
+        const classes = ["profile-badge", "profile-badge-neutral"];
+        let label = Number.isFinite(distinct) ? distinct.toLocaleString() : "0";
+        if (distinct === 0) {
+          classes.push("profile-badge-empty");
+          label = "empty";
+        } else if (distinct === 1) {
+          classes.push("profile-badge-constant");
+          label = `${label} constant`;
+        } else if (distinct > 100) {
+          classes.push("profile-badge-cardinality");
+          label = `${label} high`;
+        }
+        return `<span class="${classes.join(" ")}">${escapeHtml(label)}</span>`;
+      }
+
+      function profileRangeHtml(column) {
+        if (column.min === null || column.min === undefined || column.max === null || column.max === undefined) {
+          return '<span class="profile-muted">-</span>';
+        }
+        return `<span class="profile-range">${escapeHtml(formatProfileValue(column.min))} <span>to</span> ${escapeHtml(formatProfileValue(column.max))}</span>`;
+      }
+
+      function formatProfileValue(value) {
+        if (value === null || value === undefined) return "-";
+        if (value === "") return '""';
+        if (typeof value === "number") return formatNumber(value);
+        if (typeof value === "boolean") return value ? "true" : "false";
+        return String(value);
+      }
+
+      function formatProfilePercent(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        if (number > 0 && number < 0.001) return "<0.1%";
+        return `${Number((number * 100).toFixed(1))}%`;
+      }
+
+      function formatProfilePercentFixed(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        return `${(number * 100).toFixed(1)}%`;
+      }
+
+      function formatProfileEntropy(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "0.000";
+        return Math.max(0, Math.min(1, number)).toFixed(3);
       }
 
       function buildChartRequest() {
@@ -3060,6 +3614,7 @@
         });
         el("chartTab").addEventListener("click", () => setView("chart"));
         el("tableTab").addEventListener("click", () => setView("table"));
+        el("profileTool").addEventListener("click", () => setTool("column_profile"));
         el("lineBarTool").addEventListener("click", () => setTool("line_bar"));
         el("ukMapTool").addEventListener("click", () => setTool("uk_map"));
         el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
@@ -3074,7 +3629,7 @@
           el("themeBtn").setAttribute("aria-label", label);
           el("themeBtn").title = label;
           applyMapBackground();
-          if (state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
+          if (state.tool === "line_bar" && state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
           if (state.tool === "uk_map") measureToolRender("uk_map", () => resizeMap());
         });
         el("reloadBtn").addEventListener("click", async () => {
@@ -3124,7 +3679,7 @@
             const firstPanel = controls?.querySelector(".chart-side-section");
             if (firstPanel) setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height);
             chart.resize();
-          } else {
+          } else if (state.tool === "uk_map") {
             clampMapFloatingControl();
             resizeMap();
           }
@@ -3376,8 +3931,8 @@
           divisor = 1024 ** 2;
           suffix = "Mb";
         }
-        const rounded = Math.round(bytes / divisor);
-        return `${bytes > 0 ? Math.max(1, rounded) : 0}${suffix}`;
+        const size = bytes / divisor;
+        return `${(bytes > 0 ? Math.max(0.1, size) : 0).toFixed(1)}${suffix}`;
       }
 
       function formatXLabel(value, kind) {

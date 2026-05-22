@@ -172,15 +172,21 @@ class BrowserSmokeTests(unittest.TestCase):
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
+            profile_requests = 0
+            profile_detail_requests = 0
             chart_requests = 0
             map_requests = 0
 
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
             def count_request(request: object) -> None:
-                nonlocal chart_requests, map_requests
+                nonlocal profile_requests, profile_detail_requests, chart_requests, map_requests
                 url = request.url
-                if url.endswith("/api/chart"):
+                if url.endswith("/api/column-profile/summary"):
+                    profile_requests += 1
+                elif url.endswith("/api/column-profile/detail"):
+                    profile_detail_requests += 1
+                elif url.endswith("/api/chart"):
                     chart_requests += 1
                 elif url.endswith("/api/uk-map/summary"):
                     map_requests += 1
@@ -189,12 +195,28 @@ class BrowserSmokeTests(unittest.TestCase):
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
+                page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")
+                page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]').click()
+                page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"][aria-selected="true"]').wait_for(timeout=10_000)
+                page.locator("#profileDetailTitle").get_by_text("vehicle_age").wait_for(timeout=10_000)
+                page.locator('#profileWrap .profile-sort-button[data-profile-sort="distinct"]').click()
+                page.wait_for_function(
+                    '() => document.querySelector("#profileWrap tbody td.profile-column-name")?.textContent === "PostcodeArea"'
+                )
+                self.assertEqual(page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]').get_attribute("aria-selected"), "true")
+                page.locator('#profileWrap .profile-sort-button[data-profile-sort="distinct"]').click()
+                page.wait_for_function(
+                    '() => document.querySelector("#profileWrap tbody td.profile-column-name")?.textContent === "vehicle_age"'
+                )
+                self.assertEqual(page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]').get_attribute("aria-selected"), "true")
                 page.wait_for_function(
                     """
                     () => {
                         const text = document.querySelector("#actionTimingMonitor")?.textContent || "";
-                        return /^DuckDB: \\d+(?:ns|us|ms), Chart render: \\d+(?:ns|us|ms)$/.test(text);
+                        return /^DuckDB: \\d+(?:ns|us|ms), Profile render: \\d+(?:ns|us|ms)$/.test(text);
                     }
                     """
                 )
@@ -202,6 +224,7 @@ class BrowserSmokeTests(unittest.TestCase):
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
                 self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))
+                self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
@@ -210,6 +233,7 @@ class BrowserSmokeTests(unittest.TestCase):
 
                 page.locator("#reloadBtn").click()
                 page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"')
+                self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
@@ -252,7 +276,9 @@ class BrowserSmokeTests(unittest.TestCase):
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
 
                 self.assertEqual(page_errors, [])
-                self.assertEqual(chart_requests, 2)
+                self.assertEqual(profile_requests, 2)
+                self.assertEqual(profile_detail_requests, 3)
+                self.assertEqual(chart_requests, 1)
                 self.assertEqual(map_requests, 1)
             finally:
                 browser.close()
@@ -423,6 +449,7 @@ class BrowserSmokeTests(unittest.TestCase):
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#lineBarTool").click()
                 page.locator("#kpiSelect .kpi-theme").first.wait_for(timeout=10_000)
 
                 value_heading = page.locator('.kpi-theme[data-kpi-group="VALUE"]')

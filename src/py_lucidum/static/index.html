@@ -46,7 +46,13 @@
         <aside id="appSidebar">
           <section id="toolSelectorSection" class="section tool-selector-section">
             <div class="tool-selector">
-              <button id="lineBarTool" class="tool-option active" type="button" data-tool="line_bar" aria-label="Line and bar" title="Line and bar">
+              <button id="profileTool" class="tool-option active" type="button" data-tool="column_profile" aria-label="Column profile" title="Column profile">
+                <span class="tool-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16M4 12h16M4 19h16M8 5v14" /></svg>
+                </span>
+                <span class="tool-label">Column profile</span>
+              </button>
+              <button id="lineBarTool" class="tool-option" type="button" data-tool="line_bar" aria-label="Line and bar" title="Line and bar">
                 <span class="tool-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" focusable="false"><path d="M4 19h16M7 16V9m5 7V5m5 11v-4M6 11l4-4 4 5 4-3" /></svg>
                 </span>
@@ -61,7 +67,7 @@
             </div>
           </section>
 
-          <section class="section sidebar-kpi-section">
+          <section class="section sidebar-kpi-section hidden">
             <div class="kpi-header">
               <button id="kpiCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse KPIs" aria-expanded="true" title="Collapse KPIs">
                 <span class="filter-collapse-icon" aria-hidden="true"></span>
@@ -112,7 +118,7 @@
         <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 
         <main>
-          <div id="lineBarToolbar" class="toolbar">
+          <div id="lineBarToolbar" class="toolbar hidden">
             <div id="sortControl" class="control">
               <h3>x-axis sort order</h3>
               <div class="segmented" data-control="sort">
@@ -191,11 +197,11 @@
                 <button data-value="5">5</button>
               </div>
             </div>
-            <div id="status" class="status"></div>
           </div>
+          <div id="status" class="status main-status hidden"></div>
 
-          <div id="visualArea" class="visual-area">
-            <div id="chartSideControls" class="chart-side-controls">
+          <div id="visualArea" class="visual-area profile-mode">
+            <div id="chartSideControls" class="chart-side-controls hidden">
               <section class="chart-side-section feature-section">
                 <div class="section-title-row">
                   <h2>x-axis feature</h2>
@@ -230,20 +236,23 @@
               </section>
             </div>
 
-            <div id="chartControlsResizer" class="chart-controls-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chart controls"></div>
+            <div id="chartControlsResizer" class="chart-controls-resizer hidden" role="separator" aria-orientation="vertical" aria-label="Resize chart controls"></div>
 
             <section class="workspace">
-              <div id="lineBarTabs" class="tabs workspace-tabs">
+              <div id="lineBarTabs" class="tabs workspace-tabs hidden">
                 <button id="chartTab" class="tab active">Chart</button>
                 <button id="tableTab" class="tab">Table</button>
               </div>
               <div class="workspace-messages">
-                <div id="lineBarGroupMeta" class="workspace-meta"></div>
-                <div id="lineBarFilter">no filter</div>
+                <div id="profileGroupMeta" class="workspace-meta"></div>
+                <div id="profileFilter">no filter</div>
+                <div id="lineBarGroupMeta" class="workspace-meta hidden"></div>
+                <div id="lineBarFilter" class="hidden">no filter</div>
                 <div id="chartMessage" class="chart-message hidden"></div>
               </div>
-              <div id="chart"></div>
+              <div id="chart" class="hidden"></div>
               <div id="tableWrap" class="table-wrap hidden"></div>
+              <div id="profileWrap" class="profile-wrap"></div>
               <div id="ukMap" class="uk-map hidden"></div>
               <div id="mapFloatingControl" class="map-floating-control hidden">
                 <div class="map-floating-header">
@@ -308,7 +317,7 @@
           <button id="filterApplyBtn" class="filter-action" type="button" title="Apply filter" aria-label="Apply filter">&#9654;</button>
           <input id="filterInput" placeholder="DuckDB WHERE expression" />
         </div>
-        <div id="actionTimingMonitor" class="action-timing-monitor" aria-live="polite">DuckDB: --, Chart render: --</div>
+        <div id="actionTimingMonitor" class="action-timing-monitor" aria-live="polite">DuckDB: --, Profile render: --</div>
       </footer>
     </div>
 
