@@ -219,6 +219,35 @@ class UkMapToolTests(unittest.TestCase):
             ],
         )
 
+    def test_compact_unit_summary_returns_aligned_point_arrays(self) -> None:
+        app = create_app(self.data_path, token="", tools=["uk_map"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/uk-map/summary", self.request(level="unit", compactUnitPoints=True))
+        payload = json.loads(body)
+        points = payload["unit_points"]
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["level"], "unit")
+        self.assertNotIn("rows", payload)
+        self.assertEqual(payload["point_summary"], {
+            "summary_count": 4,
+            "plotted_count": 3,
+            "missing_value_count": 0,
+            "missing_coordinate_count": 1,
+        })
+        self.assertEqual(points["key"], ["AB10 1AA", "AL1 1AA", "AL1 2AA"])
+        self.assertEqual(points["row_count"], [2, 1, 1])
+        self.assertEqual(points["numerator"], [300, 300, 400])
+        self.assertEqual(points["denominator"], [2, 1, 1])
+        self.assertEqual(points["volume"], [2, 1, 1])
+        self.assertEqual(points["value"], [150, 300, 400])
+        self.assertEqual(points["latitude"], [57.2, 51.7, 51.8])
+        self.assertEqual(points["longitude"], [-2.2, -0.4, -0.3])
+        lengths = {len(values) for values in points.values()}
+        self.assertEqual(lengths, {3})
+        self.assertIsInstance(payload["timings"]["duckdb_ns"], int)
+        self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
+
     def test_unit_summary_applies_filter_and_weight(self) -> None:
         dataset = Dataset(self.data_path)
         result = summary(

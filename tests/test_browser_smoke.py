@@ -276,7 +276,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     """
                     () => {
                         const text = document.querySelector("#actionTimingMonitor")?.textContent || "";
-                        return /^DuckDB: \\d+(?:ns|us|ms), Map render: \\d+(?:ns|us|ms)$/.test(text);
+                        return /^Server: \\d+(?:ns|us|ms), JSON: \\d+ms, Map render: \\d+(?:ns|us|ms), Total: \\d+ms$/.test(text);
                     }
                     """
                 )

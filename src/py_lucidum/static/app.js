@@ -178,16 +178,20 @@
       const el = (id) => document.getElementById(id);
 
       async function api(path, options = {}) {
+        const { clientTiming = false, ...fetchOptions } = options;
+        const started = performance.now();
         const response = await fetch(path, {
-          ...options,
+          ...fetchOptions,
           headers: {
             "Content-Type": "application/json",
             "x-lucidum-token": token,
-            ...(options.headers || {}),
+            ...(fetchOptions.headers || {}),
           },
         });
+        const responseReady = performance.now();
+        const text = await response.text();
+        const bodyReady = performance.now();
         if (!response.ok) {
-          const text = await response.text();
           let message = text;
           try {
             message = JSON.parse(text).detail || text;
@@ -195,7 +199,19 @@
           }
           throw new Error(message);
         }
-        return response.json();
+        const parseStarted = performance.now();
+        const data = JSON.parse(text);
+        const parsed = performance.now();
+        if (clientTiming && data && typeof data === "object") {
+          data.client_timings = {
+            response_ms: responseReady - started,
+            body_ms: bodyReady - responseReady,
+            parse_ms: parsed - parseStarted,
+            data_ms: parsed - responseReady,
+            total_ms: parsed - started,
+          };
+        }
+        return data;
       }
 
       function startServerHeartbeat() {
@@ -321,9 +337,24 @@
 
       function freshActionTimings() {
         return {
-          column_profile: { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" },
-          line_bar: { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" },
-          uk_map: { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" },
+          column_profile: freshActionTiming(),
+          line_bar: freshActionTiming(),
+          uk_map: freshActionTiming(),
+        };
+      }
+
+      function freshActionTiming() {
+        return {
+          duckdbNs: null,
+          duckdbMs: null,
+          duckdbStatus: "idle",
+          clientResponseMs: null,
+          clientBodyMs: null,
+          clientParseMs: null,
+          clientDataMs: null,
+          clientTotalMs: null,
+          renderNs: null,
+          renderStatus: "idle",
         };
       }
 
@@ -359,7 +390,7 @@
 
       function actionTiming(tool) {
         if (!state.actionTimings[tool]) {
-          state.actionTimings[tool] = { duckdbNs: null, duckdbMs: null, duckdbStatus: "idle", renderNs: null, renderStatus: "idle" };
+          state.actionTimings[tool] = freshActionTiming();
         }
         return state.actionTimings[tool];
       }
@@ -396,9 +427,28 @@
         return formatActionTimingValue(timing.renderNs);
       }
 
+      function formatClientTimingValue(valueMs) {
+        const number = Number(valueMs);
+        return Number.isFinite(number) ? `${formatDurationNumber(Math.max(0, number))}ms` : "--";
+      }
+
+      function formatMapTotalTimingValue(timing) {
+        if (timing.duckdbStatus === "running") return "running";
+        if (timing.duckdbStatus === "failed") return "failed";
+        const clientTotalMs = Number(timing.clientTotalMs);
+        const renderNs = Number(timing.renderNs);
+        if (!Number.isFinite(clientTotalMs)) return "--";
+        const renderMs = Number.isFinite(renderNs) ? renderNs / 1_000_000 : 0;
+        return `${formatDurationNumber(Math.max(0, clientTotalMs + renderMs))}ms`;
+      }
+
       function syncActionTimingMonitor(tool = state.tool) {
         const timing = actionTiming(tool);
         const renderLabel = ACTION_RENDER_LABELS[tool] || "Render";
+        if (tool === "uk_map") {
+          el("actionTimingMonitor").textContent = `Server: ${formatDuckDbTimingValue(timing)}, JSON: ${formatClientTimingValue(timing.clientDataMs)}, ${renderLabel}: ${formatRenderTimingValue(timing)}, Total: ${formatMapTotalTimingValue(timing)}`;
+          return;
+        }
         el("actionTimingMonitor").textContent = `DuckDB: ${formatDuckDbTimingValue(timing)}, ${renderLabel}: ${formatRenderTimingValue(timing)}`;
       }
 
@@ -407,6 +457,11 @@
         timing.duckdbNs = null;
         timing.duckdbMs = null;
         timing.duckdbStatus = "running";
+        timing.clientResponseMs = null;
+        timing.clientBodyMs = null;
+        timing.clientParseMs = null;
+        timing.clientDataMs = null;
+        timing.clientTotalMs = null;
         timing.renderNs = null;
         timing.renderStatus = "idle";
         if (state.tool === tool) syncActionTimingMonitor(tool);
@@ -427,6 +482,11 @@
         timing.duckdbNs = null;
         timing.duckdbMs = null;
         timing.duckdbStatus = "failed";
+        timing.clientResponseMs = null;
+        timing.clientBodyMs = null;
+        timing.clientParseMs = null;
+        timing.clientDataMs = null;
+        timing.clientTotalMs = null;
         timing.renderNs = null;
         timing.renderStatus = "idle";
         if (state.tool === tool) syncActionTimingMonitor(tool);
@@ -464,6 +524,25 @@
 
       function syncDuckDbTimingFromData(tool, data) {
         setDuckDbTiming(tool, data?.timings || {});
+      }
+
+      function setClientTiming(tool, timings = {}) {
+        const timing = actionTiming(tool);
+        const responseMs = Number(timings.response_ms);
+        const bodyMs = Number(timings.body_ms);
+        const parseMs = Number(timings.parse_ms);
+        const dataMs = Number(timings.data_ms);
+        const totalMs = Number(timings.total_ms);
+        timing.clientResponseMs = Number.isFinite(responseMs) ? Math.max(0, responseMs) : null;
+        timing.clientBodyMs = Number.isFinite(bodyMs) ? Math.max(0, bodyMs) : null;
+        timing.clientParseMs = Number.isFinite(parseMs) ? Math.max(0, parseMs) : null;
+        timing.clientDataMs = Number.isFinite(dataMs) ? Math.max(0, dataMs) : null;
+        timing.clientTotalMs = Number.isFinite(totalMs) ? Math.max(0, totalMs) : null;
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function syncClientTimingFromData(tool, data) {
+        setClientTiming(tool, data?.client_timings || {});
       }
 
       function normaliseForRequestKey(value) {
@@ -2115,6 +2194,7 @@
           unitColumn: postcodeColumn("unit"),
           latitudeColumn: latitudeColumn(),
           longitudeColumn: longitudeColumn(),
+          compactUnitPoints: state.mapLevel === "unit",
         };
       }
 
@@ -2136,7 +2216,7 @@
         startToolTiming("uk_map");
         try {
           const [data, geoJson] = await Promise.all([
-            api("/api/uk-map/summary", { method: "POST", body: JSON.stringify(request) }),
+            api("/api/uk-map/summary", { method: "POST", body: JSON.stringify(request), clientTiming: true }),
             request.level === "unit" ? Promise.resolve(null) : loadMapGeoJson(request.level),
           ]);
           if (requestSeq !== state.mapRequestSeq) return;
@@ -2144,6 +2224,7 @@
           cache.requestKey = requestKey;
           cache.data = data;
           syncDuckDbTimingFromData("uk_map", data);
+          syncClientTimingFromData("uk_map", data);
           updateMapMetricTitles(data);
           renderMap(data, geoJson);
           return data;
@@ -2577,16 +2658,95 @@
         };
       }
 
+      function unitPointArrays(data) {
+        const points = data?.unit_points;
+        return points && Array.isArray(points.key) ? points : null;
+      }
+
+      function unitPointCount(data) {
+        const points = unitPointArrays(data);
+        return points ? points.key.length : (data?.rows || []).length;
+      }
+
+      function unitPointEntries(data) {
+        const bounds = L.latLngBounds([]);
+        const entries = [];
+        const points = unitPointArrays(data);
+        if (points) {
+          const count = points.key.length;
+          for (let index = 0; index < count; index += 1) {
+            const latitude = Number(points.latitude?.[index]);
+            const longitude = Number(points.longitude?.[index]);
+            if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+            const latLng = L.latLng(latitude, longitude);
+            bounds.extend(latLng);
+            entries.push({
+              key: points.key[index],
+              row_count: points.row_count?.[index],
+              numerator: points.numerator?.[index],
+              denominator: points.denominator?.[index],
+              volume: points.volume?.[index],
+              value: points.value?.[index],
+              latitude,
+              longitude,
+              latLng,
+            });
+          }
+          return { entries, bounds };
+        }
+        for (const row of data?.rows || []) {
+          const latitude = Number(row.latitude);
+          const longitude = Number(row.longitude);
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+          const latLng = L.latLng(latitude, longitude);
+          bounds.extend(latLng);
+          entries.push({
+            ...row,
+            latitude,
+            longitude,
+            latLng,
+          });
+        }
+        return { entries, bounds };
+      }
+
+      function makeUnitPointScale(data) {
+        const points = unitPointArrays(data);
+        if (!points) return makeQuantileScale(data.rows || []);
+        const values = (points.value || [])
+          .map(finiteNumber)
+          .filter((value) => value !== null);
+        return makeQuantileScaleFromValues(values);
+      }
+
+      function mapUnitHotspotKeys(data) {
+        const points = unitPointArrays(data);
+        if (!points) return mapHotspotKeys(data.rows || []);
+        const fraction = Number(state.mapHotspots);
+        if (!Number.isFinite(fraction) || fraction === 0) return null;
+        const validRows = [];
+        for (let index = 0; index < points.key.length; index += 1) {
+          const key = points.key[index];
+          const value = finiteNumber(points.value?.[index]);
+          if (key === null || key === undefined || value === null) continue;
+          validRows.push({ key, value, index });
+        }
+        if (!validRows.length) return null;
+        const direction = fraction > 0 ? -1 : 1;
+        validRows.sort((a, b) => {
+          if (a.value !== b.value) return (a.value - b.value) * direction;
+          return a.index - b.index;
+        });
+        const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * Math.abs(fraction))));
+        return new Set(validRows.slice(0, count).map((row) => String(row.key)));
+      }
+
       function makeUnitPointLayer(data, scale, hotspotKeys) {
         return new (L.Layer.extend({
-          initialize(rows) {
-            this.rows = rows
-              .map((row) => ({
-                row,
-                latLng: L.latLng(Number(row.latitude), Number(row.longitude)),
-              }))
-              .filter((entry) => Number.isFinite(entry.latLng.lat) && Number.isFinite(entry.latLng.lng));
-            this.bounds = this.rows.length ? L.latLngBounds(this.rows.map((entry) => entry.latLng)) : L.latLngBounds([]);
+          initialize(mapData) {
+            const prepared = unitPointEntries(mapData);
+            this.rows = prepared.entries;
+            this.bounds = prepared.bounds;
             this.tooltip = null;
           },
           onAdd(map) {
@@ -2641,7 +2801,7 @@
                 this.hitGrid.set(gridKey, []);
               }
               this.hitGrid.get(gridKey).push({ entry, point });
-              const style = mapPointStyle(entry.row, scale, hotspotKeys, pointRadius);
+              const style = mapPointStyle(entry, scale, hotspotKeys, pointRadius);
               context.globalAlpha = Math.max(0, Math.min(1, style.fillOpacity));
               context.fillStyle = style.fillColor;
               if (pointRadius <= 1) {
@@ -2691,8 +2851,8 @@
               this.closeTooltip();
               return;
             }
-            const value = finiteNumber(nearest.row.value);
-            const text = `${nearest.row.key}: ${value === null ? "No data" : formatLineValue(value)}`;
+            const value = finiteNumber(nearest.value);
+            const text = `${nearest.key}: ${value === null ? "No data" : formatLineValue(value)}`;
             if (!this.tooltip) {
               this.tooltip = L.tooltip({ sticky: true, direction: "top", opacity: 0.9 });
             }
@@ -2706,7 +2866,7 @@
             if (!nearest) return;
             L.popup()
               .setLatLng(nearest.latLng)
-              .setContent(mapPopupHtml(String(nearest.row.key || "Unknown"), nearest.row, data))
+              .setContent(mapPopupHtml(String(nearest.key || "Unknown"), nearest, data))
               .openOn(this.map);
           },
           closeTooltip() {
@@ -2714,7 +2874,7 @@
               this.map.removeLayer(this.tooltip);
             }
           },
-        }))(data.rows || []);
+        }))(data);
       }
 
       function renderMap(data, geoJson) {
@@ -2814,8 +2974,8 @@
         state.renderedMapLevel = data.level;
         initMap();
         syncFloatingMapControl();
-        const scale = makeQuantileScale(data.rows || []);
-        const hotspotKeys = mapHotspotKeys(data.rows || []);
+        const scale = makeUnitPointScale(data);
+        const hotspotKeys = mapUnitHotspotKeys(data);
         if (ukMapLayer) {
           ukMap.removeLayer(ukMapLayer);
           ukMapLayer = null;
@@ -2847,8 +3007,8 @@
         renderMapLegend(scale, data.response?.label || "Actual");
         const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
         const pointSummary = data.point_summary || {};
-        const summaryCount = Number(pointSummary.summary_count ?? (data.rows || []).length);
-        const plottedCount = Number(pointSummary.plotted_count ?? (data.rows || []).length);
+        const summaryCount = Number(pointSummary.summary_count ?? unitPointCount(data));
+        const plottedCount = Number(pointSummary.plotted_count ?? unitPointCount(data));
         const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted · ${rowMeta}`;
         setFilterRowMeta(data.row_count, data.filtered_row_count);
         setGroupMeta("uk_map", groupMeta);
@@ -3032,11 +3192,15 @@
       }
 
       function makeQuantileScale(rows) {
-        const palette = interpolateMapPalette(activeMapPalette(), MAP_COLOR_BUCKETS);
         const values = rows
           .map((row) => finiteNumber(row.value))
-          .filter((value) => value !== null)
-          .sort((a, b) => a - b);
+          .filter((value) => value !== null);
+        return makeQuantileScaleFromValues(values);
+      }
+
+      function makeQuantileScaleFromValues(rawValues) {
+        const palette = interpolateMapPalette(activeMapPalette(), MAP_COLOR_BUCKETS);
+        const values = [...rawValues].sort((a, b) => a - b);
         const thresholds = quantileThresholds(values, palette.length);
         return {
           palette,

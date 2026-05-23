@@ -56,11 +56,23 @@ COORDINATE_COLUMNS = {
     },
 }
 
+UNIT_POINT_FIELDS = (
+    "key",
+    "row_count",
+    "numerator",
+    "denominator",
+    "volume",
+    "value",
+    "latitude",
+    "longitude",
+)
+
 
 def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] | None = None) -> dict[str, Any]:
     with dataset.lock:
         columns = dataset.column_map()
         level = normalise_level(request.get("level"))
+        compact_unit_points = level == "unit" and bool(request.get("compactUnitPoints"))
         response = normalise_response(request, columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
         app_defaults = defaults or {}
@@ -75,7 +87,7 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         if level == "unit":
             latitude_column = normalise_coordinate_column("latitude", request, app_defaults, columns)
             longitude_column = normalise_coordinate_column("longitude", request, app_defaults, columns)
-            rows, point_summary = unit_rows(
+            rows_or_points, point_summary = unit_rows(
                 dataset,
                 join_column,
                 latitude_column,
@@ -83,11 +95,14 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 response,
                 denominator,
                 filter_sql,
+                compact=compact_unit_points,
             )
+            rows = [] if compact_unit_points else rows_or_points
         else:
             rows = map_rows(dataset, join_column, response, denominator, filter_sql)
         warnings = denominator_warnings(denominator, denominator_summary)
-        if not rows:
+        plotted_count = int(point_summary["plotted_count"]) if point_summary else len(rows)
+        if plotted_count == 0:
             if level == "unit" and point_summary and point_summary["summary_count"]:
                 warnings.append(f"No plot-ready {join_column} points were found after filtering.")
             else:
@@ -119,9 +134,12 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 "numerator_total": response_summaries[0]["numerator"] if response_summaries else None,
                 "denominator": response_summaries[0]["denominator"] if response_summaries else None,
             },
-            "rows": rows,
             "warnings": warnings,
         }
+        if compact_unit_points:
+            payload["unit_points"] = rows_or_points
+        else:
+            payload["rows"] = rows
         if point_summary:
             payload["point_summary"] = point_summary
         return payload
@@ -217,7 +235,8 @@ def map_rows(
 ) -> list[dict[str, Any]]:
     sql = build_summary_sql(dataset.relation_sql(), join_column, response, denominator, filter_sql)
     cursor = dataset.con.execute(sql)
-    rows = [dict(zip([d[0] for d in cursor.description], row)) for row in cursor.fetchall()]
+    column_names = [d[0] for d in cursor.description]
+    rows = [dict(zip(column_names, row)) for row in cursor.fetchall()]
     return [
         {
             "key": row["key"],
@@ -280,7 +299,9 @@ def unit_rows(
     response: dict[str, str],
     denominator: dict[str, str | None],
     filter_sql: str = "",
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    *,
+    compact: bool = False,
+) -> tuple[list[dict[str, Any]] | dict[str, list[Any]], dict[str, int]]:
     sql = build_unit_summary_sql(
         dataset.relation_sql(),
         join_column,
@@ -291,11 +312,17 @@ def unit_rows(
         filter_sql,
     )
     cursor = dataset.con.execute(sql)
-    raw_rows = [dict(zip([d[0] for d in cursor.description], row)) for row in cursor.fetchall()]
+    column_names = [d[0] for d in cursor.description]
+    column_indexes = {name: index for index, name in enumerate(column_names)}
+    raw_rows = cursor.fetchall()
+    if compact:
+        return compact_unit_points(raw_rows, column_indexes)
+
+    raw_dicts = [dict(zip(column_names, row)) for row in raw_rows]
     rows: list[dict[str, Any]] = []
     missing_value_count = 0
     missing_coordinate_count = 0
-    for row in raw_rows:
+    for row in raw_dicts:
         value = json_number(row.get("resp0"))
         latitude = json_number(row.get("latitude"))
         longitude = json_number(row.get("longitude"))
@@ -318,8 +345,49 @@ def unit_rows(
             }
         )
     return rows, {
-        "summary_count": len(raw_rows),
+        "summary_count": len(raw_dicts),
         "plotted_count": len(rows),
+        "missing_value_count": missing_value_count,
+        "missing_coordinate_count": missing_coordinate_count,
+    }
+
+
+def compact_unit_points(
+    raw_rows: list[tuple[Any, ...]],
+    column_indexes: dict[str, int],
+) -> tuple[dict[str, list[Any]], dict[str, int]]:
+    points: dict[str, list[Any]] = {field: [] for field in UNIT_POINT_FIELDS}
+    missing_value_count = 0
+    missing_coordinate_count = 0
+    key_index = column_indexes["key"]
+    row_count_index = column_indexes["row_count"]
+    latitude_index = column_indexes["latitude"]
+    longitude_index = column_indexes["longitude"]
+    numerator_index = column_indexes["resp0_num"]
+    denominator_index = column_indexes["resp0_den"]
+    value_index = column_indexes["resp0"]
+    for row in raw_rows:
+        value = json_number(row[value_index])
+        latitude = json_number(row[latitude_index])
+        longitude = json_number(row[longitude_index])
+        if value is None:
+            missing_value_count += 1
+            continue
+        if latitude is None or longitude is None:
+            missing_coordinate_count += 1
+            continue
+        denominator = json_number(row[denominator_index])
+        points["key"].append(row[key_index])
+        points["row_count"].append(json_number(row[row_count_index]))
+        points["numerator"].append(json_number(row[numerator_index]))
+        points["denominator"].append(denominator)
+        points["volume"].append(denominator)
+        points["value"].append(value)
+        points["latitude"].append(latitude)
+        points["longitude"].append(longitude)
+    return points, {
+        "summary_count": len(raw_rows),
+        "plotted_count": len(points["key"]),
         "missing_value_count": missing_value_count,
         "missing_coordinate_count": missing_coordinate_count,
     }
@@ -379,6 +447,7 @@ ORDER BY key
 __all__ = [
     "build_unit_summary_sql",
     "build_summary_sql",
+    "compact_unit_points",
     "map_rows",
     "unit_rows",
     "normalise_coordinate_column",
