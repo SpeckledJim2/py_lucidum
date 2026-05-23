@@ -100,6 +100,26 @@ class StaticAssetTests(unittest.TestCase):
         self.assert_no_store("/static/app.js")
         self.assert_no_store("/static/app.css")
 
+    def test_line_bar_warnings_render_inside_chart_messages(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        _, css_body = self.assert_no_store("/static/app.css")
+        _, js_body = self.assert_no_store("/static/app.js")
+        html = html_body.decode("utf-8")
+        css = css_body.decode("utf-8")
+        js = js_body.decode("utf-8")
+
+        self.assertLess(html.index('id="lineBarFilter"'), html.index('id="chartMessage"'))
+        self.assertLess(html.index('id="chartMessage"'), html.index('id="chart" class="hidden"'))
+        self.assertIn('const warnings = [...(data.warnings || [])].filter(Boolean).join(" ");', js)
+        self.assertIn('const chartMessage = [warnings, labelMessage].filter(Boolean).join(" ");', js)
+        self.assertIn('const displayMessage = message || "";', js)
+        self.assertIn('saveToolPresentation("line_bar", { groupMeta, chartMessage });', js)
+        self.assertNotIn("setStatus(status);", js)
+        self.assertNotIn('replace(/\\.$/, "")', js)
+        self.assertNotIn('saveToolPresentation("line_bar", { groupMeta, status, chartMessage: labelMessage });', js)
+        self.assertIn("#visualArea:not(.profile-mode):not(.map-mode) .workspace-messages {\n        max-width: min(860px, calc(100% - 150px));", css)
+        self.assertIn(".workspace-meta,\n      .chart-message {\n        color: var(--muted);\n        font-size: 10px;", css)
+
     def test_stop_app_confirmation_uses_custom_favicon_dialog(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
         _, js_body = self.assert_no_store("/static/app.js")

@@ -229,7 +229,7 @@
       }
 
       function setChartMessage(message) {
-        const displayMessage = (message || "").replace(/\.$/, "");
+        const displayMessage = message || "";
         el("chartMessage").textContent = displayMessage;
         const hiddenForView = state.tool === "line_bar" && state.view !== "chart";
         el("chartMessage").classList.toggle("hidden", !displayMessage || hiddenForView);
@@ -2058,12 +2058,13 @@
         renderTable(data);
         const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
         const groupMeta = `${data.rows.length.toLocaleString()} groups · ${rowMeta}`;
-        const status = [...(data.warnings || [])].filter(Boolean).join(" ");
+        const warnings = [...(data.warnings || [])].filter(Boolean).join(" ");
+        const chartMessage = [warnings, labelMessage].filter(Boolean).join(" ");
         setFilterRowMeta(data.row_count, data.filtered_row_count);
         setGroupMeta("line_bar", groupMeta);
-        setStatus(status);
-        setChartMessage(labelMessage);
-        saveToolPresentation("line_bar", { groupMeta, status, chartMessage: labelMessage });
+        setStatus("");
+        setChartMessage(chartMessage);
+        saveToolPresentation("line_bar", { groupMeta, chartMessage });
       }
 
       function useCachedChartData(cache, options = {}) {

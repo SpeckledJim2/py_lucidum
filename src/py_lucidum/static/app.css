@@ -1673,6 +1673,10 @@
         pointer-events: none;
       }
 
+      #visualArea:not(.profile-mode):not(.map-mode) .workspace-messages {
+        max-width: min(860px, calc(100% - 150px));
+      }
+
       .workspace-meta,
       .chart-message {
         color: var(--muted);
