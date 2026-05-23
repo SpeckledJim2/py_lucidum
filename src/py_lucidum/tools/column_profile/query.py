@@ -5,6 +5,8 @@ import math
 from decimal import Decimal
 from typing import Any
 
+import duckdb
+
 from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, quote_ident
 
 
@@ -21,15 +23,20 @@ def profile(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         filter_sql = dataset.normalise_filter(request.get("filter"))
         row_count = dataset.row_count()
         filtered_row_count = dataset.filtered_row_count(filter_sql)
-        column_profiles = [
-            profile_column(dataset, column, filter_sql, filtered_row_count)
-            for column in columns.values()
-        ]
+        column_profiles = []
+        skipped_columns = []
+        for column in columns.values():
+            try:
+                column_profiles.append(profile_column(dataset, column, filter_sql, filtered_row_count))
+            except duckdb.Error as exc:
+                skipped_columns.append(skipped_profile_column(column, exc))
         return {
             "row_count": row_count,
             "filtered_row_count": filtered_row_count,
             "filter": filter_sql,
             "columns": column_profiles,
+            "skipped_columns": skipped_columns,
+            "warnings": profile_warnings(skipped_columns),
         }
 
 
@@ -43,56 +50,93 @@ def profile_detail(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         filter_sql = dataset.normalise_filter(request.get("filter"))
         row_count = dataset.row_count()
         filtered_row_count = dataset.filtered_row_count(filter_sql)
-        stats = column_stats(dataset, column, filter_sql)
-        missing_count = int(stats.get("missing_count") or 0)
-        distinct_count = int(stats.get("distinct_count") or 0)
-        detail: dict[str, Any] = {
-            "name": column.name,
-            "duckdb_type": column.duckdb_type,
-            "kind": column.kind,
-            "row_count": row_count,
-            "filtered_row_count": filtered_row_count,
-            "missing_count": missing_count,
-            "non_missing_count": max(0, filtered_row_count - missing_count),
-            "distinct_count": distinct_count,
-            "filter": filter_sql,
-        }
+        try:
+            stats = column_stats(dataset, column, filter_sql)
+            missing_count = int(stats.get("missing_count") or 0)
+            distinct_count = int(stats.get("distinct_count") or 0)
+            detail: dict[str, Any] = {
+                "name": column.name,
+                "duckdb_type": column.duckdb_type,
+                "kind": column.kind,
+                "row_count": row_count,
+                "filtered_row_count": filtered_row_count,
+                "missing_count": missing_count,
+                "non_missing_count": max(0, filtered_row_count - missing_count),
+                "distinct_count": distinct_count,
+                "filter": filter_sql,
+            }
 
-        if is_numeric_kind(column.kind):
-            bin_count = numeric_detail_bin_count(distinct_count)
-            histogram = (
-                numeric_level_distribution(dataset, column, filter_sql)
-                if bin_count == distinct_count
-                else numeric_distribution(
+            if is_numeric_kind(column.kind):
+                bin_count = numeric_detail_bin_count(distinct_count)
+                histogram = (
+                    numeric_level_distribution(dataset, column, filter_sql)
+                    if bin_count == distinct_count
+                    else numeric_distribution(
+                        dataset,
+                        column,
+                        filter_sql,
+                        stats,
+                        bin_count=bin_count,
+                    )
+                )
+                detail["histogram"] = histogram
+                detail["stats"] = numeric_detail_stats(dataset, column, filter_sql)
+                detail["zero_count"] = numeric_zero_count(dataset, column, filter_sql)
+            elif column.kind in {"date", "datetime"}:
+                histogram = temporal_distribution(
                     dataset,
                     column,
                     filter_sql,
-                    stats,
-                    bin_count=bin_count,
+                    bin_count=PROFILE_DETAIL_HISTOGRAM_BINS,
                 )
-            )
-            detail["histogram"] = histogram
-            detail["stats"] = numeric_detail_stats(dataset, column, filter_sql)
-            detail["zero_count"] = numeric_zero_count(dataset, column, filter_sql)
-        elif column.kind in {"date", "datetime"}:
-            histogram = temporal_distribution(
-                dataset,
-                column,
-                filter_sql,
-                bin_count=PROFILE_DETAIL_HISTOGRAM_BINS,
-            )
-            detail["histogram"] = histogram
-            detail["stats"] = temporal_detail_stats(dataset, column, filter_sql)
-        else:
-            detail["value_counts"] = top_column_values(
-                dataset,
-                column,
-                filter_sql,
-                limit=PROFILE_DETAIL_TOP_VALUE_LIMIT,
-            )
-            detail["blank_count"] = categorical_blank_count(dataset, column, filter_sql)
+                detail["histogram"] = histogram
+                detail["stats"] = temporal_detail_stats(dataset, column, filter_sql)
+            else:
+                detail["value_counts"] = top_column_values(
+                    dataset,
+                    column,
+                    filter_sql,
+                    limit=PROFILE_DETAIL_TOP_VALUE_LIMIT,
+                )
+                detail["blank_count"] = categorical_blank_count(dataset, column, filter_sql)
+        except duckdb.Error as exc:
+            raise ValueError(profile_column_error_message(column, exc)) from exc
 
         return detail
+
+
+def skipped_profile_column(column: ColumnInfo, error: duckdb.Error) -> dict[str, str]:
+    return {
+        "name": column.name,
+        "error": profile_error_message(error),
+    }
+
+
+def profile_warnings(skipped_columns: list[dict[str, str]]) -> list[str]:
+    if not skipped_columns:
+        return []
+    names = [column["name"] for column in skipped_columns]
+    visible_names = ", ".join(names[:3])
+    if len(names) > 3:
+        visible_names = f"{visible_names}, and {len(names) - 3} more"
+    plural = "s" if len(names) != 1 else ""
+    return [f"Skipped {len(names)} unreadable column{plural}: {visible_names}."]
+
+
+def profile_column_error_message(column: ColumnInfo, error: duckdb.Error) -> str:
+    return f"Could not profile {column.name}: {profile_error_message(error)}"
+
+
+def profile_error_message(error: duckdb.Error) -> str:
+    message = str(error).splitlines()[0].strip()
+    prefix = "Invalid Input Error: "
+    if message.startswith(prefix):
+        message = message[len(prefix):]
+    if "Invalid string encoding found in Parquet file" in message:
+        return "Invalid string encoding found in Parquet data."
+    if len(message) > 240:
+        return f"{message[:237]}..."
+    return message or "DuckDB could not read this column."
 
 
 def numeric_detail_bin_count(distinct_count: int) -> int:

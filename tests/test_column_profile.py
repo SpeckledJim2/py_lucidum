@@ -6,11 +6,13 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
 import duckdb
 
 from py_lucidum.app import create_app, normalise_tools
 from py_lucidum.core import Dataset
+from py_lucidum.tools.column_profile import query as column_profile_query
 from py_lucidum.tools.column_profile.query import profile, profile_detail
 
 
@@ -101,6 +103,30 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
 
+    def test_profile_endpoint_skips_unreadable_columns(self) -> None:
+        app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)
+        original_column_stats = column_profile_query.column_stats
+
+        def fake_column_stats(dataset: Dataset, column: Any, filter_sql: str) -> dict[str, Any]:
+            if column.name == "Segment":
+                raise duckdb.InvalidInputException(
+                    'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                    'value "bad" is not valid UTF8!'
+                )
+            return original_column_stats(dataset, column, filter_sql)
+
+        with patch("py_lucidum.tools.column_profile.query.column_stats", side_effect=fake_column_stats):
+            status, _, body = asgi_post_json(app, "/api/column-profile/summary", {"filter": ""})
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual([column["name"] for column in payload["columns"]], ["Age", "Score", "QuoteDate"])
+        self.assertEqual(payload["skipped_columns"], [
+            {"name": "Segment", "error": "Invalid string encoding found in Parquet data."},
+        ])
+        self.assertEqual(payload["warnings"], ["Skipped 1 unreadable column: Segment."])
+        self.assertNotIn("/tmp/bad.parquet", json.dumps(payload))
+
     def test_profile_detail_endpoint_includes_duckdb_timing(self) -> None:
         app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)
 
@@ -113,6 +139,26 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
         self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
+
+    def test_profile_detail_endpoint_reports_unreadable_column(self) -> None:
+        app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)
+        original_column_stats = column_profile_query.column_stats
+
+        def fake_column_stats(dataset: Dataset, column: Any, filter_sql: str) -> dict[str, Any]:
+            if column.name == "Segment":
+                raise duckdb.InvalidInputException(
+                    'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                    'value "bad" is not valid UTF8!'
+                )
+            return original_column_stats(dataset, column, filter_sql)
+
+        with patch("py_lucidum.tools.column_profile.query.column_stats", side_effect=fake_column_stats):
+            status, _, body = asgi_post_json(app, "/api/column-profile/detail", {"column": "Segment", "filter": ""})
+
+        self.assertEqual(status, 400)
+        self.assertIn(b"Could not profile Segment", body)
+        self.assertIn(b"Invalid string encoding found in Parquet data", body)
+        self.assertNotIn(b"/tmp/bad.parquet", body)
 
     def test_profile_summarises_filtered_columns(self) -> None:
         payload = profile(Dataset(self.data_path), {"filter": "Segment = 'A'"})

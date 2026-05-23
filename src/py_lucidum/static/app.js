@@ -1512,15 +1512,22 @@
       function renderProfileData(data) {
         state.lastProfileData = data;
         const columns = sortedProfileColumns(data.columns || []);
+        const skippedColumns = Array.isArray(data.skipped_columns) ? data.skipped_columns : [];
+        const skippedCount = skippedColumns.length;
+        const totalColumnCount = columns.length + skippedCount;
         ensureSelectedProfileColumn(columns);
         renderProfileTable(data, columns);
         const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
-        const groupMeta = `${(data.columns || []).length.toLocaleString()} columns · ${rowMeta}`;
+        const columnMeta = skippedCount
+          ? `${columns.length.toLocaleString()} / ${totalColumnCount.toLocaleString()} columns profiled`
+          : `${columns.length.toLocaleString()} columns`;
+        const groupMeta = `${columnMeta} · ${rowMeta}`;
+        const chartMessage = (Array.isArray(data.warnings) ? data.warnings : []).filter(Boolean).join(" ");
         setFilterRowMeta(data.row_count, data.filtered_row_count);
         setGroupMeta("column_profile", groupMeta);
         setStatus("");
-        setChartMessage("");
-        saveToolPresentation("column_profile", { groupMeta });
+        setChartMessage(chartMessage);
+        saveToolPresentation("column_profile", { groupMeta, chartMessage });
         if (state.selectedProfileColumn) {
           renderProfileDetailLoading(state.selectedProfileColumn);
           scheduleProfileDetailRefresh(state.selectedProfileColumn);
