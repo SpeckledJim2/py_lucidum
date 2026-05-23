@@ -22,7 +22,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   From the project root:
 
   ```bash
-  /usr/bin/python3 -m venv .venv
+  python3.13 -m venv .venv
   .venv/bin/python -m pip install --upgrade pip
   .venv/bin/python -m pip install -e .
   ```
@@ -33,7 +33,7 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
 
   Use `pipx` if you want the `lucidum` command available from any project without activating this repository's `.venv`.
 
-  `pipx` supports macOS, Linux, and Windows. The examples below use macOS/Linux shell syntax; on Windows, follow the official `pipx` Windows installation notes and use Windows paths. The `/usr/bin/python3` fallback shown below is macOS-specific.
+  `pipx` supports macOS, Linux, and Windows. The examples below use macOS/Linux shell syntax; on Windows, follow the official `pipx` Windows installation notes and use Windows paths. Lucidum requires Python 3.13 or newer.
 
   Install `pipx` once:
 
@@ -45,13 +45,13 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   Restart the terminal after `pipx ensurepath`, then install Lucidum from a local checkout:
 
   ```bash
-  pipx install /path/to/py_lucidum
+  pipx install --python python3.13 /path/to/py_lucidum
   ```
 
   Or install from GitHub once the repository is available there:
 
   ```bash
-  pipx install git+https://github.com/SpeckledJim2/py_lucidum.git
+  pipx install --python python3.13 git+https://github.com/SpeckledJim2/py_lucidum.git
   ```
 
   After that, launch any CSV or Parquet file from any project directory:
@@ -63,11 +63,11 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
 
   If `lucidum` is not found, either restart the terminal after `pipx ensurepath` or run the command directly from `~/.local/bin/lucidum`.
 
-  If `pipx install` fails while creating `~/.local/pipx/shared`, the active Homebrew Python may have a broken `venv`/`ensurepip` setup. A practical workaround on macOS is to force `pipx` to use Apple's system Python:
+  If `pipx install` uses an older default interpreter, force `pipx` to use Python 3.13:
 
   ```bash
   rm -rf ~/.local/pipx/shared
-  PIPX_DEFAULT_PYTHON=/usr/bin/python3 pipx install --force --python /usr/bin/python3 /path/to/py_lucidum
+  PIPX_DEFAULT_PYTHON=python3.13 pipx install --force --python python3.13 /path/to/py_lucidum
   ```
 
   This is a per-user install, which is usually preferable to installing into the system Python with `sudo pip`.
@@ -322,11 +322,11 @@ The repository includes one synthetic demo dataset at `datasets/motor_premiums.p
   PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 .venv/bin/python -m pytest tests/test_pipx_install.py
   ```
 
-  If your default Homebrew Python cannot create virtual environments, point the test at Apple's system Python:
+  If your default `pipx` interpreter is not Python 3.13, point the test at Python 3.13:
 
   ```bash
   PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 \
-  PY_LUCIDUM_PIPX_PYTHON=/usr/bin/python3 \
+  PY_LUCIDUM_PIPX_PYTHON=python3.13 \
   .venv/bin/python -m pytest tests/test_pipx_install.py
   ```
 

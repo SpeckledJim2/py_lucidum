@@ -139,7 +139,7 @@ Optional `pipx` install check:
 PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 .venv/bin/python -m pytest tests/test_pipx_install.py
 ```
 
-Use `PY_LUCIDUM_PIPX_PYTHON=/usr/bin/python3` when Homebrew Python cannot create virtual environments.
+Use `PY_LUCIDUM_PIPX_PYTHON=python3.13` when the default `pipx` interpreter is not Python 3.13.
 
 The current test suite should cover:
 

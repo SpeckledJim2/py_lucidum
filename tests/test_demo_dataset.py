@@ -16,12 +16,12 @@ class SingleChildTraversable:
     def __init__(self, parts: tuple[str, ...] = ()) -> None:
         self.parts = parts
 
-    def joinpath(self, child: str) -> "SingleChildTraversable":
-        return SingleChildTraversable((*self.parts, child))
+    def joinpath(self, *children: str) -> "SingleChildTraversable":
+        return SingleChildTraversable((*self.parts, *children))
 
 
 class DemoDatasetTests(unittest.TestCase):
-    def test_demo_dataset_resource_uses_python39_compatible_joinpath(self) -> None:
+    def test_demo_dataset_resource_uses_multi_argument_joinpath(self) -> None:
         root = SingleChildTraversable()
 
         with patch("py_lucidum.demo.resources.files", return_value=root) as files_mock:

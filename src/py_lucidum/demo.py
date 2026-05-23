@@ -9,7 +9,7 @@ DEMO_DATASET_NAME = "motor_premiums.parquet"
 
 
 def _demo_dataset_resource():
-    return resources.files("py_lucidum").joinpath("datasets").joinpath(DEMO_DATASET_NAME)
+    return resources.files("py_lucidum").joinpath("datasets", DEMO_DATASET_NAME)
 
 
 def demo_dataset_path() -> Path:
