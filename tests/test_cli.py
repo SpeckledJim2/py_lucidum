@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import uvicorn
 
@@ -17,6 +17,7 @@ from py_lucidum.cli import (
     _display_url_for_app,
     _lan_url_hint_for_app,
     _run_server,
+    _start_app_server,
     ensure_port_available,
     main,
     run_app,
@@ -47,8 +48,14 @@ class CliRuntimeTests(unittest.TestCase):
         async def app(scope: object, receive: object, send: object) -> None:
             return None
 
+        opener = Mock()
         config = uvicorn.Config(app, host="127.0.0.1", port=8000)
-        server = LucidumServer(config, "http://127.0.0.1:8000/", "Use the app Stop app button to quit")
+        server = LucidumServer(
+            config,
+            "http://127.0.0.1:8000/",
+            "Use the app Stop app button to quit",
+            browser_opener=opener,
+        )
 
         with self.assertLogs("uvicorn.error", level="INFO") as logs:
             server._log_started_message([])
@@ -57,6 +64,26 @@ class CliRuntimeTests(unittest.TestCase):
             logs.output,
             ["INFO:uvicorn.error:Uvicorn running on http://127.0.0.1:8000/ (Use the app Stop app button to quit)"],
         )
+        opener.assert_not_called()
+
+    def test_lucidum_server_opens_browser_after_started_message(self) -> None:
+        async def app(scope: object, receive: object, send: object) -> None:
+            return None
+
+        opener = Mock()
+        config = uvicorn.Config(app, host="127.0.0.1", port=8000)
+        server = LucidumServer(
+            config,
+            "http://127.0.0.1:8000/",
+            "Press CTRL+C to quit",
+            open_browser=True,
+            browser_opener=opener,
+        )
+
+        with self.assertLogs("uvicorn.error", level="INFO"):
+            server._log_started_message([])
+
+        opener.assert_called_once_with("http://127.0.0.1:8000/")
 
     def test_display_url_for_app_includes_token_and_defaults(self) -> None:
         app = SimpleNamespace(
@@ -168,6 +195,25 @@ class CliRuntimeTests(unittest.TestCase):
             stdout.getvalue(),
         )
         start_server_mock.assert_called_once_with(app, "0.0.0.0", 8055, url, False, False)
+
+    def test_start_app_server_defers_open_until_server_started(self) -> None:
+        app = SimpleNamespace(state=SimpleNamespace())
+        url = "http://127.0.0.1:0/"
+
+        with (
+            patch("py_lucidum.cli.webbrowser.open") as opener_mock,
+            patch("py_lucidum.cli._run_server") as run_server_mock,
+        ):
+            _start_app_server(app, "127.0.0.1", 0, url, open_browser=True, run_in_background=False)
+
+        opener_mock.assert_not_called()
+        run_server_mock.assert_called_once()
+        server = run_server_mock.call_args.args[0]
+        self.assertIsInstance(server, LucidumServer)
+        self.assertEqual(server.display_url, url)
+        self.assertTrue(server.open_browser)
+        self.assertIs(server.browser_opener, opener_mock)
+        self.assertEqual(run_server_mock.call_args.kwargs["run_in_background"], False)
 
     def test_serve_checks_busy_port_before_printing_or_building_app(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

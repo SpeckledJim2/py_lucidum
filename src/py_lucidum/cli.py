@@ -7,7 +7,7 @@ import secrets
 import socket
 import threading
 import webbrowser
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -31,10 +31,19 @@ DEFAULT_URL_KEYS = {
 
 
 class LucidumServer(uvicorn.Server):
-    def __init__(self, config: uvicorn.Config, display_url: str, stop_instruction: str) -> None:
+    def __init__(
+        self,
+        config: uvicorn.Config,
+        display_url: str,
+        stop_instruction: str,
+        open_browser: bool = False,
+        browser_opener: Callable[[str], object] | None = None,
+    ) -> None:
         super().__init__(config)
         self.display_url = display_url
         self.stop_instruction = stop_instruction
+        self.open_browser = open_browser
+        self.browser_opener = browser_opener or webbrowser.open
 
     def _log_started_message(self, listeners: Sequence[socket.SocketType]) -> None:
         message = f"Uvicorn running on {self.display_url} ({self.stop_instruction})"
@@ -42,6 +51,8 @@ class LucidumServer(uvicorn.Server):
             message,
             extra={"color_message": message},
         )
+        if self.open_browser:
+            self.browser_opener(self.display_url)
 
 
 def find_free_port() -> int:
@@ -154,10 +165,8 @@ def _start_app_server(
     run_in_background: bool,
 ) -> None:
     ensure_port_available(host, port)
-    if open_browser:
-        webbrowser.open(url)
     config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
-    server = LucidumServer(config, url, _stop_instruction(run_in_background))
+    server = LucidumServer(config, url, _stop_instruction(run_in_background), open_browser=open_browser)
     state = getattr(app, "state", None)
     if state is not None:
         state.shutdown_callback = lambda: setattr(server, "should_exit", True)
