@@ -126,6 +126,23 @@ class BrowserSmokeTests(unittest.TestCase):
                 server.should_exit = True
                 thread.join(timeout=5)
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_stopped_overlay_uses_cached_favicon_after_shutdown(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value\n"
+                "AB,AB10 1,1,100,10\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path)
+            try:
+                self.exercise_stopped_overlay(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
     @staticmethod
     def start_app(
         data_path: Path,
@@ -155,6 +172,7 @@ class BrowserSmokeTests(unittest.TestCase):
         )
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         server = uvicorn.Server(config)
+        app.state.shutdown_callback = lambda: setattr(server, "should_exit", True)
         thread = threading.Thread(target=server.run, name="py-lucidum-browser-smoke", daemon=True)
         thread.start()
         for _ in range(100):
@@ -287,6 +305,32 @@ class BrowserSmokeTests(unittest.TestCase):
                 self.assertEqual(profile_detail_requests, 3)
                 self.assertEqual(chart_requests, 1)
                 self.assertEqual(map_requests, 1)
+            finally:
+                browser.close()
+
+    def exercise_stopped_overlay(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#stopAppBtn").click()
+                page.locator(".stop-confirm-ok").click()
+                page.locator(".shutdown-message").get_by_text("lucidum has stopped").wait_for(timeout=10_000)
+                icon = page.locator(".shutdown-icon")
+
+                self.assertEqual(icon.evaluate("node => node.tagName.toLowerCase()"), "img")
+                icon_src = icon.get_attribute("src")
+                self.assertIsNotNone(icon_src)
+                assert icon_src is not None
+                self.assertTrue(icon_src.startswith("data:image/"))
+                self.assertTrue(icon.evaluate("node => node.complete && node.naturalWidth > 0"))
+                self.assertEqual(page.locator(".shutdown-icon-fallback").count(), 0)
+                self.assertEqual(page_errors, [])
             finally:
                 browser.close()
 

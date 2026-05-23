@@ -174,6 +174,7 @@
       let mapHomeControl = null;
       let serverHeartbeatTimer = null;
       let stoppedOverlayShown = false;
+      let faviconDataUrl = "";
       const el = (id) => document.getElementById(id);
 
       async function api(path, options = {}) {
@@ -206,6 +207,22 @@
         if (!serverHeartbeatTimer) return;
         window.clearInterval(serverHeartbeatTimer);
         serverHeartbeatTimer = null;
+      }
+
+      async function cacheShutdownIcon() {
+        try {
+          const response = await fetch("/favicon.ico", { cache: "force-cache" });
+          if (!response.ok) return;
+          const blob = await response.blob();
+          faviconDataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.addEventListener("load", () => resolve(String(reader.result || "")), { once: true });
+            reader.addEventListener("error", () => reject(reader.error), { once: true });
+            reader.readAsDataURL(blob);
+          });
+        } catch (_) {
+          faviconDataUrl = "";
+        }
       }
 
       async function checkServerHealth() {
@@ -1344,11 +1361,14 @@
         stoppedOverlayShown = true;
         stopServerHeartbeat();
         document.body.classList.add("app-stopped");
+        const shutdownIcon = faviconDataUrl
+          ? `<img class="shutdown-icon" src="${faviconDataUrl}" alt="">`
+          : '<span class="shutdown-icon shutdown-icon-fallback" aria-hidden="true"></span>';
         const overlay = document.createElement("div");
         overlay.className = "shutdown-overlay";
         overlay.innerHTML = `
           <div class="shutdown-message" role="status" aria-live="polite">
-            <img class="shutdown-icon" src="/favicon.ico" alt="">
+            ${shutdownIcon}
             <div>
               <h1>lucidum has stopped</h1>
               <p>The local server is no longer running. You can close this browser tab.</p>
@@ -4106,6 +4126,7 @@
 
       async function boot() {
         bindControls();
+        cacheShutdownIcon();
         try {
           state.schema = await api("/api/schema");
           const path = state.schema.path.split(/[\\/]/).pop();

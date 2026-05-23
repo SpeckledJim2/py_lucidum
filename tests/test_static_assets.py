@@ -138,19 +138,30 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn(".stop-confirm-icon {\n        width: 38px;\n        height: 38px;", css)
         self.assertIn(".stop-confirm-actions {\n        display: flex;\n        justify-content: flex-end;", css)
 
-    def test_stopped_overlay_uses_favicon_message_layout(self) -> None:
+    def test_stopped_overlay_uses_cached_icon_message_layout(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
         _, js_body = self.assert_no_store("/static/app.js")
         css = css_body.decode("utf-8")
         js = js_body.decode("utf-8")
 
-        self.assertIn('class="shutdown-icon" src="/favicon.ico" alt=""', js)
+        self.assertIn('let faviconDataUrl = "";', js)
+        self.assertIn("async function cacheShutdownIcon()", js)
+        self.assertIn('const response = await fetch("/favicon.ico", { cache: "force-cache" });', js)
+        self.assertIn("reader.readAsDataURL(blob);", js)
+        self.assertIn("cacheShutdownIcon();", js)
+        self.assertIn('`<img class="shutdown-icon" src="${faviconDataUrl}" alt="">`', js)
+        self.assertIn('class="shutdown-icon shutdown-icon-fallback" aria-hidden="true"></span>', js)
+        self.assertNotIn('class="shutdown-icon" src="/favicon.ico" alt=""', js)
+        self.assertNotIn('class="shutdown-icon" aria-hidden="true">L</span>', js)
         self.assertIn("<h1>lucidum has stopped</h1>", js)
         self.assertNotIn("<h1>py_lucidum has stopped</h1>", js)
         self.assertIn(".shutdown-message {\n        width: min(420px, 100%);", css)
         self.assertIn("display: grid;\n        grid-template-columns: 42px minmax(0, 1fr);", css)
         self.assertIn("text-align: left;", css)
         self.assertIn(".shutdown-icon {\n        width: 42px;\n        height: 42px;", css)
+        self.assertIn("object-fit: contain;", css)
+        self.assertIn(".shutdown-icon-fallback {\n        border: 1px solid var(--line);", css)
+        self.assertIn("display: grid;\n        place-items: center;", css)
 
     def test_boot_schema_failure_updates_header_and_status(self) -> None:
         _, js_body = self.assert_no_store("/static/app.js")
