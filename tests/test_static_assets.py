@@ -843,6 +843,14 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)", js)
         self.assertIn("scheduleMapResize({ refit: didFitLayer });", js)
 
+    def test_app_js_disables_sector_geojson_smoothing(self) -> None:
+        _, body = self.assert_no_store("/static/app.js")
+        js = body.decode("utf-8")
+
+        self.assertIn("smoothFactor: 1", js)
+        self.assertIn("smoothFactor: 0", js)
+        self.assertIn("smoothFactor: levelConfig.smoothFactor ?? 1", js)
+
     def test_uk_map_static_assets_disable_cache(self) -> None:
         self.assert_no_store("/tools/uk-map/static/icons/UK.png")
 

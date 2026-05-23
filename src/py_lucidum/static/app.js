@@ -99,6 +99,7 @@
           url: "/tools/uk-map/static/geodata/areas_MappaR.geojson",
           defaultColumn: "PostcodeArea",
           aliases: ["PostcodeArea", "POSTCODE_AREA"],
+          smoothFactor: 1,
         },
         sector: {
           label: "sectors",
@@ -107,6 +108,7 @@
           url: "/tools/uk-map/static/geodata/sectors_MappaR.geojson",
           defaultColumn: "PostcodeSector",
           aliases: ["PostcodeSector", "POSTCODE_SECTOR"],
+          smoothFactor: 0,
         },
         unit: {
           label: "units",
@@ -2912,6 +2914,7 @@
           ukMapLabelLayer = null;
         }
         ukMapLayer = L.geoJSON(geoJson, {
+          smoothFactor: levelConfig.smoothFactor ?? 1,
           style: (feature) => {
             const row = summaries.get(String(feature.properties?.[data.join_property] ?? ""));
             return mapFeatureStyle(row, scale, hotspotKeys, data.level);
