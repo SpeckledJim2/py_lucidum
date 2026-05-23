@@ -2040,6 +2040,10 @@
         color: var(--text);
       }
 
+      .profile-detail-histogram-wrap {
+        min-width: 0;
+      }
+
       .profile-detail-histogram {
         display: flex;
         flex-wrap: nowrap;
@@ -2050,10 +2054,6 @@
         overflow: hidden;
         border-bottom: 1px solid var(--line);
         padding: 6px 0 0;
-      }
-
-      .profile-detail-histogram-labelled {
-        height: 136px;
       }
 
       .profile-detail-bin {
@@ -2067,10 +2067,6 @@
         border-radius: 3px 3px 0 0;
       }
 
-      .profile-detail-histogram-labelled .profile-detail-bin {
-        padding-bottom: 14px;
-      }
-
       .profile-detail-bin-bar {
         display: block;
         width: 100%;
@@ -2079,19 +2075,55 @@
         background: linear-gradient(to top, var(--accent), var(--accent-2));
       }
 
+      .profile-detail-bin-label-row {
+        display: flex;
+        gap: 1px;
+        height: 18px;
+        min-width: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
       .profile-detail-bin-label {
-        position: absolute;
-        right: 0;
-        bottom: 3px;
-        left: 0;
+        flex: 1 1 0;
+        min-width: 0;
         overflow: hidden;
+        padding-top: 4px;
         color: var(--muted);
         font-size: var(--profile-bin-label-size, 7px);
         line-height: 1;
         pointer-events: none;
         text-align: center;
-        text-overflow: ellipsis;
+        text-overflow: clip;
         white-space: nowrap;
+      }
+
+      .profile-detail-histogram-axis {
+        position: relative;
+        height: 18px;
+        min-width: 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1;
+      }
+
+      .profile-detail-histogram-axis-tick {
+        position: absolute;
+        top: 4px;
+        max-width: 92px;
+        overflow: hidden;
+        pointer-events: none;
+        text-overflow: clip;
+        transform: translateX(-50%);
+        white-space: nowrap;
+      }
+
+      .profile-detail-histogram-axis-tick-start {
+        transform: none;
+      }
+
+      .profile-detail-histogram-axis-tick-end {
+        transform: translateX(-100%);
       }
 
       .profile-histogram-tooltip {

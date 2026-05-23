@@ -1611,7 +1611,7 @@
         const isNumeric = isNumericKind(data.kind);
         const isTemporal = data.kind === "date" || data.kind === "datetime";
         const body = isNumeric || isTemporal
-          ? `${profileDetailHistogramHtml(data.histogram || [])}${profileStatsTableHtml(data.stats || {}, profileDetailStatKeys(data.kind))}`
+          ? `${profileDetailHistogramHtml(data.histogram || [], data.kind)}${profileStatsTableHtml(data.stats || {}, profileDetailStatKeys(data.kind))}`
           : profileValueCountsHtml(data.value_counts || [], data.filtered_row_count);
         const pane = profileDetailPane();
         if (!pane) return;
@@ -1660,12 +1660,11 @@
         return `<span${className}><strong>${safeCount.toLocaleString()}</strong> ${escapeHtml(label)}</span>`;
       }
 
-      function profileDetailHistogramHtml(histogram) {
+      function profileDetailHistogramHtml(histogram, kind) {
         const bins = Array.isArray(histogram) ? histogram : [];
         const maxCount = Math.max(0, ...bins.map((bin) => Number(bin.count || 0)));
         if (!bins.length) return '<div class="profile-detail-empty">No non-missing values.</div>';
-        const showLabels = bins.length < 50;
-        const labelStyle = showLabels ? ` style="--profile-bin-label-size:${profileHistogramLabelFontSize(bins.length)}px"` : "";
+        const showBinLabels = profileHistogramUsesBinLabels(bins, kind);
         const bars = bins.map((bin) => {
           const count = Number(bin.count || 0);
           const height = maxCount ? Math.max(2, Math.round((count / maxCount) * 100)) : 0;
@@ -1673,10 +1672,79 @@
           const upper = formatProfileValue(bin.upper);
           const range = lower === upper ? lower : `${lower} to ${upper}`;
           const label = `${range}: ${count.toLocaleString()}`;
-          const binLabel = showLabels ? `<span class="profile-detail-bin-label">${escapeHtml(profileHistogramBinLabel(bin))}</span>` : "";
-          return `<div class="profile-detail-bin" data-profile-bin-title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><span class="profile-detail-bin-bar" style="height:${height}%"></span>${binLabel}</div>`;
+          return `<div class="profile-detail-bin" data-profile-bin-title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><span class="profile-detail-bin-bar" style="height:${height}%"></span></div>`;
         }).join("");
-        return `<div class="profile-detail-histogram${showLabels ? " profile-detail-histogram-labelled" : ""}"${labelStyle} aria-label="Histogram">${bars}</div>`;
+        const guide = showBinLabels ? profileHistogramBinLabelsHtml(bins) : profileHistogramAxisHtml(bins, kind);
+        return `<div class="profile-detail-histogram-wrap"><div class="profile-detail-histogram" aria-label="Histogram">${bars}</div>${guide}</div>`;
+      }
+
+      function profileHistogramUsesBinLabels(bins, kind) {
+        if (kind !== "integer" || !bins.length || bins.length > 24) return false;
+        if (!bins.every(profileHistogramBinIsExact)) return false;
+        return bins.every((bin) => profileHistogramBinLabel(bin).length <= 4);
+      }
+
+      function profileHistogramBinIsExact(bin) {
+        return bin.lower === bin.upper;
+      }
+
+      function profileHistogramBinLabelsHtml(bins) {
+        const labelStyle = ` style="--profile-bin-label-size:${profileHistogramLabelFontSize(bins.length)}px"`;
+        const labels = bins.map((bin) => `<span class="profile-detail-bin-label">${escapeHtml(profileHistogramBinLabel(bin))}</span>`).join("");
+        return `<div class="profile-detail-bin-label-row"${labelStyle} aria-hidden="true">${labels}</div>`;
+      }
+
+      function profileHistogramAxisHtml(bins, kind) {
+        const ticks = profileHistogramAxisTicks(bins, kind);
+        const tickHtml = ticks.map((tick, index) => {
+          const edgeClass = index === 0
+            ? " profile-detail-histogram-axis-tick-start"
+            : (index === ticks.length - 1 ? " profile-detail-histogram-axis-tick-end" : "");
+          return `<span class="profile-detail-histogram-axis-tick${edgeClass}" style="left:${tick.position}%">${escapeHtml(tick.label)}</span>`;
+        }).join("");
+        return `<div class="profile-detail-histogram-axis" aria-hidden="true">${tickHtml}</div>`;
+      }
+
+      function profileHistogramAxisTicks(bins, kind) {
+        if (!bins.length) return [];
+        const targetCount = Math.min(bins.length + 1, profileHistogramAxisTickCount());
+        const seenLabels = new Set();
+        const ticks = [];
+        for (let index = 0; index < targetCount; index += 1) {
+          const position = targetCount === 1 ? 0 : Number(((index / (targetCount - 1)) * 100).toFixed(2));
+          const label = formatProfileAxisValue(profileHistogramAxisValue(bins, index, targetCount), kind);
+          if (!label || seenLabels.has(label)) continue;
+          seenLabels.add(label);
+          ticks.push({ position, label });
+        }
+        return ticks;
+      }
+
+      function profileHistogramAxisTickCount() {
+        const width = profileDetailPane()?.clientWidth || 720;
+        if (width >= 680) return 5;
+        if (width >= 460) return 4;
+        return 3;
+      }
+
+      function profileHistogramAxisValue(bins, index, tickCount) {
+        const lastBin = bins[bins.length - 1];
+        if (index === tickCount - 1) return lastBin.upper ?? lastBin.lower;
+        const binIndex = tickCount === 1 ? 0 : Math.min(bins.length - 1, Math.round(((bins.length - 1) * index) / (tickCount - 1)));
+        return bins[binIndex]?.lower ?? bins[binIndex]?.upper;
+      }
+
+      function formatProfileAxisValue(value, kind) {
+        const formatted = formatProfileValue(value);
+        if (kind !== "date" && kind !== "datetime") return formatted;
+        return compactProfileTemporalValue(formatted);
+      }
+
+      function compactProfileTemporalValue(value) {
+        const text = String(value || "");
+        const midnight = text.match(/^(\d{4}-\d{2}-\d{2})T00:00(?::00(?:\.0+)?)?$/);
+        if (midnight) return midnight[1];
+        return text.replace("T", " ");
       }
 
       function profileHistogramBinLabel(bin) {
@@ -1685,7 +1753,7 @@
 
       function profileHistogramLabelFontSize(binCount) {
         const count = Math.max(1, Number(binCount) || 1);
-        return Math.max(4, Math.min(9, 240 / count)).toFixed(2);
+        return Math.max(8, Math.min(9, 220 / count)).toFixed(2);
       }
 
       function profileDetailStatKeys(kind) {
