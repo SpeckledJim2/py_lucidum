@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import logging
 import secrets
 import socket
@@ -123,6 +124,26 @@ def _is_wildcard_host(host: str) -> bool:
     return host in {"0.0.0.0", "::", "[::]"}
 
 
+def _usable_lan_ipv4(address: str) -> str | None:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    if ip.version != 4 or ip.is_loopback or ip.is_unspecified:
+        return None
+    return str(ip)
+
+
+def _detect_primary_lan_ipv4() -> str | None:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            address = sock.getsockname()[0]
+    except OSError:
+        return None
+    return _usable_lan_ipv4(address)
+
+
 def _display_url_for_app(app: object, host: str, port: int) -> str:
     display_host = "127.0.0.1" if _is_wildcard_host(host) else host
     return _url_for_app(app, display_host, port)
@@ -131,7 +152,7 @@ def _display_url_for_app(app: object, host: str, port: int) -> str:
 def _lan_url_hint_for_app(app: object, host: str, port: int) -> str | None:
     if not _is_wildcard_host(host):
         return None
-    return _url_for_app(app, "<this-computer-ip>", port)
+    return _url_for_app(app, _detect_primary_lan_ipv4() or "<this-computer-ip>", port)
 
 
 def _print_open_urls(app: object, host: str, port: int, display_url: str) -> None:

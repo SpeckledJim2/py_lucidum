@@ -18,6 +18,7 @@ from py_lucidum.cli import (
     _lan_url_hint_for_app,
     _run_server,
     _start_app_server,
+    _usable_lan_ipv4,
     ensure_port_available,
     main,
     run_app,
@@ -121,11 +122,27 @@ class CliRuntimeTests(unittest.TestCase):
             _display_url_for_app(app, "0.0.0.0", 8000),
             "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age",
         )
-        self.assertEqual(
-            _lan_url_hint_for_app(app, "0.0.0.0", 8000),
-            "http://<this-computer-ip>:8000/?token=dev-token&x=Driver+Age",
-        )
+        with patch("py_lucidum.cli._detect_primary_lan_ipv4", return_value="192.168.1.50"):
+            self.assertEqual(
+                _lan_url_hint_for_app(app, "0.0.0.0", 8000),
+                "http://192.168.1.50:8000/?token=dev-token&x=Driver+Age",
+            )
         self.assertIsNone(_lan_url_hint_for_app(app, "127.0.0.1", 8000))
+
+    def test_lan_url_hint_falls_back_to_placeholder_when_ip_detection_fails(self) -> None:
+        app = SimpleNamespace(state=SimpleNamespace(token="dev-token", defaults={}))
+
+        with patch("py_lucidum.cli._detect_primary_lan_ipv4", return_value=None):
+            self.assertEqual(
+                _lan_url_hint_for_app(app, "0.0.0.0", 8000),
+                "http://<this-computer-ip>:8000/?token=dev-token",
+            )
+
+    def test_primary_lan_ipv4_detection_rejects_loopback_and_wildcard_addresses(self) -> None:
+        self.assertEqual(_usable_lan_ipv4("192.168.1.50"), "192.168.1.50")
+        self.assertIsNone(_usable_lan_ipv4("127.0.0.1"))
+        self.assertIsNone(_usable_lan_ipv4("0.0.0.0"))
+        self.assertIsNone(_usable_lan_ipv4("not-an-ip"))
 
     def test_ensure_port_available_reports_busy_port(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -183,6 +200,7 @@ class CliRuntimeTests(unittest.TestCase):
         stdout = io.StringIO()
 
         with (
+            patch("py_lucidum.cli._detect_primary_lan_ipv4", return_value="192.168.1.50"),
             patch("py_lucidum.cli._start_app_server") as start_server_mock,
             redirect_stdout(stdout),
         ):
@@ -191,7 +209,7 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(url, "http://127.0.0.1:8055/?token=dev-token")
         self.assertIn("Open locally http://127.0.0.1:8055/?token=dev-token", stdout.getvalue())
         self.assertIn(
-            "Open from another device on your LAN: http://<this-computer-ip>:8055/?token=dev-token",
+            "Open from another device on your LAN: http://192.168.1.50:8055/?token=dev-token",
             stdout.getvalue(),
         )
         start_server_mock.assert_called_once_with(app, "0.0.0.0", 8055, url, False, False)
@@ -307,6 +325,7 @@ class CliRuntimeTests(unittest.TestCase):
 
             with (
                 patch("py_lucidum.cli.create_app", return_value=app),
+                patch("py_lucidum.cli._detect_primary_lan_ipv4", return_value="192.168.1.50"),
                 patch("py_lucidum.cli._start_app_server") as start_server_mock,
                 redirect_stdout(stdout),
             ):
@@ -316,7 +335,7 @@ class CliRuntimeTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Open locally http://127.0.0.1:8053/?token=dev-token&x=Driver+Age", output)
         self.assertIn(
-            "Open from another device on your LAN: http://<this-computer-ip>:8053/?token=dev-token&x=Driver+Age",
+            "Open from another device on your LAN: http://192.168.1.50:8053/?token=dev-token&x=Driver+Age",
             output,
         )
         self.assertNotIn("Open http://0.0.0.0:8053", output)
