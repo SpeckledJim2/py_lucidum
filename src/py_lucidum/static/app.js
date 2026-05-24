@@ -150,11 +150,6 @@
           url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
           attribution: "Tiles &copy; Esri",
         },
-        grey: {
-          label: "Grey",
-          url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-          attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-        },
         osm: {
           label: "OSM",
           url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -164,6 +159,18 @@
           label: "Aerial",
           url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
           attribution: "Tiles &copy; Esri",
+        },
+        grey: {
+          label: "Light",
+          url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+          attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+          themePair: { light: "grey", dark: "darkGrey" },
+        },
+        darkGrey: {
+          label: "Dark",
+          url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+          attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+          themePair: { light: "grey", dark: "darkGrey" },
         },
       };
 
@@ -2425,6 +2432,13 @@
         container.classList.toggle("map-bg-light", !dark);
       }
 
+      function syncCartoBaseMapForTheme() {
+        const config = MAP_BASE_LAYERS[state.baseMap];
+        const pair = config?.themePair;
+        if (!pair) return;
+        setBaseMap(document.body.classList.contains("dark") ? pair.dark : pair.light);
+      }
+
       function addMapLayerControl() {
         if (!ukMap || mapLayerControl) return;
         const LayerControl = L.Control.extend({
@@ -4093,6 +4107,7 @@
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
           syncThemeButton();
+          syncCartoBaseMapForTheme();
           applyMapBackground();
           if (state.tool === "line_bar" && state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
           if (state.tool === "uk_map") measureToolRender("uk_map", () => resizeMap());
