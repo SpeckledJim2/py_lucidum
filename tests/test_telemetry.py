@@ -98,6 +98,7 @@ class TelemetryTests(unittest.TestCase):
         client = snapshot["clients"][0]
         self.assertEqual(client["client_ip"], "127.0.0.1")
         self.assertEqual(client["user_agent"], "Browser A")
+        self.assertEqual(client["user_agent_label"], "Unknown client")
         self.assertEqual(client["request_count"], 1)
         self.assertEqual(client["app_action_count"], 1)
         self.assertEqual(client["last_app_action"], "Load schema")
@@ -141,6 +142,45 @@ class TelemetryTests(unittest.TestCase):
             sorted((client["client_ip"], client["user_agent"]) for client in snapshot["clients"]),
             [("10.0.0.5", "Browser A"), ("10.0.0.5", "Browser B")],
         )
+        self.assertEqual(
+            sorted(client["user_agent_label"] for client in snapshot["clients"]),
+            ["Unknown client", "Unknown client"],
+        )
+
+    def test_clients_include_friendly_user_agent_labels(self) -> None:
+        app = create_app(self.data_path, token="")
+        user_agents = [
+            (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+                "(KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+                "Safari 26.5 · macOS",
+            ),
+            (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                "Chrome 125 · macOS",
+            ),
+            (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+                "Firefox 126 · Windows",
+            ),
+            (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
+                "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                "Safari · iOS",
+            ),
+            ("", "Unknown client"),
+        ]
+
+        for index, (user_agent, _) in enumerate(user_agents, start=1):
+            headers = {"user-agent": user_agent} if user_agent else {}
+            asgi_request(app, "GET", "/api/schema", headers=headers, client=("10.0.0.5", 1000 + index))
+        snapshot = telemetry_snapshot(app)
+
+        labels_by_agent = {client["user_agent"]: client["user_agent_label"] for client in snapshot["clients"]}
+        for user_agent, label in user_agents[:-1]:
+            self.assertEqual(labels_by_agent[user_agent], label)
+        self.assertEqual(labels_by_agent["(unknown)"], "Unknown client")
 
     def test_telemetry_and_monitor_use_existing_token_auth(self) -> None:
         app = create_app(self.data_path, token="dev-token")

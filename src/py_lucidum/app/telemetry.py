@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -101,6 +102,60 @@ def client_ip_from_scope(scope: dict[str, Any]) -> str:
 
 def app_action_for(method: str, path: str) -> str | None:
     return APP_ACTIONS.get((method.upper(), path))
+
+
+def browser_version(user_agent: str, token: str, parts: int = 1) -> str | None:
+    match = re.search(rf"{re.escape(token)}/([0-9]+(?:\.[0-9]+)*)", user_agent)
+    if not match:
+        return None
+    return ".".join(match.group(1).split(".")[:parts])
+
+
+def operating_system_label(user_agent: str) -> str | None:
+    if "iPad" in user_agent:
+        return "iPadOS"
+    if "iPhone" in user_agent or "iPod" in user_agent:
+        return "iOS"
+    if "Android" in user_agent:
+        return "Android"
+    if "Macintosh" in user_agent or "Mac OS X" in user_agent:
+        return "macOS"
+    if "Windows" in user_agent:
+        return "Windows"
+    if "Linux" in user_agent:
+        return "Linux"
+    return None
+
+
+def user_agent_label(user_agent: str) -> str:
+    if not user_agent or user_agent == UNKNOWN_USER_AGENT:
+        return "Unknown client"
+
+    os_label = operating_system_label(user_agent)
+    browser_label: str | None = None
+    if version := browser_version(user_agent, "Edg"):
+        browser_label = f"Edge {version}"
+    elif version := browser_version(user_agent, "Firefox"):
+        browser_label = f"Firefox {version}"
+    elif version := browser_version(user_agent, "CriOS"):
+        browser_label = f"Chrome {version}"
+    elif version := browser_version(user_agent, "Chrome"):
+        browser_label = f"Chrome {version}"
+    elif "Safari/" in user_agent and "Chrome/" not in user_agent and "Chromium/" not in user_agent and "Edg/" not in user_agent:
+        if os_label in {"iOS", "iPadOS"}:
+            browser_label = "Safari"
+        elif version := browser_version(user_agent, "Version", parts=2):
+            browser_label = f"Safari {version}"
+        else:
+            browser_label = "Safari"
+
+    if browser_label and os_label:
+        return f"{browser_label} · {os_label}"
+    if browser_label:
+        return browser_label
+    if os_label:
+        return f"Unknown browser · {os_label}"
+    return "Unknown client"
 
 
 def is_static_asset_request(method: str, path: str) -> bool:
@@ -425,6 +480,7 @@ class TelemetryStore:
         return {
             "client_ip": client.client_ip,
             "user_agent": client.user_agent,
+            "user_agent_label": user_agent_label(client.user_agent),
             "first_seen": iso_timestamp(client.first_seen),
             "first_seen_unix": client.first_seen,
             "last_seen": iso_timestamp(client.last_seen),

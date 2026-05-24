@@ -22,7 +22,7 @@ The monitor groups live signals into three panels:
 - `Activity`: active clients, in-flight requests, app actions, total requests, and errors.
 - `Performance`: current action, last action duration, slowest recent app action, recent error rate, and the latest `/api/health` heartbeat.
 
-The client table groups activity by client IP plus browser user agent. It shows request counts, error counts, current action, last app action, last status, last duration, and idle time.
+The client table groups activity by client IP plus full browser user agent, but displays a compact browser label such as `Safari 26.5 · macOS`. The full user agent is still retained in memory and exposed in telemetry JSON for diagnostics. The table also shows request counts, error counts, current action, last app action, last status, last duration, and idle time.
 
 The recent activity table shows the newest tracked app and API requests first. Paths are stored without query strings, so token values are not retained in telemetry. The monitor treats `/api/health` as a heartbeat line instead of normal request activity, so health checks do not inflate request totals, active clients, recent rows, last action, or error-rate calculations. Static asset loads such as `/static/...`, `/favicon.ico`, and tool images or GeoJSON are counted as diagnostics only and are excluded from the primary activity view.
 

@@ -386,6 +386,10 @@ td {
   overflow-wrap: anywhere;
 }
 
+.client-browser {
+  white-space: nowrap;
+}
+
 tbody tr:last-child td {
   border-bottom: 0;
 }

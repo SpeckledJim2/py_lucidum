@@ -188,7 +188,7 @@ function renderClients(clients) {
   clients.forEach((client) => {
     const row = document.createElement("tr");
     textCell(row, client.client_ip);
-    textCell(row, client.user_agent);
+    textCell(row, client.user_agent_label || client.user_agent, "client-browser").title = client.user_agent || "";
     const stateLabel = client.in_flight ? `${client.in_flight} running` : (client.active ? "active" : "idle");
     pillCell(row, stateLabel, client.in_flight || client.active ? "active" : "");
     textCell(row, formatNumber(client.request_count));
