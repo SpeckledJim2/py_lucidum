@@ -15,7 +15,25 @@ const state = {
   paused: false,
   timer: null,
 };
+let stoppedOverlayShown = false;
+let faviconDataUrl = "";
 const el = (id) => document.getElementById(id);
+
+async function cacheShutdownIcon() {
+  try {
+    const response = await fetch("/favicon.ico", { cache: "force-cache" });
+    if (!response.ok) return;
+    const blob = await response.blob();
+    faviconDataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(String(reader.result || "")), { once: true });
+      reader.addEventListener("error", () => reject(reader.error), { once: true });
+      reader.readAsDataURL(blob);
+    });
+  } catch (_) {
+    faviconDataUrl = "";
+  }
+}
 
 function formatNumber(value) {
   const number = Number(value);
@@ -248,6 +266,26 @@ async function loadTelemetry() {
   return JSON.parse(text);
 }
 
+async function postJson(path) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-lucidum-token": token,
+    },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    let message = text;
+    try {
+      message = JSON.parse(text).detail || text;
+    } catch (_) {
+    }
+    throw new Error(message);
+  }
+  return text ? JSON.parse(text) : {};
+}
+
 async function refreshTelemetry() {
   try {
     const snapshot = await loadTelemetry();
@@ -258,9 +296,17 @@ async function refreshTelemetry() {
   }
 }
 
+function syncPauseButton() {
+  const button = el("pauseBtn");
+  const label = state.paused ? "Resume polling" : "Pause polling";
+  button.classList.toggle("paused", state.paused);
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
 function setPaused(paused) {
   state.paused = paused;
-  el("pauseBtn").textContent = paused ? "Resume" : "Pause";
+  syncPauseButton();
   if (paused && state.timer) {
     window.clearInterval(state.timer);
     state.timer = null;
@@ -271,10 +317,99 @@ function setPaused(paused) {
   if (paused) setStatus("Paused");
 }
 
+function syncThemeButton() {
+  const button = el("themeBtn");
+  const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
+function confirmStopApp() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "stop-confirm-overlay";
+    overlay.innerHTML = `
+      <div class="stop-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="stopConfirmTitle">
+        <div class="stop-confirm-content">
+          <img class="stop-confirm-icon" src="/favicon.ico" alt="">
+          <p id="stopConfirmTitle">Stop the local lucidum server?</p>
+        </div>
+        <div class="stop-confirm-actions">
+          <button class="ghost stop-confirm-cancel" type="button">Cancel</button>
+          <button class="ghost stop-confirm-ok" type="button">OK</button>
+        </div>
+      </div>
+    `;
+    const cancelButton = overlay.querySelector(".stop-confirm-cancel");
+    const okButton = overlay.querySelector(".stop-confirm-ok");
+    let closed = false;
+    const close = (confirmed) => {
+      if (closed) return;
+      closed = true;
+      window.removeEventListener("keydown", handleKeydown);
+      overlay.remove();
+      resolve(confirmed);
+    };
+    function handleKeydown(event) {
+      if (event.key === "Escape") close(false);
+    }
+    cancelButton.addEventListener("click", () => close(false));
+    okButton.addEventListener("click", () => close(true));
+    window.addEventListener("keydown", handleKeydown);
+    document.body.append(overlay);
+    cancelButton.focus();
+  });
+}
+
+function showStoppedOverlay() {
+  if (stoppedOverlayShown) return;
+  stoppedOverlayShown = true;
+  if (state.timer) {
+    window.clearInterval(state.timer);
+    state.timer = null;
+  }
+  document.body.classList.add("app-stopped");
+  const shutdownIcon = faviconDataUrl
+    ? `<img class="shutdown-icon" src="${faviconDataUrl}" alt="">`
+    : '<span class="shutdown-icon shutdown-icon-fallback" aria-hidden="true"></span>';
+  const overlay = document.createElement("div");
+  overlay.className = "shutdown-overlay";
+  overlay.innerHTML = `
+    <div class="shutdown-message" role="status" aria-live="polite">
+      ${shutdownIcon}
+      <div>
+        <h1>lucidum has stopped</h1>
+        <p>The local server is no longer running. You can close this browser tab.</p>
+      </div>
+    </div>
+  `;
+  document.body.append(overlay);
+}
+
+async function stopApp() {
+  if (!(await confirmStopApp())) return;
+  const button = el("stopAppBtn");
+  button.disabled = true;
+  setStatus("Stopping app...");
+  try {
+    await postJson("/api/shutdown");
+    showStoppedOverlay();
+  } catch (error) {
+    button.disabled = false;
+    setStatus(error.message, true);
+  }
+}
+
 function bindControls() {
-  el("refreshBtn").addEventListener("click", refreshTelemetry);
   el("pauseBtn").addEventListener("click", () => setPaused(!state.paused));
+  el("themeBtn").addEventListener("click", () => {
+    document.body.classList.toggle("dark");
+    syncThemeButton();
+  });
+  el("stopAppBtn").addEventListener("click", stopApp);
 }
 
 bindControls();
+cacheShutdownIcon();
+syncThemeButton();
 setPaused(false);

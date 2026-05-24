@@ -18,8 +18,25 @@
           </div>
         </div>
         <div class="header-actions">
-          <button id="refreshBtn" class="ghost" type="button">Refresh</button>
-          <button id="pauseBtn" class="ghost" type="button">Pause</button>
+          <button id="pauseBtn" class="ghost header-icon-button" type="button" aria-label="Pause polling" title="Pause polling">
+            <svg class="header-action-icon pause-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M8 5v14"></path>
+              <path d="M16 5v14"></path>
+            </svg>
+            <svg class="header-action-icon resume-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M8 5v14l11-7Z"></path>
+            </svg>
+          </button>
+          <button id="themeBtn" class="ghost header-icon-button theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+            <svg class="header-action-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M20 14.5A7.5 7.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"></path>
+            </svg>
+            <svg class="header-action-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"></path>
+            </svg>
+          </button>
+          <button id="stopAppBtn" class="danger-action" type="button">Stop app</button>
         </div>
       </header>
 
