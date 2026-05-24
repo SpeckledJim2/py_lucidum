@@ -11,6 +11,11 @@
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
+    <script>
+      if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.body.classList.add("dark");
+      }
+    </script>
     <div class="app">
       <header>
         <div class="brand">

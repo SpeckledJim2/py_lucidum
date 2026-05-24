@@ -4092,9 +4092,7 @@
         el("stopAppBtn").addEventListener("click", stopApp);
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
-          const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";
-          el("themeBtn").setAttribute("aria-label", label);
-          el("themeBtn").title = label;
+          syncThemeButton();
           applyMapBackground();
           if (state.tool === "line_bar" && state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
           if (state.tool === "uk_map") measureToolRender("uk_map", () => resizeMap());
@@ -4422,8 +4420,15 @@
         return getComputedStyle(document.body).getPropertyValue(name).trim();
       }
 
+      function syncThemeButton() {
+        const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";
+        el("themeBtn").setAttribute("aria-label", label);
+        el("themeBtn").title = label;
+      }
+
       async function boot() {
         bindControls();
+        syncThemeButton();
         syncMonitorLink();
         cacheShutdownIcon();
         try {

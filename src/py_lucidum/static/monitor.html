@@ -8,6 +8,11 @@
     <link rel="stylesheet" href="/static/monitor.css" />
   </head>
   <body>
+    <script>
+      if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.body.classList.add("dark");
+      }
+    </script>
     <div class="monitor-app">
       <header>
         <div class="brand">
