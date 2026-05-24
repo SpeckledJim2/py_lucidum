@@ -383,6 +383,40 @@ COPY (
         self.assertEqual([row["x"] for row in result["rows"]], ["30", "40", "50", "60"])
         self.assertEqual([row["resp0"] for row in result["rows"]], [100, 200, 300, 400])
 
+    def test_numeric_decimal_banding_cleans_floating_point_labels(self) -> None:
+        self.data_path.write_text(
+            "Score,Actual,Expected\n"
+            "49.9,100,90\n"
+            "50.0,200,190\n"
+            "50.2,300,290\n"
+            "50.4,400,390\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request.update({"x": "Score", "bandWidth": "0.2", "quantileMode": "off"})
+
+        result = chart(dataset, request)
+        labels = [row["x"] for row in result["rows"]]
+
+        self.assertEqual(labels, ["49.8", "50", "50.2"])
+        self.assertFalse(any("000000" in label for label in labels))
+
+    def test_numeric_whole_number_banding_omits_decimal_suffix(self) -> None:
+        self.data_path.write_text(
+            "Score,Actual,Expected\n"
+            "50.1,100,90\n"
+            "51.2,200,190\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request.update({"x": "Score", "bandWidth": "1", "quantileMode": "off"})
+
+        result = chart(dataset, request)
+
+        self.assertEqual([row["x"] for row in result["rows"]], ["50", "51"])
+
     def test_numeric_quantile_banding_groups_non_missing_values(self) -> None:
         dataset = Dataset(self.data_path)
         request = self.request()

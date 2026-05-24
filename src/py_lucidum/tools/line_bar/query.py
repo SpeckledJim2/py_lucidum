@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, parse_positive_float, quote_ident
@@ -49,6 +50,7 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             threshold=str(request.get("lowGroup") or "0"),
         )
         sorted_rows = sort_rows(grouped_rows, x_group_kind, str(request.get("sort") or "alpha"))
+        clean_numeric_band_labels(sorted_rows, x_group_kind, request.get("bandWidth"))
         max_groups = int(request.get("maxGroups") or 10000)
         if len(sorted_rows) > max_groups:
             sorted_rows = sorted_rows[:max_groups]
@@ -124,6 +126,50 @@ def normalise_quantile_count(value: Any) -> int:
         return 1
     count = int(math.floor(parsed + 0.5))
     return min(1000, max(1, count))
+
+
+def decimal_places_for_band_width(value: Any) -> int | None:
+    parsed = parse_positive_float(value)
+    if parsed is None:
+        return None
+    try:
+        decimal = Decimal(str(value)).normalize()
+    except InvalidOperation:
+        return None
+    if decimal == decimal.to_integral_value():
+        return 0
+    return max(0, -decimal.as_tuple().exponent)
+
+
+def format_numeric_band_label(value: Any, decimal_places: int) -> str | None:
+    number = json_number(value)
+    if number is None:
+        return None
+    try:
+        quant = Decimal("1").scaleb(-decimal_places)
+        rounded = Decimal(str(number)).quantize(quant)
+    except InvalidOperation:
+        return None
+    if rounded == 0:
+        rounded = abs(rounded)
+    label = format(rounded, "f")
+    if "." in label:
+        label = label.rstrip("0").rstrip(".")
+    return label
+
+
+def clean_numeric_band_labels(rows: list[dict[str, Any]], x_kind: str, band_width: Any) -> None:
+    if x_kind != "numeric":
+        return
+    decimal_places = decimal_places_for_band_width(band_width)
+    if decimal_places is None:
+        return
+    for row in rows:
+        if row.get("is_tail"):
+            continue
+        label = format_numeric_band_label(row.get("x_sort"), decimal_places)
+        if label is not None:
+            row["x"] = label
 
 
 def build_x_sql(x_col: str, kind: str, band_width: Any, date_bucket: Any, quantile_count: int | None = None) -> dict[str, str]:

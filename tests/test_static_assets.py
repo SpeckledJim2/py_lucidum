@@ -691,6 +691,32 @@ class StaticAssetTests(unittest.TestCase):
         self.assertNotIn("dateAxisYearLabelIndexes", js)
         self.assertIn("formatXLabel(r.x, data.x_kind)", js)
 
+    def test_numeric_x_axis_labels_are_cleaned_defensively(self) -> None:
+        _, js_body = self.assert_no_store("/static/app.js")
+        js = js_body.decode("utf-8")
+
+        self.assertIn("function formatXLabel(value, kind)", js)
+        self.assertIn('if (kind === "numeric") return formatNumericXLabel(value);', js)
+        self.assertIn("function formatNumericXLabel(value)", js)
+        self.assertIn("const number = Number(text);", js)
+        self.assertIn("if (!Number.isFinite(number)) return text;", js)
+        self.assertIn("return number.toLocaleString(undefined, { maximumFractionDigits: 12 });", js)
+        self.assertIn('if (kind !== "integer") return String(value);', js)
+
+    def test_line_bar_x_axis_title_uses_selected_feature_with_tight_spacing(self) -> None:
+        _, js_body = self.assert_no_store("/static/app.js")
+        js = js_body.decode("utf-8")
+
+        self.assertIn('textStyle: { color: getCss("--text"), fontWeight: 700 },', js)
+        self.assertIn('name: data.x || "",', js)
+        self.assertIn('nameLocation: "middle",', js)
+        self.assertIn("nameGap: xLabelPolicy.nameGap,", js)
+        self.assertIn('nameTextStyle: { color: getCss("--text"), fontSize: 13, fontWeight: 700 },', js)
+        self.assertIn("const titleGap = rotate ? Math.max(26, labelSpace - 10) : 26;", js)
+        self.assertIn("nameGap: titleGap,", js)
+        self.assertIn("bottom: titleGap + 16 + dataZoomSpace,", js)
+        self.assertIn("nameGap: 26,\n          bottom: 46 + dataZoomSpace,", js)
+
     def test_theme_toggle_uses_icons_and_accessible_labels(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")

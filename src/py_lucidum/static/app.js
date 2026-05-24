@@ -3469,11 +3469,15 @@
               top: 0,
               data: legendData,
               selectedMode: false,
-              textStyle: { color: getCss("--text") },
+              textStyle: { color: getCss("--text"), fontWeight: 700 },
             },
             grid: { left: 72, right: 76, top: 56, bottom: xLabelPolicy.bottom, containLabel: false },
             xAxis: {
               type: "category",
+              name: data.x || "",
+              nameLocation: "middle",
+              nameGap: xLabelPolicy.nameGap,
+              nameTextStyle: { color: getCss("--text"), fontSize: 13, fontWeight: 700 },
               data: labels,
               axisLabel: {
                 show: xLabelPolicy.show,
@@ -3604,6 +3608,7 @@
         if (isDateKind(kind)) return getDateXAxisLabelPolicy(labels, rawValues);
         const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label).length), 0);
         const tooMany = labels.length >= LABEL_DENSITY_LIMIT;
+        const dataZoomSpace = labels.length > 120 ? 36 : 0;
         if (tooMany) {
           return {
             show: false,
@@ -3613,15 +3618,16 @@
             showMaxLabel: true,
             rotate: 0,
             fontSize: 10,
-            bottom: 44,
+            nameGap: 22,
+            bottom: 38 + dataZoomSpace,
           };
         }
         const rotate = labels.length > 18 || maxLength > 10 ? 65 : 0;
         const fontSize = labels.length > 50 ? 8 : 10;
-        const dataZoomSpace = labels.length > 120 ? 36 : 0;
         const estimatedTextWidth = maxLength * fontSize * 0.5;
         const rotatedHeight = estimatedTextWidth * Math.sin((rotate * Math.PI) / 180) + fontSize * Math.cos((rotate * Math.PI) / 180);
         const labelSpace = rotate ? Math.min(140, Math.max(58, Math.ceil(rotatedHeight) + 18)) : 38;
+        const titleGap = rotate ? Math.max(26, labelSpace - 10) : 26;
         return {
           show: true,
           interval: 0,
@@ -3630,7 +3636,8 @@
           showMaxLabel: true,
           rotate,
           fontSize,
-          bottom: labelSpace + dataZoomSpace,
+          nameGap: titleGap,
+          bottom: titleGap + 16 + dataZoomSpace,
         };
       }
 
@@ -3647,7 +3654,8 @@
           showMaxLabel: selectedIndexSet.has(labels.length - 1) ? true : undefined,
           rotate: 0,
           fontSize: 10,
-          bottom: 38 + dataZoomSpace,
+          nameGap: 26,
+          bottom: 46 + dataZoomSpace,
         };
       }
 
@@ -4396,10 +4404,18 @@
       }
 
       function formatXLabel(value, kind) {
+        if (kind === "numeric") return formatNumericXLabel(value);
         if (kind !== "integer") return String(value);
         const number = Number(value);
         if (!Number.isFinite(number) || !Number.isInteger(number)) return String(value);
         return number.toLocaleString(undefined, { maximumFractionDigits: 0 });
+      }
+
+      function formatNumericXLabel(value) {
+        const text = String(value);
+        const number = Number(text);
+        if (!Number.isFinite(number)) return text;
+        return number.toLocaleString(undefined, { maximumFractionDigits: 12 });
       }
 
       function getCss(name) {
