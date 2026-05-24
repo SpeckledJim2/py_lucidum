@@ -907,6 +907,17 @@
         white-space: nowrap;
       }
 
+      .monitor-link {
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+      }
+
+      .ghost:hover,
+      .monitor-link:hover {
+        border-color: var(--accent);
+      }
+
       .segmented button.active,
       .tab.active {
         background: var(--accent);

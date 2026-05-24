@@ -181,6 +181,17 @@
       let faviconDataUrl = "";
       const el = (id) => document.getElementById(id);
 
+      function monitorUrl() {
+        const url = new URL("/monitor", location.href);
+        if (token) url.searchParams.set("token", token);
+        return `${url.pathname}${url.search}`;
+      }
+
+      function syncMonitorLink() {
+        const link = el("monitorLink");
+        if (link) link.href = monitorUrl();
+      }
+
       async function api(path, options = {}) {
         const { clientTiming = false, ...fetchOptions } = options;
         const started = performance.now();
@@ -4397,6 +4408,7 @@
 
       async function boot() {
         bindControls();
+        syncMonitorLink();
         cacheShutdownIcon();
         try {
           state.schema = await api("/api/schema");

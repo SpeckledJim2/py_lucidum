@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>lucidum monitor</title>
+    <link rel="icon" type="image/png" href="/favicon.ico" />
+    <link rel="stylesheet" href="/static/monitor.css" />
+  </head>
+  <body>
+    <div class="monitor-app">
+      <header>
+        <div class="brand">
+          <img class="mark" src="/favicon.ico" alt="" />
+          <div>
+            <h1>lucidum monitor</h1>
+            <div id="uptimeMeta" class="meta">Loading telemetry...</div>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button id="refreshBtn" class="ghost" type="button">Refresh</button>
+          <button id="pauseBtn" class="ghost" type="button">Pause</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="operations-grid" aria-label="Telemetry summary">
+          <article id="serverPanel" class="status-panel server-panel">
+            <div class="panel-title-row">
+              <h2>Server</h2>
+              <span id="serverState" class="state-pill">steady</span>
+            </div>
+            <div class="primary-metric">
+              <span>RSS</span>
+              <strong id="serverRamMetric">--</strong>
+            </div>
+            <div class="metric-grid">
+              <div>
+                <span>USS</span>
+                <strong id="serverUssMetric">--</strong>
+                <small>mostly unique</small>
+              </div>
+              <div>
+                <span>Peak</span>
+                <strong id="peakRamMetric">--</strong>
+                <small>since start</small>
+              </div>
+              <div>
+                <span>CPU</span>
+                <strong id="processCpuMetric">--</strong>
+                <small id="systemCpuMetric">system --</small>
+              </div>
+            </div>
+            <div id="processMemoryMeta" class="diagnostic-line">PID --</div>
+          </article>
+
+          <article id="activityPanel" class="status-panel">
+            <div class="panel-title-row">
+              <h2>Activity</h2>
+              <span id="activityState" class="state-pill">idle</span>
+            </div>
+            <div class="metric-grid two-column">
+              <div>
+                <span>Active clients</span>
+                <strong id="activeClientsMetric">--</strong>
+              </div>
+              <div>
+                <span>In flight</span>
+                <strong id="inFlightMetric">--</strong>
+              </div>
+              <div>
+                <span>App actions</span>
+                <strong id="appActionsMetric">--</strong>
+              </div>
+              <div>
+                <span>Errors</span>
+                <strong id="errorsMetric">--</strong>
+              </div>
+              <div>
+                <span>Total requests</span>
+                <strong id="totalRequestsMetric">--</strong>
+              </div>
+            </div>
+          </article>
+
+          <article id="performancePanel" class="status-panel">
+            <div class="panel-title-row">
+              <h2>Performance</h2>
+              <span id="performanceState" class="state-pill">ok</span>
+            </div>
+            <div class="performance-content">
+              <div class="action-stack">
+                <div>
+                  <span>Current</span>
+                  <strong id="currentActionMetric">idle</strong>
+                </div>
+                <div>
+                  <span>Last</span>
+                  <strong id="lastActionMetric">--</strong>
+                  <small id="lastDurationMetric">--</small>
+                </div>
+              </div>
+              <div class="performance-meta-stack">
+                <div id="heartbeatMeta" class="heartbeat-line">Heartbeat --</div>
+                <div class="diagnostic-line">Recent error rate <span id="errorRateMetric">0%</span> · Threads <span id="threadCountMetric">--</span></div>
+              </div>
+            </div>
+            <div class="slowest-action-row">
+              <span>Slowest recent</span>
+              <strong id="slowestActionMetric">--</strong>
+            </div>
+          </article>
+        </section>
+
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+
+        <section id="clientsPanel" class="panel clients-panel">
+          <div class="section-header">
+            <h2>Clients</h2>
+            <span id="clientMeta" class="meta"></span>
+          </div>
+          <div class="table-wrap clients-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>IP</th>
+                  <th>User agent</th>
+                  <th>State</th>
+                  <th>Requests</th>
+                  <th>Errors</th>
+                  <th>Current action</th>
+                  <th>Last app action</th>
+                  <th>Status</th>
+                  <th>Duration</th>
+                  <th>Last seen</th>
+                </tr>
+              </thead>
+              <tbody id="clientsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="recentActivityPanel" class="panel recent-activity-panel">
+          <div class="section-header">
+            <h2>Recent activity</h2>
+            <span id="activityMeta" class="meta"></span>
+          </div>
+          <div class="table-wrap recent-activity-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>IP</th>
+                  <th>Method</th>
+                  <th>Path</th>
+                  <th>Action</th>
+                  <th>Status</th>
+                  <th>Duration</th>
+                </tr>
+              </thead>
+              <tbody id="activityBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/monitor.js"></script>
+  </body>
+</html>

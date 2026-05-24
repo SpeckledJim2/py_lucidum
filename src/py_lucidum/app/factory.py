@@ -6,13 +6,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 
 from py_lucidum.core import Dataset, load_kpis, load_saved_filters, resolve_filters_path, resolve_kpis_path
 
 from .assets import NoStoreStaticFiles, no_store_file_response, no_store_html_response
 from .context import AppContext
+from .telemetry import TelemetryMiddleware, TelemetryStore
 
 
 PACKAGE_ROOT = Path(__file__).parents[1]
@@ -91,6 +92,12 @@ def index_html(dataset_name: str) -> str:
     return html_text.replace("<title>lucidum</title>", f"<title>{title}</title>", 1)
 
 
+def monitor_html(dataset_name: str) -> str:
+    title = f"lucidum monitor · {html.escape(dataset_name)}" if dataset_name else "lucidum monitor"
+    html_text = (STATIC_DIR / "monitor.html").read_text(encoding="utf-8")
+    return html_text.replace("<title>lucidum monitor</title>", f"<title>{title}</title>", 1)
+
+
 def create_app(
     dataset_path: str | Path,
     token: str | None = None,
@@ -111,6 +118,7 @@ def create_app(
     dataset = Dataset(dataset_path)
     app = FastAPI(title="py_lucidum")
     app.state.dataset = dataset
+    app.state.telemetry = TelemetryStore()
     app.state.token = token
     app.state.filters_path = filters_path
     app.state.use_saved_filters = use_saved_filters
@@ -149,6 +157,11 @@ def create_app(
 
     app.mount("/static", NoStoreStaticFiles(directory=STATIC_DIR), name="static")
 
+    @app.get("/monitor")
+    def monitor(request: Request) -> HTMLResponse:
+        check_token(request)
+        return no_store_html_response(monitor_html(app.state.dataset.path.name))
+
     @app.api_route("/favicon.ico", methods=["GET", "HEAD"])
     def favicon() -> FileResponse:
         for path in FAVICON_PATHS:
@@ -165,6 +178,12 @@ def create_app(
     def health(request: Request) -> dict[str, str]:
         check_token(request)
         return {"status": "ok"}
+
+    @app.get("/api/telemetry")
+    def telemetry(request: Request, response: Response) -> dict[str, Any]:
+        check_token(request)
+        response.headers["Cache-Control"] = "no-store"
+        return app.state.telemetry.snapshot()
 
     @app.post("/api/reload")
     def reload_dataset(request: Request) -> dict[str, Any]:
@@ -211,4 +230,5 @@ def create_app(
 
         register_uk_map(app, context)
 
+    app.add_middleware(TelemetryMiddleware, store=app.state.telemetry)
     return app
