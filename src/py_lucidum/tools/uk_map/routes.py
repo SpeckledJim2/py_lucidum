@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -14,6 +15,41 @@ from .query import summary
 STATIC_DIR = Path(__file__).with_name("static")
 
 
+class _TimedDuckDbConnection:
+    def __init__(self, connection: Any):
+        self._connection = connection
+        self.elapsed_ns = 0
+
+    def execute(self, *args: Any, **kwargs: Any) -> "_TimedDuckDbConnection":
+        started = time.perf_counter_ns()
+        try:
+            self._connection.execute(*args, **kwargs)
+            return self
+        finally:
+            self.elapsed_ns += time.perf_counter_ns() - started
+
+    def fetchone(self) -> Any:
+        started = time.perf_counter_ns()
+        try:
+            return self._connection.fetchone()
+        finally:
+            self.elapsed_ns += time.perf_counter_ns() - started
+
+    def fetchall(self) -> Any:
+        started = time.perf_counter_ns()
+        try:
+            return self._connection.fetchall()
+        finally:
+            self.elapsed_ns += time.perf_counter_ns() - started
+
+    @property
+    def description(self) -> Any:
+        return self._connection.description
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+
 def register(app: FastAPI, context: AppContext) -> None:
     if not any(getattr(route, "path", None) == "/tools/uk-map/static" for route in app.routes):
         app.mount("/tools/uk-map/static", NoStoreStaticFiles(directory=STATIC_DIR), name="uk_map_static")
@@ -23,11 +59,21 @@ def register(app: FastAPI, context: AppContext) -> None:
         payload = await request.json()
         try:
             started = time.perf_counter_ns()
-            result = summary(context.dataset, payload, defaults=getattr(app.state, "defaults", {}))
-            elapsed_ns = time.perf_counter_ns() - started
+            with context.dataset.lock:
+                original_connection = context.dataset.con
+                timed_connection = _TimedDuckDbConnection(original_connection)
+                context.dataset.con = timed_connection
+                try:
+                    result = summary(context.dataset, payload, defaults=getattr(app.state, "defaults", {}))
+                finally:
+                    context.dataset.con = original_connection
+            server_ns = time.perf_counter_ns() - started
+            duckdb_ns = timed_connection.elapsed_ns
             result["timings"] = {
-                "duckdb_ns": elapsed_ns,
-                "duckdb_ms": round(elapsed_ns / 1_000_000),
+                "server_ns": server_ns,
+                "server_ms": round(server_ns / 1_000_000),
+                "duckdb_ns": duckdb_ns,
+                "duckdb_ms": round(duckdb_ns / 1_000_000),
             }
             return result
         except ValueError as exc:

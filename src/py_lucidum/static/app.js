@@ -403,6 +403,11 @@
         return String(Math.round(number));
       }
 
+      function roundedTimingMilliseconds(valueMs) {
+        const number = Number(valueMs);
+        return Number.isFinite(number) ? Math.max(0, Math.round(number)) : null;
+      }
+
       function formatActionTimingValue(valueNs, status = "idle") {
         if (status === "running") return "running";
         if (status === "failed") return "failed";
@@ -424,34 +429,46 @@
         return Number.isFinite(duckdbMs) ? `${formatDurationNumber(Math.max(0, duckdbMs))}ms` : "--";
       }
 
+      function duckDbTimingMilliseconds(timing) {
+        const duckdbNs = Number(timing.duckdbNs);
+        if (Number.isFinite(duckdbNs)) return roundedTimingMilliseconds(duckdbNs / 1_000_000);
+        const duckdbMs = Number(timing.duckdbMs);
+        return roundedTimingMilliseconds(duckdbMs);
+      }
+
       function formatRenderTimingValue(timing) {
         if (timing.renderStatus === "rendering") return "rendering...";
         return formatActionTimingValue(timing.renderNs);
       }
 
-      function formatClientTimingValue(valueMs) {
+      function renderTimingMilliseconds(timing) {
+        if (timing.renderStatus === "rendering") return null;
+        const renderNs = Number(timing.renderNs);
+        return Number.isFinite(renderNs) ? roundedTimingMilliseconds(renderNs / 1_000_000) : null;
+      }
+
+      function formatClientTimingValue(timing) {
+        if (timing.duckdbStatus === "running") return "--";
+        if (timing.duckdbStatus === "failed") return "--";
+        const valueMs = timing.clientDataMs;
         const number = Number(valueMs);
         return Number.isFinite(number) ? `${formatDurationNumber(Math.max(0, number))}ms` : "--";
       }
 
-      function formatMapTotalTimingValue(timing) {
-        if (timing.duckdbStatus === "running") return "running";
+      function formatTotalTimingValue(timing) {
+        if (timing.duckdbStatus === "running") return "--";
         if (timing.duckdbStatus === "failed") return "failed";
-        const clientTotalMs = Number(timing.clientTotalMs);
-        const renderNs = Number(timing.renderNs);
-        if (!Number.isFinite(clientTotalMs)) return "--";
-        const renderMs = Number.isFinite(renderNs) ? renderNs / 1_000_000 : 0;
-        return `${formatDurationNumber(Math.max(0, clientTotalMs + renderMs))}ms`;
+        const duckdbMs = duckDbTimingMilliseconds(timing);
+        const jsonMs = roundedTimingMilliseconds(timing.clientDataMs);
+        const renderMs = renderTimingMilliseconds(timing);
+        if (duckdbMs === null || jsonMs === null || renderMs === null) return "--";
+        return `${formatDurationNumber(duckdbMs + jsonMs + renderMs)}ms`;
       }
 
       function syncActionTimingMonitor(tool = state.tool) {
         const timing = actionTiming(tool);
         const renderLabel = ACTION_RENDER_LABELS[tool] || "Render";
-        if (tool === "uk_map") {
-          el("actionTimingMonitor").textContent = `Server: ${formatDuckDbTimingValue(timing)}, JSON: ${formatClientTimingValue(timing.clientDataMs)}, ${renderLabel}: ${formatRenderTimingValue(timing)}, Total: ${formatMapTotalTimingValue(timing)}`;
-          return;
-        }
-        el("actionTimingMonitor").textContent = `DuckDB: ${formatDuckDbTimingValue(timing)}, ${renderLabel}: ${formatRenderTimingValue(timing)}`;
+        el("actionTimingMonitor").textContent = `DuckDB: ${formatDuckDbTimingValue(timing)}, JSON: ${formatClientTimingValue(timing)}, ${renderLabel}: ${formatRenderTimingValue(timing)}, Total: ${formatTotalTimingValue(timing)}`;
       }
 
       function startToolTiming(tool) {
@@ -1483,13 +1500,14 @@
         setGroupMeta("column_profile", "Computing profile...");
         startToolTiming("column_profile");
         try {
-          const data = await api("/api/column-profile/summary", { method: "POST", body: JSON.stringify(request) });
+          const data = await api("/api/column-profile/summary", { method: "POST", body: JSON.stringify(request), clientTiming: true });
           if (requestSeq !== state.profileRequestSeq) return;
           const cache = toolCache("column_profile");
           if (cache.requestKey !== requestKey) cache.details = new Map();
           cache.requestKey = requestKey;
           cache.data = data;
           syncDuckDbTimingFromData("column_profile", data);
+          syncClientTimingFromData("column_profile", data);
           measureToolRender("column_profile", () => renderProfileData(data));
           return data;
         } catch (error) {
@@ -1669,10 +1687,11 @@
         renderProfileDetailLoading(columnName);
         startToolTiming("column_profile");
         try {
-          const data = await api("/api/column-profile/detail", { method: "POST", body: JSON.stringify(request) });
+          const data = await api("/api/column-profile/detail", { method: "POST", body: JSON.stringify(request), clientTiming: true });
           if (detailRequestSeq !== state.profileDetailRequestSeq || state.selectedProfileColumn !== columnName) return null;
           cache.details.set(requestKey, data);
           syncDuckDbTimingFromData("column_profile", data);
+          syncClientTimingFromData("column_profile", data);
           measureToolRender("column_profile", () => renderProfileDetail(data));
           return data;
         } catch (error) {
@@ -2139,12 +2158,13 @@
         startToolTiming("line_bar");
         updateAxisControls();
         try {
-          const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request) });
+          const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request), clientTiming: true });
           if (requestSeq !== state.chartRequestSeq) return;
           const cache = toolCache("line_bar");
           cache.requestKey = requestKey;
           cache.data = data;
           syncDuckDbTimingFromData("line_bar", data);
+          syncClientTimingFromData("line_bar", data);
           measureToolRender("line_bar", () => renderChartData(data, { resetTablePage: true }));
           return data;
         } catch (error) {

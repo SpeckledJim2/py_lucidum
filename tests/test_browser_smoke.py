@@ -241,7 +241,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     """
                     () => {
                         const text = document.querySelector("#actionTimingMonitor")?.textContent || "";
-                        return /^DuckDB: \\d+(?:ns|us|ms), Profile render: \\d+(?:ns|us|ms)$/.test(text);
+                        return /^DuckDB: \\d+(?:ns|us|ms), JSON: \\d+ms, Profile render: \\d+(?:ns|us|ms), Total: \\d+ms$/.test(text);
                     }
                     """
                 )
@@ -276,7 +276,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     """
                     () => {
                         const text = document.querySelector("#actionTimingMonitor")?.textContent || "";
-                        return /^Server: \\d+(?:ns|us|ms), JSON: \\d+ms, Map render: \\d+(?:ns|us|ms), Total: \\d+ms$/.test(text);
+                        return /^DuckDB: \\d+(?:ns|us|ms), JSON: \\d+ms, Map render: \\d+(?:ns|us|ms), Total: \\d+ms$/.test(text);
                     }
                     """
                 )
@@ -287,7 +287,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     """
                     () => {
                         const text = document.querySelector("#actionTimingMonitor")?.textContent || "";
-                        return /^DuckDB: \\d+(?:ns|us|ms), Chart render: \\d+(?:ns|us|ms)$/.test(text);
+                        return /^DuckDB: \\d+(?:ns|us|ms), JSON: \\d+ms, Chart render: \\d+(?:ns|us|ms), Total: \\d+ms$/.test(text);
                     }
                     """
                 )

@@ -119,10 +119,17 @@ class UkMapToolTests(unittest.TestCase):
         self.assertEqual(payload["level"], "area")
         self.assertIn("rows", payload)
         self.assertIn("response", payload)
+        self.assertIsInstance(payload["timings"]["server_ns"], int)
+        self.assertGreaterEqual(payload["timings"]["server_ns"], 0)
+        self.assertIsInstance(payload["timings"]["server_ms"], int)
+        self.assertGreaterEqual(payload["timings"]["server_ms"], 0)
         self.assertIsInstance(payload["timings"]["duckdb_ns"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
         self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
+        self.assertLessEqual(payload["timings"]["duckdb_ns"], payload["timings"]["server_ns"])
+        self.assertNotIn("app_ns", payload["timings"])
+        self.assertNotIn("app_ms", payload["timings"])
 
     def test_area_summary_uses_average_row_value(self) -> None:
         dataset = Dataset(self.data_path)

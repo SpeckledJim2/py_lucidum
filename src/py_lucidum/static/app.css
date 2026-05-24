@@ -1029,7 +1029,7 @@
 
       .filter-footer {
         display: grid;
-        grid-template-columns: minmax(0, 4fr) minmax(120px, 1fr);
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         gap: 10px;
         align-items: center;
         min-width: 0;
