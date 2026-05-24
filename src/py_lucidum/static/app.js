@@ -2882,10 +2882,13 @@
 
       function makeUnitPointLayer(data, scale, hotspotKeys) {
         return new (L.Layer.extend({
-          initialize(mapData) {
+          initialize(mapData, initialScale, initialHotspotKeys) {
             const prepared = unitPointEntries(mapData);
+            this.data = mapData;
             this.rows = prepared.entries;
             this.bounds = prepared.bounds;
+            this.scale = initialScale;
+            this.hotspotKeys = initialHotspotKeys;
             this.tooltip = null;
           },
           onAdd(map) {
@@ -2912,6 +2915,11 @@
           },
           getBounds() {
             return this.bounds;
+          },
+          setRenderContext(nextScale, nextHotspotKeys) {
+            this.scale = nextScale;
+            this.hotspotKeys = nextHotspotKeys;
+            this.reset();
           },
           reset() {
             if (!this.map || !this.canvas) return;
@@ -2940,7 +2948,7 @@
                 this.hitGrid.set(gridKey, []);
               }
               this.hitGrid.get(gridKey).push({ entry, point });
-              const style = mapPointStyle(entry, scale, hotspotKeys, pointRadius);
+              const style = mapPointStyle(entry, this.scale, this.hotspotKeys, pointRadius);
               context.globalAlpha = Math.max(0, Math.min(1, style.fillOpacity));
               context.fillStyle = style.fillColor;
               if (pointRadius <= 1) {
@@ -3005,7 +3013,7 @@
             if (!nearest) return;
             L.popup()
               .setLatLng(nearest.latLng)
-              .setContent(mapPopupHtml(String(nearest.key || "Unknown"), nearest, data))
+              .setContent(mapPopupHtml(String(nearest.key || "Unknown"), nearest, this.data))
               .openOn(this.map);
           },
           closeTooltip() {
@@ -3013,7 +3021,7 @@
               this.map.removeLayer(this.tooltip);
             }
           },
-        }))(data);
+        }))(data, scale, hotspotKeys);
       }
 
       function renderMap(data, geoJson) {
@@ -3212,8 +3220,17 @@
         syncFloatingMapControl();
         if (state.tool !== "uk_map" || !state.lastMapData) return;
         if (state.lastMapData.level === "unit") {
-          state.preserveMapView = true;
-          renderMap(state.lastMapData, null);
+          if (!ukMapPointLayer?.setRenderContext) {
+            state.preserveMapView = true;
+            renderMap(state.lastMapData, null);
+            return;
+          }
+          measureToolRender("uk_map", () => {
+            const scale = makeUnitPointScale(state.lastMapData);
+            const hotspotKeys = mapUnitHotspotKeys(state.lastMapData);
+            ukMapPointLayer.setRenderContext(scale, hotspotKeys);
+            renderMapLegend(scale, state.lastMapData.response?.label || "Actual");
+          });
           return;
         }
         const geoJson = state.mapGeoJsonCache[state.lastMapData.level];

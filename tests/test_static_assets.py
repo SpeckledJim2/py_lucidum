@@ -1045,10 +1045,17 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("function makeUnitPointScale(data)", js)
         self.assertIn("function mapUnitHotspotKeys(data)", js)
         self.assertIn("makeUnitPointLayer", js)
+        self.assertIn("setRenderContext(nextScale, nextHotspotKeys)", js)
+        self.assertIn("this.scale = nextScale;", js)
+        self.assertIn("this.hotspotKeys = nextHotspotKeys;", js)
+        self.assertIn("const style = mapPointStyle(entry, this.scale, this.hotspotKeys, pointRadius);", js)
         self.assertIn("unitPointRadiusForZoom", js)
         self.assertIn("unitPointHitRadius(pointRadius)", js)
         self.assertIn("if (pointRadius <= 1)", js)
         self.assertIn("fillRect(point.x - pointRadius", js)
+        self.assertIn("if (!ukMapPointLayer?.setRenderContext)", js)
+        self.assertIn("ukMapPointLayer.setRenderContext(scale, hotspotKeys);", js)
+        self.assertIn('renderMapLegend(scale, state.lastMapData.response?.label || "Actual");', js)
         self.assertIn("<span>Units</span>", js)
 
     def test_app_js_refits_map_after_layout_resize(self) -> None:
