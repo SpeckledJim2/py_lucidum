@@ -871,10 +871,25 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)", js)
         self.assertIn("scheduleMapResize({ refit: didFitLayer });", js)
 
-    def test_app_js_disables_sector_geojson_smoothing(self) -> None:
+    def test_app_js_reuses_cached_polygon_layers(self) -> None:
         _, body = self.assert_no_store("/static/app.js")
         js = body.decode("utf-8")
 
+        self.assertIn("mapPolygonLayerCache: {}", js)
+        self.assertIn("mapPolygonRenderContext: null", js)
+        self.assertIn("function cachedMapPolygonLayer(level, geoJson)", js)
+        self.assertIn("if (!state.mapPolygonLayerCache[level])", js)
+        self.assertIn("layer: createMapPolygonLayer(level, geoJson)", js)
+        self.assertIn("layer._lucidumMapKey = mapPolygonFeatureKey(feature, levelConfig.property);", js)
+        self.assertIn("layer.bindTooltip(() => mapPolygonTooltipHtml(layer), { sticky: true });", js)
+        self.assertIn("layer.bindPopup(() => mapPolygonPopupHtml(layer));", js)
+        self.assertIn("ukMapLayer = cachedPolygonLayer.layer;", js)
+        self.assertIn("applyMapPolygonStyles();", js)
+        self.assertIn("if (!ukMap.hasLayer(ukMapLayer)) ukMapLayer.addTo(ukMap);", js)
+        self.assertIn('if (state.lastMapData?.level === "sector") restyleActiveMapPolygonLayer();', js)
+        self.assertNotIn('if (state.lastMapData?.level === "sector") redrawMapInPlace();', js)
+        self.assertIn("function restyleActiveMapPolygonLayer()", js)
+        self.assertIn("function countMatchedMapPolygonFeatures(layer, summaries)", js)
         self.assertIn("smoothFactor: 1", js)
         self.assertIn("smoothFactor: 0", js)
         self.assertIn("smoothFactor: levelConfig.smoothFactor ?? 1", js)

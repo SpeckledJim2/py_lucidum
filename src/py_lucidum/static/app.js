@@ -67,6 +67,8 @@
         },
         actionTimings: freshActionTimings(),
         mapGeoJsonCache: {},
+        mapPolygonLayerCache: {},
+        mapPolygonRenderContext: null,
         mapFitLevel: null,
         mapStartupFitDone: false,
         renderedMapLevel: null,
@@ -2357,7 +2359,7 @@
           zoomSnap: 0.25,
         }).setView([54.5, -3.2], 6);
         ukMap.on("zoomend", () => {
-          if (state.lastMapData?.level === "sector") redrawMapInPlace();
+          if (state.lastMapData?.level === "sector") restyleActiveMapPolygonLayer();
         });
         setBaseMap(state.baseMap);
         addMapLayerControl();
@@ -2660,6 +2662,89 @@
         };
       }
 
+      function mapPolygonFeatureKey(feature, property) {
+        return String(feature?.properties?.[property] ?? "");
+      }
+
+      function activeMapPolygonContext() {
+        return state.mapPolygonRenderContext;
+      }
+
+      function mapPolygonLayerKey(layer, context = activeMapPolygonContext()) {
+        return String(layer?._lucidumMapKey ?? mapPolygonFeatureKey(layer?.feature, context?.joinProperty));
+      }
+
+      function mapPolygonLayerRow(layer, context = activeMapPolygonContext()) {
+        const key = mapPolygonLayerKey(layer, context);
+        return {
+          key,
+          row: context?.summaries?.get(key) || null,
+          data: context?.data || null,
+        };
+      }
+
+      function mapPolygonTooltipHtml(layer) {
+        const { key, row } = mapPolygonLayerRow(layer);
+        const title = key || "Unknown";
+        const value = finiteNumber(row?.value);
+        return `${title}: ${value === null ? "No data" : formatLineValue(value)}`;
+      }
+
+      function mapPolygonPopupHtml(layer) {
+        const { key, row, data } = mapPolygonLayerRow(layer);
+        return mapPopupHtml(key || "Unknown", row, data || {});
+      }
+
+      function mapPolygonFeatureStyle(feature) {
+        const context = activeMapPolygonContext();
+        if (!context) return mapFeatureStyle(null, makeQuantileScale([]), null);
+        const key = mapPolygonFeatureKey(feature, context.joinProperty);
+        const row = context.summaries.get(key);
+        return mapFeatureStyle(row, context.scale, context.hotspotKeys, context.data.level);
+      }
+
+      function createMapPolygonLayer(level, geoJson) {
+        const levelConfig = MAP_LEVELS[level] || MAP_LEVELS.area;
+        return L.geoJSON(geoJson, {
+          smoothFactor: levelConfig.smoothFactor ?? 1,
+          style: mapPolygonFeatureStyle,
+          onEachFeature: (feature, layer) => {
+            layer._lucidumMapKey = mapPolygonFeatureKey(feature, levelConfig.property);
+            layer.bindTooltip(() => mapPolygonTooltipHtml(layer), { sticky: true });
+            layer.bindPopup(() => mapPolygonPopupHtml(layer));
+          },
+        });
+      }
+
+      function cachedMapPolygonLayer(level, geoJson) {
+        if (!state.mapPolygonLayerCache[level]) {
+          state.mapPolygonLayerCache[level] = {
+            layer: createMapPolygonLayer(level, geoJson),
+            featureCount: geoJson.features?.length || 0,
+          };
+        }
+        return state.mapPolygonLayerCache[level];
+      }
+
+      function countMatchedMapPolygonFeatures(layer, summaries) {
+        let count = 0;
+        layer.eachLayer((featureLayer) => {
+          const row = summaries.get(mapPolygonLayerKey(featureLayer));
+          if (finiteNumber(row?.value) !== null) count += 1;
+        });
+        return count;
+      }
+
+      function applyMapPolygonStyles() {
+        if (!ukMapLayer) return;
+        ukMapLayer.setStyle(mapPolygonFeatureStyle);
+      }
+
+      function restyleActiveMapPolygonLayer() {
+        if (state.tool !== "uk_map" || !state.lastMapData || state.lastMapData.level === "unit") return;
+        applyMapPolygonStyles();
+      }
+
       function unitPointRadiusForZoom(zoom) {
         const value = Number(zoom);
         if (!Number.isFinite(value)) return 2.5;
@@ -2923,14 +3008,18 @@
         const summaries = new Map((data.rows || []).map((row) => [String(row.key), row]));
         const scale = makeQuantileScale(data.rows || []);
         const hotspotKeys = mapHotspotKeys(data.rows || []);
-        const featureCount = geoJson.features?.length || 0;
-        const matchedFeatureCount = (geoJson.features || []).reduce((count, feature) => {
-          const row = summaries.get(String(feature.properties?.[data.join_property] ?? ""));
-          return count + (finiteNumber(row?.value) === null ? 0 : 1);
-        }, 0);
-        if (ukMapLayer) {
+        state.mapPolygonRenderContext = {
+          data,
+          joinProperty: data.join_property,
+          summaries,
+          scale,
+          hotspotKeys,
+        };
+        const cachedPolygonLayer = cachedMapPolygonLayer(data.level, geoJson);
+        const featureCount = cachedPolygonLayer.featureCount;
+        const matchedFeatureCount = countMatchedMapPolygonFeatures(cachedPolygonLayer.layer, summaries);
+        if (ukMapLayer && ukMapLayer !== cachedPolygonLayer.layer) {
           ukMap.removeLayer(ukMapLayer);
-          ukMapLayer = null;
         }
         if (ukMapPointLayer) {
           ukMap.removeLayer(ukMapPointLayer);
@@ -2940,21 +3029,9 @@
           ukMap.removeLayer(ukMapLabelLayer);
           ukMapLabelLayer = null;
         }
-        ukMapLayer = L.geoJSON(geoJson, {
-          smoothFactor: levelConfig.smoothFactor ?? 1,
-          style: (feature) => {
-            const row = summaries.get(String(feature.properties?.[data.join_property] ?? ""));
-            return mapFeatureStyle(row, scale, hotspotKeys, data.level);
-          },
-          onEachFeature: (feature, layer) => {
-            const key = String(feature.properties?.[data.join_property] ?? "");
-            const row = summaries.get(key);
-            const title = key || "Unknown";
-            const value = finiteNumber(row?.value);
-            layer.bindTooltip(`${title}: ${value === null ? "No data" : formatLineValue(value)}`, { sticky: true });
-            layer.bindPopup(mapPopupHtml(title, row, data));
-          },
-        }).addTo(ukMap);
+        ukMapLayer = cachedPolygonLayer.layer;
+        applyMapPolygonStyles();
+        if (!ukMap.hasLayer(ukMapLayer)) ukMapLayer.addTo(ukMap);
         renderMapLabels(data, summaries, hotspotKeys);
 
         let searchWarning = "";
@@ -3010,6 +3087,7 @@
           ukMap.removeLayer(ukMapLayer);
           ukMapLayer = null;
         }
+        state.mapPolygonRenderContext = null;
         if (ukMapLabelLayer) {
           ukMap.removeLayer(ukMapLabelLayer);
           ukMapLabelLayer = null;
@@ -3067,7 +3145,7 @@
         if (!Number.isFinite(fontSize) || fontSize <= 0 || !ukMapLayer) return;
         ukMapLabelLayer = L.layerGroup().addTo(ukMap);
         ukMapLayer.eachLayer((layer) => {
-          const key = String(layer.feature?.properties?.[data.join_property] ?? "");
+          const key = mapPolygonLayerKey(layer);
           const row = summaries.get(key);
           const value = finiteNumber(row?.value);
           if (value === null) return;
@@ -3090,10 +3168,9 @@
       function zoomToMapKey(level, key) {
         if (!ukMapLayer) return false;
         let targetLayer = null;
-        const property = MAP_LEVELS[level]?.property;
         ukMapLayer.eachLayer((layer) => {
           if (targetLayer) return;
-          if (String(layer.feature?.properties?.[property] ?? "") === key) {
+          if (mapPolygonLayerKey(layer) === key) {
             targetLayer = layer;
           }
         });
