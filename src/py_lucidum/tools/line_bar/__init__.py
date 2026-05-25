@@ -4,6 +4,8 @@ from .query import chart
 
 TOOL_ID = "line_bar"
 TOOL_LABEL = "Line and bar chart"
+TOOL_ALIASES = ("line-bar", "line_bar", "linebar")
+DEFAULT_ENABLED = True
 
 
 def register(app, context) -> None:
@@ -12,4 +14,11 @@ def register(app, context) -> None:
     register_routes(app, context)
 
 
-__all__ = ["TOOL_ID", "TOOL_LABEL", "chart", "register"]
+__all__ = [
+    "DEFAULT_ENABLED",
+    "TOOL_ALIASES",
+    "TOOL_ID",
+    "TOOL_LABEL",
+    "chart",
+    "register",
+]

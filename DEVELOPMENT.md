@@ -10,14 +10,16 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 
 ## Current Architecture
 
-- `py_lucidum.core` owns DuckDB connection management, file relation SQL, schema inference, row counts, band suggestions, filter validation, saved-filter loading, and SQL helpers.
+- `py_lucidum.core` owns DuckDB connection management, file relation SQL, schema inference, row counts, band suggestions, filter validation, saved-filter loading, shared data-source metadata, and shared metric/weight SQL helpers.
 - `py_lucidum.app` owns the FastAPI factory, shared app context, token checks, static asset serving, favicon serving, schema/reload/health/shutdown endpoints, and tool registration.
+- `py_lucidum.tools.registry` is the backend source of truth for tool IDs, labels, aliases, default enablement, and registration order.
 - `py_lucidum.cli` owns the `lucidum` command, free-port selection, token URL construction, background server handling for notebook-style runtimes, and browser opening.
 - `py_lucidum.demo` resolves the bundled synthetic demo dataset from either the source tree or installed package resources.
 - `py_lucidum.tools.column_profile` implements filtered column summary/detail profiling and routes.
 - `py_lucidum.tools.line_bar` implements chart aggregation and line/bar routes.
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
-- `py_lucidum.tools.glm` and `py_lucidum.tools.gbm` are placeholders for future tools.
+- `py_lucidum.tools.glm` and `py_lucidum.tools.gbm` register lightweight shell routes for future modelling tools. They must not import optional modelling libraries until real model fitting is implemented.
+- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the current app shell and existing tools, while new modelling shell UI lives in `src/py_lucidum/static/app/model-tool-shell.js`.
 
 Tool code should depend on `core` and the app registration context, but tools should not depend on each other. Shared behavior should move into `core` or another shared module only when there is real reuse.
 
@@ -46,6 +48,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
   - `POST /api/chart`
   - `POST /api/line-bar/chart`
   - `POST /api/uk-map/summary`
+  - `GET /api/glm/summary`
+  - `GET /api/gbm/summary`
 
 `/api/chart` is retained for compatibility with the current frontend. New integrations should prefer the namespaced line-bar endpoint.
 
@@ -57,6 +61,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - The wheel packages the demo dataset as `py_lucidum/datasets/motor_premiums.parquet`.
 - Other local files under `datasets/` remain ignored.
 - Parquet is the preferred working format for speed; CSV remains supported for convenience.
+- `GET /api/schema` includes `data_sources`. The only current source is `dataset`; future model outputs should publish named tabular artifacts through this same contract.
+- Line/Bar accepts a `source` request field and defaults it to `dataset`. Unknown sources are rejected before query execution.
 
 **Defaults, saved filters, and KPIs**
 
@@ -100,6 +106,21 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - Unit points render on a canvas-backed Leaflet layer with a hit grid for hover tooltips and click popups. Unit redraws intentionally project rows first and then apply pixel-space culling; a geographic viewport prefilter before projection is not part of the current rendering strategy because it did not improve observed redraw speed during testing.
 - If no unit point columns are configured and defaults are absent, the Units layer is disabled. Explicit invalid unit point columns produce validation errors when requested.
 
+**GLM and GBM shells**
+
+- GLM and GBM are opt-in tools (`--tools glm,gbm`) and are not part of the default user-facing tool set.
+- Shell endpoints return `status: "not_implemented"` and exist only to prove registration, routing, telemetry labelling, and frontend navigation do not require modelling dependencies.
+- Real modelling dependencies should be introduced as optional extras when the fitting implementation is added, not as base install dependencies.
+
+**Performance timings**
+
+- The footer shows approximate diagnostic timings for the active tool, for example `DuckDB`, `JSON`, tool render time, and `Total`.
+- Timing values can use `ns`, `us`, or `ms` depending on duration.
+- `DuckDB` is measured on the Python server for the active tool API request. UK maps use a route-local DuckDB execute/fetch timer so the footer can show whether the database query is the bottleneck.
+- This does not include browser-to-server network latency, JSON transfer or parsing, profile table rendering, chart drawing, map drawing, GeoJSON loading, or map tile loading.
+- `Profile render`, `Chart render`, and `Map render` are measured in the browser after data arrives. All tools also show `JSON` and `Total`; `Total = DuckDB + JSON + render` using the rounded millisecond values shown in the footer.
+- Cached UI rerenders can update render timing without running a new DuckDB query, so DuckDB may show the last cached query time. Collapsing the filter footer hides the timing monitor with the filter input.
+
 **Local server behavior**
 
 - CLI launches use token-protected URLs by default.
@@ -127,6 +148,8 @@ Standard checks before committing:
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/python -m compileall src tests
 node --check src/py_lucidum/static/app.js
+node --check src/py_lucidum/static/app/main.js
+node --check src/py_lucidum/static/app/model-tool-shell.js
 git diff --check
 ```
 
@@ -152,12 +175,14 @@ The current test suite should cover:
 - Column profile summary/detail routes, filter handling, distinct/missing counts, histograms, and entropy scores.
 - Line-and-bar aggregation, filters, transforms, grouping, sorting, saved filters, CSV reads, and Parquet reads.
 - UK map area, sector, and unit aggregation, alias defaults, coordinate validation, and custom column defaults.
+- Tool registry defaults, optional GLM/GBM shell registration, and the default `dataset` data-source contract.
 - Browser smoke behavior for loading profile, chart, and map tools without unexpected extra API requests.
 
 ## Future Work
 
-- GLM and GBM tool packages are placeholders and should remain independently registered tools.
+- GLM and GBM shells should become independently registered modelling tools without coupling directly to Line/Bar internals.
 - Future modelling routes, query code, and frontend assets should live inside their tool packages unless shared behavior emerges.
+- Model outputs that need plotting should publish tabular artifacts through the shared data-source contract so Line/Bar can plot them without knowing model-specific concepts such as SHAP, residuals, or lift tables.
 - Performance tests should be opt-in and target generated large datasets where practical, measuring schema load, aggregation time, repeat-query time, memory use, returned row count, and payload size.
 - License checks should verify runtime and frontend dependencies are compatible with public distribution.
 - React/Vite or another frontend framework can be reconsidered later if the static frontend becomes a maintenance constraint.

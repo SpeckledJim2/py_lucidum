@@ -58,6 +58,17 @@ class StaticAssetTests(unittest.TestCase):
         self.assertEqual(headers.get("cache-control"), "no-store")
         return headers, body
 
+    def app_js_contract(self) -> str:
+        module_paths = [
+            "/static/app.js",
+            "/static/app/main.js",
+            "/static/app/model-tool-shell.js",
+        ]
+        return "\n".join(
+            self.assert_no_store(path)[1].decode("utf-8")
+            for path in module_paths
+        )
+
     def test_index_uses_stable_local_asset_urls_and_disables_cache(self) -> None:
         _, body = self.assert_no_store("/")
         html = body.decode("utf-8")
@@ -101,11 +112,14 @@ class StaticAssetTests(unittest.TestCase):
         self.assertNotIn('id="themeBtn" class="ghost">Dark</button>', html)
         self.assertNotIn("<h2>Tool</h2>", html)
         self.assertIn('href="/static/app.css"', html)
-        self.assertIn('src="/static/app.js"', html)
+        self.assertIn('type="module" src="/static/app.js"', html)
+        self.assertIn('id="modelToolWrap" class="model-tool-wrap hidden"', html)
         self.assertNotIn("?v=", html)
 
     def test_static_app_assets_disable_cache(self) -> None:
         self.assert_no_store("/static/app.js")
+        self.assert_no_store("/static/app/main.js")
+        self.assert_no_store("/static/app/model-tool-shell.js")
         self.assert_no_store("/static/app.css")
         self.assert_no_store("/static/monitor.js")
         self.assert_no_store("/static/monitor.css")
@@ -290,10 +304,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_line_bar_warnings_render_inside_chart_messages(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertLess(html.index('id="lineBarFilter"'), html.index('id="chartMessage"'))
         self.assertLess(html.index('id="chartMessage"'), html.index('id="chart" class="hidden"'))
@@ -309,9 +322,8 @@ class StaticAssetTests(unittest.TestCase):
 
     def test_stop_app_confirmation_uses_custom_favicon_dialog(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn("function confirmStopApp()", js)
         self.assertIn('overlay.className = "stop-confirm-overlay";', js)
@@ -327,9 +339,8 @@ class StaticAssetTests(unittest.TestCase):
 
     def test_stopped_overlay_uses_cached_icon_message_layout(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('let faviconDataUrl = "";', js)
         self.assertIn("async function cacheShutdownIcon()", js)
@@ -351,8 +362,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("display: grid;\n        place-items: center;", css)
 
     def test_boot_schema_failure_updates_header_and_status(self) -> None:
-        _, js_body = self.assert_no_store("/static/app.js")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('state.schema = await api("/api/schema");', js)
         self.assertIn('el("datasetMeta").textContent = "Dataset failed to load";', js)
@@ -363,8 +373,7 @@ class StaticAssetTests(unittest.TestCase):
         )
 
     def test_dataset_meta_file_size_uses_one_decimal_place(self) -> None:
-        _, js_body = self.assert_no_store("/static/app.js")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn("function formatFileSize(value)", js)
         self.assertIn("const size = bytes / divisor;", js)
@@ -383,10 +392,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_saved_filter_select_uses_feature_list_row_spacing(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox"', html)
         self.assertIn('aria-multiselectable="true"', html)
@@ -471,10 +479,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_filter_panel_collapses_and_shows_row_meta(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('<section class="section sidebar-filter-section filter-collapsed">', html)
         self.assertIn('aria-label="Resize KPI and filter controls"', html)
@@ -509,10 +516,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_kpi_sidebar_section_contains_metric_selects_and_grouped_rows(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('<section class="section sidebar-kpi-section hidden">', html)
         self.assertLess(html.index("<h2>KPIs</h2>"), html.index("<h2>FILTER</h2>"))
@@ -565,10 +571,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_filter_footer_and_sidebar_filter_controls_contract(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertLess(html.index('id="sidebarToggleBtn"'), html.index('id="filterFooterToggleBtn"'))
         self.assertIn('<div class="layout-toggle-group">', html)
@@ -669,29 +674,29 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('el("filterFooterToggleBtn").addEventListener("click", () => setFilterFooterVisible(state.filterFooterCollapsed));', js)
         self.assertIn('el("filterSidebarClearBtn").addEventListener("click", clearFilter);', js)
 
-    def test_readme_documents_performance_timing_semantics(self) -> None:
+    def test_development_docs_record_performance_timing_semantics(self) -> None:
         readme = Path(__file__).parents[1].joinpath("README.md").read_text(encoding="utf-8")
+        development = Path(__file__).parents[1].joinpath("DEVELOPMENT.md").read_text(encoding="utf-8")
 
-        self.assertIn("**Performance timings**", readme)
-        self.assertIn("can use `ns`, `us`, or `ms` depending on the measured duration", readme)
-        self.assertIn("`DuckDB` is measured on the Python server for the active tool API request", readme)
-        self.assertIn("UK maps use a route-local DuckDB execute/fetch timer", readme)
-        self.assertIn("This does not include browser-to-server network latency", readme)
-        self.assertIn("All tools also show `JSON` and `Total`", readme)
-        self.assertIn("`Total = DuckDB + JSON + render`", readme)
-        self.assertIn("`Chart render` is measured in the browser after data has arrived", readme)
-        self.assertIn("`Map render` is measured in the browser after data and the required GeoJSON are available", readme)
-        self.assertIn("the Unit canvas layer, legend, labels, and the Unit hover/click hit grid", readme)
-        self.assertIn("Cached UI rerenders can update the render timing without running a new DuckDB query", readme)
-        self.assertIn("Collapsing the filter footer hides the timing monitor", readme)
+        self.assertNotIn("**Performance timings**", readme)
+        self.assertIn("**Performance timings**", development)
+        self.assertIn("can use `ns`, `us`, or `ms` depending on duration", development)
+        self.assertIn("`DuckDB` is measured on the Python server for the active tool API request", development)
+        self.assertIn("UK maps use a route-local DuckDB execute/fetch timer", development)
+        self.assertIn("This does not include browser-to-server network latency", development)
+        self.assertIn("All tools also show `JSON` and `Total`", development)
+        self.assertIn("`Total = DuckDB + JSON + render`", development)
+        self.assertIn("`Chart render`", development)
+        self.assertIn("`Map render`", development)
+        self.assertIn("Cached UI rerenders can update render timing without running a new DuckDB query", development)
+        self.assertIn("Collapsing the filter footer hides the timing monitor", development)
 
     def test_chart_search_inputs_have_clear_buttons(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('<div class="chart-search-row">', html)
         self.assertIn('id="featureSearchClear"', html)
@@ -706,8 +711,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("input.focus();", js)
 
     def test_date_x_axis_labels_are_month_aware(self) -> None:
-        _, js_body = self.assert_no_store("/static/app.js")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn("const DATE_AXIS_TARGET_LABELS = 12;", js)
         self.assertIn("const DATE_AXIS_MIN_MONTH_LABELS = 2;", js)
@@ -737,8 +741,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("formatXLabel(r.x, data.x_kind)", js)
 
     def test_numeric_x_axis_labels_are_cleaned_defensively(self) -> None:
-        _, js_body = self.assert_no_store("/static/app.js")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn("function formatXLabel(value, kind)", js)
         self.assertIn('if (kind === "numeric") return formatNumericXLabel(value);', js)
@@ -749,8 +752,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('if (kind !== "integer") return String(value);', js)
 
     def test_line_bar_x_axis_title_uses_selected_feature_with_tight_spacing(self) -> None:
-        _, js_body = self.assert_no_store("/static/app.js")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('textStyle: { color: getCss("--text"), fontWeight: 700 },', js)
         self.assertIn('name: data.x || "",', js)
@@ -765,10 +767,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_theme_toggle_uses_icons_and_accessible_labels(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn(".theme-toggle", css)
         self.assertIn("width: 28px;", css)
@@ -809,9 +810,8 @@ class StaticAssetTests(unittest.TestCase):
 
     def test_line_bar_quantile_control_is_numeric_only(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('id="bandControl"', html)
         self.assertIn('id="quantileControl"', html)
@@ -832,9 +832,8 @@ class StaticAssetTests(unittest.TestCase):
 
     def test_london_map_button_icon_fills_button(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('class="map-place-icon-london"', js)
         self.assertIn(".map-place-button img.map-place-icon-london", css)
@@ -847,10 +846,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_map_layer_control_uses_distinct_radio_groups(self) -> None:
         _, html_body = self.assert_no_store("/")
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         html = html_body.decode("utf-8")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn("<span>Line</span>", html)
         self.assertIn("<span>Opacity</span>", html)
@@ -919,9 +917,8 @@ class StaticAssetTests(unittest.TestCase):
 
     def test_sidebar_toggle_contract(self) -> None:
         _, css_body = self.assert_no_store("/static/app.css")
-        _, js_body = self.assert_no_store("/static/app.js")
         css = css_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn("--sidebar-bg: #dce4ef;", css)
         self.assertIn("--sidebar-bg: #24334b;", css)
@@ -971,10 +968,9 @@ class StaticAssetTests(unittest.TestCase):
 
     def test_column_profile_tool_static_assets_are_registered(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, js_body = self.assert_no_store("/static/app.js")
         _, css_body = self.assert_no_store("/static/app.css")
         html = html_body.decode("utf-8")
-        js = js_body.decode("utf-8")
+        js = self.app_js_contract()
         css = css_body.decode("utf-8")
 
         self.assertLess(html.index('id="profileTool"'), html.index('id="lineBarTool"'))
@@ -1093,8 +1089,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertNotIn("function profileDistributionHtml", js)
 
     def test_app_js_contains_unit_point_map_controls(self) -> None:
-        _, body = self.assert_no_store("/static/app.js")
-        js = body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn('unitColumn: postcodeColumn("unit")', js)
         self.assertIn('latitudeColumn: latitudeColumn()', js)
@@ -1121,8 +1116,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("<span>Units</span>", js)
 
     def test_app_js_refits_map_after_layout_resize(self) -> None:
-        _, body = self.assert_no_store("/static/app.js")
-        js = body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn("function scheduleMapResize({ refit = false } = {})", js)
         self.assertIn("fitMapToLayer({ animate: false })", js)
@@ -1136,8 +1130,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("scheduleMapResize({ refit: didFitLayer });", js)
 
     def test_app_js_reuses_cached_polygon_layers(self) -> None:
-        _, body = self.assert_no_store("/static/app.js")
-        js = body.decode("utf-8")
+        js = self.app_js_contract()
 
         self.assertIn("mapPolygonLayerCache: {}", js)
         self.assertIn("mapPolygonRenderContext: null", js)
@@ -1159,9 +1152,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("smoothFactor: levelConfig.smoothFactor ?? 1", js)
 
     def test_uk_map_documents_current_interactivity_contract(self) -> None:
-        _, body = self.assert_no_store("/static/app.js")
-        js = body.decode("utf-8")
-        readme = Path(__file__).parents[1].joinpath("README.md").read_text(encoding="utf-8")
+        js = self.app_js_contract()
         development = Path(__file__).parents[1].joinpath("DEVELOPMENT.md").read_text(encoding="utf-8")
 
         self.assertIn("layer.bindTooltip(() => mapPolygonTooltipHtml(layer), { sticky: true });", js)
@@ -1170,7 +1161,6 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('map.on("click", this.handleClick, this);', js)
         self.assertIn("this.hitGrid = new Map();", js)
         self.assertIn("this.hitGrid.get(gridKey).push({ entry, point });", js)
-        self.assertIn("Unit hover/click hit grid", readme)
         self.assertIn("Area and sector geometry use Leaflet GeoJSON with hover tooltips and click popups.", development)
         self.assertIn("Unit points render on a canvas-backed Leaflet layer with a hit grid for hover tooltips and click popups.", development)
         self.assertIn("a geographic viewport prefilter before projection is not part of the current rendering strategy", development)

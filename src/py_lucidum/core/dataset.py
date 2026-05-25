@@ -34,6 +34,28 @@ class Dataset:
             return f"read_csv_auto({path}, header=true, ignore_errors=true)"
         raise ValueError("Only .csv and .parquet files are supported in this prototype")
 
+    def normalise_source(self, raw: Any = None) -> str:
+        source_id = str(raw or "dataset").strip()
+        if source_id in {"", "dataset"}:
+            return "dataset"
+        raise ValueError("Choose a valid data source")
+
+    def relation_sql_for_source(self, source_id: Any = None) -> str:
+        self.normalise_source(source_id)
+        return self.relation_sql()
+
+    def data_sources(self) -> list[dict[str, Any]]:
+        schema = self.schema()
+        return [
+            {
+                "id": "dataset",
+                "label": self.path.name,
+                "kind": "dataset",
+                "row_count": schema["row_count"],
+                "columns": schema["columns"],
+            }
+        ]
+
     def reload(self) -> None:
         with self._lock:
             self._schema = None

@@ -3,7 +3,9 @@ from __future__ import annotations
 from .query import summary
 
 TOOL_ID = "uk_map"
-TOOL_LABEL = "UK mapping tool"
+TOOL_LABEL = "UK mapping"
+TOOL_ALIASES = ("uk-map", "uk_map", "ukmap", "map")
+DEFAULT_ENABLED = True
 
 
 def register(app, context) -> None:
@@ -12,4 +14,11 @@ def register(app, context) -> None:
     register_routes(app, context)
 
 
-__all__ = ["TOOL_ID", "TOOL_LABEL", "register", "summary"]
+__all__ = [
+    "DEFAULT_ENABLED",
+    "TOOL_ALIASES",
+    "TOOL_ID",
+    "TOOL_LABEL",
+    "register",
+    "summary",
+]

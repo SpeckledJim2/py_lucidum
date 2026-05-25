@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, quote_ident
-from py_lucidum.tools.line_bar.query import (
+from py_lucidum.core import (
+    ColumnInfo,
+    Dataset,
     denominator_warnings,
     denominator_valid_condition,
+    is_numeric_kind,
+    json_number,
     normalise_denominator,
+    quote_ident,
     response_parts,
     response_summary,
     summarize_denominator,

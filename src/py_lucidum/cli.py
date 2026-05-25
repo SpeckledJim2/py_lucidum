@@ -29,6 +29,7 @@ DEFAULT_URL_KEYS = {
     "postcode_unit",
     "latitude",
     "longitude",
+    "source",
 }
 
 
@@ -400,7 +401,7 @@ def main() -> int:
         action="store_true",
         help="Disable KPI specs and skip default kpi_spec.csv discovery.",
     )
-    parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Supports column-profile, line-bar, and uk-map.")
+    parser.add_argument("--tools", default=None, help="Comma-separated tools to enable. Supports column-profile, line-bar, uk-map, glm, and gbm.")
     args = parser.parse_args()
     if args.demo and args.path:
         parser.error("choose either a dataset path or --demo, not both")

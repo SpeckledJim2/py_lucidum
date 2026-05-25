@@ -4,6 +4,8 @@ from .query import profile, profile_detail
 
 TOOL_ID = "column_profile"
 TOOL_LABEL = "Column profile"
+TOOL_ALIASES = ("column-profile", "column_profile", "columnprofile", "columns", "profile")
+DEFAULT_ENABLED = True
 
 
 def register(app, context) -> None:
@@ -12,4 +14,12 @@ def register(app, context) -> None:
     register_routes(app, context)
 
 
-__all__ = ["TOOL_ID", "TOOL_LABEL", "profile", "profile_detail", "register"]
+__all__ = [
+    "DEFAULT_ENABLED",
+    "TOOL_ALIASES",
+    "TOOL_ID",
+    "TOOL_LABEL",
+    "profile",
+    "profile_detail",
+    "register",
+]

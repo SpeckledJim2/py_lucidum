@@ -47,6 +47,36 @@ def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, d
     return start["status"], headers, response_body
 
 
+def asgi_get(app: Any, path: str) -> tuple[int, dict[str, str], bytes]:
+    messages: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
+    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in start["headers"]}
+    return start["status"], headers, response_body
+
+
 class ColumnProfileToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
@@ -68,6 +98,7 @@ class ColumnProfileToolTests(unittest.TestCase):
     def test_default_tools_include_column_profile_first(self) -> None:
         self.assertEqual(normalise_tools(None), ["column_profile", "line_bar", "uk_map"])
         self.assertEqual(normalise_tools("profile,line-bar"), ["column_profile", "line_bar"])
+        self.assertEqual(normalise_tools("glm,gbm"), ["glm", "gbm"])
 
         app = create_app(self.data_path, token="dev-token")
         paths = {route.path for route in app.routes}
@@ -77,6 +108,24 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertIn("/api/column-profile/detail", paths)
         self.assertIn("/api/chart", paths)
         self.assertIn("/api/uk-map/summary", paths)
+        self.assertNotIn("/api/glm/summary", paths)
+        self.assertNotIn("/api/gbm/summary", paths)
+
+    def test_model_tool_shells_can_be_enabled_without_model_dependencies(self) -> None:
+        app = create_app(self.data_path, token="", tools=["glm", "gbm"], use_saved_filters=False, use_kpis=False)
+        paths = {route.path for route in app.routes}
+
+        self.assertEqual(app.state.enabled_tools, ["glm", "gbm"])
+        self.assertIn("/api/glm/summary", paths)
+        self.assertIn("/api/gbm/summary", paths)
+        self.assertNotIn("/api/chart", paths)
+
+        status, _, body = asgi_get(app, "/api/glm/summary")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["tool"], "glm")
+        self.assertEqual(payload["status"], "not_implemented")
 
     def test_column_profile_can_be_enabled_alone(self) -> None:
         app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)

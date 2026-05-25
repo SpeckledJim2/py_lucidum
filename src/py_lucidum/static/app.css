@@ -2413,6 +2413,74 @@
         font-size: 13px;
       }
 
+      .model-tool-wrap {
+        min-height: 100%;
+        display: grid;
+        align-items: start;
+        padding: 18px;
+      }
+
+      .model-shell {
+        max-width: 720px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        overflow: hidden;
+      }
+
+      .model-shell-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid var(--line);
+        padding: 14px 16px;
+      }
+
+      .model-shell-header h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .model-shell-header span,
+      .model-shell-body p {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .model-shell-body {
+        padding: 16px;
+      }
+
+      .model-shell-body p {
+        margin: 0 0 14px;
+      }
+
+      .model-shell-body dl {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin: 0;
+      }
+
+      .model-shell-body dl div {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+      }
+
+      .model-shell-body dt {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      .model-shell-body dd {
+        margin: 4px 0 0;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
       .hidden {
         display: none;
       }

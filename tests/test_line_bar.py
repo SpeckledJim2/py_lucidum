@@ -48,6 +48,36 @@ def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, d
     return start["status"], headers, response_body
 
 
+def asgi_get(app: Any, path: str) -> tuple[int, dict[str, str], bytes]:
+    messages: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
+    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in start["headers"]}
+    return start["status"], headers, response_body
+
+
 class LineBarToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
@@ -127,12 +157,51 @@ class LineBarToolTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["x"], "UseofVan")
+        self.assertEqual(payload["source"], "dataset")
         self.assertIn("rows", payload)
         self.assertIn("response_summaries", payload)
         self.assertIsInstance(payload["timings"]["duckdb_ns"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
         self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
+
+    def test_dataset_exposes_default_data_source_contract(self) -> None:
+        dataset = Dataset(self.data_path)
+        sources = dataset.data_sources()
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0]["id"], "dataset")
+        self.assertEqual(sources[0]["kind"], "dataset")
+        self.assertEqual(sources[0]["row_count"], 4)
+        self.assertEqual([column["name"] for column in sources[0]["columns"]], [
+            "YoungestDriverAge",
+            "UseofVan",
+            "QuoteDate",
+            "Gross.Weight",
+            "Actual",
+            "Expected",
+            "Weight",
+        ])
+
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        status, _, body = asgi_get(app, "/api/schema")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["data_sources"][0]["id"], "dataset")
+
+    def test_chart_accepts_dataset_source_and_rejects_unknown_sources(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request["source"] = "dataset"
+
+        result = chart(dataset, request)
+
+        self.assertEqual(result["source"], "dataset")
+
+        request["source"] = "model-output"
+        with self.assertRaisesRegex(ValueError, "valid data source"):
+            chart(dataset, request)
 
     def test_default_saved_filters_fall_back_to_specs_directory(self) -> None:
         self.filters_path.unlink()

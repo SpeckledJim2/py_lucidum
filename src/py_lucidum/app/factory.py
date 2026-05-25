@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 
 from py_lucidum.core import Dataset, load_kpis, load_saved_filters, resolve_filters_path, resolve_kpis_path
+from py_lucidum.tools.registry import normalise_tools, register_tools, tool_payload
 
 from .assets import NoStoreStaticFiles, no_store_file_response, no_store_html_response
 from .context import AppContext
@@ -23,26 +24,6 @@ PROJECT_ROOT = Path(__file__).parents[3]
 STATIC_DIR = PACKAGE_ROOT / "static"
 FAVICON_PATHS = (PROJECT_ROOT / "favicon.ico", STATIC_DIR / "favicon.ico")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-TOOL_ALIASES = {
-    "column-profile": "column_profile",
-    "column_profile": "column_profile",
-    "columnprofile": "column_profile",
-    "columns": "column_profile",
-    "line-bar": "line_bar",
-    "line_bar": "line_bar",
-    "linebar": "line_bar",
-    "profile": "column_profile",
-    "uk-map": "uk_map",
-    "uk_map": "uk_map",
-    "ukmap": "uk_map",
-    "map": "uk_map",
-}
-TOOL_METADATA = {
-    "column_profile": {"id": "column_profile", "label": "Column profile"},
-    "line_bar": {"id": "line_bar", "label": "Line and bar chart"},
-    "uk_map": {"id": "uk_map", "label": "UK mapping"},
-}
-DEFAULT_TOOLS = ["column_profile", "line_bar", "uk_map"]
 DEFAULT_KEYS = {
     "x",
     "actual",
@@ -53,6 +34,7 @@ DEFAULT_KEYS = {
     "postcode_unit",
     "latitude",
     "longitude",
+    "source",
 }
 
 
@@ -61,31 +43,6 @@ def favicon_media_type(path: Path) -> str:
         if handle.read(len(PNG_SIGNATURE)) == PNG_SIGNATURE:
             return "image/png"
     return "image/x-icon"
-
-
-def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
-    if tools is None:
-        requested = DEFAULT_TOOLS
-    elif isinstance(tools, str):
-        requested = [part.strip() for part in tools.split(",") if part.strip()]
-    else:
-        requested = [str(part).strip() for part in tools if str(part).strip()]
-    if not requested:
-        requested = DEFAULT_TOOLS
-
-    enabled: list[str] = []
-    for name in requested:
-        canonical = TOOL_ALIASES.get(name.lower())
-        if not canonical:
-            supported = ", ".join(sorted(TOOL_ALIASES))
-            raise ValueError(f"Unknown tool '{name}'. Supported tools: {supported}")
-        if canonical not in enabled:
-            enabled.append(canonical)
-    return enabled
-
-
-def tool_payload(enabled_tools: Sequence[str]) -> list[dict[str, str]]:
-    return [TOOL_METADATA[tool] for tool in enabled_tools]
 
 
 def index_html(dataset_name: str) -> str:
@@ -156,6 +113,7 @@ def create_app(
         payload["filters"] = app.state.saved_filters
         payload["kpis"] = app.state.kpis
         payload["tools"] = tool_payload(app.state.enabled_tools)
+        payload["data_sources"] = app.state.dataset.data_sources()
         return payload
 
     @app.get("/")
@@ -241,18 +199,7 @@ def create_app(
         return {"message": "py_lucidum is stopping"}
 
     context = AppContext(dataset=dataset, check_token=check_token)
-    if "column_profile" in enabled_tools:
-        from py_lucidum.tools.column_profile import register as register_column_profile
-
-        register_column_profile(app, context)
-    if "line_bar" in enabled_tools:
-        from py_lucidum.tools.line_bar import register as register_line_bar
-
-        register_line_bar(app, context)
-    if "uk_map" in enabled_tools:
-        from py_lucidum.tools.uk_map import register as register_uk_map
-
-        register_uk_map(app, context)
+    register_tools(app, context, enabled_tools)
 
     app.add_middleware(TelemetryMiddleware, store=app.state.telemetry)
     return app

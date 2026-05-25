@@ -1,0 +1,4617 @@
+      import { createModelToolShell } from "./model-tool-shell.js";
+
+      function paramsFromLocation() {
+        const standardParams = new URLSearchParams(location.search);
+        const expectedKeys = ["token", "tool", "source", "x", "actual", "expected", "denominator", "postcode_area", "postcode_sector", "postcode_unit", "latitude", "longitude"];
+        if (expectedKeys.some((key) => standardParams.has(key))) return standardParams;
+        const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
+        try {
+          const decodedParams = new URLSearchParams(decodeURIComponent(rawSearch));
+          return expectedKeys.some((key) => decodedParams.has(key)) ? decodedParams : standardParams;
+        } catch (_) {
+          return standardParams;
+        }
+      }
+
+      const locationParams = paramsFromLocation();
+      const token = locationParams.get("token") || "";
+      const ACTION_RENDER_LABELS = {
+        column_profile: "Profile render",
+        line_bar: "Chart render",
+        uk_map: "Map render",
+        glm: "GLM render",
+        gbm: "GBM render",
+      };
+      const state = {
+        schema: null,
+        x: null,
+        sort: "alpha",
+        lowGroup: "0",
+        labels: "none",
+        sidebarVisible: true,
+        bandWidth: "0",
+        quantileMode: "off",
+        dateBucket: "none",
+        transform: "none",
+        sigma: "0",
+        source: locationParams.get("source") || "dataset",
+        tool: "column_profile",
+        view: "chart",
+        mapLevel: "area",
+        baseMap: "blank",
+        mapPalette: "divergent",
+        mapLineWeight: 1,
+        mapOpacity: 1,
+        mapHotspots: 0,
+        mapLabelSize: 0,
+        featureSort: "original",
+        expectedSort: "original",
+        kpiCollapsed: false,
+        collapsedKpiGroups: new Set(),
+        kpiGroupsInitialised: false,
+        activeKpiKey: "",
+        activeKpiFormat: null,
+        filterOperator: "and",
+        filterCollapsed: true,
+        filterFooterCollapsed: false,
+        filterSelectionMode: "single",
+        collapsedSavedFilterThemes: new Set(),
+        savedFilterThemesInitialised: false,
+        activeFilter: "",
+        profileSort: { key: "", direction: "asc" },
+        profileDetailSort: { key: "count", direction: "desc" },
+        selectedProfileColumn: "",
+        lastProfileData: null,
+        lastProfileDetailData: null,
+        lastData: null,
+        lastMapData: null,
+        toolCache: {
+          column_profile: freshProfileCache(),
+          line_bar: { requestKey: null, data: null, presentation: null },
+          uk_map: { requestKey: null, data: null, presentation: null },
+          glm: { requestKey: null, data: null, presentation: null },
+          gbm: { requestKey: null, data: null, presentation: null },
+        },
+        actionTimings: freshActionTimings(),
+        mapGeoJsonCache: {},
+        mapPolygonLayerCache: {},
+        mapPolygonRenderContext: null,
+        mapFitLevel: null,
+        mapStartupFitDone: false,
+        renderedMapLevel: null,
+        preserveMapView: false,
+        pendingMapZoom: null,
+        mapControlPosition: null,
+        mapControlMoved: false,
+        tablePage: 1,
+        bandFeature: null,
+        profileRequestSeq: 0,
+        profileDetailRequestSeq: 0,
+        chartRequestSeq: 0,
+        mapRequestSeq: 0,
+        glmRequestSeq: 0,
+        gbmRequestSeq: 0,
+      };
+
+      const BAND_STEPS = makeBandSteps();
+      const TABLE_PAGE_SIZE = 1000;
+      const LABEL_DENSITY_LIMIT = 200;
+      const DATE_AXIS_TARGET_LABELS = 12;
+      const DATE_AXIS_MIN_MONTH_LABELS = 2;
+      const DATE_AXIS_MAX_MONTH_LABELS = 14;
+      const DATE_AXIS_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const RESPONSE_AXIS_PADDING = 0.08;
+      const RESPONSE_AXIS_TARGET_INTERVALS = 15;
+      const MAP_LEVELS = {
+        area: {
+          label: "areas",
+          singular: "area",
+          property: "PostcodeArea",
+          url: "/tools/uk-map/static/geodata/areas_MappaR.geojson",
+          defaultColumn: "PostcodeArea",
+          aliases: ["PostcodeArea", "POSTCODE_AREA"],
+          smoothFactor: 1,
+        },
+        sector: {
+          label: "sectors",
+          singular: "sector",
+          property: "PostcodeSector",
+          url: "/tools/uk-map/static/geodata/sectors_MappaR.geojson",
+          defaultColumn: "PostcodeSector",
+          aliases: ["PostcodeSector", "POSTCODE_SECTOR"],
+          smoothFactor: 0,
+        },
+        unit: {
+          label: "units",
+          singular: "unit",
+          property: "PostcodeUnit",
+          defaultColumn: "PostcodeUnit",
+          aliases: ["PostcodeUnit", "POSTCODE_UNIT"],
+        },
+      };
+      const COORDINATE_COLUMN_ALIASES = {
+        latitude: ["lat", "latitude", "LATITUDE"],
+        longitude: ["long", "longitude", "LONGITUDE", "LONGiTUDE"],
+      };
+      const MAP_PALETTES = {
+        divergent: ["#00441b", "#1b7837", "#5aae61", "#a6dba0", "#d9f0d3", "#fddbc7", "#f4a582", "#d6604d", "#b2182b", "#67001f"],
+        spectral: ["#2c7bb6", "#00a6ca", "#00ccbc", "#90eb9d", "#ffff8c", "#f9d057", "#f29e2e", "#e76818", "#d7191c", "#a50026"],
+        viridis: ["#fde725", "#b5de2b", "#6ece58", "#35b779", "#1f9e89", "#26828e", "#31688e", "#3e4989", "#482878", "#440154"],
+      };
+      const MAP_COLOR_BUCKETS = 100;
+      const MAP_LEGEND_BUCKETS = 10;
+      const MAP_MISSING_COLOR = "#e5e7eb";
+      const MAP_MUTED_COLOR = "#cbd5e1";
+      const MAP_POINT_GRID_SIZE = 18;
+      const MAP_FIT_PADDING = [8, 8];
+      const MAP_UNIT_FIT_PADDING = [18, 18];
+      const MAP_INITIAL_FIT_OPTIONS = { animate: false };
+      const MAP_CONTROL_POSITION_VERSION = "3";
+      const MAP_CONTROL_POSITION_KEYS = {
+        left: "py_lucidum_map_control_left",
+        top: "py_lucidum_map_control_top",
+        version: "py_lucidum_map_control_version",
+      };
+      const MAP_BASE_LAYERS = {
+        blank: { label: "Blank" },
+        esri: {
+          label: "Esri",
+          url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+          attribution: "Tiles &copy; Esri",
+        },
+        osm: {
+          label: "OSM",
+          url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+          attribution: "&copy; OpenStreetMap contributors",
+        },
+        satellite: {
+          label: "Aerial",
+          url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          attribution: "Tiles &copy; Esri",
+        },
+        grey: {
+          label: "Light",
+          url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+          attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+          themePair: { light: "grey", dark: "darkGrey" },
+        },
+        darkGrey: {
+          label: "Dark",
+          url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+          attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+          themePair: { light: "grey", dark: "darkGrey" },
+        },
+      };
+
+      const chart = echarts.init(document.getElementById("chart"));
+      let ukMap = null;
+      let ukMapLayer = null;
+      let ukMapPointLayer = null;
+      let ukMapLabelLayer = null;
+      let baseTileLayer = null;
+      let mapLayerControl = null;
+      let mapZoomControl = null;
+      let mapHomeControl = null;
+      let serverHeartbeatTimer = null;
+      let stoppedOverlayShown = false;
+      let faviconDataUrl = "";
+      const el = (id) => document.getElementById(id);
+      const modelToolShell = createModelToolShell({
+        api,
+        el,
+        escapeHtml,
+        measureToolRender,
+        saveToolPresentation,
+        setChartMessage,
+        setClientTiming,
+        setDuckDbTiming,
+        setGroupMeta,
+        setRenderTiming,
+        setStatus,
+        setToolTimingFailed,
+        startToolTiming,
+        state,
+        syncClientTimingFromData,
+        syncDuckDbTimingFromData,
+        toolCache,
+      });
+
+      function monitorUrl() {
+        const url = new URL("/monitor", location.href);
+        if (token) url.searchParams.set("token", token);
+        return `${url.pathname}${url.search}`;
+      }
+
+      function syncMonitorLink() {
+        const link = el("monitorLink");
+        if (link) link.href = monitorUrl();
+      }
+
+      async function api(path, options = {}) {
+        const { clientTiming = false, ...fetchOptions } = options;
+        const started = performance.now();
+        const response = await fetch(path, {
+          ...fetchOptions,
+          headers: {
+            "Content-Type": "application/json",
+            "x-lucidum-token": token,
+            ...(fetchOptions.headers || {}),
+          },
+        });
+        const responseReady = performance.now();
+        const text = await response.text();
+        const bodyReady = performance.now();
+        if (!response.ok) {
+          let message = text;
+          try {
+            message = JSON.parse(text).detail || text;
+          } catch (_) {
+          }
+          throw new Error(message);
+        }
+        const parseStarted = performance.now();
+        const data = JSON.parse(text);
+        const parsed = performance.now();
+        if (clientTiming && data && typeof data === "object") {
+          data.client_timings = {
+            response_ms: responseReady - started,
+            body_ms: bodyReady - responseReady,
+            parse_ms: parsed - parseStarted,
+            data_ms: parsed - responseReady,
+            total_ms: parsed - started,
+          };
+        }
+        return data;
+      }
+
+      function startServerHeartbeat() {
+        if (serverHeartbeatTimer) return;
+        serverHeartbeatTimer = window.setInterval(checkServerHealth, 2000);
+      }
+
+      function stopServerHeartbeat() {
+        if (!serverHeartbeatTimer) return;
+        window.clearInterval(serverHeartbeatTimer);
+        serverHeartbeatTimer = null;
+      }
+
+      async function cacheShutdownIcon() {
+        try {
+          const response = await fetch("/favicon.ico", { cache: "force-cache" });
+          if (!response.ok) return;
+          const blob = await response.blob();
+          faviconDataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.addEventListener("load", () => resolve(String(reader.result || "")), { once: true });
+            reader.addEventListener("error", () => reject(reader.error), { once: true });
+            reader.readAsDataURL(blob);
+          });
+        } catch (_) {
+          faviconDataUrl = "";
+        }
+      }
+
+      async function checkServerHealth() {
+        if (stoppedOverlayShown) return;
+        try {
+          await fetch("/api/health", {
+            cache: "no-store",
+            headers: {
+              "x-lucidum-token": token,
+            },
+          });
+        } catch (_) {
+          showStoppedOverlay();
+        }
+      }
+
+      function setStatus(message, isError = false) {
+        el("status").textContent = message || "";
+        el("status").classList.toggle("error", isError);
+        el("status").classList.toggle("hidden", !message);
+      }
+
+      function setChartMessage(message) {
+        const displayMessage = message || "";
+        el("chartMessage").textContent = displayMessage;
+        const hiddenForView = state.tool === "line_bar" && state.view !== "chart";
+        el("chartMessage").classList.toggle("hidden", !displayMessage || hiddenForView);
+      }
+
+      function setGroupMeta(tool, message) {
+        const id = tool === "uk_map"
+          ? "mapGroupMeta"
+          : (tool === "column_profile" ? "profileGroupMeta" : (isModelTool(tool) ? "modelToolGroupMeta" : "lineBarGroupMeta"));
+        el(id).textContent = message || "";
+      }
+
+      function activeFilterLabel() {
+        return state.activeFilter || "no filter";
+      }
+
+      function syncActiveFilterLabels() {
+        const label = activeFilterLabel();
+        el("profileFilter").textContent = label;
+        el("lineBarFilter").textContent = label;
+        el("modelToolFilter").textContent = label;
+        el("mapControlFilter").textContent = label;
+      }
+
+      function formatRowMeta(rowCount, filteredRowCount = rowCount) {
+        const total = Number(rowCount);
+        if (!Number.isFinite(total)) return "";
+        const filtered = Number(filteredRowCount ?? total);
+        const shown = Number.isFinite(filtered) ? filtered : total;
+        return shown === total
+          ? `${total.toLocaleString()} rows`
+          : `${shown.toLocaleString()} / ${total.toLocaleString()} rows`;
+      }
+
+      function setFilterRowMeta(rowCount, filteredRowCount = rowCount) {
+        const meta = formatRowMeta(rowCount, filteredRowCount);
+        if (meta) el("filterRowMeta").textContent = meta;
+      }
+
+      function makeBandSteps() {
+        const steps = [];
+        for (let exponent = -8; exponent <= 12; exponent += 1) {
+          const multiplier = 10 ** exponent;
+          steps.push(1 * multiplier, 2 * multiplier, 5 * multiplier);
+        }
+        steps.push(4, 7, 12);
+        return [...new Set(steps)].sort((a, b) => a - b);
+      }
+
+      function numericColumns() {
+        return state.schema.columns.filter((c) => isNumericKind(c.kind));
+      }
+
+      function selectedColumn() {
+        return state.schema?.columns.find((c) => c.name === state.x);
+      }
+
+      function toolEnabled(id) {
+        return Boolean((state.schema?.tools || []).some((tool) => tool.id === id));
+      }
+
+      function isModelTool(tool) {
+        return tool === "glm" || tool === "gbm";
+      }
+
+      function freshProfileCache() {
+        return { requestKey: null, data: null, presentation: null, details: new Map() };
+      }
+
+      function freshToolCache() {
+        return {
+          column_profile: freshProfileCache(),
+          line_bar: { requestKey: null, data: null, presentation: null },
+          uk_map: { requestKey: null, data: null, presentation: null },
+          glm: { requestKey: null, data: null, presentation: null },
+          gbm: { requestKey: null, data: null, presentation: null },
+        };
+      }
+
+      function freshActionTimings() {
+        return {
+          column_profile: freshActionTiming(),
+          line_bar: freshActionTiming(),
+          uk_map: freshActionTiming(),
+          glm: freshActionTiming(),
+          gbm: freshActionTiming(),
+        };
+      }
+
+      function freshActionTiming() {
+        return {
+          duckdbNs: null,
+          duckdbMs: null,
+          duckdbStatus: "idle",
+          clientResponseMs: null,
+          clientBodyMs: null,
+          clientParseMs: null,
+          clientDataMs: null,
+          clientTotalMs: null,
+          renderNs: null,
+          renderStatus: "idle",
+        };
+      }
+
+      function clearToolCaches() {
+        state.toolCache = freshToolCache();
+        state.actionTimings = freshActionTimings();
+        state.lastProfileData = null;
+        state.lastProfileDetailData = null;
+        state.profileDetailRequestSeq += 1;
+        state.lastData = null;
+        state.lastMapData = null;
+        state.mapStartupFitDone = false;
+        state.renderedMapLevel = null;
+        syncActionTimingMonitor();
+      }
+
+      function clearProfileDetailCache() {
+        const cache = toolCache("column_profile");
+        cache.details = new Map();
+        state.lastProfileDetailData = null;
+        state.profileDetailRequestSeq += 1;
+      }
+
+      function toolCache(tool) {
+        if (!state.toolCache[tool]) {
+          state.toolCache[tool] = tool === "column_profile" ? freshProfileCache() : { requestKey: null, data: null, presentation: null };
+        }
+        if (tool === "column_profile" && !(state.toolCache[tool].details instanceof Map)) {
+          state.toolCache[tool].details = new Map();
+        }
+        return state.toolCache[tool];
+      }
+
+      function actionTiming(tool) {
+        if (!state.actionTimings[tool]) {
+          state.actionTimings[tool] = freshActionTiming();
+        }
+        return state.actionTimings[tool];
+      }
+
+      function formatDurationNumber(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        return String(Math.round(number));
+      }
+
+      function roundedTimingMilliseconds(valueMs) {
+        const number = Number(valueMs);
+        return Number.isFinite(number) ? Math.max(0, Math.round(number)) : null;
+      }
+
+      function formatActionTimingValue(valueNs, status = "idle") {
+        if (status === "running") return "running";
+        if (status === "failed") return "failed";
+        if (valueNs === null || valueNs === undefined) return "--";
+        const ns = Number(valueNs);
+        if (!Number.isFinite(ns)) return "--";
+        const roundedNs = Math.max(0, Math.round(ns));
+        if (roundedNs < 1000) return `${roundedNs}ns`;
+        if (roundedNs < 1_000_000) return `${formatDurationNumber(roundedNs / 1000)}us`;
+        return `${formatDurationNumber(roundedNs / 1_000_000)}ms`;
+      }
+
+      function formatDuckDbTimingValue(timing) {
+        if (timing.duckdbStatus === "running") return "running";
+        if (timing.duckdbStatus === "failed") return "failed";
+        const duckdbNs = Number(timing.duckdbNs);
+        if (Number.isFinite(duckdbNs)) return formatActionTimingValue(duckdbNs);
+        const duckdbMs = Number(timing.duckdbMs);
+        return Number.isFinite(duckdbMs) ? `${formatDurationNumber(Math.max(0, duckdbMs))}ms` : "--";
+      }
+
+      function duckDbTimingMilliseconds(timing) {
+        const duckdbNs = Number(timing.duckdbNs);
+        if (Number.isFinite(duckdbNs)) return roundedTimingMilliseconds(duckdbNs / 1_000_000);
+        const duckdbMs = Number(timing.duckdbMs);
+        return roundedTimingMilliseconds(duckdbMs);
+      }
+
+      function formatRenderTimingValue(timing) {
+        if (timing.renderStatus === "rendering") return "rendering...";
+        return formatActionTimingValue(timing.renderNs);
+      }
+
+      function renderTimingMilliseconds(timing) {
+        if (timing.renderStatus === "rendering") return null;
+        const renderNs = Number(timing.renderNs);
+        return Number.isFinite(renderNs) ? roundedTimingMilliseconds(renderNs / 1_000_000) : null;
+      }
+
+      function formatClientTimingValue(timing) {
+        if (timing.duckdbStatus === "running") return "--";
+        if (timing.duckdbStatus === "failed") return "--";
+        const valueMs = timing.clientDataMs;
+        const number = Number(valueMs);
+        return Number.isFinite(number) ? `${formatDurationNumber(Math.max(0, number))}ms` : "--";
+      }
+
+      function formatTotalTimingValue(timing) {
+        if (timing.duckdbStatus === "running") return "--";
+        if (timing.duckdbStatus === "failed") return "failed";
+        const duckdbMs = duckDbTimingMilliseconds(timing);
+        const jsonMs = roundedTimingMilliseconds(timing.clientDataMs);
+        const renderMs = renderTimingMilliseconds(timing);
+        if (duckdbMs === null || jsonMs === null || renderMs === null) return "--";
+        return `${formatDurationNumber(duckdbMs + jsonMs + renderMs)}ms`;
+      }
+
+      function syncActionTimingMonitor(tool = state.tool) {
+        const timing = actionTiming(tool);
+        const renderLabel = ACTION_RENDER_LABELS[tool] || "Render";
+        el("actionTimingMonitor").textContent = `DuckDB: ${formatDuckDbTimingValue(timing)}, JSON: ${formatClientTimingValue(timing)}, ${renderLabel}: ${formatRenderTimingValue(timing)}, Total: ${formatTotalTimingValue(timing)}`;
+      }
+
+      function startToolTiming(tool) {
+        const timing = actionTiming(tool);
+        timing.duckdbNs = null;
+        timing.duckdbMs = null;
+        timing.duckdbStatus = "running";
+        timing.clientResponseMs = null;
+        timing.clientBodyMs = null;
+        timing.clientParseMs = null;
+        timing.clientDataMs = null;
+        timing.clientTotalMs = null;
+        timing.renderNs = null;
+        timing.renderStatus = "idle";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function setDuckDbTiming(tool, timings = {}) {
+        const timing = actionTiming(tool);
+        const duckdbNs = Number(timings.duckdb_ns);
+        const duckdbMs = Number(timings.duckdb_ms);
+        timing.duckdbNs = Number.isFinite(duckdbNs) ? Math.max(0, Math.round(duckdbNs)) : null;
+        timing.duckdbMs = timing.duckdbNs === null && Number.isFinite(duckdbMs) ? Math.max(0, duckdbMs) : null;
+        timing.duckdbStatus = "idle";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function setToolTimingFailed(tool) {
+        const timing = actionTiming(tool);
+        timing.duckdbNs = null;
+        timing.duckdbMs = null;
+        timing.duckdbStatus = "failed";
+        timing.clientResponseMs = null;
+        timing.clientBodyMs = null;
+        timing.clientParseMs = null;
+        timing.clientDataMs = null;
+        timing.clientTotalMs = null;
+        timing.renderNs = null;
+        timing.renderStatus = "idle";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function setRenderTimingRunning(tool) {
+        const timing = actionTiming(tool);
+        timing.renderNs = null;
+        timing.renderStatus = "rendering";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function setRenderTiming(tool, valueMs) {
+        const timing = actionTiming(tool);
+        const number = Number(valueMs);
+        timing.renderNs = Number.isFinite(number) ? Math.max(0, Math.round(number * 1_000_000)) : null;
+        timing.renderStatus = "idle";
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function measureToolRender(tool, renderCallback) {
+        const started = performance.now();
+        setRenderTimingRunning(tool);
+        try {
+          const result = renderCallback();
+          requestAnimationFrame(() => {
+            setRenderTiming(tool, performance.now() - started);
+          });
+          return result;
+        } catch (error) {
+          setRenderTiming(tool, null);
+          throw error;
+        }
+      }
+
+      function syncDuckDbTimingFromData(tool, data) {
+        setDuckDbTiming(tool, data?.timings || {});
+      }
+
+      function setClientTiming(tool, timings = {}) {
+        const timing = actionTiming(tool);
+        const responseMs = Number(timings.response_ms);
+        const bodyMs = Number(timings.body_ms);
+        const parseMs = Number(timings.parse_ms);
+        const dataMs = Number(timings.data_ms);
+        const totalMs = Number(timings.total_ms);
+        timing.clientResponseMs = Number.isFinite(responseMs) ? Math.max(0, responseMs) : null;
+        timing.clientBodyMs = Number.isFinite(bodyMs) ? Math.max(0, bodyMs) : null;
+        timing.clientParseMs = Number.isFinite(parseMs) ? Math.max(0, parseMs) : null;
+        timing.clientDataMs = Number.isFinite(dataMs) ? Math.max(0, dataMs) : null;
+        timing.clientTotalMs = Number.isFinite(totalMs) ? Math.max(0, totalMs) : null;
+        if (state.tool === tool) syncActionTimingMonitor(tool);
+      }
+
+      function syncClientTimingFromData(tool, data) {
+        setClientTiming(tool, data?.client_timings || {});
+      }
+
+      function normaliseForRequestKey(value) {
+        if (Array.isArray(value)) {
+          return value.map(normaliseForRequestKey);
+        }
+        if (value && typeof value === "object") {
+          return Object.keys(value).sort().reduce((result, key) => {
+            result[key] = normaliseForRequestKey(value[key]);
+            return result;
+          }, {});
+        }
+        return value;
+      }
+
+      function stableRequestKey(request) {
+        return JSON.stringify(normaliseForRequestKey(request));
+      }
+
+      function saveToolPresentation(tool, presentation) {
+        toolCache(tool).presentation = {
+          groupMeta: presentation.groupMeta || "",
+          status: presentation.status || "",
+          statusError: Boolean(presentation.statusError),
+          chartMessage: presentation.chartMessage || "",
+        };
+      }
+
+      function applyToolPresentation(tool) {
+        const presentation = toolCache(tool).presentation;
+        if (!presentation) return;
+        setGroupMeta(tool, presentation.groupMeta);
+        setStatus(presentation.status, presentation.statusError);
+        setChartMessage(presentation.chartMessage);
+      }
+
+      function toolHandler(tool) {
+        if (tool === "column_profile") {
+          return {
+            buildRequest: buildProfileRequest,
+            fetch: fetchProfileData,
+            useCached: useCachedProfileData,
+          };
+        }
+        if (tool === "uk_map") {
+          return {
+            buildRequest: buildMapRequest,
+            fetch: fetchMapData,
+            useCached: useCachedMapData,
+            handleMissingRequest: showMapMissingNumerator,
+          };
+        }
+        if (isModelTool(tool)) {
+          return {
+            buildRequest: () => modelToolShell.buildRequest(tool),
+            fetch: (request, requestKey) => modelToolShell.fetchData(tool, request, requestKey),
+            useCached: (cache) => modelToolShell.useCached(tool, cache),
+          };
+        }
+        return {
+          buildRequest: buildChartRequest,
+          fetch: fetchChartData,
+          useCached: useCachedChartData,
+        };
+      }
+
+      async function refreshTool(tool, options = {}) {
+        const handler = toolHandler(tool);
+        const request = handler.buildRequest();
+        if (!request) {
+          handler.handleMissingRequest?.();
+          return null;
+        }
+        const requestKey = stableRequestKey(request);
+        const cache = toolCache(tool);
+        if (!options.force && cache.data && cache.requestKey === requestKey) {
+          await handler.useCached(cache, options);
+          return cache.data;
+        }
+        return handler.fetch(request, requestKey);
+      }
+
+      function refreshActiveTool(options = {}) {
+        return refreshTool(state.tool, options);
+      }
+
+      function chooseDefaultTool() {
+        const requested = locationParams.get("tool");
+        if (requested && toolEnabled(requested)) return requested;
+        if (toolEnabled("column_profile")) return "column_profile";
+        if (toolEnabled("line_bar")) return "line_bar";
+        if (toolEnabled("uk_map")) return "uk_map";
+        if (toolEnabled("glm")) return "glm";
+        if (toolEnabled("gbm")) return "gbm";
+        return "column_profile";
+      }
+
+      function renderToolSelector() {
+        const profileEnabled = toolEnabled("column_profile");
+        const lineBarEnabled = toolEnabled("line_bar");
+        const ukMapEnabled = toolEnabled("uk_map");
+        const glmEnabled = toolEnabled("glm");
+        const gbmEnabled = toolEnabled("gbm");
+        el("profileTool").disabled = !profileEnabled;
+        el("lineBarTool").disabled = !lineBarEnabled;
+        el("ukMapTool").disabled = !ukMapEnabled;
+        el("glmTool").disabled = !glmEnabled;
+        el("gbmTool").disabled = !gbmEnabled;
+        el("profileTool").classList.toggle("hidden", !profileEnabled);
+        el("lineBarTool").classList.toggle("hidden", !lineBarEnabled);
+        el("ukMapTool").classList.toggle("hidden", !ukMapEnabled);
+        el("glmTool").classList.toggle("hidden", !glmEnabled);
+        el("gbmTool").classList.toggle("hidden", !gbmEnabled);
+        el("toolSelectorSection").classList.toggle("hidden", !(profileEnabled || lineBarEnabled || ukMapEnabled || glmEnabled || gbmEnabled));
+      }
+
+      function setTool(tool, refresh = true) {
+        if (!toolEnabled(tool)) return;
+        state.tool = tool;
+        el("profileTool").classList.toggle("active", tool === "column_profile");
+        el("lineBarTool").classList.toggle("active", tool === "line_bar");
+        el("ukMapTool").classList.toggle("active", tool === "uk_map");
+        el("glmTool").classList.toggle("active", tool === "glm");
+        el("gbmTool").classList.toggle("active", tool === "gbm");
+        document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile" || isModelTool(tool));
+        el("lineBarToolbar").classList.toggle("hidden", tool !== "line_bar");
+        el("visualArea").classList.toggle("map-mode", tool === "uk_map");
+        el("visualArea").classList.toggle("profile-mode", tool === "column_profile");
+        el("visualArea").classList.toggle("model-mode", isModelTool(tool));
+        el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
+        el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
+        el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
+        el("profileGroupMeta").classList.toggle("hidden", tool !== "column_profile");
+        el("profileFilter").classList.toggle("hidden", tool !== "column_profile");
+        el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
+        el("lineBarFilter").classList.toggle("hidden", tool !== "line_bar");
+        el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool));
+        el("modelToolFilter").classList.toggle("hidden", !isModelTool(tool));
+        el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
+        el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
+        el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
+        el("modelToolWrap").classList.toggle("hidden", !isModelTool(tool));
+        requestAnimationFrame(clampSidebarFilterHeight);
+        syncActiveFilterLabels();
+        syncActionTimingMonitor(tool);
+        setStatus("");
+        setChartMessage("");
+        if (tool === "line_bar") {
+          el("profileWrap").classList.add("hidden");
+          el("modelToolWrap").classList.add("hidden");
+          el("ukMap").classList.add("hidden");
+          el("mapLegend").classList.add("hidden");
+          setView(state.view);
+          updateAxisControls();
+          requestAnimationFrame(() => chart.resize());
+        } else if (tool === "uk_map") {
+          el("profileWrap").classList.add("hidden");
+          el("modelToolWrap").classList.add("hidden");
+          el("chart").classList.add("hidden");
+          el("tableWrap").classList.add("hidden");
+          el("ukMap").classList.remove("hidden");
+          initMap();
+          syncFloatingMapControl();
+          syncMapControls();
+          requestAnimationFrame(() => {
+            clampMapFloatingControl();
+            resizeMap();
+          });
+        } else {
+          el("chart").classList.add("hidden");
+          el("tableWrap").classList.add("hidden");
+          el("ukMap").classList.add("hidden");
+          el("mapLegend").classList.add("hidden");
+          if (isModelTool(tool)) {
+            el("profileWrap").classList.add("hidden");
+            el("modelToolWrap").classList.remove("hidden");
+          } else {
+            el("modelToolWrap").classList.add("hidden");
+            el("profileWrap").classList.remove("hidden");
+          }
+        }
+        if (refresh && state.schema) refreshActiveTool();
+      }
+
+      function handleToolClick(tool) {
+        if (state.tool === tool) {
+          setSidebarVisible(!state.sidebarVisible);
+          return;
+        }
+        setTool(tool);
+      }
+
+      function setSidebarVisible(visible) {
+        state.sidebarVisible = Boolean(visible);
+        document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible);
+        el("appSidebar").removeAttribute("aria-hidden");
+        syncSidebarToggleButton();
+        requestAnimationFrame(() => {
+          if (state.tool === "line_bar") {
+            chart.resize();
+          } else if (state.tool === "uk_map") {
+            clampMapFloatingControl();
+            resizeMap();
+          }
+        });
+      }
+
+      function syncSidebarToggleButton() {
+        const button = el("sidebarToggleBtn");
+        const label = state.sidebarVisible ? "Collapse sidebar" : "Expand sidebar";
+        button.setAttribute("aria-expanded", String(state.sidebarVisible));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
+      function setFilterFooterVisible(visible) {
+        state.filterFooterCollapsed = !visible;
+        document.body.classList.toggle("filter-footer-collapsed", state.filterFooterCollapsed);
+        el("filterFooter").setAttribute("aria-hidden", String(state.filterFooterCollapsed));
+        syncFilterFooterToggleButton();
+        requestAnimationFrame(() => {
+          if (state.tool === "line_bar") {
+            chart.resize();
+          } else if (state.tool === "uk_map") {
+            clampMapFloatingControl();
+            resizeMap();
+          }
+        });
+      }
+
+      function syncFilterFooterToggleButton() {
+        const button = el("filterFooterToggleBtn");
+        const visible = !state.filterFooterCollapsed;
+        const label = visible ? "Hide filter footer" : "Show filter footer";
+        button.setAttribute("aria-expanded", String(visible));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
+      function setFilterCollapsed(collapsed) {
+        state.filterCollapsed = Boolean(collapsed);
+        document.querySelector(".sidebar-filter-section")?.classList.toggle("filter-collapsed", state.filterCollapsed);
+        syncFilterCollapseButton();
+        if (!state.filterCollapsed) {
+          requestAnimationFrame(() => {
+            const savedHeight = Number(localStorage.getItem("py_lucidum_sidebar_filter_height"));
+            const section = document.querySelector(".sidebar-filter-section");
+            const currentHeight = section?.getBoundingClientRect().height || 0;
+            setSidebarFilterHeight(Number.isFinite(savedHeight) && savedHeight > 0 ? savedHeight : currentHeight);
+          });
+        }
+      }
+
+      function syncFilterCollapseButton() {
+        const button = el("filterCollapseBtn");
+        const label = state.filterCollapsed ? "Expand filter" : "Collapse filter";
+        button.setAttribute("aria-expanded", String(!state.filterCollapsed));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
+      function isNumericKind(kind) {
+        return kind === "numeric" || kind === "integer";
+      }
+
+      function isDateKind(kind) {
+        return kind === "date" || kind === "datetime";
+      }
+
+      function syncSegmented(control, value) {
+        const group = document.querySelector(`.segmented[data-control="${control}"]`);
+        if (!group) return;
+        group.querySelectorAll("button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.value === value);
+        });
+      }
+
+      function formatBandWidth(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number <= 0) return "0";
+        return Number(number.toPrecision(12)).toString();
+      }
+
+      function syncBandingControl() {
+        syncSegmented("bandWidth", state.bandWidth);
+        el("bandLabel").textContent = state.quantileMode === "quantile" ? "Quantiles" : "Banding";
+        const display = Number(state.bandWidth) > 0 ? state.bandWidth : "auto off";
+        el("bandValue").textContent = `(${display})`;
+      }
+
+      function quantileCountForBandWidth(value = state.bandWidth) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number <= 0) return 1;
+        return Math.min(1000, Math.max(1, Math.round(number)));
+      }
+
+      function syncQuantileControl() {
+        syncSegmented("quantileMode", state.quantileMode);
+      }
+
+      function normalizeBandWidthForQuantiles() {
+        state.bandWidth = String(quantileCountForBandWidth());
+        state.bandFeature = state.x;
+        syncBandingControl();
+      }
+
+      function autoBandWidthForSelectedColumn() {
+        const suggestion = selectedColumn()?.band_suggestion;
+        return suggestion ? formatBandWidth(suggestion) : "0";
+      }
+
+      function stepBandWidth(direction) {
+        const current = Number(state.bandWidth) > 0 ? Number(state.bandWidth) : Number(autoBandWidthForSelectedColumn()) || 1;
+        let next = current;
+        if (direction < 0) {
+          const smallerSteps = BAND_STEPS.filter((step) => step < current);
+          next = smallerSteps.length ? smallerSteps[smallerSteps.length - 1] : current;
+        } else {
+          next = BAND_STEPS.find((step) => step > current) || current;
+        }
+        state.bandWidth = state.quantileMode === "quantile" ? String(quantileCountForBandWidth(next)) : formatBandWidth(next);
+        state.bandFeature = state.x;
+        syncBandingControl();
+        refreshChart();
+      }
+
+      function updateAxisControls() {
+        const kind = selectedColumn()?.kind;
+        const isDate = kind === "date" || kind === "datetime";
+        const isNumeric = isNumericKind(kind);
+        const isCategorical = kind === "categorical";
+        const hasExpected = Boolean(el("expectedNumerator").value);
+        el("sortControl").classList.toggle("hidden", !isCategorical);
+        el("expectedSortButton").classList.toggle("hidden", !hasExpected);
+        el("dateControl").classList.toggle("hidden", !isDate);
+        el("bandControl").classList.toggle("hidden", !isNumeric);
+        el("quantileControl").classList.toggle("hidden", !isNumeric);
+        if (isNumeric && state.bandFeature !== state.x) {
+          state.bandWidth = autoBandWidthForSelectedColumn();
+          state.bandFeature = state.x;
+        }
+        if (isNumeric && state.quantileMode === "quantile") {
+          normalizeBandWidthForQuantiles();
+        }
+        if (!isCategorical || (state.sort === "expected" && !hasExpected)) {
+          state.sort = "alpha";
+          syncSegmented("sort", "alpha");
+        } else {
+          syncSegmented("sort", state.sort);
+        }
+        if (!isDate) {
+          state.dateBucket = "none";
+          syncSegmented("dateBucket", "none");
+        }
+        if (!isNumeric) {
+          state.bandWidth = "0";
+          state.quantileMode = "off";
+          state.bandFeature = state.x;
+          syncSegmented("bandWidth", "0");
+        }
+        syncBandingControl();
+        syncQuantileControl();
+      }
+
+      function fillMetricSelect(select, includeNone = false) {
+        select.innerHTML = "";
+        if (includeNone) {
+          select.append(new Option("None", ""));
+        }
+        for (const col of numericColumns()) {
+          select.append(new Option(col.name, col.name));
+        }
+      }
+
+      function fillDenominatorSelect(select) {
+        select.innerHTML = "";
+        select.append(new Option("Average row value", "__none__"));
+        for (const col of numericColumns()) {
+          select.append(new Option(col.name, col.name));
+        }
+      }
+
+      function columnExists(name) {
+        return Boolean(name && state.schema.columns.some((col) => col.name === name));
+      }
+
+      function numericColumnExists(name) {
+        return Boolean(name && numericColumns().some((col) => col.name === name));
+      }
+
+      function requestedDefault(name) {
+        return locationParams.get(name) || state.schema.defaults?.[name] || "";
+      }
+
+      function hasRequestedDefault(name) {
+        return locationParams.has(name) || Boolean(state.schema.defaults?.[name]);
+      }
+
+      function normaliseKpiDenominator(value) {
+        const denominator = String(value || "").trim();
+        if (!denominator || denominator.toLowerCase() === "n" || denominator.toLowerCase() === "average row value" || denominator === "__none__") {
+          return "__none__";
+        }
+        return denominator;
+      }
+
+      function kpiKey(kpi) {
+        if (!kpi) return "";
+        return `${kpi.actual}\u0000${normaliseKpiDenominator(kpi.denominator)}`;
+      }
+
+      function denominatorDisplayName(value) {
+        const denominator = normaliseKpiDenominator(value);
+        if (denominator === "__none__") return "N";
+        return denominator;
+      }
+
+      function availableKpis() {
+        return (state.schema?.kpis || [])
+          .map((kpi) => ({
+            group: String(kpi.group || "General").trim() || "General",
+            name: String(kpi.name || "").trim(),
+            actual: String(kpi.actual || "").trim(),
+            denominator: normaliseKpiDenominator(kpi.denominator),
+            decimals: Number(kpi.decimals),
+            format: String(kpi.format || "number").toLowerCase(),
+          }))
+          .filter((kpi) => (
+            kpi.name &&
+            numericColumnExists(kpi.actual) &&
+            (kpi.denominator === "__none__" || numericColumnExists(kpi.denominator)) &&
+            Number.isInteger(kpi.decimals) &&
+            kpi.decimals >= 0 &&
+            ["number", "currency", "percent"].includes(kpi.format)
+          ));
+      }
+
+      function selectedKpiForCurrentMetric() {
+        const actual = el("actualNumerator").value;
+        const denominator = normaliseKpiDenominator(el("denominator").value);
+        return availableKpis().find((kpi) => kpi.actual === actual && kpi.denominator === denominator) || null;
+      }
+
+      function setActiveKpiState(kpi) {
+        state.activeKpiKey = kpi ? kpiKey(kpi) : "";
+        state.activeKpiFormat = kpi ? { decimals: kpi.decimals, format: kpi.format } : null;
+        el("kpiSelectedMeta").textContent = kpi ? kpi.name : "";
+      }
+
+      function syncKpiSelectionFromMetrics() {
+        setActiveKpiState(selectedKpiForCurrentMetric());
+        syncKpiActiveRows();
+      }
+
+      function syncKpiActiveRows() {
+        el("kpiSelect").querySelectorAll(".kpi-option").forEach((button) => {
+          const active = button.dataset.kpiKey === state.activeKpiKey;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-selected", String(active));
+        });
+      }
+
+      function setKpiCollapsed(collapsed) {
+        state.kpiCollapsed = Boolean(collapsed);
+        document.querySelector(".sidebar-kpi-section")?.classList.toggle("kpi-collapsed", state.kpiCollapsed);
+        const button = el("kpiCollapseBtn");
+        button.setAttribute("aria-expanded", String(!state.kpiCollapsed));
+        button.setAttribute("aria-label", state.kpiCollapsed ? "Expand KPIs" : "Collapse KPIs");
+        button.title = state.kpiCollapsed ? "Expand KPIs" : "Collapse KPIs";
+        requestAnimationFrame(clampSidebarFilterHeight);
+      }
+
+      function renderKpis() {
+        const list = el("kpiSelect");
+        const kpis = availableKpis();
+        const availableGroups = new Set(kpis.map((kpi) => kpi.group));
+        const selected = selectedKpiForCurrentMetric();
+        setActiveKpiState(selected);
+        if (!state.kpiGroupsInitialised) {
+          availableGroups.forEach((group) => state.collapsedKpiGroups.add(group));
+          const openGroup = selected?.group || kpis[0]?.group;
+          if (openGroup) state.collapsedKpiGroups.delete(openGroup);
+          state.kpiGroupsInitialised = true;
+        }
+        for (const group of state.collapsedKpiGroups) {
+          if (!availableGroups.has(group)) state.collapsedKpiGroups.delete(group);
+        }
+        list.innerHTML = "";
+        let currentGroup = "";
+        for (const kpi of kpis) {
+          const group = kpi.group || "General";
+          if (group !== currentGroup) {
+            const collapsed = state.collapsedKpiGroups.has(group);
+            const heading = document.createElement("button");
+            heading.type = "button";
+            heading.className = "saved-filter-theme kpi-theme";
+            heading.dataset.kpiGroup = group;
+            heading.setAttribute("aria-expanded", String(!collapsed));
+            heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} KPIs`);
+            heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} KPIs`;
+            heading.innerHTML = `<span class="saved-filter-theme-icon" aria-hidden="true"></span><span class="saved-filter-theme-label">${escapeHtml(group)}</span>`;
+            heading.addEventListener("click", () => toggleKpiGroup(group));
+            list.append(heading);
+            currentGroup = group;
+          }
+          const button = document.createElement("button");
+          const key = kpiKey(kpi);
+          const active = key === state.activeKpiKey;
+          button.type = "button";
+          button.className = `feature kpi-option${active ? " active" : ""}`;
+          button.dataset.kpiKey = key;
+          button.dataset.kpiGroup = group;
+          button.hidden = state.collapsedKpiGroups.has(group);
+          button.setAttribute("role", "option");
+          button.setAttribute("aria-selected", String(active));
+          button.innerHTML = `<span class="saved-filter-name">${escapeHtml(kpi.name)}</span><span class="kpi-detail">${escapeHtml(`${kpi.actual} / ${denominatorDisplayName(kpi.denominator)}`)}</span>`;
+          button.addEventListener("click", () => selectKpi(kpi));
+          list.append(button);
+        }
+      }
+
+      function toggleKpiGroup(group) {
+        const collapsed = !state.collapsedKpiGroups.has(group);
+        if (collapsed) {
+          state.collapsedKpiGroups.add(group);
+        } else {
+          state.collapsedKpiGroups.delete(group);
+        }
+        const list = el("kpiSelect");
+        list.querySelectorAll(".kpi-theme").forEach((heading) => {
+          if (heading.dataset.kpiGroup !== group) return;
+          heading.setAttribute("aria-expanded", String(!collapsed));
+          heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} KPIs`);
+          heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} KPIs`;
+        });
+        list.querySelectorAll(".kpi-option").forEach((button) => {
+          if (button.dataset.kpiGroup === group) button.hidden = collapsed;
+        });
+      }
+
+      function selectKpi(kpi) {
+        const actual = el("actualNumerator");
+        const denominator = el("denominator");
+        const nextDenominator = normaliseKpiDenominator(kpi.denominator);
+        const changed = actual.value !== kpi.actual || denominator.value !== nextDenominator;
+        actual.value = kpi.actual;
+        denominator.value = nextDenominator;
+        setActiveKpiState(kpi);
+        renderKpis();
+        if (changed) {
+          refreshActiveTool();
+        }
+      }
+
+      function savedFilterSpecSignature(filters = state.schema?.filters || []) {
+        return JSON.stringify((filters || []).map((filter) => ({
+          theme: String(filter.theme || "General"),
+          name: String(filter.name || ""),
+          expression: String(filter.expression || "").trim(),
+        })));
+      }
+
+      function savedFilterRowKey(row) {
+        return [row.theme || "General", row.name || "", row.expression || ""].map(String).join("\u0000");
+      }
+
+      function savedFilterButtonKey(button) {
+        return savedFilterRowKey({
+          theme: button.dataset.filterTheme || "General",
+          name: button.dataset.filterName || "",
+          expression: button.dataset.expression || "",
+        });
+      }
+
+      function savedFilterSelectionSnapshot() {
+        return new Set(selectedSavedFilterRows().map(savedFilterRowKey));
+      }
+
+      function restoreSavedFilterSelection(selectedKeys) {
+        if (!selectedKeys?.size) return;
+        el("savedFilterSelect").querySelectorAll(".saved-filter-option").forEach((button) => {
+          const active = selectedKeys.has(savedFilterButtonKey(button));
+          button.setAttribute("aria-selected", String(active));
+          button.classList.toggle("active", active);
+        });
+      }
+
+      function renderSavedFilters() {
+        const list = el("savedFilterSelect");
+        const filters = state.schema.filters || [];
+        const availableThemes = new Set(filters.map((filter) => filter.theme || "General"));
+        if (!state.savedFilterThemesInitialised) {
+          availableThemes.forEach((theme) => state.collapsedSavedFilterThemes.add(theme));
+          state.savedFilterThemesInitialised = true;
+        }
+        for (const theme of state.collapsedSavedFilterThemes) {
+          if (!availableThemes.has(theme)) state.collapsedSavedFilterThemes.delete(theme);
+        }
+        list.innerHTML = "";
+        let currentTheme = "";
+        for (const filter of filters) {
+          const theme = filter.theme || "General";
+          if (theme !== currentTheme) {
+            const collapsed = state.collapsedSavedFilterThemes.has(theme);
+            const heading = document.createElement("button");
+            heading.type = "button";
+            heading.className = "saved-filter-theme";
+            heading.dataset.filterTheme = theme;
+            heading.setAttribute("aria-expanded", String(!collapsed));
+            heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${theme} saved filters`);
+            heading.title = `${collapsed ? "Expand" : "Collapse"} ${theme} saved filters`;
+            heading.innerHTML = `<span class="saved-filter-theme-icon" aria-hidden="true"></span><span class="saved-filter-theme-label">${escapeHtml(theme)}</span>`;
+            heading.addEventListener("click", () => toggleSavedFilterTheme(theme));
+            list.append(heading);
+            currentTheme = theme;
+          }
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "feature saved-filter-option";
+          button.dataset.expression = filter.expression || "";
+          button.dataset.filterTheme = theme;
+          button.dataset.filterName = filter.name || "";
+          button.hidden = state.collapsedSavedFilterThemes.has(theme);
+          button.setAttribute("role", "option");
+          button.setAttribute("aria-selected", "false");
+          button.innerHTML = `<span class="saved-filter-name">${escapeHtml(filter.name)}</span><span class="saved-filter-expression">${escapeHtml(filter.expression)}</span>`;
+          button.addEventListener("click", () => {
+            const selected = button.getAttribute("aria-selected") === "true";
+            if (state.filterSelectionMode === "single") {
+              list.querySelectorAll(".saved-filter-option").forEach((option) => {
+                const isClickedOption = option === button;
+                option.setAttribute("aria-selected", String(isClickedOption));
+                option.classList.toggle("active", isClickedOption);
+              });
+            } else {
+              button.setAttribute("aria-selected", String(!selected));
+              button.classList.toggle("active", !selected);
+            }
+            applySavedFilters();
+          });
+          list.append(button);
+        }
+      }
+
+      function setFilterSelectionMode(mode, options = {}) {
+        const nextMode = mode === "single" || mode === "grouped" ? mode : "multi";
+        state.filterSelectionMode = nextMode;
+        document.body.classList.toggle("saved-filter-single-mode", nextMode === "single");
+        document.body.classList.toggle("saved-filter-grouped-mode", nextMode === "grouped");
+        const group = document.querySelector('.segmented[data-control="filterSelectionMode"]');
+        group?.querySelectorAll("button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.value === nextMode);
+        });
+        if (nextMode === "single") {
+          const filterOptions = Array.from(el("savedFilterSelect").querySelectorAll(".saved-filter-option"));
+          const selected = filterOptions.filter((button) => button.getAttribute("aria-selected") === "true");
+          if (selected.length > 1) {
+            const keep = selected[0];
+            filterOptions.forEach((button) => {
+              const active = button === keep;
+              button.setAttribute("aria-selected", String(active));
+              button.classList.toggle("active", active);
+            });
+          }
+        }
+        if (options.apply !== false) {
+          applySavedFilters();
+        }
+      }
+
+      function toggleSavedFilterTheme(theme) {
+        const collapsed = !state.collapsedSavedFilterThemes.has(theme);
+        if (collapsed) {
+          state.collapsedSavedFilterThemes.add(theme);
+        } else {
+          state.collapsedSavedFilterThemes.delete(theme);
+        }
+        const list = el("savedFilterSelect");
+        list.querySelectorAll(".saved-filter-theme").forEach((heading) => {
+          if (heading.dataset.filterTheme !== theme) return;
+          heading.setAttribute("aria-expanded", String(!collapsed));
+          heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${theme} saved filters`);
+          heading.title = `${collapsed ? "Expand" : "Collapse"} ${theme} saved filters`;
+        });
+        list.querySelectorAll(".saved-filter-option").forEach((button) => {
+          if (button.dataset.filterTheme === theme) button.hidden = collapsed;
+        });
+      }
+
+      function selectedSavedFilterRows() {
+        return Array.from(el("savedFilterSelect").querySelectorAll('.saved-filter-option[aria-selected="true"]'))
+          .map((button) => ({
+            theme: button.dataset.filterTheme || "General",
+            name: button.dataset.filterName || "",
+            expression: button.dataset.expression.trim(),
+          }))
+          .filter((row) => row.expression);
+      }
+
+      function selectedSavedFilterExpressions() {
+        return selectedSavedFilterRows().map((row) => row.expression);
+      }
+
+      function wrapFilterExpression(expression) {
+        return `(${expression})`;
+      }
+
+      function combinedFlatSavedFilterExpression(rows) {
+        const expressions = rows.map((row) => row.expression);
+        if (!expressions.length) return "";
+        const operator = state.filterOperator === "or" || state.filterOperator === "nor" ? "OR" : "AND";
+        const groupedExpressions = expressions.length > 1 ? expressions.map(wrapFilterExpression) : expressions;
+        const combined = groupedExpressions.join(` ${operator} `);
+        return state.filterOperator === "nand" || state.filterOperator === "nor" ? `NOT (${combined})` : combined;
+      }
+
+      function combinedGroupedSavedFilterExpression(rows) {
+        if (rows.length === 1) return rows[0].expression;
+        const groups = [];
+        const byTheme = new Map();
+        rows.forEach((row) => {
+          if (!byTheme.has(row.theme)) {
+            const group = [];
+            byTheme.set(row.theme, group);
+            groups.push(group);
+          }
+          byTheme.get(row.theme).push(row.expression);
+        });
+        return groups
+          .map((expressions) => {
+            const groupedExpressions = expressions.map(wrapFilterExpression).join(" OR ");
+            return expressions.length > 1 ? `(${groupedExpressions})` : groupedExpressions;
+          })
+          .join(" AND ");
+      }
+
+      function combinedSavedFilterExpression() {
+        const rows = selectedSavedFilterRows();
+        if (!rows.length) return "";
+        return state.filterSelectionMode === "grouped"
+          ? combinedGroupedSavedFilterExpression(rows)
+          : combinedFlatSavedFilterExpression(rows);
+      }
+
+      function applySavedFilters() {
+        el("filterInput").value = combinedSavedFilterExpression();
+        applyFilter();
+      }
+
+      function chooseDefaults() {
+        const requestedX = requestedDefault("x");
+        state.x = columnExists(requestedX) ? requestedX : state.schema.columns[0]?.name || null;
+        fillMetricSelect(el("actualNumerator"));
+        fillMetricSelect(el("expectedNumerator"), true);
+        fillDenominatorSelect(el("denominator"));
+        const requestedActual = requestedDefault("actual");
+        const requestedExpected = requestedDefault("expected");
+        const requestedDenominator = requestedDefault("denominator");
+        el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
+        el("expectedNumerator").value = numericColumnExists(requestedExpected) ? requestedExpected : "";
+        el("denominator").value = numericColumnExists(requestedDenominator) ? requestedDenominator : "__none__";
+        applyInitialKpiDefault();
+      }
+
+      function applyInitialKpiDefault() {
+        if (hasRequestedDefault("actual") || hasRequestedDefault("denominator")) return;
+        const firstKpi = availableKpis()[0];
+        if (!firstKpi) return;
+        el("actualNumerator").value = firstKpi.actual;
+        el("denominator").value = firstKpi.denominator;
+      }
+
+      function renderExpectedNumerators() {
+        const query = el("expectedSearch").value.trim().toLowerCase();
+        const select = el("expectedNumerator");
+        const list = el("expectedList");
+        list.innerHTML = "";
+
+        function addExpectedButton(label, value, kind, extraClass = "") {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `feature ${extraClass} ${value === select.value ? "active" : ""}`.trim();
+          button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
+          button.addEventListener("click", () => {
+            const changed = select.value !== value;
+            select.value = value;
+            renderExpectedNumerators();
+            updateAxisControls();
+            if (changed) refreshChart();
+          });
+          list.append(button);
+        }
+
+        if (!query || "none".includes(query) || "no expected line".includes(query) || "off".includes(query)) {
+          addExpectedButton("No expected line", "", "off", "expected-none-option");
+        }
+
+        const columns = [...numericColumns()];
+        if (state.expectedSort === "alpha") {
+          columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        }
+        for (const col of columns) {
+          if (query && !col.name.toLowerCase().includes(query)) continue;
+          addExpectedButton(col.name, col.name, col.kind);
+        }
+      }
+
+      function renderFeatures() {
+        const query = el("featureSearch").value.trim().toLowerCase();
+        const list = el("featureList");
+        list.innerHTML = "";
+        const columns = [...state.schema.columns];
+        if (state.featureSort === "alpha") {
+          columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        }
+        for (const col of columns) {
+          if (query && !col.name.toLowerCase().includes(query)) continue;
+          const button = document.createElement("button");
+          button.className = `feature ${col.name === state.x ? "active" : ""}`;
+          button.innerHTML = `<span>${escapeHtml(col.name)}</span><span class="kind">${col.kind}</span>`;
+          button.addEventListener("click", () => {
+            state.x = col.name;
+            renderFeatures();
+            updateAxisControls();
+            refreshChart();
+          });
+          list.append(button);
+        }
+      }
+
+      function clearSearchInput(inputId, render) {
+        const input = el(inputId);
+        if (input.value) {
+          input.value = "";
+          render();
+        }
+        input.focus();
+      }
+
+      function currentResponses() {
+        const responses = [];
+        if (el("actualNumerator").value) {
+          responses.push({
+            label: el("actualNumerator").value,
+            numerator: el("actualNumerator").value,
+          });
+        }
+        if (el("expectedNumerator").value) {
+          responses.push({
+            label: el("expectedNumerator").value,
+            numerator: el("expectedNumerator").value,
+          });
+        }
+        return responses;
+      }
+
+      function applyFilter() {
+        const nextFilter = el("filterInput").value.trim();
+        if (nextFilter === state.activeFilter) {
+          syncActiveFilterLabels();
+          refreshActiveTool();
+          return;
+        }
+        state.activeFilter = nextFilter;
+        clearProfileDetailCache();
+        syncActiveFilterLabels();
+        refreshActiveTool();
+      }
+
+      function clearFilter() {
+        el("filterInput").value = "";
+        Array.from(el("savedFilterSelect").querySelectorAll(".saved-filter-option")).forEach((button) => {
+          button.setAttribute("aria-selected", "false");
+          button.classList.remove("active");
+        });
+        if (state.activeFilter === "") {
+          syncActiveFilterLabels();
+          refreshActiveTool();
+          return;
+        }
+        state.activeFilter = "";
+        clearProfileDetailCache();
+        syncActiveFilterLabels();
+        refreshActiveTool();
+      }
+
+      function confirmStopApp() {
+        return new Promise((resolve) => {
+          const overlay = document.createElement("div");
+          overlay.className = "stop-confirm-overlay";
+          overlay.innerHTML = `
+            <div class="stop-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="stopConfirmTitle">
+              <div class="stop-confirm-content">
+                <img class="stop-confirm-icon" src="/favicon.ico" alt="">
+                <p id="stopConfirmTitle">Stop the local lucidum server?</p>
+              </div>
+              <div class="stop-confirm-actions">
+                <button class="ghost stop-confirm-cancel" type="button">Cancel</button>
+                <button class="ghost stop-confirm-ok" type="button">OK</button>
+              </div>
+            </div>
+          `;
+          const cancelButton = overlay.querySelector(".stop-confirm-cancel");
+          const okButton = overlay.querySelector(".stop-confirm-ok");
+          let closed = false;
+          const close = (confirmed) => {
+            if (closed) return;
+            closed = true;
+            window.removeEventListener("keydown", handleKeydown);
+            overlay.remove();
+            resolve(confirmed);
+          };
+          function handleKeydown(event) {
+            if (event.key === "Escape") close(false);
+          }
+          cancelButton.addEventListener("click", () => close(false));
+          okButton.addEventListener("click", () => close(true));
+          window.addEventListener("keydown", handleKeydown);
+          document.body.append(overlay);
+          cancelButton.focus();
+        });
+      }
+
+      async function stopApp() {
+        if (!(await confirmStopApp())) return;
+        const button = el("stopAppBtn");
+        button.disabled = true;
+        button.textContent = "Stopping...";
+        setStatus("Stopping app...");
+        try {
+          await api("/api/shutdown", { method: "POST" });
+          showStoppedOverlay();
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "Stop app";
+          setStatus(error.message, true);
+        }
+      }
+
+      function showStoppedOverlay() {
+        if (stoppedOverlayShown) return;
+        stoppedOverlayShown = true;
+        stopServerHeartbeat();
+        document.body.classList.add("app-stopped");
+        const shutdownIcon = faviconDataUrl
+          ? `<img class="shutdown-icon" src="${faviconDataUrl}" alt="">`
+          : '<span class="shutdown-icon shutdown-icon-fallback" aria-hidden="true"></span>';
+        const overlay = document.createElement("div");
+        overlay.className = "shutdown-overlay";
+        overlay.innerHTML = `
+          <div class="shutdown-message" role="status" aria-live="polite">
+            ${shutdownIcon}
+            <div>
+              <h1>lucidum has stopped</h1>
+              <p>The local server is no longer running. You can close this browser tab.</p>
+            </div>
+          </div>
+        `;
+        document.body.append(overlay);
+      }
+
+      function buildProfileRequest() {
+        if (!state.schema) return null;
+        return {
+          filter: state.activeFilter,
+        };
+      }
+
+      function buildProfileDetailRequest(columnName = state.selectedProfileColumn) {
+        if (!state.schema || !columnName) return null;
+        return {
+          column: columnName,
+          filter: state.activeFilter,
+        };
+      }
+
+      async function fetchProfileData(request, requestKey) {
+        const requestSeq = state.profileRequestSeq + 1;
+        state.profileRequestSeq = requestSeq;
+        state.profileDetailRequestSeq += 1;
+        setStatus("");
+        setChartMessage("");
+        setGroupMeta("column_profile", "Computing profile...");
+        startToolTiming("column_profile");
+        try {
+          const data = await api("/api/column-profile/summary", { method: "POST", body: JSON.stringify(request), clientTiming: true });
+          if (requestSeq !== state.profileRequestSeq) return;
+          const cache = toolCache("column_profile");
+          if (cache.requestKey !== requestKey) cache.details = new Map();
+          cache.requestKey = requestKey;
+          cache.data = data;
+          syncDuckDbTimingFromData("column_profile", data);
+          syncClientTimingFromData("column_profile", data);
+          measureToolRender("column_profile", () => renderProfileData(data));
+          return data;
+        } catch (error) {
+          if (requestSeq !== state.profileRequestSeq) return;
+          setToolTimingFailed("column_profile");
+          setGroupMeta("column_profile", "Profile failed");
+          setChartMessage("");
+          setStatus(error.message, true);
+        }
+      }
+
+      function useCachedProfileData(cache) {
+        state.lastProfileData = cache.data;
+        measureToolRender("column_profile", () => {
+          renderProfileData(cache.data);
+          applyToolPresentation("column_profile");
+        });
+      }
+
+      function renderProfileData(data) {
+        state.lastProfileData = data;
+        const columns = sortedProfileColumns(data.columns || []);
+        const skippedColumns = Array.isArray(data.skipped_columns) ? data.skipped_columns : [];
+        const skippedCount = skippedColumns.length;
+        const totalColumnCount = columns.length + skippedCount;
+        ensureSelectedProfileColumn(columns);
+        renderProfileTable(data, columns);
+        const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
+        const columnMeta = skippedCount
+          ? `${columns.length.toLocaleString()} / ${totalColumnCount.toLocaleString()} columns profiled`
+          : `${columns.length.toLocaleString()} columns`;
+        const groupMeta = `${columnMeta} · ${rowMeta}`;
+        const chartMessage = (Array.isArray(data.warnings) ? data.warnings : []).filter(Boolean).join(" ");
+        setFilterRowMeta(data.row_count, data.filtered_row_count);
+        setGroupMeta("column_profile", groupMeta);
+        setStatus("");
+        setChartMessage(chartMessage);
+        saveToolPresentation("column_profile", { groupMeta, chartMessage });
+        if (state.selectedProfileColumn) {
+          renderProfileDetailLoading(state.selectedProfileColumn);
+          scheduleProfileDetailRefresh(state.selectedProfileColumn);
+        } else {
+          renderProfileDetailEmpty("Select a column to view details.");
+        }
+      }
+
+      function renderProfileTable(data, columns = sortedProfileColumns(data.columns || [])) {
+        ensureSelectedProfileColumn(columns);
+        const rows = columns.map((column) => `
+          <tr class="profile-summary-row${column.name === state.selectedProfileColumn ? " selected" : ""}" data-profile-column="${escapeHtml(column.name)}" tabindex="0" aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}">
+            <td class="profile-column-name">${escapeHtml(column.name)}</td>
+            <td>${profileTypeBadgeHtml(column)}</td>
+            <td>${profileMissingHtml(column)}</td>
+            <td>${profileDistinctHtml(column, data.filtered_row_count)}</td>
+            <td>${profileRangeHtml(column)}</td>
+          </tr>
+        `).join("");
+        const empty = columns.length
+          ? ""
+          : '<div class="profile-empty">No columns were found in the loaded dataset.</div>';
+        const currentDetail = el("profileDetailPane")?.innerHTML || profileDetailEmptyHtml("Select a column to view details.");
+        el("profileWrap").innerHTML = `
+          <div class="profile-summary-pane">
+            <div class="profile-table-scroll">
+              <table class="profile-table">
+                <thead>
+                  <tr>
+                    ${profileSortHeaderHtml("name", "Column")}
+                    ${profileSortHeaderHtml("type", "Type")}
+                    ${profileSortHeaderHtml("missing", "Missing")}
+                    ${profileSortHeaderHtml("distinct", "Distinct")}
+                    <th>Min / Max</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+            ${empty}
+          </div>
+          <aside id="profileDetailPane" class="profile-detail-pane" aria-live="polite">${currentDetail}</aside>
+        `;
+        bindProfileTable();
+      }
+
+      function bindProfileTable() {
+        el("profileWrap").querySelectorAll("[data-profile-sort]").forEach((button) => {
+          button.addEventListener("click", () => setProfileSort(button.dataset.profileSort));
+        });
+        el("profileWrap").querySelectorAll("[data-profile-column]").forEach((row) => {
+          row.addEventListener("click", () => selectProfileColumn(row.dataset.profileColumn || ""));
+          row.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            selectProfileColumn(row.dataset.profileColumn || "");
+          });
+        });
+      }
+
+      function profileSortHeaderHtml(key, label) {
+        const active = state.profileSort.key === key;
+        const direction = active ? state.profileSort.direction : "";
+        const ariaSort = active ? (direction === "desc" ? "descending" : "ascending") : "none";
+        const indicator = active ? (direction === "desc" ? "v" : "^") : "";
+        return `<th aria-sort="${ariaSort}">
+          <button class="profile-sort-button" type="button" data-profile-sort="${key}">
+            <span>${escapeHtml(label)}</span><span class="profile-sort-indicator" aria-hidden="true">${indicator}</span>
+          </button>
+        </th>`;
+      }
+
+      function setProfileSort(key) {
+        if (!["name", "type", "missing", "distinct"].includes(key)) return;
+        if (state.profileSort.key === key) {
+          state.profileSort.direction = state.profileSort.direction === "asc" ? "desc" : "asc";
+        } else {
+          state.profileSort = { key, direction: "asc" };
+        }
+        if (state.lastProfileData) {
+          const columns = sortedProfileColumns(state.lastProfileData.columns || []);
+          ensureSelectedProfileColumn(columns);
+          renderProfileTable(state.lastProfileData, columns);
+        }
+      }
+
+      function ensureSelectedProfileColumn(columns) {
+        if (!columns.length) {
+          state.selectedProfileColumn = "";
+          return;
+        }
+        if (!columns.some((column) => column.name === state.selectedProfileColumn)) {
+          state.selectedProfileColumn = columns[0].name;
+        }
+      }
+
+      function selectProfileColumn(columnName) {
+        if (!state.lastProfileData || !columnName) return;
+        const exists = (state.lastProfileData.columns || []).some((column) => column.name === columnName);
+        if (!exists) return;
+        const changed = state.selectedProfileColumn !== columnName;
+        if (!changed) return;
+        state.selectedProfileColumn = columnName;
+        syncProfileSelectedRows();
+        renderProfileDetailLoading(columnName);
+        refreshSelectedProfileDetail();
+      }
+
+      function syncProfileSelectedRows() {
+        el("profileWrap").querySelectorAll("[data-profile-column]").forEach((row) => {
+          const selected = row.dataset.profileColumn === state.selectedProfileColumn;
+          row.classList.toggle("selected", selected);
+          row.setAttribute("aria-selected", String(selected));
+        });
+      }
+
+      function scheduleProfileDetailRefresh(columnName) {
+        window.setTimeout(() => {
+          if (state.selectedProfileColumn === columnName) refreshSelectedProfileDetail();
+        }, 0);
+      }
+
+      async function refreshSelectedProfileDetail() {
+        const request = buildProfileDetailRequest();
+        const columnName = request?.column || "";
+        const detailRequestSeq = state.profileDetailRequestSeq + 1;
+        state.profileDetailRequestSeq = detailRequestSeq;
+        if (!request || !columnName) {
+          renderProfileDetailEmpty("Select a column to view details.");
+          return null;
+        }
+        const requestKey = stableRequestKey(request);
+        const cache = toolCache("column_profile");
+        const cached = cache.details.get(requestKey);
+        if (cached) {
+          measureToolRender("column_profile", () => renderProfileDetail(cached));
+          return cached;
+        }
+        renderProfileDetailLoading(columnName);
+        startToolTiming("column_profile");
+        try {
+          const data = await api("/api/column-profile/detail", { method: "POST", body: JSON.stringify(request), clientTiming: true });
+          if (detailRequestSeq !== state.profileDetailRequestSeq || state.selectedProfileColumn !== columnName) return null;
+          cache.details.set(requestKey, data);
+          syncDuckDbTimingFromData("column_profile", data);
+          syncClientTimingFromData("column_profile", data);
+          measureToolRender("column_profile", () => renderProfileDetail(data));
+          return data;
+        } catch (error) {
+          if (detailRequestSeq !== state.profileDetailRequestSeq) return null;
+          setToolTimingFailed("column_profile");
+          renderProfileDetailError(error.message);
+          setStatus(error.message, true);
+          return null;
+        }
+      }
+
+      function profileDetailPane() {
+        return el("profileDetailPane");
+      }
+
+      function profileDetailEmptyHtml(message) {
+        return `<div class="profile-detail-state">${escapeHtml(message)}</div>`;
+      }
+
+      function renderProfileDetailEmpty(message) {
+        const pane = profileDetailPane();
+        if (pane) pane.innerHTML = profileDetailEmptyHtml(message);
+      }
+
+      function renderProfileDetailLoading(columnName) {
+        const pane = profileDetailPane();
+        if (!pane) return;
+        pane.innerHTML = `
+          <div class="profile-detail-state">
+            <strong>${escapeHtml(columnName)}</strong>
+            <span>Loading profile...</span>
+          </div>
+        `;
+      }
+
+      function renderProfileDetailError(message) {
+        const pane = profileDetailPane();
+        if (!pane) return;
+        pane.innerHTML = `<div class="profile-detail-state profile-detail-error">${escapeHtml(message || "Profile detail failed")}</div>`;
+      }
+
+      function renderProfileDetail(data) {
+        state.lastProfileDetailData = data;
+        const isNumeric = isNumericKind(data.kind);
+        const isTemporal = data.kind === "date" || data.kind === "datetime";
+        const body = isNumeric || isTemporal
+          ? `${profileDetailHistogramHtml(data.histogram || [], data.kind)}${profileStatsTableHtml(data.stats || {}, profileDetailStatKeys(data.kind))}`
+          : profileValueCountsHtml(data.value_counts || [], data.filtered_row_count);
+        const pane = profileDetailPane();
+        if (!pane) return;
+        pane.innerHTML = `
+          <div class="profile-detail-header">
+            <div>
+              <h3 id="profileDetailTitle">${escapeHtml(data.name)}</h3>
+              <div class="profile-detail-subtitle">${profileTypeBadgeHtml(data)} <span>${escapeHtml(data.duckdb_type || data.kind || "")}</span></div>
+            </div>
+          </div>
+          ${profileDetailCountsHtml(data)}
+          ${body}
+        `;
+        bindProfileDetail();
+      }
+
+      function profileDetailCountsHtml(data) {
+        const filtered = Number(data.filtered_row_count || 0);
+        const nonMissing = Number(data.non_missing_count || 0);
+        const missing = Number(data.missing_count || 0);
+        const distinct = Number(data.distinct_count || 0);
+        const missingRate = filtered ? missing / filtered : 0;
+        return `
+          <div class="profile-detail-counts">
+            <span><strong>${nonMissing.toLocaleString()}</strong> non-missing</span>
+            <span><strong>${distinct.toLocaleString()}</strong> distinct</span>
+            <span class="${missing > 0 ? "profile-detail-missing" : ""}"><strong>${missing.toLocaleString()}</strong> missing${missing > 0 ? ` (${formatProfilePercent(missingRate)})` : ""}</span>
+            ${profileDetailSpecialCountHtml(data)}
+          </div>
+        `;
+      }
+
+      function profileDetailSpecialCountHtml(data) {
+        if (isNumericKind(data.kind)) {
+          return profileDetailCountBadgeHtml(Number(data.zero_count || 0), "zero", "profile-detail-zero");
+        }
+        if (data.kind === "categorical") {
+          return profileDetailCountBadgeHtml(Number(data.blank_count || 0), "blank", "profile-detail-blank");
+        }
+        return "";
+      }
+
+      function profileDetailCountBadgeHtml(count, label, flagClass) {
+        const safeCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+        const className = safeCount > 0 ? ` class="${flagClass}"` : "";
+        return `<span${className}><strong>${safeCount.toLocaleString()}</strong> ${escapeHtml(label)}</span>`;
+      }
+
+      function profileDetailHistogramHtml(histogram, kind) {
+        const bins = Array.isArray(histogram) ? histogram : [];
+        const maxCount = Math.max(0, ...bins.map((bin) => Number(bin.count || 0)));
+        if (!bins.length) return '<div class="profile-detail-empty">No non-missing values.</div>';
+        const showBinLabels = profileHistogramUsesBinLabels(bins, kind);
+        const bars = bins.map((bin) => {
+          const count = Number(bin.count || 0);
+          const height = maxCount ? Math.max(2, Math.round((count / maxCount) * 100)) : 0;
+          const lower = formatProfileValue(bin.lower);
+          const upper = formatProfileValue(bin.upper);
+          const range = lower === upper ? lower : `${lower} to ${upper}`;
+          const label = `${range}: ${count.toLocaleString()}`;
+          return `<div class="profile-detail-bin" data-profile-bin-title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><span class="profile-detail-bin-bar" style="height:${height}%"></span></div>`;
+        }).join("");
+        const guide = showBinLabels ? profileHistogramBinLabelsHtml(bins) : profileHistogramAxisHtml(bins, kind);
+        return `<div class="profile-detail-histogram-wrap"><div class="profile-detail-histogram" aria-label="Histogram">${bars}</div>${guide}</div>`;
+      }
+
+      function profileHistogramUsesBinLabels(bins, kind) {
+        if (kind !== "integer" || !bins.length || bins.length > 24) return false;
+        if (!bins.every(profileHistogramBinIsExact)) return false;
+        return bins.every((bin) => profileHistogramBinLabel(bin).length <= 4);
+      }
+
+      function profileHistogramBinIsExact(bin) {
+        return bin.lower === bin.upper;
+      }
+
+      function profileHistogramBinLabelsHtml(bins) {
+        const labelStyle = ` style="--profile-bin-label-size:${profileHistogramLabelFontSize(bins.length)}px"`;
+        const labels = bins.map((bin) => `<span class="profile-detail-bin-label">${escapeHtml(profileHistogramBinLabel(bin))}</span>`).join("");
+        return `<div class="profile-detail-bin-label-row"${labelStyle} aria-hidden="true">${labels}</div>`;
+      }
+
+      function profileHistogramAxisHtml(bins, kind) {
+        const ticks = profileHistogramAxisTicks(bins, kind);
+        const tickHtml = ticks.map((tick, index) => {
+          const edgeClass = index === 0
+            ? " profile-detail-histogram-axis-tick-start"
+            : (index === ticks.length - 1 ? " profile-detail-histogram-axis-tick-end" : "");
+          return `<span class="profile-detail-histogram-axis-tick${edgeClass}" style="left:${tick.position}%">${escapeHtml(tick.label)}</span>`;
+        }).join("");
+        return `<div class="profile-detail-histogram-axis" aria-hidden="true">${tickHtml}</div>`;
+      }
+
+      function profileHistogramAxisTicks(bins, kind) {
+        if (!bins.length) return [];
+        const targetCount = Math.min(bins.length + 1, profileHistogramAxisTickCount());
+        const seenLabels = new Set();
+        const ticks = [];
+        for (let index = 0; index < targetCount; index += 1) {
+          const position = targetCount === 1 ? 0 : Number(((index / (targetCount - 1)) * 100).toFixed(2));
+          const label = formatProfileAxisValue(profileHistogramAxisValue(bins, index, targetCount), kind);
+          if (!label || seenLabels.has(label)) continue;
+          seenLabels.add(label);
+          ticks.push({ position, label });
+        }
+        return ticks;
+      }
+
+      function profileHistogramAxisTickCount() {
+        const width = profileDetailPane()?.clientWidth || 720;
+        if (width >= 680) return 5;
+        if (width >= 460) return 4;
+        return 3;
+      }
+
+      function profileHistogramAxisValue(bins, index, tickCount) {
+        const lastBin = bins[bins.length - 1];
+        if (index === tickCount - 1) return lastBin.upper ?? lastBin.lower;
+        const binIndex = tickCount === 1 ? 0 : Math.min(bins.length - 1, Math.round(((bins.length - 1) * index) / (tickCount - 1)));
+        return bins[binIndex]?.lower ?? bins[binIndex]?.upper;
+      }
+
+      function formatProfileAxisValue(value, kind) {
+        const formatted = formatProfileValue(value);
+        if (kind !== "date" && kind !== "datetime") return formatted;
+        return compactProfileTemporalValue(formatted);
+      }
+
+      function compactProfileTemporalValue(value) {
+        const text = String(value || "");
+        const midnight = text.match(/^(\d{4}-\d{2}-\d{2})T00:00(?::00(?:\.0+)?)?$/);
+        if (midnight) return midnight[1];
+        return text.replace("T", " ");
+      }
+
+      function profileHistogramBinLabel(bin) {
+        return formatProfileValue(bin.lower);
+      }
+
+      function profileHistogramLabelFontSize(binCount) {
+        const count = Math.max(1, Number(binCount) || 1);
+        return Math.max(8, Math.min(9, 220 / count)).toFixed(2);
+      }
+
+      function profileDetailStatKeys(kind) {
+        if (kind === "date" || kind === "datetime") return ["min", "p25", "median", "p75", "max"];
+        return ["min", "p1", "p5", "p25", "median", "mean", "p75", "p95", "p99", "max", "sd"];
+      }
+
+      function profileStatsTableHtml(stats, keys) {
+        const rows = keys.map((key) => `
+          <tr>
+            <th>${escapeHtml(profileStatLabel(key))}</th>
+            <td>${escapeHtml(formatProfileValue(stats[key]))}</td>
+          </tr>
+        `).join("");
+        return `<table class="profile-stats-table"><tbody>${rows}</tbody></table>`;
+      }
+
+      function profileStatLabel(key) {
+        return {
+          p1: "P1",
+          p5: "P5",
+          p25: "P25",
+          p75: "P75",
+          p95: "P95",
+          p99: "P99",
+          sd: "SD",
+        }[key] || key.charAt(0).toUpperCase() + key.slice(1);
+      }
+
+      function profileValueCountsHtml(rows, filteredRowCount) {
+        if (!rows.length) return '<div class="profile-detail-empty">No non-missing values.</div>';
+        const filtered = Number(filteredRowCount || 0);
+        const tableRows = sortedProfileValueCounts(rows).map((row) => {
+          const count = Number(row.count || 0);
+          const percent = filtered ? formatProfilePercentFixed(count / filtered) : "";
+          return `
+            <tr>
+              <td>${escapeHtml(formatProfileValue(row.value))}</td>
+              <td><span class="profile-count-value">${count.toLocaleString()}</span><span class="profile-count-percent">${escapeHtml(percent)}</span></td>
+            </tr>
+          `;
+        }).join("");
+        return `
+          <div class="profile-count-table-scroll">
+            <table class="profile-count-table">
+              <thead><tr>${profileDetailSortHeaderHtml("value", "Value")}${profileDetailSortHeaderHtml("count", "Rows")}</tr></thead>
+              <tbody>${tableRows}</tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      function profileDetailSortHeaderHtml(key, label) {
+        const active = state.profileDetailSort.key === key;
+        const direction = active ? state.profileDetailSort.direction : "";
+        const ariaSort = active ? (direction === "desc" ? "descending" : "ascending") : "none";
+        const indicator = active ? (direction === "desc" ? "v" : "^") : "";
+        return `<th aria-sort="${ariaSort}">
+          <button class="profile-count-sort-button" type="button" data-profile-detail-sort="${key}">
+            <span>${escapeHtml(label)}</span><span class="profile-sort-indicator" aria-hidden="true">${indicator}</span>
+          </button>
+        </th>`;
+      }
+
+      function bindProfileDetail() {
+        profileDetailPane()?.querySelectorAll(".profile-detail-bin[data-profile-bin-title]").forEach((bin) => {
+          bin.addEventListener("pointerenter", showProfileHistogramTooltip);
+          bin.addEventListener("pointermove", positionProfileHistogramTooltip);
+          bin.addEventListener("pointerleave", hideProfileHistogramTooltip);
+          bin.addEventListener("pointercancel", hideProfileHistogramTooltip);
+        });
+        profileDetailPane()?.querySelectorAll("[data-profile-detail-sort]").forEach((button) => {
+          button.addEventListener("click", () => setProfileDetailSort(button.dataset.profileDetailSort));
+        });
+      }
+
+      function profileHistogramTooltip() {
+        let tooltip = document.getElementById("profileHistogramTooltip");
+        if (!tooltip) {
+          tooltip = document.createElement("div");
+          tooltip.id = "profileHistogramTooltip";
+          tooltip.className = "profile-histogram-tooltip";
+          tooltip.hidden = true;
+          document.body.appendChild(tooltip);
+        }
+        return tooltip;
+      }
+
+      function showProfileHistogramTooltip(event) {
+        const label = event.currentTarget?.dataset?.profileBinTitle || "";
+        if (!label) return;
+        const tooltip = profileHistogramTooltip();
+        tooltip.textContent = label;
+        tooltip.hidden = false;
+        tooltip.classList.add("visible");
+        positionProfileHistogramTooltip(event);
+      }
+
+      function positionProfileHistogramTooltip(event) {
+        const tooltip = document.getElementById("profileHistogramTooltip");
+        if (!tooltip || tooltip.hidden) return;
+        const offset = 10;
+        const margin = 8;
+        const rect = tooltip.getBoundingClientRect();
+        const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+        let left = event.clientX + offset;
+        let top = event.clientY - rect.height - offset;
+        if (top < margin) top = event.clientY + offset;
+        left = Math.min(Math.max(margin, left), maxLeft);
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${Math.max(margin, top)}px`;
+      }
+
+      function hideProfileHistogramTooltip() {
+        const tooltip = document.getElementById("profileHistogramTooltip");
+        if (!tooltip) return;
+        tooltip.hidden = true;
+        tooltip.classList.remove("visible");
+      }
+
+      function setProfileDetailSort(key) {
+        if (!["value", "count"].includes(key)) return;
+        if (state.profileDetailSort.key === key) {
+          state.profileDetailSort.direction = state.profileDetailSort.direction === "asc" ? "desc" : "asc";
+        } else {
+          state.profileDetailSort = { key, direction: key === "count" ? "desc" : "asc" };
+        }
+        if (state.lastProfileDetailData && !isNumericKind(state.lastProfileDetailData.kind)) {
+          measureToolRender("column_profile", () => renderProfileDetail(state.lastProfileDetailData));
+        }
+      }
+
+      function sortedProfileValueCounts(rows) {
+        const key = state.profileDetailSort.key || "count";
+        const direction = state.profileDetailSort.direction === "asc" ? 1 : -1;
+        return [...rows]
+          .map((row, index) => ({ row, index }))
+          .sort((left, right) => {
+            let compared = 0;
+            if (key === "value") {
+              compared = compareProfileText(formatProfileValue(left.row.value), formatProfileValue(right.row.value));
+            } else {
+              compared = Number(left.row.count || 0) - Number(right.row.count || 0);
+            }
+            return compared ? compared * direction : left.index - right.index;
+          })
+          .map((entry) => entry.row);
+      }
+
+      function sortedProfileColumns(columns) {
+        const key = state.profileSort.key;
+        if (!key) return [...columns];
+        const direction = state.profileSort.direction === "desc" ? -1 : 1;
+        return columns
+          .map((column, index) => ({ column, index }))
+          .sort((left, right) => {
+            const compared = compareProfileColumns(left.column, right.column, key);
+            return compared ? compared * direction : left.index - right.index;
+          })
+          .map((entry) => entry.column);
+      }
+
+      function compareProfileColumns(left, right, key) {
+        if (key === "missing" || key === "distinct") {
+          const field = key === "missing" ? "missing_count" : "distinct_count";
+          const leftValue = Number(left[field] || 0);
+          const rightValue = Number(right[field] || 0);
+          return leftValue === rightValue ? compareProfileText(left.name, right.name) : leftValue - rightValue;
+        }
+        if (key === "type") {
+          const leftType = `${left.kind || ""}\u0000${left.duckdb_type || ""}`;
+          const rightType = `${right.kind || ""}\u0000${right.duckdb_type || ""}`;
+          const compared = compareProfileText(leftType, rightType);
+          return compared || compareProfileText(left.name, right.name);
+        }
+        return compareProfileText(left.name, right.name);
+      }
+
+      function compareProfileText(left, right) {
+        return String(left || "").localeCompare(String(right || ""), undefined, { sensitivity: "base", numeric: true });
+      }
+
+      function profileTypeBadgeHtml(column) {
+        const kind = column.kind || "unknown";
+        return `<span class="profile-type" title="${escapeHtml(column.duckdb_type || kind)}">${escapeHtml(kind)}</span>`;
+      }
+
+      function profileMissingHtml(column) {
+        const missing = Number(column.missing_count || 0);
+        if (!Number.isFinite(missing) || missing <= 0) {
+          return '<span class="profile-missing-count">0</span>';
+        }
+        const rate = Number(column.missing_rate || 0);
+        const percent = Number.isFinite(rate) ? ` (${formatProfilePercent(rate)})` : "";
+        return `<span class="profile-badge profile-badge-warning profile-missing-count">${missing.toLocaleString()}${percent}</span>`;
+      }
+
+      function profileDistinctHtml(column, filteredRowCount) {
+        const distinct = Number(column.distinct_count || 0);
+        const filtered = Number(filteredRowCount || 0);
+        const classes = ["profile-badge", "profile-badge-neutral"];
+        let label = Number.isFinite(distinct) ? distinct.toLocaleString() : "0";
+        if (distinct === 0) {
+          classes.push("profile-badge-empty");
+          label = "empty";
+        } else if (distinct === 1) {
+          classes.push("profile-badge-constant");
+          label = `${label} constant`;
+        } else if (distinct > 100) {
+          classes.push("profile-badge-cardinality");
+          label = `${label} high`;
+        }
+        return `<span class="${classes.join(" ")}">${escapeHtml(label)}</span>`;
+      }
+
+      function profileRangeHtml(column) {
+        if (column.min === null || column.min === undefined || column.max === null || column.max === undefined) {
+          return '<span class="profile-muted">-</span>';
+        }
+        return `<span class="profile-range">${escapeHtml(formatProfileValue(column.min))} <span>to</span> ${escapeHtml(formatProfileValue(column.max))}</span>`;
+      }
+
+      function formatProfileValue(value) {
+        if (value === null || value === undefined) return "-";
+        if (value === "") return '""';
+        if (typeof value === "number") return formatNumber(value);
+        if (typeof value === "boolean") return value ? "true" : "false";
+        return String(value);
+      }
+
+      function formatProfilePercent(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        if (number > 0 && number < 0.001) return "<0.1%";
+        return `${Number((number * 100).toFixed(1))}%`;
+      }
+
+      function formatProfilePercentFixed(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        return `${(number * 100).toFixed(1)}%`;
+      }
+
+      function buildChartRequest() {
+        if (!state.schema || !state.x) return null;
+        const kind = selectedColumn()?.kind;
+        const isDate = kind === "date" || kind === "datetime";
+        const isNumeric = isNumericKind(kind);
+        return {
+          source: state.source || "dataset",
+          x: state.x,
+          sort: state.sort,
+          lowGroup: state.lowGroup,
+          bandWidth: isNumeric ? Number(state.bandWidth) : 0,
+          quantileMode: isNumeric ? state.quantileMode : "off",
+          dateBucket: isDate ? state.dateBucket : "none",
+          transform: state.transform,
+          sigma: Number(state.sigma),
+          filter: state.activeFilter,
+          denominator: el("denominator").value,
+          responses: currentResponses(),
+          maxGroups: 10000,
+        };
+      }
+
+      async function refreshChart(options = {}) {
+        return refreshTool("line_bar", options);
+      }
+
+      async function fetchChartData(request, requestKey) {
+        const requestSeq = state.chartRequestSeq + 1;
+        state.chartRequestSeq = requestSeq;
+        setStatus("");
+        setChartMessage("");
+        setGroupMeta("line_bar", "Computing...");
+        startToolTiming("line_bar");
+        updateAxisControls();
+        try {
+          const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request), clientTiming: true });
+          if (requestSeq !== state.chartRequestSeq) return;
+          const cache = toolCache("line_bar");
+          cache.requestKey = requestKey;
+          cache.data = data;
+          syncDuckDbTimingFromData("line_bar", data);
+          syncClientTimingFromData("line_bar", data);
+          measureToolRender("line_bar", () => renderChartData(data, { resetTablePage: true }));
+          return data;
+        } catch (error) {
+          if (requestSeq !== state.chartRequestSeq) return;
+          setToolTimingFailed("line_bar");
+          setGroupMeta("line_bar", "Query failed");
+          setChartMessage("");
+          setStatus(error.message, true);
+        }
+      }
+
+      function renderChartData(data, options = {}) {
+        state.lastData = data;
+        if (options.resetTablePage) {
+          state.tablePage = 1;
+        }
+        updateMetricTitles(data);
+        const labelMessage = renderChart(data);
+        renderTable(data);
+        const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
+        const groupMeta = `${data.rows.length.toLocaleString()} groups · ${rowMeta}`;
+        const warnings = [...(data.warnings || [])].filter(Boolean).join(" ");
+        const chartMessage = [warnings, labelMessage].filter(Boolean).join(" ");
+        setFilterRowMeta(data.row_count, data.filtered_row_count);
+        setGroupMeta("line_bar", groupMeta);
+        setStatus("");
+        setChartMessage(chartMessage);
+        saveToolPresentation("line_bar", { groupMeta, chartMessage });
+      }
+
+      function useCachedChartData(cache, options = {}) {
+        state.lastData = cache.data;
+        if (options.renderIfCached) {
+          measureToolRender("line_bar", () => renderChartData(cache.data));
+          return;
+        }
+        measureToolRender("line_bar", () => {
+          updateMetricTitles(cache.data);
+          applyToolPresentation("line_bar");
+          requestAnimationFrame(() => chart.resize());
+        });
+      }
+
+      function buildMapRequest() {
+        if (!state.schema) return null;
+        const numerator = el("actualNumerator").value;
+        if (!numerator) return null;
+        if (state.mapLevel === "unit" && !mapLevelSelectable("unit")) return null;
+        return {
+          level: state.mapLevel,
+          numerator,
+          denominator: el("denominator").value,
+          filter: state.activeFilter,
+          areaColumn: postcodeColumn("area"),
+          sectorColumn: postcodeColumn("sector"),
+          unitColumn: postcodeColumn("unit"),
+          latitudeColumn: latitudeColumn(),
+          longitudeColumn: longitudeColumn(),
+          compactUnitPoints: state.mapLevel === "unit",
+        };
+      }
+
+      function showMapMissingNumerator() {
+        setGroupMeta("uk_map", "Choose an Actual column");
+        setChartMessage("UK mapping needs a numeric Actual column.");
+      }
+
+      async function refreshMap(options = {}) {
+        return refreshTool("uk_map", options);
+      }
+
+      async function fetchMapData(request, requestKey) {
+        const requestSeq = state.mapRequestSeq + 1;
+        state.mapRequestSeq = requestSeq;
+        setStatus("");
+        setChartMessage("");
+        setGroupMeta("uk_map", "Computing map...");
+        startToolTiming("uk_map");
+        try {
+          const [data, geoJson] = await Promise.all([
+            api("/api/uk-map/summary", { method: "POST", body: JSON.stringify(request), clientTiming: true }),
+            request.level === "unit" ? Promise.resolve(null) : loadMapGeoJson(request.level),
+          ]);
+          if (requestSeq !== state.mapRequestSeq) return;
+          const cache = toolCache("uk_map");
+          cache.requestKey = requestKey;
+          cache.data = data;
+          syncDuckDbTimingFromData("uk_map", data);
+          syncClientTimingFromData("uk_map", data);
+          updateMapMetricTitles(data);
+          renderMap(data, geoJson);
+          return data;
+        } catch (error) {
+          if (requestSeq !== state.mapRequestSeq) return;
+          setToolTimingFailed("uk_map");
+          state.pendingMapZoom = null;
+          setGroupMeta("uk_map", "Map failed");
+          setChartMessage(error.message);
+        }
+      }
+
+      async function useCachedMapData(cache) {
+        state.lastMapData = cache.data;
+        updateMapMetricTitles(cache.data);
+        syncFloatingMapControl();
+        applyToolPresentation("uk_map");
+        const geoJson = state.mapGeoJsonCache[cache.data.level];
+        const activeLayer = cache.data.level === "unit" ? ukMapPointLayer : ukMapLayer;
+        if (!activeLayer || state.renderedMapLevel !== cache.data.level || state.pendingMapZoom) {
+          if (cache.data.level === "unit") {
+            state.preserveMapView = !state.pendingMapZoom;
+            renderMap(cache.data, null);
+            return;
+          }
+          if (geoJson) {
+            state.preserveMapView = !state.pendingMapZoom;
+            renderMap(cache.data, geoJson);
+          } else {
+            const loadedGeoJson = await loadMapGeoJson(cache.data.level);
+            state.preserveMapView = !state.pendingMapZoom;
+            renderMap(cache.data, loadedGeoJson);
+          }
+          return;
+        }
+        measureToolRender("uk_map", () => requestAnimationFrame(() => resizeMap()));
+      }
+
+      function postcodeColumn(level) {
+        const key = level === "sector" ? "postcode_sector" : (level === "unit" ? "postcode_unit" : "postcode_area");
+        const fallback = MAP_LEVELS[level].defaultColumn;
+        return configuredColumn(key) || resolveColumnAlias(fallback, MAP_LEVELS[level].aliases);
+      }
+
+      function latitudeColumn() {
+        return configuredColumn("latitude") || resolveColumnAlias("lat", COORDINATE_COLUMN_ALIASES.latitude);
+      }
+
+      function longitudeColumn() {
+        return configuredColumn("longitude") || resolveColumnAlias("long", COORDINATE_COLUMN_ALIASES.longitude);
+      }
+
+      function configuredColumn(key) {
+        return locationParams.get(key) || state.schema.defaults?.[key] || "";
+      }
+
+      function resolveColumnAlias(requested, aliases) {
+        if (columnExists(requested)) return requested;
+        return aliases.find((alias) => columnExists(alias)) || requested;
+      }
+
+      function configuredDefaultExists(key) {
+        return locationParams.has(key) || Object.prototype.hasOwnProperty.call(state.schema?.defaults || {}, key);
+      }
+
+      function unitPointColumnsExplicitlyConfigured() {
+        return ["postcode_unit", "latitude", "longitude"].some(configuredDefaultExists);
+      }
+
+      function unitPointColumnsAvailable() {
+        return columnExists(postcodeColumn("unit")) && numericColumnExists(latitudeColumn()) && numericColumnExists(longitudeColumn());
+      }
+
+      function mapLevelSelectable(level) {
+        if (level !== "unit") return true;
+        return unitPointColumnsAvailable() || unitPointColumnsExplicitlyConfigured();
+      }
+
+      async function loadMapGeoJson(level) {
+        if (state.mapGeoJsonCache[level]) return state.mapGeoJsonCache[level];
+        const config = MAP_LEVELS[level];
+        const response = await fetch(config.url);
+        if (!response.ok) {
+          throw new Error(`Could not load ${config.label} GeoJSON`);
+        }
+        const geoJson = await response.json();
+        const firstFeature = geoJson.features?.[0];
+        if (!firstFeature?.properties || !(config.property in firstFeature.properties)) {
+          throw new Error(`${config.label} GeoJSON is missing ${config.property}`);
+        }
+        state.mapGeoJsonCache[level] = geoJson;
+        return geoJson;
+      }
+
+      function initMap() {
+        if (ukMap) return;
+        ukMap = L.map("ukMap", {
+          preferCanvas: true,
+          zoomControl: false,
+          zoomDelta: 0.5,
+          zoomSnap: 0.25,
+        }).setView([54.5, -3.2], 6);
+        ukMap.on("zoomend", () => {
+          if (state.lastMapData?.level === "sector") restyleActiveMapPolygonLayer();
+        });
+        setBaseMap(state.baseMap);
+        addMapLayerControl();
+        addMapZoomControl();
+        addMapHomeControl();
+      }
+
+      function resizeMap() {
+        if (!ukMap) return;
+        ukMap.invalidateSize({ pan: false });
+      }
+
+      function scheduleMapResize({ refit = false } = {}) {
+        if (!ukMap) return;
+        requestAnimationFrame(() => {
+          resizeMap();
+          if (!refit) return;
+          requestAnimationFrame(() => {
+            if (state.tool === "uk_map") {
+              resizeMap();
+              fitMapToLayer({ animate: false });
+            }
+          });
+        });
+      }
+
+      function setBaseMap(baseMap) {
+        state.baseMap = MAP_BASE_LAYERS[baseMap] ? baseMap : "blank";
+        if (!ukMap) return;
+        if (baseTileLayer) {
+          ukMap.removeLayer(baseTileLayer);
+          baseTileLayer = null;
+        }
+        const config = MAP_BASE_LAYERS[state.baseMap];
+        if (config.url) {
+          baseTileLayer = L.tileLayer(config.url, {
+            maxZoom: 19,
+            attribution: config.attribution || "",
+          }).addTo(ukMap);
+          baseTileLayer.bringToBack();
+        }
+        ukMap.getContainer().classList.toggle("blank-base", state.baseMap === "blank");
+        applyMapBackground();
+        syncMapControls();
+      }
+
+      function applyMapBackground() {
+        const container = ukMap?.getContainer();
+        if (!container) return;
+        const dark = document.body.classList.contains("dark");
+        container.classList.toggle("map-bg-dark", dark);
+        container.classList.toggle("map-bg-light", !dark);
+      }
+
+      function syncCartoBaseMapForTheme() {
+        const config = MAP_BASE_LAYERS[state.baseMap];
+        const pair = config?.themePair;
+        if (!pair) return;
+        setBaseMap(document.body.classList.contains("dark") ? pair.dark : pair.light);
+      }
+
+      function addMapLayerControl() {
+        if (!ukMap || mapLayerControl) return;
+        const LayerControl = L.Control.extend({
+          options: { position: "topleft" },
+          onAdd() {
+            const container = L.DomUtil.create("div", "map-layer-control leaflet-control");
+            container.innerHTML = `
+              ${Object.entries(MAP_BASE_LAYERS).map(([value, config]) => `
+                <label>
+                  <input type="radio" name="baseMap" value="${escapeHtml(value)}">
+                  <span>${escapeHtml(config.label)}</span>
+                </label>
+              `).join("")}
+              <div class="map-layer-separator"></div>
+              <label>
+                <input type="radio" name="mapLevel" value="area">
+                <span>Area</span>
+              </label>
+              <label>
+                <input type="radio" name="mapLevel" value="sector">
+                <span>Sector</span>
+              </label>
+              <label>
+                <input type="radio" name="mapLevel" value="unit">
+                <span>Units</span>
+              </label>
+            `;
+            L.DomEvent.disableClickPropagation(container);
+            L.DomEvent.disableScrollPropagation(container);
+            container.addEventListener("change", handleMapLayerControlChange);
+            return container;
+          },
+        });
+        mapLayerControl = new LayerControl();
+        mapLayerControl.addTo(ukMap);
+        syncMapControls();
+      }
+
+      function handleMapLayerControlChange(event) {
+        const target = event.target;
+        if (!target || target.tagName !== "INPUT") return;
+        if (target.name === "baseMap") {
+          setBaseMap(target.value);
+          return;
+        }
+        if (target.name === "mapLevel" && target.checked && mapLevelSelectable(target.value) && target.value !== state.mapLevel) {
+          state.mapLevel = target.value;
+          state.preserveMapView = true;
+          syncMapControls();
+          refreshMap();
+        }
+      }
+
+      function syncMapControls() {
+        const container = document.querySelector(".map-layer-control");
+        if (!container) return;
+        container.querySelectorAll('input[name="baseMap"]').forEach((input) => {
+          input.checked = input.value === state.baseMap;
+        });
+        container.querySelectorAll('input[name="mapLevel"]').forEach((input) => {
+          input.disabled = !mapLevelSelectable(input.value);
+          input.checked = input.value === state.mapLevel;
+        });
+      }
+
+      function addMapZoomControl() {
+        if (!ukMap || mapZoomControl) return;
+        mapZoomControl = L.control.zoom({ position: "topleft" });
+        mapZoomControl.addTo(ukMap);
+      }
+
+      function addMapHomeControl() {
+        if (!ukMap || mapHomeControl) return;
+        const HomeControl = L.Control.extend({
+          options: { position: "topleft" },
+          onAdd() {
+            const container = L.DomUtil.create("div", "map-place-control leaflet-control");
+            const ukButton = L.DomUtil.create("button", "map-place-button", container);
+            ukButton.type = "button";
+            ukButton.title = "Fit UK map layer";
+            ukButton.setAttribute("aria-label", "Fit UK map layer");
+            ukButton.innerHTML = '<img src="/tools/uk-map/static/icons/UK.png" alt="">';
+            const londonButton = L.DomUtil.create("button", "map-place-button", container);
+            londonButton.type = "button";
+            londonButton.title = "Zoom to London";
+            londonButton.setAttribute("aria-label", "Zoom to London");
+            londonButton.innerHTML = '<img class="map-place-icon-london" src="/tools/uk-map/static/icons/London.png" alt="">';
+            L.DomEvent.disableClickPropagation(container);
+            ukButton.addEventListener("click", (event) => {
+              event.preventDefault();
+              fitMapToLayer();
+            });
+            londonButton.addEventListener("click", (event) => {
+              event.preventDefault();
+              ukMap?.setView([51.5074, -0.1278], 10);
+            });
+            return container;
+          },
+        });
+        mapHomeControl = new HomeControl();
+        mapHomeControl.addTo(ukMap);
+      }
+
+      function fitMapToLayer(options = {}) {
+        const bounds = activeMapBounds();
+        if (!bounds) {
+          ukMap?.setView([54.5, -3.2], 6);
+          return;
+        }
+        fitMapBounds(bounds, state.renderedMapLevel, options);
+      }
+
+      function fitMapBounds(bounds, level = state.renderedMapLevel, options = {}) {
+        if (!ukMap || !bounds?.isValid?.()) return false;
+        ukMap.fitBounds(bounds, mapFitOptions(level, options));
+        return true;
+      }
+
+      function mapFitOptions(level, options = {}) {
+        const fitOptions = level === "unit"
+          ? { padding: MAP_UNIT_FIT_PADDING, maxZoom: 13 }
+          : { padding: MAP_FIT_PADDING };
+        return { ...fitOptions, ...options };
+      }
+
+      function activeMapBounds() {
+        const layer = state.renderedMapLevel === "unit" ? ukMapPointLayer : ukMapLayer;
+        const bounds = layer?.getBounds?.();
+        return bounds?.isValid?.() ? bounds : null;
+      }
+
+      function activeMapPalette() {
+        return MAP_PALETTES[state.mapPalette] || MAP_PALETTES.viridis;
+      }
+
+      function hexToRgb(hex) {
+        const match = String(hex || "").trim().match(/^#?([0-9a-f]{6})$/i);
+        if (!match) return null;
+        const value = Number.parseInt(match[1], 16);
+        return {
+          r: (value >> 16) & 255,
+          g: (value >> 8) & 255,
+          b: value & 255,
+        };
+      }
+
+      function rgbToHex({ r, g, b }) {
+        return `#${[r, g, b].map((channel) => {
+          const value = Math.min(255, Math.max(0, Math.round(channel)));
+          return value.toString(16).padStart(2, "0");
+        }).join("")}`;
+      }
+
+      function interpolateMapPalette(basePalette, count) {
+        const colors = basePalette.map(hexToRgb).filter(Boolean);
+        if (!colors.length || count <= 0) return [];
+        if (count === 1 || colors.length === 1) return [rgbToHex(colors[0])];
+        return Array.from({ length: count }, (_, index) => {
+          const position = (index * (colors.length - 1)) / (count - 1);
+          const lowerIndex = Math.floor(position);
+          const upperIndex = Math.min(colors.length - 1, Math.ceil(position));
+          const ratio = position - lowerIndex;
+          const lower = colors[lowerIndex];
+          const upper = colors[upperIndex];
+          return rgbToHex({
+            r: lower.r + (upper.r - lower.r) * ratio,
+            g: lower.g + (upper.g - lower.g) * ratio,
+            b: lower.b + (upper.b - lower.b) * ratio,
+          });
+        });
+      }
+
+      function averageHexColors(colors) {
+        const rgbs = colors.map(hexToRgb).filter(Boolean);
+        if (!rgbs.length) return MAP_MISSING_COLOR;
+        const total = rgbs.reduce((sum, color) => ({
+          r: sum.r + color.r,
+          g: sum.g + color.g,
+          b: sum.b + color.b,
+        }), { r: 0, g: 0, b: 0 });
+        return rgbToHex({
+          r: total.r / rgbs.length,
+          g: total.g / rgbs.length,
+          b: total.b / rgbs.length,
+        });
+      }
+
+      function legendPaletteFromMapPalette(mapPalette) {
+        return Array.from({ length: MAP_LEGEND_BUCKETS }, (_, index) => {
+          const start = Math.floor((index * mapPalette.length) / MAP_LEGEND_BUCKETS);
+          const end = Math.max(start + 1, Math.floor(((index + 1) * mapPalette.length) / MAP_LEGEND_BUCKETS));
+          return averageHexColors(mapPalette.slice(start, end));
+        });
+      }
+
+      function quantileThresholds(values, bucketCount) {
+        const thresholds = [];
+        if (!values.length || bucketCount <= 1) return thresholds;
+        for (let index = 1; index < bucketCount; index += 1) {
+          thresholds.push(values[Math.min(values.length - 1, Math.ceil((values.length * index) / bucketCount) - 1)]);
+        }
+        return thresholds;
+      }
+
+      function mapHotspotSelection(value = state.mapHotspots) {
+        const raw = Number(value);
+        if (!Number.isFinite(raw)) return null;
+        const sliderValue = Math.round(raw * 10) / 10;
+        if (sliderValue === 0) return null;
+        const magnitude = Math.min(1, Math.max(0.1, Math.abs(sliderValue)));
+        const fraction = Math.min(1, Math.max(0.1, Math.round((1.1 - magnitude) * 10) / 10));
+        if (fraction >= 1) return null;
+        return {
+          direction: sliderValue > 0 ? -1 : 1,
+          fraction,
+        };
+      }
+
+      function mapHotspotPercent(value = state.mapHotspots) {
+        const raw = Number(value);
+        if (!Number.isFinite(raw)) return 0;
+        const sliderValue = Math.round(raw * 10) / 10;
+        if (sliderValue === 0) return 0;
+        const magnitude = Math.min(1, Math.max(0.1, Math.abs(sliderValue)));
+        return Math.round(Math.min(1, Math.max(0.1, Math.round((1.1 - magnitude) * 10) / 10)) * 100);
+      }
+
+      function mapHotspotKeys(rows) {
+        const selection = mapHotspotSelection();
+        if (!selection) return null;
+        const validRows = rows
+          .map((row, index) => ({ row, index, value: finiteNumber(row.value) }))
+          .filter(({ row, value }) => row.key !== null && row.key !== undefined && value !== null);
+        if (!validRows.length) return null;
+        validRows.sort((a, b) => {
+          if (a.value !== b.value) return (a.value - b.value) * selection.direction;
+          return a.index - b.index;
+        });
+        const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * selection.fraction)));
+        return new Set(validRows.slice(0, count).map(({ row }) => String(row.key)));
+      }
+
+      function mapLineWeightForLevel(level) {
+        const baseWeight = Number(state.mapLineWeight);
+        if (!Number.isFinite(baseWeight) || baseWeight <= 0) return 0;
+        if (level !== "sector" || !ukMap) return baseWeight;
+        const zoom = ukMap.getZoom();
+        if (zoom <= 6) return Math.min(baseWeight, 0.15);
+        if (zoom <= 7) return Math.min(baseWeight, 0.25);
+        if (zoom <= 8) return Math.min(baseWeight, 0.4);
+        if (zoom <= 9) return Math.min(baseWeight, 0.65);
+        if (zoom <= 10) return Math.min(baseWeight, 0.85);
+        return baseWeight;
+      }
+
+      function mapFeatureStyle(row, scale, hotspotKeys, level = state.mapLevel) {
+        const value = finiteNumber(row?.value);
+        const hasValue = value !== null;
+        const selected = hasValue && (!hotspotKeys || hotspotKeys.has(String(row.key)));
+        const muted = hasValue && !selected;
+        const lineWeight = mapLineWeightForLevel(level);
+        return {
+          color: "#000000",
+          opacity: lineWeight > 0 ? (muted ? 0.35 : 0.75) : 0,
+          weight: lineWeight,
+          fillColor: hasValue ? (muted ? MAP_MUTED_COLOR : scale.color(value)) : MAP_MISSING_COLOR,
+          fillOpacity: hasValue ? (muted ? Math.min(Number(state.mapOpacity), 0.22) : Number(state.mapOpacity)) : Math.min(Number(state.mapOpacity), 0.35),
+        };
+      }
+
+      function mapPolygonFeatureKey(feature, property) {
+        return String(feature?.properties?.[property] ?? "");
+      }
+
+      function activeMapPolygonContext() {
+        return state.mapPolygonRenderContext;
+      }
+
+      function mapPolygonLayerKey(layer, context = activeMapPolygonContext()) {
+        return String(layer?._lucidumMapKey ?? mapPolygonFeatureKey(layer?.feature, context?.joinProperty));
+      }
+
+      function mapPolygonLayerRow(layer, context = activeMapPolygonContext()) {
+        const key = mapPolygonLayerKey(layer, context);
+        return {
+          key,
+          row: context?.summaries?.get(key) || null,
+          data: context?.data || null,
+        };
+      }
+
+      function mapPolygonTooltipHtml(layer) {
+        const { key, row } = mapPolygonLayerRow(layer);
+        const title = key || "Unknown";
+        const value = finiteNumber(row?.value);
+        return `${title}: ${value === null ? "No data" : formatLineValue(value)}`;
+      }
+
+      function mapPolygonPopupHtml(layer) {
+        const { key, row, data } = mapPolygonLayerRow(layer);
+        return mapPopupHtml(key || "Unknown", row, data || {});
+      }
+
+      function mapPolygonFeatureStyle(feature) {
+        const context = activeMapPolygonContext();
+        if (!context) return mapFeatureStyle(null, makeQuantileScale([]), null);
+        const key = mapPolygonFeatureKey(feature, context.joinProperty);
+        const row = context.summaries.get(key);
+        return mapFeatureStyle(row, context.scale, context.hotspotKeys, context.data.level);
+      }
+
+      function createMapPolygonLayer(level, geoJson) {
+        const levelConfig = MAP_LEVELS[level] || MAP_LEVELS.area;
+        return L.geoJSON(geoJson, {
+          smoothFactor: levelConfig.smoothFactor ?? 1,
+          style: mapPolygonFeatureStyle,
+          onEachFeature: (feature, layer) => {
+            layer._lucidumMapKey = mapPolygonFeatureKey(feature, levelConfig.property);
+            layer.bindTooltip(() => mapPolygonTooltipHtml(layer), { sticky: true });
+            layer.bindPopup(() => mapPolygonPopupHtml(layer));
+          },
+        });
+      }
+
+      function cachedMapPolygonLayer(level, geoJson) {
+        if (!state.mapPolygonLayerCache[level]) {
+          state.mapPolygonLayerCache[level] = {
+            layer: createMapPolygonLayer(level, geoJson),
+            featureCount: geoJson.features?.length || 0,
+          };
+        }
+        return state.mapPolygonLayerCache[level];
+      }
+
+      function countMatchedMapPolygonFeatures(layer, summaries) {
+        let count = 0;
+        layer.eachLayer((featureLayer) => {
+          const row = summaries.get(mapPolygonLayerKey(featureLayer));
+          if (finiteNumber(row?.value) !== null) count += 1;
+        });
+        return count;
+      }
+
+      function applyMapPolygonStyles() {
+        if (!ukMapLayer) return;
+        ukMapLayer.setStyle(mapPolygonFeatureStyle);
+      }
+
+      function restyleActiveMapPolygonLayer() {
+        if (state.tool !== "uk_map" || !state.lastMapData || state.lastMapData.level === "unit") return;
+        applyMapPolygonStyles();
+      }
+
+      function unitPointRadiusForZoom(zoom) {
+        const value = Number(zoom);
+        if (!Number.isFinite(value)) return 2.5;
+        if (value <= 5) return 1;
+        if (value <= 6) return 1.25;
+        if (value <= 7) return 1.75;
+        if (value <= 8) return 2.5;
+        if (value <= 10) return 3.25;
+        return 4;
+      }
+
+      function unitPointHitRadius(radius) {
+        return Math.max(radius + 4, 6);
+      }
+
+      function mapPointStyle(row, scale, hotspotKeys, radius) {
+        const value = finiteNumber(row?.value);
+        const selected = value !== null && (!hotspotKeys || hotspotKeys.has(String(row.key)));
+        const muted = value !== null && !selected;
+        const strokeOpacity = radius < 2 ? 0 : (radius < 3 ? 0.35 : 0.65);
+        return {
+          fillColor: muted ? MAP_MUTED_COLOR : scale.color(value),
+          fillOpacity: muted ? Math.min(Number(state.mapOpacity), 0.28) : Number(state.mapOpacity),
+          strokeOpacity: muted ? Math.min(strokeOpacity, 0.25) : strokeOpacity,
+        };
+      }
+
+      function unitPointArrays(data) {
+        const points = data?.unit_points;
+        return points && Array.isArray(points.key) ? points : null;
+      }
+
+      function unitPointCount(data) {
+        const points = unitPointArrays(data);
+        return points ? points.key.length : (data?.rows || []).length;
+      }
+
+      function unitPointEntries(data) {
+        const bounds = L.latLngBounds([]);
+        const entries = [];
+        const points = unitPointArrays(data);
+        if (points) {
+          const count = points.key.length;
+          for (let index = 0; index < count; index += 1) {
+            const latitude = Number(points.latitude?.[index]);
+            const longitude = Number(points.longitude?.[index]);
+            if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+            const latLng = L.latLng(latitude, longitude);
+            bounds.extend(latLng);
+            entries.push({
+              key: points.key[index],
+              row_count: points.row_count?.[index],
+              numerator: points.numerator?.[index],
+              denominator: points.denominator?.[index],
+              volume: points.volume?.[index],
+              value: points.value?.[index],
+              latitude,
+              longitude,
+              latLng,
+            });
+          }
+          return { entries, bounds };
+        }
+        for (const row of data?.rows || []) {
+          const latitude = Number(row.latitude);
+          const longitude = Number(row.longitude);
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+          const latLng = L.latLng(latitude, longitude);
+          bounds.extend(latLng);
+          entries.push({
+            ...row,
+            latitude,
+            longitude,
+            latLng,
+          });
+        }
+        return { entries, bounds };
+      }
+
+      function makeUnitPointScale(data) {
+        const points = unitPointArrays(data);
+        if (!points) return makeQuantileScale(data.rows || []);
+        const values = (points.value || [])
+          .map(finiteNumber)
+          .filter((value) => value !== null);
+        return makeQuantileScaleFromValues(values);
+      }
+
+      function mapUnitHotspotKeys(data) {
+        const points = unitPointArrays(data);
+        if (!points) return mapHotspotKeys(data.rows || []);
+        const selection = mapHotspotSelection();
+        if (!selection) return null;
+        const validRows = [];
+        for (let index = 0; index < points.key.length; index += 1) {
+          const key = points.key[index];
+          const value = finiteNumber(points.value?.[index]);
+          if (key === null || key === undefined || value === null) continue;
+          validRows.push({ key, value, index });
+        }
+        if (!validRows.length) return null;
+        validRows.sort((a, b) => {
+          if (a.value !== b.value) return (a.value - b.value) * selection.direction;
+          return a.index - b.index;
+        });
+        const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * selection.fraction)));
+        return new Set(validRows.slice(0, count).map((row) => String(row.key)));
+      }
+
+      function makeUnitPointLayer(data, scale, hotspotKeys) {
+        return new (L.Layer.extend({
+          initialize(mapData, initialScale, initialHotspotKeys) {
+            const prepared = unitPointEntries(mapData);
+            this.data = mapData;
+            this.rows = prepared.entries;
+            this.bounds = prepared.bounds;
+            this.scale = initialScale;
+            this.hotspotKeys = initialHotspotKeys;
+            this.tooltip = null;
+          },
+          onAdd(map) {
+            this.map = map;
+            this.canvas = L.DomUtil.create("canvas", "leaflet-unit-point-layer");
+            this.canvas.style.pointerEvents = "none";
+            const pane = map.getPanes().overlayPane;
+            pane.appendChild(this.canvas);
+            map.on("moveend zoomend resize viewreset", this.reset, this);
+            map.on("mousemove", this.handleMouseMove, this);
+            map.on("mouseout", this.closeTooltip, this);
+            map.on("click", this.handleClick, this);
+            this.reset();
+          },
+          onRemove(map) {
+            this.closeTooltip();
+            map.off("moveend zoomend resize viewreset", this.reset, this);
+            map.off("mousemove", this.handleMouseMove, this);
+            map.off("mouseout", this.closeTooltip, this);
+            map.off("click", this.handleClick, this);
+            this.canvas?.remove();
+            this.canvas = null;
+            this.map = null;
+          },
+          getBounds() {
+            return this.bounds;
+          },
+          setRenderContext(nextScale, nextHotspotKeys) {
+            this.scale = nextScale;
+            this.hotspotKeys = nextHotspotKeys;
+            this.reset();
+          },
+          reset() {
+            if (!this.map || !this.canvas) return;
+            const size = this.map.getSize();
+            const topLeft = this.map.containerPointToLayerPoint([0, 0]);
+            const ratio = window.devicePixelRatio || 1;
+            L.DomUtil.setPosition(this.canvas, topLeft);
+            this.canvas.width = Math.max(1, Math.round(size.x * ratio));
+            this.canvas.height = Math.max(1, Math.round(size.y * ratio));
+            this.canvas.style.width = `${size.x}px`;
+            this.canvas.style.height = `${size.y}px`;
+            const context = this.canvas.getContext("2d");
+            context.setTransform(ratio, 0, 0, ratio, 0, 0);
+            context.clearRect(0, 0, size.x, size.y);
+            this.hitGrid = new Map();
+            const pointRadius = unitPointRadiusForZoom(this.map.getZoom());
+            const hitRadius = unitPointHitRadius(pointRadius);
+            this.hitRadius = hitRadius;
+            for (const entry of this.rows) {
+              const point = this.map.latLngToLayerPoint(entry.latLng).subtract(topLeft);
+              if (point.x < -hitRadius || point.y < -hitRadius || point.x > size.x + hitRadius || point.y > size.y + hitRadius) {
+                continue;
+              }
+              const gridKey = `${Math.floor(point.x / MAP_POINT_GRID_SIZE)},${Math.floor(point.y / MAP_POINT_GRID_SIZE)}`;
+              if (!this.hitGrid.has(gridKey)) {
+                this.hitGrid.set(gridKey, []);
+              }
+              this.hitGrid.get(gridKey).push({ entry, point });
+              const style = mapPointStyle(entry, this.scale, this.hotspotKeys, pointRadius);
+              context.globalAlpha = Math.max(0, Math.min(1, style.fillOpacity));
+              context.fillStyle = style.fillColor;
+              if (pointRadius <= 1) {
+                const sizePx = pointRadius * 2;
+                context.fillRect(point.x - pointRadius, point.y - pointRadius, sizePx, sizePx);
+              } else {
+                context.beginPath();
+                context.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
+                context.fill();
+                if (style.strokeOpacity > 0) {
+                  context.globalAlpha = Math.max(0, Math.min(1, style.strokeOpacity));
+                  context.strokeStyle = "#000000";
+                  context.lineWidth = pointRadius < 3 ? 0.5 : 0.75;
+                  context.stroke();
+                }
+              }
+            }
+            context.globalAlpha = 1;
+          },
+          findNearest(containerPoint) {
+            if (!this.map || !this.hitGrid) return null;
+            const hitRadius = this.hitRadius || unitPointHitRadius(unitPointRadiusForZoom(this.map.getZoom()));
+            const radiusSquared = hitRadius * hitRadius;
+            let nearest = null;
+            let nearestDistance = radiusSquared;
+            const gridX = Math.floor(containerPoint.x / MAP_POINT_GRID_SIZE);
+            const gridY = Math.floor(containerPoint.y / MAP_POINT_GRID_SIZE);
+            for (let dxCell = -1; dxCell <= 1; dxCell += 1) {
+              for (let dyCell = -1; dyCell <= 1; dyCell += 1) {
+                const entries = this.hitGrid.get(`${gridX + dxCell},${gridY + dyCell}`) || [];
+                for (const candidate of entries) {
+                  const dx = candidate.point.x - containerPoint.x;
+                  const dy = candidate.point.y - containerPoint.y;
+                  const distance = dx * dx + dy * dy;
+                  if (distance <= nearestDistance) {
+                    nearest = candidate.entry;
+                    nearestDistance = distance;
+                  }
+                }
+              }
+            }
+            return nearest;
+          },
+          handleMouseMove(event) {
+            const nearest = this.findNearest(event.containerPoint);
+            if (!nearest) {
+              this.closeTooltip();
+              return;
+            }
+            const value = finiteNumber(nearest.value);
+            const text = `${nearest.key}: ${value === null ? "No data" : formatLineValue(value)}`;
+            if (!this.tooltip) {
+              this.tooltip = L.tooltip({ sticky: true, direction: "top", opacity: 0.9 });
+            }
+            this.tooltip.setLatLng(event.latlng).setContent(text);
+            if (!this.map.hasLayer(this.tooltip)) {
+              this.tooltip.addTo(this.map);
+            }
+          },
+          handleClick(event) {
+            const nearest = this.findNearest(event.containerPoint);
+            if (!nearest) return;
+            L.popup()
+              .setLatLng(nearest.latLng)
+              .setContent(mapPopupHtml(String(nearest.key || "Unknown"), nearest, this.data))
+              .openOn(this.map);
+          },
+          closeTooltip() {
+            if (this.tooltip && this.map?.hasLayer(this.tooltip)) {
+              this.map.removeLayer(this.tooltip);
+            }
+          },
+        }))(data, scale, hotspotKeys);
+      }
+
+      function renderMap(data, geoJson) {
+        return measureToolRender("uk_map", () => renderMapContents(data, geoJson));
+      }
+
+      function renderMapContents(data, geoJson) {
+        if (data.level === "unit") {
+          renderUnitMap(data);
+          return;
+        }
+        state.lastMapData = data;
+        state.renderedMapLevel = data.level;
+        initMap();
+        syncFloatingMapControl();
+        const levelConfig = MAP_LEVELS[data.level] || MAP_LEVELS.area;
+        const summaries = new Map((data.rows || []).map((row) => [String(row.key), row]));
+        const scale = makeQuantileScale(data.rows || []);
+        const hotspotKeys = mapHotspotKeys(data.rows || []);
+        state.mapPolygonRenderContext = {
+          data,
+          joinProperty: data.join_property,
+          summaries,
+          scale,
+          hotspotKeys,
+        };
+        const cachedPolygonLayer = cachedMapPolygonLayer(data.level, geoJson);
+        const featureCount = cachedPolygonLayer.featureCount;
+        const matchedFeatureCount = countMatchedMapPolygonFeatures(cachedPolygonLayer.layer, summaries);
+        if (ukMapLayer && ukMapLayer !== cachedPolygonLayer.layer) {
+          ukMap.removeLayer(ukMapLayer);
+        }
+        if (ukMapPointLayer) {
+          ukMap.removeLayer(ukMapPointLayer);
+          ukMapPointLayer = null;
+        }
+        if (ukMapLabelLayer) {
+          ukMap.removeLayer(ukMapLabelLayer);
+          ukMapLabelLayer = null;
+        }
+        ukMapLayer = cachedPolygonLayer.layer;
+        applyMapPolygonStyles();
+        if (!ukMap.hasLayer(ukMapLayer)) ukMapLayer.addTo(ukMap);
+        renderMapLabels(data, summaries, hotspotKeys);
+
+        let searchWarning = "";
+        let didFitLayer = false;
+        if (state.pendingMapZoom && state.pendingMapZoom.level === data.level) {
+          const zoomed = zoomToMapKey(state.pendingMapZoom.level, state.pendingMapZoom.key);
+          if (!zoomed) {
+            searchWarning = `Postcode ${state.pendingMapZoom.label} was not found.`;
+          }
+          state.pendingMapZoom = null;
+          state.mapFitLevel = data.level;
+          state.mapStartupFitDone = true;
+          state.preserveMapView = false;
+        } else if (state.preserveMapView) {
+          state.mapFitLevel = data.level;
+          state.preserveMapView = false;
+        } else if (state.mapFitLevel !== data.level) {
+          if (!state.mapStartupFitDone) {
+            const bounds = ukMapLayer.getBounds();
+            if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
+              didFitLayer = true;
+              state.mapStartupFitDone = true;
+            }
+          }
+          state.mapFitLevel = data.level;
+        }
+        renderMapLegend(scale, data.response?.label || "Actual");
+        const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
+        const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`;
+        setFilterRowMeta(data.row_count, data.filtered_row_count);
+        setGroupMeta("uk_map", groupMeta);
+        const warnings = [...(data.warnings || [])];
+        if (searchWarning) {
+          warnings.push(searchWarning);
+        }
+        if (matchedFeatureCount === 0 && (data.rows || []).length) {
+          warnings.push(`No ${levelConfig.label} matched the GeoJSON ${levelConfig.property} values.`);
+        }
+        const chartMessage = warnings.filter(Boolean).join(" ");
+        setChartMessage(chartMessage);
+        saveToolPresentation("uk_map", { groupMeta, chartMessage });
+        scheduleMapResize({ refit: didFitLayer });
+      }
+
+      function renderUnitMap(data) {
+        state.lastMapData = data;
+        state.renderedMapLevel = data.level;
+        initMap();
+        syncFloatingMapControl();
+        const scale = makeUnitPointScale(data);
+        const hotspotKeys = mapUnitHotspotKeys(data);
+        if (ukMapLayer) {
+          ukMap.removeLayer(ukMapLayer);
+          ukMapLayer = null;
+        }
+        state.mapPolygonRenderContext = null;
+        if (ukMapLabelLayer) {
+          ukMap.removeLayer(ukMapLabelLayer);
+          ukMapLabelLayer = null;
+        }
+        if (ukMapPointLayer) {
+          ukMap.removeLayer(ukMapPointLayer);
+          ukMapPointLayer = null;
+        }
+        ukMapPointLayer = makeUnitPointLayer(data, scale, hotspotKeys).addTo(ukMap);
+
+        let didFitLayer = false;
+        if (state.preserveMapView) {
+          state.mapFitLevel = data.level;
+          state.preserveMapView = false;
+        } else if (state.mapFitLevel !== data.level) {
+          if (!state.mapStartupFitDone) {
+            const bounds = ukMapPointLayer.getBounds();
+            if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
+              didFitLayer = true;
+              state.mapStartupFitDone = true;
+            }
+          }
+          state.mapFitLevel = data.level;
+        }
+        renderMapLegend(scale, data.response?.label || "Actual");
+        const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
+        const pointSummary = data.point_summary || {};
+        const summaryCount = Number(pointSummary.summary_count ?? unitPointCount(data));
+        const plottedCount = Number(pointSummary.plotted_count ?? unitPointCount(data));
+        const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted · ${rowMeta}`;
+        setFilterRowMeta(data.row_count, data.filtered_row_count);
+        setGroupMeta("uk_map", groupMeta);
+        const warnings = [...(data.warnings || [])];
+        const missingValueCount = Number(pointSummary.missing_value_count || 0);
+        const missingCoordinateCount = Number(pointSummary.missing_coordinate_count || 0);
+        if (missingValueCount) {
+          warnings.push(`${missingValueCount.toLocaleString()} ${missingValueCount === 1 ? "unit has" : "units have"} no plottable KPI value.`);
+        }
+        if (missingCoordinateCount) {
+          warnings.push(`${missingCoordinateCount.toLocaleString()} ${missingCoordinateCount === 1 ? "unit has" : "units have"} no valid coordinates.`);
+        }
+        const chartMessage = warnings.filter(Boolean).join(" ");
+        setChartMessage(chartMessage);
+        saveToolPresentation("uk_map", { groupMeta, chartMessage });
+        scheduleMapResize({ refit: didFitLayer });
+      }
+
+      function updateMapMetricTitles(data) {
+        renderMetricTitle(el("actualMetricTitle"), "Actual", data.response?.value);
+        renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
+      }
+
+      function renderMapLabels(data, summaries, hotspotKeys) {
+        const fontSize = Number(state.mapLabelSize);
+        if (!Number.isFinite(fontSize) || fontSize <= 0 || !ukMapLayer) return;
+        ukMapLabelLayer = L.layerGroup().addTo(ukMap);
+        ukMapLayer.eachLayer((layer) => {
+          const key = mapPolygonLayerKey(layer);
+          const row = summaries.get(key);
+          const value = finiteNumber(row?.value);
+          if (value === null) return;
+          if (hotspotKeys && !hotspotKeys.has(key)) return;
+          const bounds = layer.getBounds?.();
+          if (!bounds?.isValid()) return;
+          const html = `<div class="map-label" style="font-size:${fontSize}px">${escapeHtml(key)}<br>${escapeHtml(formatLineValue(value))}</div>`;
+          L.marker(bounds.getCenter(), {
+            interactive: false,
+            icon: L.divIcon({
+              className: "",
+              html,
+              iconSize: [0, 0],
+              iconAnchor: [0, 0],
+            }),
+          }).addTo(ukMapLabelLayer);
+        });
+      }
+
+      function zoomToMapKey(level, key) {
+        if (!ukMapLayer) return false;
+        let targetLayer = null;
+        ukMapLayer.eachLayer((layer) => {
+          if (targetLayer) return;
+          if (mapPolygonLayerKey(layer) === key) {
+            targetLayer = layer;
+          }
+        });
+        if (!targetLayer) return false;
+        const bounds = targetLayer.getBounds?.();
+        if (bounds?.isValid()) {
+          ukMap.fitBounds(bounds, { padding: [30, 30], maxZoom: level === "sector" ? 13 : 9 });
+          return true;
+        }
+        return false;
+      }
+
+      function redrawMapInPlace() {
+        syncFloatingMapControl();
+        if (state.tool !== "uk_map" || !state.lastMapData) return;
+        if (state.lastMapData.level === "unit") {
+          if (!ukMapPointLayer?.setRenderContext) {
+            state.preserveMapView = true;
+            renderMap(state.lastMapData, null);
+            return;
+          }
+          measureToolRender("uk_map", () => {
+            const scale = makeUnitPointScale(state.lastMapData);
+            const hotspotKeys = mapUnitHotspotKeys(state.lastMapData);
+            ukMapPointLayer.setRenderContext(scale, hotspotKeys);
+            renderMapLegend(scale, state.lastMapData.response?.label || "Actual");
+          });
+          return;
+        }
+        const geoJson = state.mapGeoJsonCache[state.lastMapData.level];
+        if (!geoJson) return;
+        state.preserveMapView = true;
+        renderMap(state.lastMapData, geoJson);
+      }
+
+      function syncFloatingMapControl() {
+        const actualLabel = el("actualNumerator").selectedOptions[0]?.textContent || el("actualNumerator").value || "Actual";
+        const denominatorValue = el("denominator").value;
+        const denominatorLabel = denominatorValue && denominatorValue !== "__none__"
+          ? (el("denominator").selectedOptions[0]?.textContent || denominatorValue)
+          : "";
+        el("mapControlMetric").textContent = denominatorLabel ? `${actualLabel} / ${denominatorLabel}` : actualLabel;
+        syncActiveFilterLabels();
+        document.querySelectorAll(".map-palette-button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.palette === state.mapPalette);
+        });
+        el("mapLineWeight").value = String(state.mapLineWeight);
+        el("mapOpacity").value = String(state.mapOpacity);
+        el("mapHotspots").value = String(state.mapHotspots);
+        el("mapLabelSize").value = String(state.mapLabelSize);
+        el("mapLineWeightValue").textContent = String(state.mapLineWeight);
+        el("mapOpacityValue").textContent = formatCompactSliderValue(state.mapOpacity);
+        el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
+        el("mapLabelSizeValue").textContent = String(state.mapLabelSize);
+      }
+
+      function formatCompactSliderValue(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        return Number.isInteger(number) ? String(number) : String(Number(number.toFixed(1)));
+      }
+
+      function formatHotspotSliderValue(value) {
+        const raw = Number(value);
+        if (!Number.isFinite(raw)) return "";
+        const sliderValue = Math.round(raw * 10) / 10;
+        if (sliderValue === 0) return "All";
+        return `${sliderValue < 0 ? "B" : "T"}${mapHotspotPercent(sliderValue)}`;
+      }
+
+      function normalisePostcodeSearch(raw) {
+        const value = String(raw || "").trim().toUpperCase();
+        const compact = value.replace(/[^A-Z0-9]/g, "");
+        if (!compact) return null;
+        const areaMatch = compact.match(/^[A-Z]{1,2}/);
+        if (!areaMatch) return null;
+        const area = areaMatch[0];
+        if (/^[A-Z]{1,2}$/.test(compact)) {
+          return { level: "area", key: area, label: area };
+        }
+        const parts = value.replace(/[^A-Z0-9 ]/g, " ").trim().split(/\s+/).filter(Boolean);
+        let sector = "";
+        if (parts.length >= 2 && /\d/.test(parts[0]) && /^\d/.test(parts[1])) {
+          sector = `${parts[0]} ${parts[1][0]}`;
+        } else if (compact.length >= 5 && /\d[A-Z]{2}$/.test(compact)) {
+          sector = `${compact.slice(0, -3)} ${compact.slice(-3, -2)}`;
+        } else if (/\d$/.test(compact) && /\d/.test(compact.slice(0, -1))) {
+          sector = `${compact.slice(0, -1)} ${compact.slice(-1)}`;
+        }
+        if (sector) return { level: "sector", key: sector, label: sector };
+        return { level: "area", key: area, label: area };
+      }
+
+      async function searchMapPostcode() {
+        const search = normalisePostcodeSearch(el("mapPostcodeInput").value);
+        if (!search) {
+          setChartMessage("Enter a postcode area or sector.");
+          return;
+        }
+        el("mapPostcodeInput").value = search.label;
+        setChartMessage("");
+        state.pendingMapZoom = search;
+        if (state.mapLevel !== search.level) {
+          state.mapLevel = search.level;
+          syncMapControls();
+          await refreshMap();
+          return;
+        }
+        if (!state.lastMapData || state.lastMapData.level !== search.level) {
+          await refreshMap();
+          return;
+        }
+        const zoomed = zoomToMapKey(search.level, search.key);
+        if (!zoomed) {
+          setChartMessage(`Postcode ${search.label} was not found.`);
+        }
+        state.pendingMapZoom = null;
+      }
+
+      function mapPopupHtml(title, row, data) {
+        if (!row) {
+          return `<div class="map-popup"><strong>${escapeHtml(title)}</strong><div>No matching data</div></div>`;
+        }
+        const weightLabel = data.denominator?.bar_label || "Weight";
+        return `<div class="map-popup">
+          <strong>${escapeHtml(title)}</strong>
+          <div>${escapeHtml(data.response?.label || "Actual")}: ${escapeHtml(formatLineValue(row.value) || "No data")}</div>
+          <div>${escapeHtml(weightLabel)}: ${escapeHtml(formatNumber(row.denominator))}</div>
+          <div>Rows: ${escapeHtml(formatNumber(row.row_count))}</div>
+        </div>`;
+      }
+
+      function finiteNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : null;
+      }
+
+      function makeQuantileScale(rows) {
+        const values = rows
+          .map((row) => finiteNumber(row.value))
+          .filter((value) => value !== null);
+        return makeQuantileScaleFromValues(values);
+      }
+
+      function makeQuantileScaleFromValues(rawValues) {
+        const palette = interpolateMapPalette(activeMapPalette(), MAP_COLOR_BUCKETS);
+        const values = [...rawValues].sort((a, b) => a - b);
+        const thresholds = quantileThresholds(values, palette.length);
+        return {
+          palette,
+          legendPalette: legendPaletteFromMapPalette(palette),
+          values,
+          thresholds,
+          legendThresholds: quantileThresholds(values, MAP_LEGEND_BUCKETS),
+          color(value) {
+            if (value === null) return MAP_MISSING_COLOR;
+            let bucket = 0;
+            while (bucket < thresholds.length && value > thresholds[bucket]) bucket += 1;
+            return palette[Math.min(bucket, palette.length - 1)];
+          },
+        };
+      }
+
+      function renderMapLegend(scale, title) {
+        const legend = el("mapLegend");
+        if (state.tool !== "uk_map" || !scale.values.length) {
+          legend.classList.add("hidden");
+          legend.innerHTML = "";
+          return;
+        }
+        const rows = [];
+        let lower = null;
+        for (let index = 0; index < scale.legendPalette.length; index += 1) {
+          const upper = scale.legendThresholds[index] ?? null;
+          const label = mapLegendLabel(lower, upper, index === scale.legendPalette.length - 1);
+          rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${scale.legendPalette[index]}"></span><span>${escapeHtml(label)}</span></div>`);
+          lower = upper;
+        }
+        if (mapHotspotSelection()) {
+          rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MUTED_COLOR}"></span><span>Not selected</span></div>`);
+        }
+        rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MISSING_COLOR}"></span><span>No data</span></div>`);
+        legend.innerHTML = rows.join("");
+        legend.classList.remove("hidden");
+      }
+
+      function mapLegendLabel(lower, upper, isLast) {
+        if (lower === null && upper === null) return "All values";
+        if (lower === null) return `≤ ${formatLineValue(upper)}`;
+        if (upper === null || isLast) return `> ${formatLineValue(lower)}`;
+        return `${formatLineValue(lower)}–${formatLineValue(upper)}`;
+      }
+
+      function renderChart(data) {
+        const labels = data.rows.map((r) => formatXLabel(r.x, data.x_kind));
+        const labelMode = state.labels;
+        const rawXValues = data.rows.map((r) => r.x);
+        const xLabelPolicy = getXAxisLabelPolicy(labels, data.x_kind, rawXValues);
+        const dataLabelsAllowed = labels.length < LABEL_DENSITY_LIMIT;
+        const showBarLabels = dataLabelsAllowed && (labelMode === "bar" || labelMode === "all");
+        const showLineLabels = dataLabelsAllowed && (labelMode === "line" || labelMode === "all");
+        const barLayout = getBarLayout(labels.length);
+        const responseAxis = responseAxisOptions(data);
+        const actualColor = getCss("--actual-line");
+        const expectedColor = "#d13f3f";
+        const responseColors = [actualColor, expectedColor];
+        const nColor = getCss("--bar");
+        const weightLabel = data.denominator?.bar_label || "Weight";
+        const sigmaColor = "#8a94a6";
+        const legendData = [
+          ...data.responses.map((response) => response.label),
+          { name: weightLabel, icon: "roundRect", itemStyle: { color: nColor, borderColor: nColor } },
+        ];
+        const barSeries = {
+          name: weightLabel,
+          type: "bar",
+          yAxisIndex: 1,
+          z: 1,
+          legendHoverLink: true,
+          itemStyle: { color: nColor },
+          animation: false,
+          animationDuration: 0,
+          animationDurationUpdate: 0,
+          data: data.rows.map((r) => ({
+            value: r.volume,
+            itemStyle: { color: r.is_tail ? getCss("--tail") : getCss("--bar") },
+          })),
+          label: { show: showBarLabels, position: "top", fontSize: 10, formatter: formatChartLabel },
+          barWidth: barLayout.width,
+          barMaxWidth: barLayout.maxWidth,
+          barCategoryGap: barLayout.categoryGap,
+        };
+        const lineSeries = data.responses.map((response, index) => ({
+          name: response.label,
+          type: "line",
+          yAxisIndex: 0,
+          z: 3,
+          animation: false,
+          animationDuration: 0,
+          animationDurationUpdate: 0,
+          smooth: false,
+          showSymbol: data.rows.length < 250,
+          symbolSize: 5,
+          lineStyle: { color: responseColors[index] || actualColor },
+          itemStyle: { color: responseColors[index] || actualColor },
+          data: data.rows.map((r) => r[`resp${index}`]),
+          showAllSymbol: true,
+          label: { show: showLineLabels, fontSize: 10, formatter: formatLineLabel },
+        }));
+
+        const customSeries = [];
+        if (Number(state.sigma) > 0 && data.responses.length >= 2) {
+          customSeries.push({
+            name: "sigma",
+            type: "custom",
+            yAxisIndex: 0,
+            z: 5,
+            legendHoverLink: false,
+            animation: false,
+            animationDuration: 0,
+            animationDurationUpdate: 0,
+            renderItem: function (params, api) {
+              const x = api.coord([api.value(0), api.value(1)])[0];
+              const low = api.coord([api.value(0), api.value(2)])[1];
+              const high = api.coord([api.value(0), api.value(3)])[1];
+              if (!Number.isFinite(low) || !Number.isFinite(high)) return;
+              return {
+                type: "group",
+                children: [
+                  { type: "line", shape: { x1: x, y1: low, x2: x, y2: high }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
+                  { type: "line", shape: { x1: x - 4, y1: low, x2: x + 4, y2: low }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
+                  { type: "line", shape: { x1: x - 4, y1: high, x2: x + 4, y2: high }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
+                ],
+              };
+            },
+            data: data.rows.map((r, i) => [i, r.resp1, r.resp1_low, r.resp1_high]).filter((r) => r.every((v) => v !== null && v !== undefined)),
+            encode: { x: 0, y: [2, 3] },
+            tooltip: { show: false },
+          });
+        }
+
+        chart.setOption(
+          {
+            animation: false,
+            animationDuration: 0,
+            animationDurationUpdate: 0,
+            stateAnimation: { duration: 0 },
+            backgroundColor: "transparent",
+            color: [actualColor, expectedColor, nColor],
+            tooltip: {
+              trigger: "axis",
+              formatter: (params) => formatChartTooltip(params, weightLabel),
+            },
+            legend: {
+              top: 0,
+              data: legendData,
+              selectedMode: false,
+              textStyle: { color: getCss("--text"), fontWeight: 700 },
+            },
+            grid: { left: 72, right: 76, top: 56, bottom: xLabelPolicy.bottom, containLabel: false },
+            xAxis: {
+              type: "category",
+              name: data.x || "",
+              nameLocation: "middle",
+              nameGap: xLabelPolicy.nameGap,
+              nameTextStyle: { color: getCss("--text"), fontSize: 13, fontWeight: 700 },
+              data: labels,
+              axisLabel: {
+                show: xLabelPolicy.show,
+                color: getCss("--text"),
+                interval: xLabelPolicy.interval,
+                formatter: xLabelPolicy.formatter,
+                hideOverlap: false,
+                showMinLabel: xLabelPolicy.showMinLabel,
+                showMaxLabel: xLabelPolicy.showMaxLabel,
+                rotate: xLabelPolicy.rotate,
+                fontSize: xLabelPolicy.fontSize,
+                margin: 8,
+              },
+              axisLine: { lineStyle: { color: getCss("--line") } },
+            },
+            yAxis: [
+              { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatLineValue(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
+              { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
+            ],
+            dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
+            series: [barSeries, ...lineSeries, ...customSeries],
+          },
+          true,
+        );
+        requestAnimationFrame(() => chart.resize());
+        return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-");
+      }
+
+      function chartDensityMessage(groupCount, xLabelsHidden, chartLabelsHidden) {
+        if (!xLabelsHidden && !chartLabelsHidden) return "";
+        const labelTarget = xLabelsHidden && chartLabelsHidden
+          ? "X-axis and chart labels"
+          : xLabelsHidden ? "X-axis labels" : "Chart labels";
+        return `${labelTarget} hidden as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories.`;
+      }
+
+      function formatChartTooltip(params, weightLabel) {
+        const items = Array.isArray(params) ? params : [params];
+        if (!items.length) return "";
+        const lines = [escapeHtml(items[0].axisValueLabel ?? items[0].name ?? "")];
+        items.forEach((item) => {
+          const value = Array.isArray(item.value) ? item.value[1] : item.value;
+          const formatter = item.seriesName === weightLabel ? formatNumber : formatLineValue;
+          lines.push(`${item.marker || ""}${escapeHtml(item.seriesName)}: ${escapeHtml(formatter(value))}`);
+        });
+        return lines.join("<br/>");
+      }
+
+      function updateMetricTitles(data) {
+        const summaries = data.response_summaries || [];
+        renderMetricTitle(el("actualMetricTitle"), "Actual", summaries[0]?.value);
+        renderMetricTitle(el("expectedMetricTitle"), "Expected", summaries[1]?.value);
+        renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
+      }
+
+      function renderMetricTitle(target, label, value, formatter = formatLineValue) {
+        const formatted = formatter(value);
+        target.textContent = label;
+        if (!formatted) return;
+        target.append(" ");
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "metric-value";
+        valueSpan.textContent = formatted;
+        target.append(valueSpan);
+      }
+
+      function responseAxisOptions(data) {
+        return responseAxisBounds(responseAxisExtent(data.rows, data.responses.length)) || {};
+      }
+
+      function responseAxisExtent(rows, responseCount) {
+        let min = Infinity;
+        let max = -Infinity;
+        rows.forEach((row) => {
+          for (let index = 0; index < responseCount; index += 1) {
+            const value = Number(row[`resp${index}`]);
+            if (!Number.isFinite(value)) continue;
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+          }
+        });
+        return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+      }
+
+      function responseAxisSpan(value) {
+        const min = Number(value?.min);
+        const max = Number(value?.max);
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+        if (max > min) return max - min;
+        return Math.max(Math.abs(max), Math.abs(min), 1);
+      }
+
+      function niceAxisStep(span) {
+        if (!Number.isFinite(span) || span <= 0) return 1;
+        const roughStep = span / RESPONSE_AXIS_TARGET_INTERVALS;
+        const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+        const normalized = roughStep / magnitude;
+        const multiplier = [1, 2, 5, 10].find((candidate) => normalized <= candidate) || 10;
+        return multiplier * magnitude;
+      }
+
+      function roundAxisValue(value, step) {
+        if (!Number.isFinite(value)) return value;
+        const precision = Math.min(12, Math.max(0, Math.ceil(-Math.log10(Math.abs(step))) + 3));
+        return Number(value.toFixed(precision));
+      }
+
+      function responseAxisBounds(value) {
+        const min = Number(value?.min);
+        const max = Number(value?.max);
+        const span = responseAxisSpan(value);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || span === null) return null;
+        const paddedMin = min - span * RESPONSE_AXIS_PADDING;
+        const paddedMax = max + span * RESPONSE_AXIS_PADDING;
+        const step = niceAxisStep(paddedMax - paddedMin);
+        let axisMin = Math.floor(paddedMin / step) * step;
+        let axisMax = Math.ceil(paddedMax / step) * step;
+        if (min >= 0) axisMin = Math.max(0, axisMin);
+        if (axisMax <= axisMin) axisMax = axisMin + step;
+        return {
+          min: roundAxisValue(axisMin, step),
+          max: roundAxisValue(axisMax, step),
+          interval: step,
+        };
+      }
+
+      function getXAxisLabelPolicy(labels, kind = "", rawValues = labels) {
+        if (isDateKind(kind)) return getDateXAxisLabelPolicy(labels, rawValues);
+        const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label).length), 0);
+        const tooMany = labels.length >= LABEL_DENSITY_LIMIT;
+        const dataZoomSpace = labels.length > 120 ? 36 : 0;
+        if (tooMany) {
+          return {
+            show: false,
+            interval: 0,
+            formatter: undefined,
+            showMinLabel: true,
+            showMaxLabel: true,
+            rotate: 0,
+            fontSize: 10,
+            nameGap: 22,
+            bottom: 38 + dataZoomSpace,
+          };
+        }
+        const rotate = labels.length > 18 || maxLength > 10 ? 65 : 0;
+        const fontSize = labels.length > 50 ? 8 : 10;
+        const estimatedTextWidth = maxLength * fontSize * 0.5;
+        const rotatedHeight = estimatedTextWidth * Math.sin((rotate * Math.PI) / 180) + fontSize * Math.cos((rotate * Math.PI) / 180);
+        const labelSpace = rotate ? Math.min(140, Math.max(58, Math.ceil(rotatedHeight) + 18)) : 38;
+        const titleGap = rotate ? Math.max(26, labelSpace - 10) : 26;
+        return {
+          show: true,
+          interval: 0,
+          formatter: undefined,
+          showMinLabel: true,
+          showMaxLabel: true,
+          rotate,
+          fontSize,
+          nameGap: titleGap,
+          bottom: titleGap + 16 + dataZoomSpace,
+        };
+      }
+
+      function getDateXAxisLabelPolicy(labels, rawValues) {
+        const parsedDates = rawValues.map(parseDateCategory);
+        const selectedIndexes = dateXAxisLabelIndexes(parsedDates, labels.length);
+        const selectedIndexSet = new Set(selectedIndexes);
+        const dataZoomSpace = labels.length > 120 ? 36 : 0;
+        return {
+          show: selectedIndexes.length > 0,
+          interval: (index) => selectedIndexSet.has(index),
+          formatter: (value, index) => formatDateAxisLabel(rawValues[index] ?? value, parsedDates[index]),
+          showMinLabel: selectedIndexSet.has(0) ? true : undefined,
+          showMaxLabel: selectedIndexSet.has(labels.length - 1) ? true : undefined,
+          rotate: 0,
+          fontSize: 10,
+          nameGap: 26,
+          bottom: 46 + dataZoomSpace,
+        };
+      }
+
+      function dateXAxisLabelIndexes(parsedDates, count) {
+        if (count <= 0) return [];
+        const monthStartIndexes = parsedDates
+          .map((date, index) => (date && date.day === 1 ? index : null))
+          .filter((index) => index !== null);
+        if (monthStartIndexes.length >= DATE_AXIS_MIN_MONTH_LABELS) {
+          if (monthStartIndexes.length <= DATE_AXIS_MAX_MONTH_LABELS) return monthStartIndexes;
+          const stride = Math.ceil(monthStartIndexes.length / DATE_AXIS_TARGET_LABELS);
+          const indexes = monthStartIndexes.filter((_, position) => position % stride === 0);
+          return indexes.length >= DATE_AXIS_MIN_MONTH_LABELS ? indexes : sparseDateXAxisLabelIndexes(count);
+        }
+        return sparseDateXAxisLabelIndexes(count);
+      }
+
+      function sparseDateXAxisLabelIndexes(count) {
+        if (count <= DATE_AXIS_TARGET_LABELS) return Array.from({ length: count }, (_, index) => index);
+        const indexes = new Set([0, count - 1]);
+        const step = Math.ceil((count - 1) / (DATE_AXIS_TARGET_LABELS - 1));
+        for (let index = 0; index < count; index += step) {
+          indexes.add(index);
+        }
+        return Array.from(indexes).sort((a, b) => a - b);
+      }
+
+      function parseDateCategory(value) {
+        if (value === null || value === undefined) return null;
+        const match = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (!match) return null;
+        const year = Number(match[1]);
+        const month = Number(match[2]);
+        const day = Number(match[3]);
+        if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+        const checked = new Date(Date.UTC(year, month - 1, day));
+        if (checked.getUTCFullYear() !== year || checked.getUTCMonth() !== month - 1 || checked.getUTCDate() !== day) return null;
+        return { year, month, day };
+      }
+
+      function formatDateAxisLabel(value, parsedDate) {
+        if (!parsedDate) return String(value);
+        const month = DATE_AXIS_MONTHS[parsedDate.month - 1];
+        return `${parsedDate.day} ${month} ${parsedDate.year}`;
+      }
+
+      function getBarLayout(count) {
+        if (count <= 3) {
+          return { width: "62%", maxWidth: 240, categoryGap: "18%" };
+        }
+        if (count <= 8) {
+          return { width: "56%", maxWidth: 180, categoryGap: "24%" };
+        }
+        if (count <= 20) {
+          return { width: "46%", maxWidth: 90, categoryGap: "34%" };
+        }
+        if (count <= 60) {
+          return { width: "68%", maxWidth: 34, categoryGap: "28%" };
+        }
+        return { width: null, maxWidth: 18, categoryGap: "30%" };
+      }
+
+      function renderTable(data) {
+        const responseHeaders = data.responses.map((r, i) => `<th>${escapeHtml(r.label)}</th>`).join("");
+        const weightLabel = data.denominator?.bar_label || "Weight";
+        const needsPagination = data.rows.length > TABLE_PAGE_SIZE;
+        const pageCount = needsPagination ? Math.ceil(data.rows.length / TABLE_PAGE_SIZE) : 1;
+        state.tablePage = Math.min(Math.max(state.tablePage, 1), pageCount);
+        const start = needsPagination ? (state.tablePage - 1) * TABLE_PAGE_SIZE : 0;
+        const pageRows = needsPagination ? data.rows.slice(start, start + TABLE_PAGE_SIZE) : data.rows;
+        const rows = pageRows
+          .map((r) => {
+            const values = data.responses.map((_, i) => `<td>${formatLineValue(r[`resp${i}`])}</td>`).join("");
+            return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
+          })
+          .join("");
+        const pager = needsPagination
+          ? `<div class="table-pagination">
+              <span>${(start + 1).toLocaleString()}-${(start + pageRows.length).toLocaleString()} of ${data.rows.length.toLocaleString()} rows</span>
+              <button id="tablePrevBtn" type="button"${state.tablePage === 1 ? " disabled" : ""}>Previous</button>
+              <span>Page ${state.tablePage.toLocaleString()} of ${pageCount.toLocaleString()}</span>
+              <button id="tableNextBtn" type="button"${state.tablePage === pageCount ? " disabled" : ""}>Next</button>
+            </div>`
+          : "";
+        el("tableWrap").innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>${escapeHtml(weightLabel)}</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody></table></div>${pager}`;
+        if (needsPagination) {
+          el("tablePrevBtn").addEventListener("click", () => {
+            state.tablePage -= 1;
+            renderTable(data);
+          });
+          el("tableNextBtn").addEventListener("click", () => {
+            state.tablePage += 1;
+            renderTable(data);
+          });
+        }
+      }
+
+      function setView(view) {
+        state.view = view;
+        if (state.tool !== "line_bar") return;
+        el("chartTab").classList.toggle("active", view === "chart");
+        el("tableTab").classList.toggle("active", view === "table");
+        el("chart").classList.toggle("hidden", view !== "chart");
+        el("tableWrap").classList.toggle("hidden", view !== "table");
+        el("ukMap").classList.add("hidden");
+        el("mapLegend").classList.add("hidden");
+        el("chartMessage").classList.toggle("hidden", view !== "chart" || !el("chartMessage").textContent);
+        if (view === "chart") chart.resize();
+      }
+
+      function setupSidebarResize() {
+        const shell = document.querySelector(".shell");
+        const resizer = el("sidebarResizer");
+        const savedWidth = Number(localStorage.getItem("py_lucidum_sidebar_width"));
+        if (Number.isFinite(savedWidth) && savedWidth > 0) {
+          setSidebarWidth(savedWidth);
+        }
+
+        let dragging = false;
+        resizer.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          dragging = true;
+          resizer.classList.add("dragging");
+          document.body.classList.add("resizing-sidebar");
+          resizer.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        resizer.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          const bounds = shell.getBoundingClientRect();
+          setSidebarWidth(event.clientX - bounds.left);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          resizer.classList.remove("dragging");
+          document.body.classList.remove("resizing-sidebar");
+          window.getSelection()?.removeAllRanges();
+          const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"));
+          if (Number.isFinite(width)) {
+            localStorage.setItem("py_lucidum_sidebar_width", String(Math.round(width)));
+          }
+          if (event.pointerId !== undefined) {
+            try {
+              resizer.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+          chart.resize();
+        }
+        resizer.addEventListener("pointerup", finishDrag);
+        resizer.addEventListener("pointercancel", finishDrag);
+      }
+
+      function setSidebarWidth(rawWidth) {
+        const viewportLimit = Math.max(260, window.innerWidth - 520);
+        const width = Math.min(Math.max(rawWidth, 220), Math.min(560, viewportLimit));
+        document.documentElement.style.setProperty("--sidebar-width", `${Math.round(width)}px`);
+        requestAnimationFrame(() => chart.resize());
+      }
+
+      function setupSidebarFilterResize() {
+        const section = document.querySelector(".sidebar-filter-section");
+        const resizer = el("sidebarFilterResizer");
+        const savedHeight = Number(localStorage.getItem("py_lucidum_sidebar_filter_height"));
+        if (Number.isFinite(savedHeight) && savedHeight > 0) {
+          document.documentElement.style.setProperty("--sidebar-filter-height", `${Math.round(savedHeight)}px`);
+          if (!state.filterCollapsed) setSidebarFilterHeight(savedHeight);
+        }
+
+        let dragging = false;
+        let startY = 0;
+        let startHeight = 0;
+        resizer.addEventListener("pointerdown", (event) => {
+          if (state.filterCollapsed) return;
+          event.preventDefault();
+          dragging = true;
+          startY = event.clientY;
+          startHeight = section?.getBoundingClientRect().height || 0;
+          resizer.classList.add("dragging");
+          document.body.classList.add("resizing-sidebar-filter");
+          resizer.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        resizer.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          setSidebarFilterHeight(startHeight + startY - event.clientY);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          resizer.classList.remove("dragging");
+          document.body.classList.remove("resizing-sidebar-filter");
+          window.getSelection()?.removeAllRanges();
+          const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-filter-height"));
+          if (Number.isFinite(height)) {
+            localStorage.setItem("py_lucidum_sidebar_filter_height", String(Math.round(height)));
+          }
+          if (event.pointerId !== undefined) {
+            try {
+              resizer.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+        }
+        resizer.addEventListener("pointerup", finishDrag);
+        resizer.addEventListener("pointercancel", finishDrag);
+      }
+
+      function setSidebarFilterHeight(rawHeight) {
+        if (state.filterCollapsed) return;
+        const section = document.querySelector(".sidebar-filter-section");
+        const aside = el("appSidebar");
+        if (!section || !aside) return;
+        const toolSection = el("toolSelectorSection");
+        const kpiSection = document.querySelector(".sidebar-kpi-section");
+        const outerHeight = (element) => {
+          if (!element || element.classList.contains("hidden")) return 0;
+          const style = getComputedStyle(element);
+          return element.getBoundingClientRect().height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+        };
+        const asideStyle = getComputedStyle(aside);
+        const contentHeight = aside.getBoundingClientRect().height - (parseFloat(asideStyle.paddingTop) || 0) - (parseFloat(asideStyle.paddingBottom) || 0);
+        const kpiVisible = kpiSection && !kpiSection.classList.contains("hidden") && !state.kpiCollapsed;
+        const kpiStyle = kpiSection ? getComputedStyle(kpiSection) : null;
+        const kpiMarginBottom = kpiVisible && kpiStyle ? (parseFloat(kpiStyle.marginBottom) || 0) : 0;
+        const sectionStyle = getComputedStyle(section);
+        const sectionMargins = (parseFloat(sectionStyle.marginTop) || 0) + (parseFloat(sectionStyle.marginBottom) || 0);
+        const availableHeight = contentHeight - outerHeight(toolSection);
+        const minHeight = 168;
+        const minKpiHeight = kpiVisible ? 132 : 0;
+        const maxHeight = Math.max(minHeight, availableHeight - minKpiHeight - kpiMarginBottom - sectionMargins);
+        const height = Math.min(Math.max(rawHeight, minHeight), maxHeight);
+        document.documentElement.style.setProperty("--sidebar-filter-height", `${Math.round(height)}px`);
+      }
+
+      function clampSidebarFilterHeight() {
+        const section = document.querySelector(".sidebar-filter-section");
+        if (!section || state.filterCollapsed) return;
+        setSidebarFilterHeight(section.getBoundingClientRect().height);
+      }
+
+      function setupChartControlsResize() {
+        const visualArea = document.querySelector(".visual-area");
+        const resizer = el("chartControlsResizer");
+        const savedWidth = Number(localStorage.getItem("py_lucidum_chart_controls_width"));
+        if (Number.isFinite(savedWidth) && savedWidth > 0) {
+          setChartControlsWidth(savedWidth);
+        }
+
+        let dragging = false;
+        resizer.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          dragging = true;
+          resizer.classList.add("dragging");
+          document.body.classList.add("resizing-chart-controls");
+          resizer.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        resizer.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          const bounds = visualArea.getBoundingClientRect();
+          setChartControlsWidth(event.clientX - bounds.left);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          resizer.classList.remove("dragging");
+          document.body.classList.remove("resizing-chart-controls");
+          window.getSelection()?.removeAllRanges();
+          const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-controls-width"));
+          if (Number.isFinite(width)) {
+            localStorage.setItem("py_lucidum_chart_controls_width", String(Math.round(width)));
+          }
+          if (event.pointerId !== undefined) {
+            try {
+              resizer.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+          chart.resize();
+        }
+        resizer.addEventListener("pointerup", finishDrag);
+        resizer.addEventListener("pointercancel", finishDrag);
+      }
+
+      function setChartControlsWidth(rawWidth) {
+        const visualArea = document.querySelector(".visual-area");
+        const availableWidth = visualArea?.getBoundingClientRect().width || window.innerWidth;
+        const minWidth = 280;
+        const maxWidth = Math.max(minWidth, Math.min(560, availableWidth - 420));
+        const width = Math.min(Math.max(rawWidth, minWidth), maxWidth);
+        document.documentElement.style.setProperty("--chart-controls-width", `${Math.round(width)}px`);
+        requestAnimationFrame(() => chart.resize());
+      }
+
+      function setupChartControlHeightsResize() {
+        const controls = document.querySelector(".chart-side-controls");
+        const firstPanel = controls?.querySelector(".chart-side-section");
+        const resizer = el("chartControlHeightResizer");
+        const savedHeight = Number(localStorage.getItem("py_lucidum_chart_feature_controls_height"));
+        if (Number.isFinite(savedHeight) && savedHeight > 0) {
+          setChartFeatureControlsHeight(savedHeight);
+        }
+
+        let dragging = false;
+        let startY = 0;
+        let startHeight = 0;
+        resizer.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          dragging = true;
+          startY = event.clientY;
+          startHeight = firstPanel?.getBoundingClientRect().height || 0;
+          resizer.classList.add("dragging");
+          document.body.classList.add("resizing-chart-control-heights");
+          resizer.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        resizer.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          setChartFeatureControlsHeight(startHeight + event.clientY - startY);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          resizer.classList.remove("dragging");
+          document.body.classList.remove("resizing-chart-control-heights");
+          window.getSelection()?.removeAllRanges();
+          const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-feature-controls-height"));
+          if (Number.isFinite(height)) {
+            localStorage.setItem("py_lucidum_chart_feature_controls_height", String(Math.round(height)));
+          }
+          if (event.pointerId !== undefined) {
+            try {
+              resizer.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+        }
+        resizer.addEventListener("pointerup", finishDrag);
+        resizer.addEventListener("pointercancel", finishDrag);
+      }
+
+      function setChartFeatureControlsHeight(rawHeight) {
+        const controls = document.querySelector(".chart-side-controls");
+        const availableHeight = controls?.getBoundingClientRect().height || window.innerHeight;
+        const splitterSpace = 22;
+        const minPanelHeight = 96;
+        const maxHeight = Math.max(minPanelHeight, availableHeight - splitterSpace - minPanelHeight);
+        const height = Math.min(Math.max(rawHeight, minPanelHeight), maxHeight);
+        document.documentElement.style.setProperty("--chart-feature-controls-height", `${Math.round(height)}px`);
+      }
+
+      function bindControls() {
+        setupSidebarResize();
+        setupSidebarFilterResize();
+        setupChartControlsResize();
+        setupChartControlHeightsResize();
+        setupMapFloatingControlDrag();
+        bindMapFloatingControls();
+        syncSidebarToggleButton();
+        setKpiCollapsed(state.kpiCollapsed);
+        syncFilterCollapseButton();
+        syncFilterFooterToggleButton();
+        syncActionTimingMonitor();
+        setFilterSelectionMode(state.filterSelectionMode, { apply: false });
+        document.querySelectorAll(".segmented").forEach((group) => {
+          group.addEventListener("click", (event) => {
+            if (event.target.tagName !== "BUTTON") return;
+            if (group.dataset.control === "bandWidth" && event.target.dataset.action) {
+              stepBandWidth(event.target.dataset.action === "band-down" ? -1 : 1);
+              return;
+            }
+            group.querySelectorAll("button").forEach((button) => button.classList.remove("active"));
+            event.target.classList.add("active");
+            const previousControlValue = state[group.dataset.control];
+            state[group.dataset.control] = event.target.dataset.value;
+            if (group.dataset.control === "featureSort") {
+              renderFeatures();
+              return;
+            }
+            if (group.dataset.control === "expectedSort") {
+              renderExpectedNumerators();
+              return;
+            }
+            if (group.dataset.control === "filterOperator") {
+              applySavedFilters();
+              return;
+            }
+            if (group.dataset.control === "filterSelectionMode") {
+              setFilterSelectionMode(event.target.dataset.value);
+              return;
+            }
+            if (group.dataset.control === "bandWidth") {
+              state.bandFeature = state.x;
+              if (state.quantileMode === "quantile") {
+                normalizeBandWidthForQuantiles();
+              } else {
+                syncBandingControl();
+              }
+            }
+            if (group.dataset.control === "quantileMode") {
+              if (state.quantileMode === "quantile" && previousControlValue !== "quantile") {
+                state.bandWidth = "10";
+                state.bandFeature = state.x;
+                syncBandingControl();
+              } else if (state.quantileMode === "quantile") {
+                normalizeBandWidthForQuantiles();
+              } else {
+                syncBandingControl();
+              }
+              syncQuantileControl();
+            }
+            refreshChart({ renderIfCached: group.dataset.control === "labels" });
+          });
+        });
+        ["actualNumerator", "denominator"].forEach((id) => {
+          el(id).addEventListener("change", () => {
+            syncKpiSelectionFromMetrics();
+            refreshActiveTool();
+          });
+        });
+        el("expectedNumerator").addEventListener("change", () => {
+          renderExpectedNumerators();
+          updateAxisControls();
+          refreshChart();
+        });
+        el("expectedSearch").addEventListener("input", renderExpectedNumerators);
+        el("featureSearch").addEventListener("input", renderFeatures);
+        el("expectedSearchClear").addEventListener("click", () => clearSearchInput("expectedSearch", renderExpectedNumerators));
+        el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));
+        el("filterApplyBtn").addEventListener("click", applyFilter);
+        el("filterClearBtn").addEventListener("click", clearFilter);
+        el("filterInput").addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            applyFilter();
+          }
+        });
+        el("chartTab").addEventListener("click", () => setView("chart"));
+        el("tableTab").addEventListener("click", () => setView("table"));
+        el("profileTool").addEventListener("click", () => handleToolClick("column_profile"));
+        el("lineBarTool").addEventListener("click", () => handleToolClick("line_bar"));
+        el("ukMapTool").addEventListener("click", () => handleToolClick("uk_map"));
+        el("glmTool").addEventListener("click", () => handleToolClick("glm"));
+        el("gbmTool").addEventListener("click", () => handleToolClick("gbm"));
+        el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
+        el("filterFooterToggleBtn").addEventListener("click", () => setFilterFooterVisible(state.filterFooterCollapsed));
+        el("kpiCollapseBtn").addEventListener("click", () => setKpiCollapsed(!state.kpiCollapsed));
+        el("filterCollapseBtn").addEventListener("click", () => setFilterCollapsed(!state.filterCollapsed));
+        el("filterSidebarClearBtn").addEventListener("click", clearFilter);
+        el("stopAppBtn").addEventListener("click", stopApp);
+        el("themeBtn").addEventListener("click", () => {
+          document.body.classList.toggle("dark");
+          syncThemeButton();
+          syncCartoBaseMapForTheme();
+          applyMapBackground();
+          if (state.tool === "line_bar" && state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
+          if (state.tool === "uk_map") measureToolRender("uk_map", () => resizeMap());
+        });
+        el("reloadBtn").addEventListener("click", async () => {
+          setStatus("");
+          setGroupMeta(state.tool, "Reloading...");
+          const previousFilterSignature = savedFilterSpecSignature();
+          const previousSavedFilterSelection = savedFilterSelectionSnapshot();
+          const previousCollapsedSavedFilterThemes = new Set(state.collapsedSavedFilterThemes);
+          const previousSavedFilterThemesInitialised = state.savedFilterThemesInitialised;
+          const previousSidebarVisible = state.sidebarVisible;
+          const preserveMapViewOnReload = state.tool === "uk_map" && Boolean(ukMap);
+          state.schema = await api("/api/reload", { method: "POST" });
+          const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
+          state.bandFeature = null;
+          state.mapFitLevel = null;
+          clearToolCaches();
+          if (preserveMapViewOnReload) state.preserveMapView = true;
+          setFilterRowMeta(state.schema.row_count);
+          if (filtersUnchanged) {
+            state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
+            state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
+          } else {
+            state.collapsedSavedFilterThemes = new Set();
+            state.savedFilterThemesInitialised = false;
+          }
+          state.kpiGroupsInitialised = false;
+          renderSavedFilters();
+          if (filtersUnchanged) restoreSavedFilterSelection(previousSavedFilterSelection);
+          renderKpis();
+          renderToolSelector();
+          if (!toolEnabled(state.tool)) {
+            state.tool = chooseDefaultTool();
+          }
+          renderExpectedNumerators();
+          renderFeatures();
+          updateAxisControls();
+          setTool(state.tool, false);
+          setSidebarVisible(previousSidebarVisible);
+          refreshActiveTool({ force: true });
+        });
+        window.addEventListener("resize", () => {
+          if (state.sidebarVisible) clampSidebarFilterHeight();
+          if (state.tool === "line_bar") {
+            const controls = document.querySelector(".chart-side-controls");
+            if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
+            const firstPanel = controls?.querySelector(".chart-side-section");
+            if (firstPanel) setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height);
+            chart.resize();
+          } else if (state.tool === "uk_map") {
+            clampMapFloatingControl();
+            resizeMap();
+          }
+        });
+      }
+
+      function setupMapFloatingControlDrag() {
+        const panel = el("mapFloatingControl");
+        const saved = restoreMapFloatingPosition();
+        if (saved) {
+          state.mapControlMoved = true;
+          requestAnimationFrame(() => setMapFloatingPosition(saved.left, saved.top));
+        }
+
+        let dragging = false;
+        let startX = 0;
+        let startY = 0;
+        let startLeft = 0;
+        let startTop = 0;
+        panel.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0 || isMapFloatingInteractiveTarget(event.target)) return;
+          event.preventDefault();
+          dragging = true;
+          if (!state.mapControlMoved) {
+            state.mapControlMoved = true;
+            setMapFloatingPosition(panel.offsetLeft, panel.offsetTop);
+          }
+          startX = event.clientX;
+          startY = event.clientY;
+          startLeft = panel.offsetLeft;
+          startTop = panel.offsetTop;
+          panel.classList.add("dragging");
+          document.body.classList.add("dragging-map-control");
+          panel.setPointerCapture(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+        });
+        panel.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          event.preventDefault();
+          setMapFloatingPosition(startLeft + event.clientX - startX, startTop + event.clientY - startY);
+        });
+        function finishDrag(event) {
+          if (!dragging) return;
+          dragging = false;
+          panel.classList.remove("dragging");
+          document.body.classList.remove("dragging-map-control");
+          window.getSelection()?.removeAllRanges();
+          persistMapFloatingPosition();
+          if (event.pointerId !== undefined) {
+            try {
+              panel.releasePointerCapture(event.pointerId);
+            } catch (_) {
+            }
+          }
+        }
+        panel.addEventListener("pointerup", finishDrag);
+        panel.addEventListener("pointercancel", finishDrag);
+      }
+
+      function isMapFloatingInteractiveTarget(target) {
+        return Boolean(target?.closest?.("button, input, select, textarea, label, a"));
+      }
+
+      function restoreMapFloatingPosition() {
+        if (localStorage.getItem(MAP_CONTROL_POSITION_KEYS.version) !== MAP_CONTROL_POSITION_VERSION) {
+          clearMapFloatingPosition();
+          return null;
+        }
+        const left = Number(localStorage.getItem(MAP_CONTROL_POSITION_KEYS.left));
+        const top = Number(localStorage.getItem(MAP_CONTROL_POSITION_KEYS.top));
+        if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+        return { left, top };
+      }
+
+      function persistMapFloatingPosition() {
+        const position = state.mapControlPosition;
+        if (!position) return;
+        localStorage.setItem(MAP_CONTROL_POSITION_KEYS.left, String(Math.round(position.left)));
+        localStorage.setItem(MAP_CONTROL_POSITION_KEYS.top, String(Math.round(position.top)));
+        localStorage.setItem(MAP_CONTROL_POSITION_KEYS.version, MAP_CONTROL_POSITION_VERSION);
+      }
+
+      function clearMapFloatingPosition() {
+        localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.left);
+        localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.top);
+        localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.version);
+      }
+
+      function setMapFloatingPosition(rawLeft, rawTop) {
+        const panel = el("mapFloatingControl");
+        const workspace = panel.closest(".workspace");
+        const workspaceRect = workspace?.getBoundingClientRect();
+        if (!workspaceRect) return;
+        const margin = 8;
+        const maxLeft = Math.max(margin, workspaceRect.width - panel.offsetWidth - margin);
+        const maxTop = Math.max(margin, workspaceRect.height - panel.offsetHeight - margin);
+        const left = Math.min(Math.max(rawLeft, margin), maxLeft);
+        const top = Math.min(Math.max(rawTop, margin), maxTop);
+        panel.style.left = `${Math.round(left)}px`;
+        panel.style.top = `${Math.round(top)}px`;
+        panel.style.right = "auto";
+        state.mapControlPosition = { left, top };
+      }
+
+      function clampMapFloatingControl() {
+        const panel = el("mapFloatingControl");
+        if (state.mapControlMoved) {
+          if (state.mapControlPosition) {
+            setMapFloatingPosition(state.mapControlPosition.left, state.mapControlPosition.top);
+          } else {
+            setMapFloatingPosition(panel.offsetLeft, panel.offsetTop);
+          }
+          return;
+        }
+        positionMapFloatingControlTopRight();
+      }
+
+      function positionMapFloatingControlTopRight() {
+        const panel = el("mapFloatingControl");
+        const styles = getComputedStyle(panel);
+        const rightInset = styles.getPropertyValue("--map-floating-right").trim() || "19px";
+        const topInset = styles.getPropertyValue("--map-floating-top").trim() || "16px";
+        panel.style.left = "auto";
+        panel.style.right = rightInset;
+        panel.style.top = topInset;
+        state.mapControlPosition = null;
+      }
+
+      function resetMapFloatingControlPosition() {
+        clearMapFloatingPosition();
+        state.mapControlPosition = null;
+        state.mapControlMoved = false;
+        positionMapFloatingControlTopRight();
+      }
+
+      function bindMapFloatingControls() {
+        el("mapControlReset").addEventListener("click", resetMapFloatingControlPosition);
+        document.querySelectorAll(".map-palette-button").forEach((button) => {
+          button.addEventListener("click", () => {
+            state.mapPalette = button.dataset.palette || "viridis";
+            redrawMapInPlace();
+          });
+        });
+        [
+          ["mapLineWeight", "mapLineWeight"],
+          ["mapOpacity", "mapOpacity"],
+          ["mapHotspots", "mapHotspots"],
+          ["mapLabelSize", "mapLabelSize"],
+        ].forEach(([id, stateKey]) => {
+          el(id).addEventListener("input", (event) => {
+            state[stateKey] = Number(event.target.value);
+            redrawMapInPlace();
+          });
+        });
+        el("mapPostcodeSearch").addEventListener("click", searchMapPostcode);
+        el("mapPostcodeClear").addEventListener("click", () => {
+          el("mapPostcodeInput").value = "";
+          setChartMessage("");
+        });
+        el("mapPostcodeInput").addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            searchMapPostcode();
+          }
+        });
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
+      }
+
+      function formatNumber(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return "";
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        const abs = Math.abs(number);
+        let maximumFractionDigits = 0;
+        if (abs !== 0 && abs < 0.01) maximumFractionDigits = 6;
+        else if (abs < 1) maximumFractionDigits = 4;
+        else if (abs < 10) maximumFractionDigits = 3;
+        else if (abs < 1000) maximumFractionDigits = 2;
+        else maximumFractionDigits = 1;
+        return number.toLocaleString(undefined, {
+          minimumFractionDigits: 0,
+          maximumFractionDigits,
+        });
+      }
+
+      function formatChartLabel(params) {
+        const value = Array.isArray(params.value) ? params.value[1] : params.value;
+        return formatNumber(value);
+      }
+
+      function formatLineLabel(params) {
+        const value = Array.isArray(params.value) ? params.value[1] : params.value;
+        return formatLineValue(value);
+      }
+
+      function formatLineValue(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return "";
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        if (state.activeKpiFormat) {
+          const decimals = Number(state.activeKpiFormat.decimals);
+          const fractionDigits = Number.isInteger(decimals) ? Math.max(0, Math.min(12, decimals)) : 2;
+          const displayNumber = state.activeKpiFormat.format === "percent" ? number * 100 : number;
+          const formatted = Math.abs(displayNumber).toLocaleString(undefined, {
+            minimumFractionDigits: fractionDigits,
+            maximumFractionDigits: fractionDigits,
+          });
+          const sign = displayNumber < 0 ? "-" : "";
+          if (state.activeKpiFormat.format === "currency") return `${sign}£${formatted}`;
+          const signed = `${sign}${formatted}`;
+          if (state.activeKpiFormat.format === "percent") return `${signed}%`;
+          return signed;
+        }
+        const abs = Math.abs(number);
+        let fractionDigits = 2;
+        if (abs !== 0 && abs < 0.01) fractionDigits = 6;
+        else if (abs < 1) fractionDigits = 4;
+        return number.toLocaleString(undefined, {
+          minimumFractionDigits: fractionDigits,
+          maximumFractionDigits: fractionDigits,
+        });
+      }
+
+      function formatWeightValue(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return "";
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "";
+        const abs = Math.abs(number);
+        if (abs >= 10 || Number.isInteger(number)) {
+          return number.toLocaleString(undefined, {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0,
+          });
+        }
+        return formatNumber(number);
+      }
+
+      function formatFileSize(value) {
+        const bytes = Number(value);
+        if (!Number.isFinite(bytes) || bytes < 0) return "";
+        let divisor = 1024;
+        let suffix = "Kb";
+        if (bytes >= 1024 ** 3) {
+          divisor = 1024 ** 3;
+          suffix = "Gb";
+        } else if (bytes >= 1024 ** 2) {
+          divisor = 1024 ** 2;
+          suffix = "Mb";
+        }
+        const size = bytes / divisor;
+        return `${(bytes > 0 ? Math.max(0.1, size) : 0).toFixed(1)}${suffix}`;
+      }
+
+      function formatXLabel(value, kind) {
+        if (kind === "numeric") return formatNumericXLabel(value);
+        if (kind !== "integer") return String(value);
+        const number = Number(value);
+        if (!Number.isFinite(number) || !Number.isInteger(number)) return String(value);
+        return number.toLocaleString(undefined, { maximumFractionDigits: 0 });
+      }
+
+      function formatNumericXLabel(value) {
+        const text = String(value);
+        const number = Number(text);
+        if (!Number.isFinite(number)) return text;
+        return number.toLocaleString(undefined, { maximumFractionDigits: 12 });
+      }
+
+      function getCss(name) {
+        return getComputedStyle(document.body).getPropertyValue(name).trim();
+      }
+
+      function syncThemeButton() {
+        const label = document.body.classList.contains("dark") ? "Switch to light mode" : "Switch to dark mode";
+        el("themeBtn").setAttribute("aria-label", label);
+        el("themeBtn").title = label;
+      }
+
+      export async function boot() {
+        bindControls();
+        syncThemeButton();
+        syncMonitorLink();
+        cacheShutdownIcon();
+        try {
+          state.schema = await api("/api/schema");
+          const path = state.schema.path.split(/[\\/]/).pop();
+          const fileSize = formatFileSize(state.schema.file_size);
+          const fileMeta = fileSize ? `${path} · ${fileSize}` : path;
+          document.title = path ? `lucidum · ${path}` : "lucidum";
+          el("datasetMeta").textContent = `${fileMeta} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
+          setFilterRowMeta(state.schema.row_count);
+          chooseDefaults();
+          renderKpis();
+          renderToolSelector();
+          state.tool = chooseDefaultTool();
+          renderSavedFilters();
+          renderExpectedNumerators();
+          renderFeatures();
+          updateAxisControls();
+          setTool(state.tool, false);
+          await refreshActiveTool({ force: true });
+          startServerHeartbeat();
+        } catch (error) {
+          el("datasetMeta").textContent = "Dataset failed to load";
+          setStatus(error.message, true);
+        }
+      }

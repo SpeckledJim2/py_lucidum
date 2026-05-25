@@ -22,6 +22,8 @@ APP_ACTIONS = {
     ("POST", "/api/chart"): "Line/bar chart",
     ("POST", "/api/line-bar/chart"): "Line/bar chart",
     ("POST", "/api/uk-map/summary"): "UK map summary",
+    ("GET", "/api/glm/summary"): "GLM summary",
+    ("GET", "/api/gbm/summary"): "GBM summary",
 }
 HEARTBEAT_PATH = "/api/health"
 EXCLUDED_PATHS = {"/api/telemetry", "/api/lucidum-servers"}
