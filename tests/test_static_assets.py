@@ -673,6 +673,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("`Total = DuckDB + JSON + render`", readme)
         self.assertIn("`Chart render` is measured in the browser after data has arrived", readme)
         self.assertIn("`Map render` is measured in the browser after data and the required GeoJSON are available", readme)
+        self.assertIn("the Unit canvas layer, legend, labels, and the Unit hover/click hit grid", readme)
         self.assertIn("Cached UI rerenders can update the render timing without running a new DuckDB query", readme)
         self.assertIn("Collapsing the filter footer hides the timing monitor", readme)
 
@@ -1141,6 +1142,37 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("smoothFactor: 1", js)
         self.assertIn("smoothFactor: 0", js)
         self.assertIn("smoothFactor: levelConfig.smoothFactor ?? 1", js)
+
+    def test_uk_map_documents_current_interactivity_contract(self) -> None:
+        _, body = self.assert_no_store("/static/app.js")
+        js = body.decode("utf-8")
+        readme = Path(__file__).parents[1].joinpath("README.md").read_text(encoding="utf-8")
+        development = Path(__file__).parents[1].joinpath("DEVELOPMENT.md").read_text(encoding="utf-8")
+
+        self.assertIn("layer.bindTooltip(() => mapPolygonTooltipHtml(layer), { sticky: true });", js)
+        self.assertIn("layer.bindPopup(() => mapPolygonPopupHtml(layer));", js)
+        self.assertIn('map.on("mousemove", this.handleMouseMove, this);', js)
+        self.assertIn('map.on("click", this.handleClick, this);', js)
+        self.assertIn("this.hitGrid = new Map();", js)
+        self.assertIn("this.hitGrid.get(gridKey).push({ entry, point });", js)
+        self.assertIn("Unit hover/click hit grid", readme)
+        self.assertIn("Area and sector geometry use Leaflet GeoJSON with hover tooltips and click popups.", development)
+        self.assertIn("Unit points render on a canvas-backed Leaflet layer with a hit grid for hover tooltips and click popups.", development)
+        self.assertIn("a geographic viewport prefilter before projection is not part of the current rendering strategy", development)
+
+    def test_monitor_docs_describe_lucidum_server_panel(self) -> None:
+        telemetry_doc = Path(__file__).parents[1].joinpath("docs/telemetry-monitor.md").read_text(encoding="utf-8")
+        development = Path(__file__).parents[1].joinpath("DEVELOPMENT.md").read_text(encoding="utf-8")
+
+        self.assertIn("The `lucidum servers` table lists local Lucidum-looking server processes", telemetry_doc)
+        self.assertIn("highlights that current server row", telemetry_doc)
+        self.assertIn("clickable server addresses that open in a new tab", telemetry_doc)
+        self.assertIn("Each stoppable row has a compact `X` button", telemetry_doc)
+        self.assertIn("stopping a sibling server terminates the matching same-user Lucidum process", telemetry_doc)
+        self.assertIn("It is not shared across multiple Lucidum processes. The `lucidum servers` table can discover sibling servers", telemetry_doc)
+        self.assertNotIn("open each server's own `/monitor` page", telemetry_doc)
+        self.assertIn("GET /api/lucidum-servers", development)
+        self.assertIn("POST /api/lucidum-servers/stop", development)
 
     def test_uk_map_static_assets_disable_cache(self) -> None:
         self.assert_no_store("/tools/uk-map/static/icons/UK.png")

@@ -26,6 +26,8 @@ The client table groups activity by client IP plus full browser user agent, but 
 
 The recent activity table shows the newest tracked app and API requests first. Paths are stored without query strings, so token values are not retained in telemetry. The monitor treats `/api/health` as a heartbeat line instead of normal request activity, so health checks do not inflate request totals, active clients, recent rows, last action, or error-rate calculations. Static asset loads such as `/static/...`, `/favicon.ico`, and tool images or GeoJSON are counted as diagnostics only and are excluded from the primary activity view.
 
+The `lucidum servers` table lists local Lucidum-looking server processes for the current operating-system user. It includes the monitor's own server even if process scanning cannot discover it, highlights that current server row, shows known listeners, and uses clickable server addresses that open in a new tab with the current monitor token when token auth is enabled. Each stoppable row has a compact `X` button; stopping the current server uses the normal shutdown callback, while stopping a sibling server terminates the matching same-user Lucidum process after validating its PID and create time.
+
 The RAM values are process-level measurements from the server process that owns the monitor page:
 
 - `RSS`: resident memory and the headline RAM value.
@@ -35,11 +37,11 @@ The RAM values are process-level measurements from the server process that owns 
 
 The telemetry API still includes VMS for diagnostic compatibility, but the monitor does not display it because virtual address space can be very large on macOS and is not real RAM pressure.
 
-If multiple Lucidum servers are running, open each server's own `/monitor` page to see that process.
-
 ## Privacy and Persistence
 
 Telemetry is in memory only. It resets when the Lucidum process restarts and is not written to disk.
+
+The `lucidum servers` table is separate from telemetry. It is built from current-user process discovery plus launch metadata for the current server, and returned URLs are stripped of token query values before display.
 
 Lucidum stores bounded request metadata only:
 
@@ -64,7 +66,7 @@ The monitor reports HTTP request activity, not raw TCP socket state. A "connecti
 Telemetry is intentionally lightweight and local-process scoped:
 
 - It does not survive restart.
-- It is not shared across multiple Lucidum processes.
+- It is not shared across multiple Lucidum processes. The `lucidum servers` table can discover sibling servers, but it does not merge their telemetry.
 - It does not identify browser tabs separately when they share the same IP and user agent.
 - It does not attribute RAM to individual clients, browser tabs, or requests because Lucidum runs those actions inside one shared Python process.
 - Reverse proxies may hide the original client IP unless they preserve client details at the ASGI layer.

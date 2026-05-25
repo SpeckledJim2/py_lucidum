@@ -37,8 +37,10 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - HTTP:
   - `GET /api/schema`
   - `GET /api/health`
+  - `GET /api/lucidum-servers`
   - `POST /api/reload`
   - `POST /api/shutdown`
+  - `POST /api/lucidum-servers/stop`
   - `POST /api/column-profile/summary`
   - `POST /api/column-profile/detail`
   - `POST /api/chart`
@@ -94,7 +96,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - Default join columns are `PostcodeArea`, `PostcodeSector`, and `PostcodeUnit`; uppercase aliases are supported.
 - Default coordinate columns are `lat` and `long`; `latitude`/`LATITUDE` and `longitude`/`LONGITUDE` aliases are supported.
 - Unit points group by postcode unit, average coordinates, and plot only units with valid KPI and valid coordinates.
-- Unit points render on a canvas-backed Leaflet layer; area and sector geometry use Leaflet GeoJSON.
+- Area and sector geometry use Leaflet GeoJSON with hover tooltips and click popups.
+- Unit points render on a canvas-backed Leaflet layer with a hit grid for hover tooltips and click popups. Unit redraws intentionally project rows first and then apply pixel-space culling; a geographic viewport prefilter before projection is not part of the current rendering strategy because it did not improve observed redraw speed during testing.
 - If no unit point columns are configured and defaults are absent, the Units layer is disabled. Explicit invalid unit point columns produce validation errors when requested.
 
 **Local server behavior**
