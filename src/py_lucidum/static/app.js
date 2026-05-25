@@ -2643,19 +2643,41 @@
         return thresholds;
       }
 
+      function mapHotspotSelection(value = state.mapHotspots) {
+        const raw = Number(value);
+        if (!Number.isFinite(raw)) return null;
+        const sliderValue = Math.round(raw * 10) / 10;
+        if (sliderValue === 0) return null;
+        const magnitude = Math.min(1, Math.max(0.1, Math.abs(sliderValue)));
+        const fraction = Math.min(1, Math.max(0.1, Math.round((1.1 - magnitude) * 10) / 10));
+        if (fraction >= 1) return null;
+        return {
+          direction: sliderValue > 0 ? -1 : 1,
+          fraction,
+        };
+      }
+
+      function mapHotspotPercent(value = state.mapHotspots) {
+        const raw = Number(value);
+        if (!Number.isFinite(raw)) return 0;
+        const sliderValue = Math.round(raw * 10) / 10;
+        if (sliderValue === 0) return 0;
+        const magnitude = Math.min(1, Math.max(0.1, Math.abs(sliderValue)));
+        return Math.round(Math.min(1, Math.max(0.1, Math.round((1.1 - magnitude) * 10) / 10)) * 100);
+      }
+
       function mapHotspotKeys(rows) {
-        const fraction = Number(state.mapHotspots);
-        if (!Number.isFinite(fraction) || fraction === 0) return null;
+        const selection = mapHotspotSelection();
+        if (!selection) return null;
         const validRows = rows
           .map((row, index) => ({ row, index, value: finiteNumber(row.value) }))
           .filter(({ row, value }) => row.key !== null && row.key !== undefined && value !== null);
         if (!validRows.length) return null;
-        const direction = fraction > 0 ? -1 : 1;
         validRows.sort((a, b) => {
-          if (a.value !== b.value) return (a.value - b.value) * direction;
+          if (a.value !== b.value) return (a.value - b.value) * selection.direction;
           return a.index - b.index;
         });
-        const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * Math.abs(fraction))));
+        const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * selection.fraction)));
         return new Set(validRows.slice(0, count).map(({ row }) => String(row.key)));
       }
 
@@ -2861,8 +2883,8 @@
       function mapUnitHotspotKeys(data) {
         const points = unitPointArrays(data);
         if (!points) return mapHotspotKeys(data.rows || []);
-        const fraction = Number(state.mapHotspots);
-        if (!Number.isFinite(fraction) || fraction === 0) return null;
+        const selection = mapHotspotSelection();
+        if (!selection) return null;
         const validRows = [];
         for (let index = 0; index < points.key.length; index += 1) {
           const key = points.key[index];
@@ -2871,12 +2893,11 @@
           validRows.push({ key, value, index });
         }
         if (!validRows.length) return null;
-        const direction = fraction > 0 ? -1 : 1;
         validRows.sort((a, b) => {
-          if (a.value !== b.value) return (a.value - b.value) * direction;
+          if (a.value !== b.value) return (a.value - b.value) * selection.direction;
           return a.index - b.index;
         });
-        const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * Math.abs(fraction))));
+        const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * selection.fraction)));
         return new Set(validRows.slice(0, count).map((row) => String(row.key)));
       }
 
@@ -3256,7 +3277,7 @@
         el("mapLabelSize").value = String(state.mapLabelSize);
         el("mapLineWeightValue").textContent = String(state.mapLineWeight);
         el("mapOpacityValue").textContent = formatCompactSliderValue(state.mapOpacity);
-        el("mapHotspotsValue").textContent = formatPercentSliderValue(state.mapHotspots);
+        el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
         el("mapLabelSizeValue").textContent = String(state.mapLabelSize);
       }
 
@@ -3266,11 +3287,12 @@
         return Number.isInteger(number) ? String(number) : String(Number(number.toFixed(1)));
       }
 
-      function formatPercentSliderValue(value) {
-        const number = Number(value);
-        if (!Number.isFinite(number)) return "";
-        if (number === 0) return "0";
-        return `${Number((number * 100).toFixed(0))}%`;
+      function formatHotspotSliderValue(value) {
+        const raw = Number(value);
+        if (!Number.isFinite(raw)) return "";
+        const sliderValue = Math.round(raw * 10) / 10;
+        if (sliderValue === 0) return "All";
+        return `${sliderValue < 0 ? "B" : "T"}${mapHotspotPercent(sliderValue)}`;
       }
 
       function normalisePostcodeSearch(raw) {
@@ -3381,7 +3403,7 @@
           rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${scale.legendPalette[index]}"></span><span>${escapeHtml(label)}</span></div>`);
           lower = upper;
         }
-        if (Number(state.mapHotspots) !== 0) {
+        if (mapHotspotSelection()) {
           rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MUTED_COLOR}"></span><span>Not selected</span></div>`);
         }
         rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MISSING_COLOR}"></span><span>No data</span></div>`);
