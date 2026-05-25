@@ -18,8 +18,9 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.tools.column_profile` implements filtered column summary/detail profiling and routes.
 - `py_lucidum.tools.line_bar` implements chart aggregation and line/bar routes.
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
-- `py_lucidum.tools.glm` and `py_lucidum.tools.gbm` register lightweight shell routes for future modelling tools. They must not import optional modelling libraries until real model fitting is implemented.
-- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the current app shell and existing tools, while new modelling shell UI lives in `src/py_lucidum/static/app/model-tool-shell.js`.
+- `py_lucidum.tools.glm` registers a lightweight shell route for future modelling work.
+- `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM training, validation, persistence, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
+- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the current app shell and existing tools, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, and `src/py_lucidum/static/app/model-tool-shell.js` owns remaining modelling shell UI.
 
 Tool code should depend on `core` and the app registration context, but tools should not depend on each other. Shared behavior should move into `core` or another shared module only when there is real reuse.
 
@@ -50,6 +51,13 @@ Tool code should depend on `core` and the app registration context, but tools sh
   - `POST /api/uk-map/summary`
   - `GET /api/glm/summary`
   - `GET /api/gbm/summary`
+  - `GET /api/gbm/config`
+  - `GET /api/gbm/models`
+  - `POST /api/gbm/validate`
+  - `POST /api/gbm/train`
+  - `GET /api/gbm/jobs/{job_id}`
+  - `GET /api/gbm/models/{model_id}`
+  - `POST /api/gbm/models/{model_id}/activate`
 
 `/api/chart` is retained for compatibility with the current frontend. New integrations should prefer the namespaced line-bar endpoint.
 
@@ -61,7 +69,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - The wheel packages the demo dataset as `py_lucidum/datasets/motor_premiums.parquet`.
 - Other local files under `datasets/` remain ignored.
 - Parquet is the preferred working format for speed; CSV remains supported for convenience.
-- `GET /api/schema` includes `data_sources`. The only current source is `dataset`; future model outputs should publish named tabular artifacts through this same contract.
+- `GET /api/schema` includes `data_sources`. The default source is `dataset`; model outputs publish named tabular artifacts through this same contract.
 - Line/Bar accepts a `source` request field and defaults it to `dataset`. Unknown sources are rejected before query execution.
 
 **Defaults, saved filters, and KPIs**
@@ -106,11 +114,18 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - Unit points render on a canvas-backed Leaflet layer with a hit grid for hover tooltips and click popups. Unit redraws intentionally project rows first and then apply pixel-space culling; a geographic viewport prefilter before projection is not part of the current rendering strategy because it did not improve observed redraw speed during testing.
 - If no unit point columns are configured and defaults are absent, the Units layer is disabled. Explicit invalid unit point columns produce validation errors when requested.
 
-**GLM and GBM shells**
+**GLM and GBM**
 
 - GLM and GBM are opt-in tools (`--tools glm,gbm`) and are not part of the default user-facing tool set.
-- Shell endpoints return `status: "not_implemented"` and exist only to prove registration, routing, telemetry labelling, and frontend navigation do not require modelling dependencies.
-- Real modelling dependencies should be introduced as optional extras when the fitting implementation is added, not as base install dependencies.
+- GLM still returns a shell `status: "not_implemented"` response.
+- GBM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
+- GBM training imports LightGBM, pandas, and numpy lazily through the `gbm` optional extra. These packages must not become base install dependencies.
+- GBM uses the sidebar Actual and denominator/KPI controls as the model response and offset/exposure inputs. The filter controls remain hidden while GBM is active because training ignores the global filter.
+- GBM artifacts are stored beside the source dataset under `.lucidum/models/gbm/`, with one directory per model.
+- GBM `feature_config.json` is the persisted source of truth for the trained model's selected features, monotonicity settings, and Gain values.
+- GBM config and activation responses must drive the UI's `Use`, `Monotonicity`, `Gain`, and parameter tables from the active model, so switching models mirrors exactly what was trained.
+- GBM model outputs publish data sources through the shared `data_sources` contract using IDs such as `gbm:<model_id>:predictions`, `gbm:<model_id>:shap_long`, and `gbm:<model_id>:shap_summary`.
+- LightGBM-specific training, objective handling, offsets, SHAP, feature importance, and tree extraction belong in backend GBM modules, not in frontend code.
 
 **Performance timings**
 
@@ -149,6 +164,7 @@ Standard checks before committing:
 .venv/bin/python -m compileall src tests
 node --check src/py_lucidum/static/app.js
 node --check src/py_lucidum/static/app/main.js
+node --check src/py_lucidum/static/app/gbm-tool.js
 node --check src/py_lucidum/static/app/model-tool-shell.js
 git diff --check
 ```
@@ -175,12 +191,13 @@ The current test suite should cover:
 - Column profile summary/detail routes, filter handling, distinct/missing counts, histograms, and entropy scores.
 - Line-and-bar aggregation, filters, transforms, grouping, sorting, saved filters, CSV reads, and Parquet reads.
 - UK map area, sector, and unit aggregation, alias defaults, coordinate validation, and custom column defaults.
-- Tool registry defaults, optional GLM/GBM shell registration, and the default `dataset` data-source contract.
-- Browser smoke behavior for loading profile, chart, and map tools without unexpected extra API requests.
+- Tool registry defaults, optional GLM/GBM registration, and the default `dataset` data-source contract.
+- GBM validation, sidecar model store behavior, optional dependency failures, active-model feature/parameter refresh, model data-source publishing, Gain ordering, and chart/map use of prediction sources.
+- Browser smoke behavior for loading profile, chart, map, and GBM tools without unexpected extra API requests or stale active-model state.
 
 ## Future Work
 
-- GLM and GBM shells should become independently registered modelling tools without coupling directly to Line/Bar internals.
+- GLM should become an independently registered modelling tool without coupling directly to Line/Bar internals.
 - Future modelling routes, query code, and frontend assets should live inside their tool packages unless shared behavior emerges.
 - Model outputs that need plotting should publish tabular artifacts through the shared data-source contract so Line/Bar can plot them without knowing model-specific concepts such as SHAP, residuals, or lift tables.
 - Performance tests should be opt-in and target generated large datasets where practical, measuring schema load, aggregation time, repeat-query time, memory use, returned row count, and payload size.
@@ -197,5 +214,5 @@ The current test suite should cover:
   - Scan staged changes for secrets, real customer data, local-only paths, and stale references to removed files or old demo datasets.
 - Update `README.md` for public user-facing behavior changes.
 - Update this file when architecture, behavior contracts, testing policy, packaging, or tool-extension guidance changes.
-- Keep generated caches, local datasets other than the synthetic demo, virtual environments, build artifacts, and OS metadata out of git.
+- Keep generated caches, local datasets other than the synthetic demo, `.lucidum/` model artifacts, virtual environments, build artifacts, and OS metadata out of git.
 - Do not commit real customer data. The bundled motor premiums dataset is synthetic.

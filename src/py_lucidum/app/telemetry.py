@@ -24,6 +24,10 @@ APP_ACTIONS = {
     ("POST", "/api/uk-map/summary"): "UK map summary",
     ("GET", "/api/glm/summary"): "GLM summary",
     ("GET", "/api/gbm/summary"): "GBM summary",
+    ("GET", "/api/gbm/config"): "GBM config",
+    ("GET", "/api/gbm/models"): "GBM models",
+    ("POST", "/api/gbm/validate"): "GBM validate",
+    ("POST", "/api/gbm/train"): "GBM train",
 }
 HEARTBEAT_PATH = "/api/health"
 EXCLUDED_PATHS = {"/api/telemetry", "/api/lucidum-servers"}

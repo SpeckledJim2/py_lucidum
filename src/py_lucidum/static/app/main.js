@@ -1,3 +1,4 @@
+      import { createGbmTool } from "./gbm-tool.js";
       import { createModelToolShell } from "./model-tool-shell.js";
 
       function paramsFromLocation() {
@@ -215,6 +216,38 @@
         syncDuckDbTimingFromData,
         toolCache,
       });
+      const gbmTool = createGbmTool({
+        api,
+        clearToolCaches,
+        el,
+        escapeHtml,
+        measureToolRender,
+        renderExpectedNumerators,
+        renderFeatures,
+        saveToolPresentation,
+        setChartMessage,
+        setClientTiming,
+        setDuckDbTiming,
+        setGroupMeta,
+        setRenderTiming,
+        setStatus,
+        setToolTimingFailed,
+        startToolTiming,
+        state,
+        syncClientTimingFromData,
+        syncDuckDbTimingFromData,
+        toolCache,
+        updateAxisControls,
+        refreshActiveTool,
+        reloadSchema: async (preferredSource) => {
+          state.schema = await api("/api/schema");
+          if (preferredSource) state.source = preferredSource;
+          if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
+          renderExpectedNumerators();
+          renderFeatures();
+          updateAxisControls();
+        },
+      });
 
       function monitorUrl() {
         const url = new URL("/monitor", location.href);
@@ -363,11 +396,20 @@
       }
 
       function numericColumns() {
-        return state.schema.columns.filter((c) => isNumericKind(c.kind));
+        return sourceColumns().filter((c) => isNumericKind(c.kind));
       }
 
       function selectedColumn() {
-        return state.schema?.columns.find((c) => c.name === state.x);
+        return sourceColumns().find((c) => c.name === state.x);
+      }
+
+      function currentDataSource() {
+        const sources = state.schema?.data_sources || [];
+        return sources.find((source) => source.id === (state.source || "dataset")) || sources.find((source) => source.id === "dataset") || null;
+      }
+
+      function sourceColumns() {
+        return currentDataSource()?.columns || state.schema?.columns || [];
       }
 
       function toolEnabled(id) {
@@ -671,6 +713,13 @@
             handleMissingRequest: showMapMissingNumerator,
           };
         }
+        if (tool === "gbm") {
+          return {
+            buildRequest: () => gbmTool.buildRequest(),
+            fetch: (request, requestKey) => gbmTool.fetchData(request, requestKey),
+            useCached: (cache, options) => gbmTool.useCached(cache, options),
+          };
+        }
         if (isModelTool(tool)) {
           return {
             buildRequest: () => modelToolShell.buildRequest(tool),
@@ -743,7 +792,11 @@
         el("ukMapTool").classList.toggle("active", tool === "uk_map");
         el("glmTool").classList.toggle("active", tool === "glm");
         el("gbmTool").classList.toggle("active", tool === "gbm");
-        document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile" || isModelTool(tool));
+        document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile" || tool === "glm");
+        document.querySelector(".sidebar-filter-section")?.classList.toggle("hidden", isModelTool(tool));
+        const gbmSourcesAvailable = (state.schema?.data_sources || []).some((source) => String(source.id || "").startsWith("gbm:"));
+        el("gbmSidebarPanel")?.classList.toggle("hidden", !(tool === "gbm" || (toolEnabled("gbm") && gbmSourcesAvailable)));
+        gbmTool.syncSidebarFromSchema();
         el("lineBarToolbar").classList.toggle("hidden", tool !== "line_bar");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
         el("visualArea").classList.toggle("profile-mode", tool === "column_profile");
@@ -755,8 +808,8 @@
         el("profileFilter").classList.toggle("hidden", tool !== "column_profile");
         el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarFilter").classList.toggle("hidden", tool !== "line_bar");
-        el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool));
-        el("modelToolFilter").classList.toggle("hidden", !isModelTool(tool));
+        el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");
+        el("modelToolFilter").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
         el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
@@ -1002,7 +1055,7 @@
       }
 
       function columnExists(name) {
-        return Boolean(name && state.schema.columns.some((col) => col.name === name));
+        return Boolean(name && sourceColumns().some((col) => col.name === name));
       }
 
       function numericColumnExists(name) {
@@ -1369,8 +1422,11 @@
       }
 
       function chooseDefaults() {
+        const requestedSource = requestedDefault("source");
+        const availableSources = state.schema.data_sources || [];
+        state.source = availableSources.some((source) => source.id === requestedSource) ? requestedSource : "dataset";
         const requestedX = requestedDefault("x");
-        state.x = columnExists(requestedX) ? requestedX : state.schema.columns[0]?.name || null;
+        state.x = columnExists(requestedX) ? requestedX : sourceColumns()[0]?.name || null;
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
@@ -1430,7 +1486,7 @@
         const query = el("featureSearch").value.trim().toLowerCase();
         const list = el("featureList");
         list.innerHTML = "";
-        const columns = [...state.schema.columns];
+        const columns = [...sourceColumns()];
         if (state.featureSort === "alpha") {
           columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
         }
@@ -2320,6 +2376,7 @@
         if (state.mapLevel === "unit" && !mapLevelSelectable("unit")) return null;
         return {
           level: state.mapLevel,
+          source: state.source || "dataset",
           numerator,
           denominator: el("denominator").value,
           filter: state.activeFilter,

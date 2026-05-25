@@ -9,9 +9,10 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions.
 - **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, banding, date buckets, tables, transforms, and sigma bars.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, or postcode units when unit and coordinate columns are available.
+- **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions that can be plotted as chart/map data sources, evaluation plots, model navigation, and tree viewing.
 - **Filters and KPIs**: apply free-form DuckDB `WHERE` filters, saved filter rows, and KPI specs that set Actual/Weight choices and formatting.
 
-GLM and GBM tool slots exist in the codebase for future modelling work, but model building is not part of the current user-facing release.
+The GLM tool slot exists in the codebase for future modelling work, but GLM model building is not part of the current user-facing release.
 
 ## Installation
 
@@ -24,6 +25,12 @@ python3.13 -m venv .venv
 ```
 
 This installs the `lucidum` command inside the virtual environment.
+
+To enable GBM model training, install the optional modelling extra:
+
+```bash
+.venv/bin/python -m pip install -e ".[gbm]"
+```
 
 For a user-level command available outside this checkout, install with `pipx`:
 
@@ -69,6 +76,7 @@ Parquet is recommended for normal use because DuckDB can read it efficiently.
 .venv/bin/lucidum --demo --kpis specs/kpi_spec.csv
 .venv/bin/lucidum --demo --no-kpis
 .venv/bin/lucidum --demo --tools line-bar
+.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm
 ```
 
 - `--open` opens the generated URL with Python's configured browser handler.
@@ -77,7 +85,7 @@ Parquet is recommended for normal use because DuckDB can read it efficiently.
 - `--x`, `--actual`, `--expected`, and `--denominator` set initial Line/Bar selections.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
-- `--tools` selects enabled tools. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`.
+- `--tools` selects enabled tools. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `gbm` after installing the `gbm` extra to train LightGBM models.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
 
@@ -158,6 +166,16 @@ FINANCIAL,Premium,PREMIUM,N,2,currency
 ```
 
 `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`.
+
+## GBM Models
+
+The GBM tool is opt-in:
+
+```bash
+.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm
+```
+
+The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. Models are saved beside the dataset under `.lucidum/models/gbm/`. Selecting a saved GBM makes it active and refreshes the feature table, parameter table, evaluation plot, tree viewer, and plot-ready model outputs. Once a model is active, its predictions and SHAP outputs appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
 
 ## Development
 

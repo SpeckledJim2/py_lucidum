@@ -12,6 +12,7 @@ from urllib.request import urlopen
 import uvicorn
 
 from py_lucidum.app import create_app
+from py_lucidum.tools.gbm.store import GbmModelStore
 
 
 try:
@@ -42,6 +43,87 @@ class BrowserSmokeTests(unittest.TestCase):
                 self.assert_static_asset(base_url, "/static/app.css", "text/css")
                 self.assert_static_asset(base_url, "/static/app.js", "text/javascript")
                 self.exercise_browser(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_tool_loads_feature_grid(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,sample\n"
+                "10,100,30,A,AB,AB10 1,AB10 1AA,57.1,-2.1,training\n"
+                "20,200,40,B,AB,AB10 1,AB10 1AB,57.2,-2.2,test\n"
+                "30,300,50,C,CD20 2,CD20 2AA,CD20 2AA,56.1,-1.1,training\n",
+                encoding="utf-8",
+            )
+            kpis_path = tmp_path / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "MODEL,Actual numerator,actualNumerator,denominator,2,number\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            for model_id, label, learning_rate, created_at in (
+                ("browser-smoke-model", "Browser smoke model", 0.11, "2026-05-25T00:00:00Z"),
+                ("browser-smoke-model-2", "Second smoke model", 0.22, "2026-05-25T00:00:01Z"),
+            ):
+                model_dir = store.create_model_dir(model_id)
+                store.write_json(
+                    model_dir / "manifest.json",
+                    {
+                        "model_id": model_id,
+                        "label": label,
+                        "created_at": created_at,
+                        "objective": "gamma",
+                        "metric": "gamma",
+                        "best_iteration": 3,
+                        "training_rows": 2,
+                        "test_rows": 1,
+                        "feature_importance": [],
+                        "sources": {},
+                    },
+                )
+                store.write_json(
+                    model_dir / "feature_config.json",
+                    [
+                        {"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 5.0}
+                        if model_id == "browser-smoke-model"
+                        else {"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 6.0}
+                    ],
+                )
+                store.write_json(
+                    model_dir / "parameters.json",
+                    {
+                        "objective": "gamma",
+                        "metric": "gamma",
+                        "learning_rate": learning_rate,
+                        "num_iterations": 123 if model_id.endswith("-2") else 77,
+                    },
+                )
+                store.write_json(
+                    model_dir / "training_log.json",
+                    {
+                        "evaluation": {
+                            "training": {"gamma": [7.38, 7.33, 7.31, 7.305, 7.301]},
+                            "test": {"gamma": [7.37, 7.325, 7.3022, 7.303, 7.304]},
+                        },
+                        "warnings": [],
+                    },
+                )
+                store.write_json(model_dir / "tree_dump.json", {"tree_info": []})
+            store.activate_model("browser-smoke-model")
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "gbm"],
+                kpis_path=kpis_path,
+                use_kpis=True,
+            )
+            try:
+                self.exercise_gbm_tool(base_url)
             finally:
                 server.should_exit = True
                 thread.join(timeout=5)
@@ -153,6 +235,7 @@ class BrowserSmokeTests(unittest.TestCase):
         use_kpis: bool = False,
         token: str | None = None,
         defaults: dict[str, str] | None = None,
+        tools: list[str] | None = None,
     ) -> tuple[str, uvicorn.Server, threading.Thread]:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -169,6 +252,7 @@ class BrowserSmokeTests(unittest.TestCase):
             kpis_path=kpis_path,
             use_kpis=use_kpis,
             token=token,
+            tools=tools,
         )
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         server = uvicorn.Server(config)
@@ -305,6 +389,269 @@ class BrowserSmokeTests(unittest.TestCase):
                 self.assertEqual(profile_detail_requests, 3)
                 self.assertEqual(chart_requests, 1)
                 self.assertEqual(map_requests, 1)
+            finally:
+                browser.close()
+
+    def exercise_gbm_tool(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
+                page.get_by_text("Features and parameters").wait_for(timeout=10_000)
+                page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
+                page.get_by_text("Train GBM").wait_for(timeout=10_000)
+                page.get_by_text("Gain").first.wait_for(timeout=10_000)
+                page.get_by_text("SHAP rows").wait_for(timeout=10_000)
+                page.get_by_text("Features", exact=True).wait_for(timeout=10_000)
+                page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
+                page.get_by_text("Evaluation log", exact=True).wait_for(timeout=10_000)
+                page.locator("#gbmActiveModelSelect").wait_for(timeout=10_000)
+                self.assertEqual(
+                    page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
+                    "0.11",
+                )
+                page.locator("#gbmParameterGrid .tabulator-row", has_text="objective").locator(".tabulator-cell[tabulator-field='value']").click()
+                page.locator("#gbmParameterGrid select.gbm-parameter-select").wait_for(timeout=10_000)
+                page.keyboard.press("Escape")
+                page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").click()
+                page.locator("#gbmParameterGrid input.gbm-parameter-input").wait_for(timeout=10_000)
+                page.keyboard.press("Escape")
+                gbm_top_before = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
+                page.locator("#gbmCreateSampleBtn").click()
+                self.assertEqual(page.locator("#gbmCreateSampleBtn").text_content(), "Sample pending")
+                self.assertEqual(page.locator("#gbmCreateSampleBtn").get_attribute("aria-pressed"), "true")
+                self.assertFalse(page.locator("#gbmNotice").is_visible())
+                self.assertTrue(page.locator("#status").evaluate("node => node.classList.contains('hidden')"))
+                gbm_top_after_sample = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
+                self.assertLessEqual(abs(gbm_top_before - gbm_top_after_sample), 1)
+                page.evaluate(
+                    """
+                    () => {
+                      for (const checkbox of document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox")) {
+                        checkbox.checked = false;
+                        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+                      }
+                    }
+                    """
+                )
+                page.locator("#gbmTrainBtn").click()
+                page.locator("#gbmNotice").get_by_text("Choose at least one usable GBM feature").wait_for(timeout=10_000)
+                self.assertTrue(page.locator("#status").evaluate("node => node.classList.contains('hidden')"))
+                gbm_top_after_error = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
+                self.assertLessEqual(abs(gbm_top_before - gbm_top_after_error), 1)
+                self.assertTrue(page.locator(".sidebar-kpi-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
+                self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
+                self.assertFalse(page.locator("#modelToolGroupMeta").is_visible())
+                self.assertFalse(page.locator("#modelToolFilter").is_visible())
+                page.wait_for_function(
+                    """
+                    () => {
+                      const target = document.querySelector("#gbmEvaluationChart");
+                      const chart = target && window.echarts?.getInstanceByDom(target);
+                      return chart?.getOption()?.title?.[0]?.text === "evaluation metric: gamma, test metric: 7.3022, best iteration: 3";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                chart_options = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                      const option = chart.getOption();
+                      return {
+                        title: option.title[0].text,
+                        subtext: option.title[0].subtext || "",
+                        titleFontSize: option.title[0].textStyle.fontSize,
+                        legendOrient: option.legend[0].orient,
+                        legendRight: option.legend[0].right,
+                        gridTop: option.grid[0].top,
+                        gridRight: option.grid[0].right,
+                        gridContainLabel: option.grid[0].containLabel,
+                        xType: option.xAxis[0].type,
+                        xInterval: option.xAxis[0].interval,
+                        xMax: option.xAxis[0].max,
+                        yType: option.yAxis[0].type,
+                        yScale: option.yAxis[0].scale,
+                        seriesNames: option.series.map((series) => series.name),
+                        showSymbol: option.series.every((series) => series.showSymbol),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(chart_options["title"], "evaluation metric: gamma, test metric: 7.3022, best iteration: 3")
+                self.assertEqual(chart_options["subtext"], "")
+                self.assertEqual(chart_options["titleFontSize"], 12)
+                self.assertEqual(chart_options["legendOrient"], "vertical")
+                self.assertEqual(chart_options["legendRight"], 8)
+                self.assertEqual(chart_options["gridTop"], 42)
+                self.assertEqual(chart_options["gridRight"], 82)
+                self.assertTrue(chart_options["gridContainLabel"])
+                self.assertEqual(chart_options["xType"], "value")
+                self.assertEqual(chart_options["xInterval"], 2)
+                self.assertEqual(chart_options["xMax"], 6)
+                self.assertEqual(chart_options["yType"], "value")
+                self.assertTrue(chart_options["yScale"])
+                self.assertEqual(chart_options["seriesNames"], ["train", "test"])
+                self.assertTrue(chart_options["showSymbol"])
+                page.get_by_text("Model navigator").click()
+                page.locator("tr", has_text="Second smoke model").get_by_role("button", name="Activate").click()
+                page.get_by_text("Features and parameters").click()
+                page.wait_for_function(
+                    """
+                    () => [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                      .find((row) => row.textContent.includes("learning_rate"))
+                      ?.querySelector(".tabulator-cell[tabulator-field='value']")
+                      ?.textContent.trim() === "0.22"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(
+                    page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").text_content(),
+                    "123",
+                )
+                feature_state = page.evaluate(
+                    """
+                    () => {
+                      function rowState(name) {
+                        const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                          .find((item) => item.textContent.includes(name));
+                        return {
+                          checked: Boolean(row?.querySelector(".gbm-use-checkbox")?.checked),
+                          monotonicity: row?.querySelector(".tabulator-cell[tabulator-field='monotonicity']")?.textContent.trim() || "",
+                          gain: row?.querySelector(".tabulator-cell[tabulator-field='gain']")?.textContent.trim() || "",
+                        };
+                      }
+                      return { age: rowState("Age"), segment: rowState("Segment") };
+                    }
+                    """
+                )
+                self.assertFalse(feature_state["age"]["checked"])
+                self.assertTrue(feature_state["segment"]["checked"])
+                self.assertEqual(feature_state["age"]["monotonicity"], "")
+                self.assertEqual(feature_state["segment"]["gain"], "6.000")
+                layout = page.evaluate(
+                    """
+                    () => {
+                        const visual = document.querySelector("#visualArea").getBoundingClientRect();
+                        const tool = document.querySelector(".gbm-tool").getBoundingClientRect();
+                        const grid = document.querySelector("#gbmFeatureGrid").getBoundingClientRect();
+                        const right = document.querySelector(".gbm-right-panel").getBoundingClientRect();
+                        const firstRow = document.querySelector("#gbmFeatureGrid .tabulator-row");
+                        const normalRow = document.querySelector("#gbmFeatureGrid .tabulator-row:not(.gbm-feature-disabled):not(.gbm-feature-warning)");
+                        const firstGain = document.querySelector("#gbmFeatureGrid .tabulator-cell[tabulator-field='gain']");
+                        const tableHolder = document.querySelector("#gbmFeatureGrid .tabulator-tableholder");
+                        const tab = document.querySelector(".gbm-tabs .tab");
+                        const shap = document.querySelector("#gbmShapRows");
+                        const sample = document.querySelector("#gbmCreateSampleBtn");
+                        const train = document.querySelector("#gbmTrainBtn");
+                        const parameterGrid = document.querySelector("#gbmParameterGrid");
+                        const evaluationChart = document.querySelector("#gbmEvaluationChart");
+                        const evaluationPanel = evaluationChart?.parentElement;
+                        const featureCell = document.querySelector("#gbmFeatureGrid .tabulator-row .tabulator-cell");
+                        const parameterCell = document.querySelector("#gbmParameterGrid .tabulator-row .tabulator-cell");
+                        const featureHeader = document.querySelector("#gbmFeatureGrid .tabulator-col");
+                        const parameterHeader = document.querySelector("#gbmParameterGrid .tabulator-col");
+                        const featureHeaderContent = document.querySelector("#gbmFeatureGrid .tabulator-col .tabulator-col-content");
+                        const parameterHeaderContent = document.querySelector("#gbmParameterGrid .tabulator-col .tabulator-col-content");
+                        const featureNameCell = document.querySelector("#gbmFeatureGrid .tabulator-row .gbm-feature-name-cell");
+                        const featureKind = document.querySelector("#gbmFeatureGrid .gbm-feature-kind");
+                        const segmentKind = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                          .find((row) => row.textContent.includes("Segment"))
+                          ?.querySelector(".gbm-feature-kind");
+                        const headerTitles = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-col-title")]
+                          .map((node) => node.textContent.trim())
+                          .filter(Boolean);
+                        return {
+                            visualWidth: visual.width,
+                            toolWidth: tool.width,
+                            gridWidth: grid.width,
+                            rightWidth: right.width,
+                            shapRadios: document.querySelectorAll("input[name='gbmShapRows']").length,
+                            featureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox").length,
+                            disabledFeatureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-feature-disabled .gbm-use-checkbox").length,
+                            rowHeight: firstRow ? firstRow.getBoundingClientRect().height : 0,
+                            gainAlign: firstGain ? getComputedStyle(firstGain).textAlign : "",
+                            rowBackground: normalRow ? getComputedStyle(normalRow).backgroundColor : "",
+                            holderBackground: tableHolder ? getComputedStyle(tableHolder).backgroundColor : "",
+                            tabTop: tab ? Math.round(tab.getBoundingClientRect().top) : 0,
+                            shapTop: shap ? Math.round(shap.getBoundingClientRect().top) : 0,
+                            shapRight: shap ? Math.round(shap.getBoundingClientRect().right) : 0,
+                            sampleLeft: sample ? Math.round(sample.getBoundingClientRect().left) : 0,
+                            sampleTop: sample ? Math.round(sample.getBoundingClientRect().top) : 0,
+                            trainTop: train ? Math.round(train.getBoundingClientRect().top) : 0,
+                            parameterGridHeight: parameterGrid ? Math.round(parameterGrid.getBoundingClientRect().height) : 0,
+                            evaluationChartHeight: evaluationChart ? Math.round(evaluationChart.getBoundingClientRect().height) : 0,
+                            evaluationPanelHeight: evaluationPanel ? Math.round(evaluationPanel.getBoundingClientRect().height) : 0,
+                            featureCellFontSize: featureCell ? getComputedStyle(featureCell).fontSize : "",
+                            featureCellLineHeight: featureCell ? getComputedStyle(featureCell).lineHeight : "",
+                            featureCellDisplay: featureCell ? getComputedStyle(featureCell).display : "",
+                            featureCellAlignItems: featureCell ? getComputedStyle(featureCell).alignItems : "",
+                            parameterCellFontSize: parameterCell ? getComputedStyle(parameterCell).fontSize : "",
+                            parameterCellLineHeight: parameterCell ? getComputedStyle(parameterCell).lineHeight : "",
+                            parameterCellDisplay: parameterCell ? getComputedStyle(parameterCell).display : "",
+                            parameterCellAlignItems: parameterCell ? getComputedStyle(parameterCell).alignItems : "",
+                            featureHeaderFontSize: featureHeader ? getComputedStyle(featureHeader).fontSize : "",
+                            featureHeaderJustifyContent: featureHeader ? getComputedStyle(featureHeader).justifyContent : "",
+                            featureHeaderContentDisplay: featureHeaderContent ? getComputedStyle(featureHeaderContent).display : "",
+                            featureHeaderContentAlignItems: featureHeaderContent ? getComputedStyle(featureHeaderContent).alignItems : "",
+                            parameterHeaderFontSize: parameterHeader ? getComputedStyle(parameterHeader).fontSize : "",
+                            parameterHeaderJustifyContent: parameterHeader ? getComputedStyle(parameterHeader).justifyContent : "",
+                            parameterHeaderContentDisplay: parameterHeaderContent ? getComputedStyle(parameterHeaderContent).display : "",
+                            parameterHeaderContentAlignItems: parameterHeaderContent ? getComputedStyle(parameterHeaderContent).alignItems : "",
+                            featureNameJustifyContent: featureNameCell ? getComputedStyle(featureNameCell).justifyContent : "",
+                            featureKindFontSize: featureKind ? getComputedStyle(featureKind).fontSize : "",
+                            segmentKindText: segmentKind ? segmentKind.textContent.trim() : "",
+                            featureHeaders: headerTitles,
+                        };
+                    }
+                    """
+                )
+                self.assertGreater(layout["toolWidth"], layout["visualWidth"] * 0.85)
+                self.assertGreater(layout["gridWidth"], 320)
+                self.assertGreater(layout["rightWidth"], 300)
+                self.assertGreaterEqual(layout["shapRadios"], 3)
+                self.assertGreater(layout["featureCheckboxes"], 0)
+                self.assertEqual(layout["disabledFeatureCheckboxes"], 0)
+                self.assertLess(layout["rowHeight"], 28)
+                self.assertEqual(layout["gainAlign"], "center")
+                self.assertEqual(layout["rowBackground"], layout["holderBackground"])
+                self.assertLess(layout["shapRight"], layout["sampleLeft"])
+                self.assertLessEqual(abs(layout["tabTop"] - layout["shapTop"]), 2)
+                self.assertLessEqual(abs(layout["tabTop"] - layout["sampleTop"]), 2)
+                self.assertLessEqual(abs(layout["tabTop"] - layout["trainTop"]), 2)
+                self.assertGreaterEqual(layout["parameterGridHeight"], 260)
+                self.assertGreaterEqual(layout["evaluationChartHeight"], 220)
+                self.assertLess(layout["evaluationChartHeight"], layout["evaluationPanelHeight"])
+                self.assertEqual(layout["featureCellFontSize"], "11px")
+                self.assertEqual(layout["parameterCellFontSize"], "11px")
+                self.assertEqual(layout["featureCellLineHeight"], layout["parameterCellLineHeight"])
+                self.assertEqual(layout["featureCellDisplay"], "inline-flex")
+                self.assertEqual(layout["parameterCellDisplay"], "inline-flex")
+                self.assertEqual(layout["featureCellAlignItems"], "center")
+                self.assertEqual(layout["parameterCellAlignItems"], "center")
+                self.assertEqual(layout["featureHeaderFontSize"], "11px")
+                self.assertEqual(layout["parameterHeaderFontSize"], "11px")
+                self.assertEqual(layout["featureHeaderJustifyContent"], "center")
+                self.assertEqual(layout["parameterHeaderJustifyContent"], "center")
+                self.assertEqual(layout["featureHeaderContentDisplay"], "flex")
+                self.assertEqual(layout["parameterHeaderContentDisplay"], "flex")
+                self.assertEqual(layout["featureHeaderContentAlignItems"], "center")
+                self.assertEqual(layout["parameterHeaderContentAlignItems"], "center")
+                self.assertEqual(layout["featureNameJustifyContent"], "space-between")
+                self.assertEqual(layout["featureKindFontSize"], "9px")
+                self.assertEqual(layout["segmentKindText"], "categorical (3)")
+                self.assertIn("Feature", layout["featureHeaders"])
+                self.assertIn("Use", layout["featureHeaders"])
+                self.assertIn("Monotonicity", layout["featureHeaders"])
+                self.assertIn("Gain", layout["featureHeaders"])
+                self.assertNotIn("Type", layout["featureHeaders"])
+                self.assertEqual(page_errors, [])
             finally:
                 browser.close()
 

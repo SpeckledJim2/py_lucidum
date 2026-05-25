@@ -1131,6 +1131,10 @@
         grid-template-columns: minmax(0, 1fr);
       }
 
+      .visual-area.model-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       .chart-controls-resizer {
         background: linear-gradient(to right, var(--line), transparent);
         cursor: col-resize;
@@ -2414,10 +2418,14 @@
       }
 
       .model-tool-wrap {
-        min-height: 100%;
-        display: grid;
-        align-items: start;
-        padding: 18px;
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        box-sizing: border-box;
+        display: block;
+        overflow: hidden;
+        padding: 12px;
       }
 
       .model-shell {
@@ -2479,6 +2487,388 @@
         margin: 4px 0 0;
         font-size: 16px;
         font-weight: 700;
+      }
+
+      .gbm-sidebar-panel select {
+        width: 100%;
+      }
+
+      .gbm-tool {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        height: 100%;
+        width: 100%;
+        position: relative;
+      }
+
+      .gbm-tool-error-shell {
+        min-height: 160px;
+      }
+
+      .gbm-notice {
+        background: color-mix(in srgb, var(--panel) 92%, var(--danger));
+        border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line));
+        border-radius: 6px;
+        box-shadow: var(--shadow);
+        color: var(--danger);
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.25;
+        max-width: min(520px, 54%);
+        padding: 7px 9px;
+        position: absolute;
+        right: 8px;
+        top: 8px;
+        z-index: 5;
+      }
+
+      .gbm-toolbar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        flex: 0 0 auto;
+        margin-bottom: 10px;
+      }
+
+      .gbm-tabs {
+        position: static;
+      }
+
+      .gbm-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: nowrap;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .gbm-action-button {
+        flex: 0 0 auto;
+        min-height: 24px;
+      }
+
+      .gbm-sample-button.active {
+        background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+        border-color: var(--accent);
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .gbm-train-button {
+        background: #15803d;
+        border-color: #15803d;
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .gbm-train-button.training,
+      .gbm-train-button.training:disabled {
+        background: #d97706;
+        border-color: #d97706;
+        color: #fff;
+        cursor: progress;
+        opacity: 1;
+      }
+
+      .gbm-tab-panel {
+        overflow: hidden;
+        min-height: 0;
+        flex: 1 1 auto;
+      }
+
+      .gbm-feature-layout {
+        display: grid;
+        grid-template-columns: minmax(360px, 1fr) minmax(320px, 0.9fr);
+        gap: 12px;
+        height: 100%;
+        min-height: 0;
+      }
+
+      .gbm-grid-panel,
+      .gbm-right-panel {
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-panel-section {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-section-title {
+        color: #111827;
+        flex: 0 0 auto;
+        font-size: 13px;
+        font-weight: 800;
+        line-height: 1.2;
+        margin: 0 0 5px;
+      }
+
+      .gbm-panel-section > .gbm-grid,
+      .gbm-panel-section > .gbm-evaluation-chart {
+        flex: 1 1 auto;
+      }
+
+      .gbm-right-panel {
+        display: grid;
+        grid-template-rows: 300px minmax(0, 1fr);
+        gap: 10px;
+      }
+
+      .gbm-grid {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        min-height: 220px;
+        overflow: hidden;
+      }
+
+      #gbmFeatureGrid {
+        height: 100%;
+        width: 100%;
+      }
+
+      .gbm-parameter-grid {
+        height: 100%;
+        min-height: 0;
+      }
+
+      .gbm-grid .tabulator,
+      .gbm-grid .tabulator-tableholder,
+      .gbm-grid .tabulator-table {
+        background: var(--panel) !important;
+      }
+
+      .gbm-grid .tabulator-header,
+      .gbm-grid .tabulator-header .tabulator-col {
+        background: var(--panel-2) !important;
+      }
+
+      .gbm-grid.tabulator .tabulator-header .tabulator-col {
+        justify-content: center;
+        min-height: 20px;
+        font-size: 11px;
+        line-height: 1.15;
+      }
+
+      .gbm-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content {
+        align-items: center;
+        display: flex;
+        min-height: 20px;
+        padding: 1px 6px;
+      }
+
+      .gbm-grid .tabulator-row,
+      .gbm-grid .tabulator-row.tabulator-row-even,
+      .gbm-grid .tabulator-row.tabulator-row-odd {
+        background: var(--panel) !important;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+        min-height: 20px;
+      }
+
+      .gbm-grid .tabulator-row .tabulator-cell {
+        align-items: center;
+        background: transparent !important;
+        border-right-color: color-mix(in srgb, var(--line) 80%, transparent);
+        display: inline-flex;
+        min-height: 20px;
+        padding: 1px 6px;
+        font-size: 11px;
+        line-height: 1.15;
+      }
+
+      .gbm-grid .tabulator-row.tabulator-selected,
+      .gbm-grid .tabulator-row.tabulator-selected .tabulator-cell,
+      .gbm-grid .tabulator-row:hover,
+      .gbm-grid .tabulator-row:hover .tabulator-cell {
+        background: var(--panel) !important;
+      }
+
+      .gbm-parameter-input,
+      .gbm-parameter-select {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        font: inherit;
+        height: 21px;
+        line-height: 19px;
+        max-width: 100%;
+        padding: 0 5px;
+        width: 100%;
+      }
+
+      #gbmFeatureGrid .tabulator-cell[tabulator-field="gain"],
+      #gbmFeatureGrid .tabulator-col[tabulator-field="gain"] {
+        justify-content: center;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #gbmFeatureGrid .tabulator-cell[tabulator-field="include"] {
+        justify-content: center;
+      }
+
+      #gbmFeatureGrid .tabulator-row .gbm-feature-name-cell,
+      .gbm-feature-name-line {
+        align-items: center;
+        gap: 8px;
+        justify-content: space-between;
+      }
+
+      #gbmFeatureGrid .tabulator-row .gbm-feature-name-cell {
+        min-width: 0;
+      }
+
+      .gbm-feature-name-line {
+        display: flex;
+        min-width: 0;
+        width: 100%;
+      }
+
+      .gbm-feature-name-main {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .gbm-feature-kind {
+        flex: 0 0 auto;
+        margin-left: auto;
+        text-align: right;
+      }
+
+      #gbmFeatureGrid .gbm-use-checkbox {
+        width: 14px;
+        height: 14px;
+        margin: 0;
+        vertical-align: middle;
+        accent-color: var(--accent);
+      }
+
+      .gbm-shap-rows {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+        flex-wrap: nowrap;
+        gap: 6px;
+        margin-right: 8px;
+        min-height: 24px;
+        padding-right: 12px;
+        border-right: 1px solid var(--line);
+      }
+
+      .gbm-shap-label {
+        color: #111827;
+        font-size: 12px;
+        font-weight: 800;
+        margin-right: 4px;
+      }
+
+      .gbm-shap-option {
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        display: inline-flex;
+        flex: 0 0 auto;
+        gap: 5px;
+        min-height: 24px;
+        padding: 2px 7px;
+        font-size: 12px;
+        background: var(--panel);
+      }
+
+      .gbm-shap-option input {
+        margin: 0;
+        accent-color: var(--accent);
+      }
+
+      .gbm-evaluation-chart,
+      .gbm-tree-chart {
+        min-height: 220px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+
+      .gbm-evaluation-chart {
+        height: 100%;
+        min-height: 0;
+        width: 100%;
+      }
+
+      .gbm-tree-chart {
+        height: 560px;
+      }
+
+      .gbm-tree-toolbar {
+        margin-bottom: 8px;
+      }
+
+      .gbm-model-table,
+      .gbm-fallback-table table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .gbm-model-table th,
+      .gbm-model-table td,
+      .gbm-fallback-table th,
+      .gbm-fallback-table td {
+        border-bottom: 1px solid var(--line);
+        padding: 7px 8px;
+        text-align: left;
+      }
+
+      .gbm-model-table tr.active td {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+      }
+
+      .gbm-fallback-table input,
+      .gbm-fallback-table select {
+        max-width: 130px;
+      }
+
+      #gbmFeatureGrid .tabulator-row.gbm-feature-disabled,
+      #gbmFeatureGrid .tabulator-row.gbm-feature-disabled .tabulator-cell,
+      .gbm-fallback-table tr.gbm-feature-disabled,
+      .gbm-fallback-table tr.gbm-feature-disabled td {
+        background: color-mix(in srgb, #ef4444 14%, var(--panel)) !important;
+      }
+
+      #gbmFeatureGrid .tabulator-row.gbm-feature-disabled .tabulator-cell,
+      .gbm-fallback-table tr.gbm-feature-disabled td {
+        color: color-mix(in srgb, var(--text) 70%, #991b1b);
+      }
+
+      #gbmFeatureGrid .tabulator-row.gbm-feature-warning,
+      #gbmFeatureGrid .tabulator-row.gbm-feature-warning .tabulator-cell,
+      .gbm-fallback-table tr.gbm-feature-warning,
+      .gbm-fallback-table tr.gbm-feature-warning td {
+        background: color-mix(in srgb, #facc15 22%, var(--panel)) !important;
+      }
+
+      .gbm-use-cell,
+      .gbm-gain-cell {
+        text-align: center;
+      }
+
+      .gbm-empty-state {
+        color: var(--muted);
+        padding: 16px 0;
+      }
+
+      td.numeric {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .gbm-fallback-table td.gbm-gain-cell {
+        text-align: center;
       }
 
       .hidden {

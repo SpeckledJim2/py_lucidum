@@ -20,6 +20,7 @@ class Dataset:
         self._row_count: int | None = None
         self._band_suggestions: dict[str, float | int | None] | None = None
         self._lock = threading.RLock()
+        self._source_providers: list[Any] = []
 
     @property
     def lock(self) -> threading.RLock:
@@ -38,23 +39,44 @@ class Dataset:
         source_id = str(raw or "dataset").strip()
         if source_id in {"", "dataset"}:
             return "dataset"
+        for provider in self._source_providers:
+            has_source = getattr(provider, "has_source", None)
+            if callable(has_source) and has_source(source_id):
+                return source_id
         raise ValueError("Choose a valid data source")
 
     def relation_sql_for_source(self, source_id: Any = None) -> str:
-        self.normalise_source(source_id)
-        return self.relation_sql()
+        normalised = self.normalise_source(source_id)
+        if normalised == "dataset":
+            return self.relation_sql()
+        for provider in self._source_providers:
+            has_source = getattr(provider, "has_source", None)
+            relation_sql = getattr(provider, "relation_sql", None)
+            if callable(has_source) and callable(relation_sql) and has_source(normalised):
+                return str(relation_sql(normalised))
+        raise ValueError("Choose a valid data source")
+
+    def register_data_source_provider(self, provider: Any) -> None:
+        if provider not in self._source_providers:
+            self._source_providers.append(provider)
 
     def data_sources(self) -> list[dict[str, Any]]:
-        schema = self.schema()
-        return [
-            {
-                "id": "dataset",
-                "label": self.path.name,
-                "kind": "dataset",
-                "row_count": schema["row_count"],
-                "columns": schema["columns"],
-            }
-        ]
+        with self._lock:
+            schema = self.schema()
+            sources = [
+                {
+                    "id": "dataset",
+                    "label": self.path.name,
+                    "kind": "dataset",
+                    "row_count": schema["row_count"],
+                    "columns": schema["columns"],
+                }
+            ]
+            for provider in self._source_providers:
+                data_sources = getattr(provider, "data_sources", None)
+                if callable(data_sources):
+                    sources.extend(data_sources(self))
+            return sources
 
     def reload(self) -> None:
         with self._lock:
@@ -99,6 +121,37 @@ class Dataset:
         if self._row_count is None:
             self._row_count = int(self.con.execute(f"SELECT COUNT(*) FROM {self.relation_sql()}").fetchone()[0])
         return self._row_count
+
+    def row_count_for_source(self, source_id: Any = None) -> int:
+        source = self.normalise_source(source_id)
+        if source == "dataset":
+            return self.row_count()
+        return int(self.con.execute(f"SELECT COUNT(*) FROM {self.relation_sql_for_source(source)}").fetchone()[0])
+
+    def schema_for_source(self, source_id: Any = None) -> dict[str, Any]:
+        source = self.normalise_source(source_id)
+        if source == "dataset":
+            return self.schema()
+        relation = self.relation_sql_for_source(source)
+        rows = self.con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
+        columns = [
+            ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
+            for row in rows
+        ]
+        return {
+            "path": source,
+            "file_size": None,
+            "row_count": self.row_count_for_source(source),
+            "columns": [
+                {
+                    "name": c.name,
+                    "duckdb_type": c.duckdb_type,
+                    "kind": c.kind,
+                    "band_suggestion": c.band_suggestion,
+                }
+                for c in columns
+            ],
+        }
 
     def band_suggestions(self, schema: list[ColumnInfo]) -> dict[str, float | int | None]:
         if self._band_suggestions is not None:
@@ -163,12 +216,27 @@ FROM sample
     def column_map(self) -> dict[str, ColumnInfo]:
         return {c.name: c for c in self._schema_columns()}
 
+    def column_map_for_source(self, source_id: Any = None) -> dict[str, ColumnInfo]:
+        source = self.normalise_source(source_id)
+        if source == "dataset":
+            return self.column_map()
+        schema = self.schema_for_source(source)
+        return {
+            str(column["name"]): ColumnInfo(
+                name=str(column["name"]),
+                duckdb_type=str(column["duckdb_type"]),
+                kind=str(column["kind"]),
+                band_suggestion=column.get("band_suggestion"),
+            )
+            for column in schema["columns"]
+        }
+
     def _schema_columns(self) -> list[ColumnInfo]:
         self.schema()
         assert self._schema is not None
         return self._schema
 
-    def normalise_filter(self, raw: Any) -> str:
+    def normalise_filter(self, raw: Any, source_id: Any = None) -> str:
         expression = str(raw or "").strip()
         if not expression:
             return ""
@@ -176,14 +244,14 @@ FROM sample
         if any(token in expression for token in forbidden):
             raise ValueError("Filter must be a single DuckDB expression without statement separators or comments")
         try:
-            self.con.execute(f"SELECT 1 FROM {self.relation_sql()} WHERE ({expression}) LIMIT 0")
+            self.con.execute(f"SELECT 1 FROM {self.relation_sql_for_source(source_id)} WHERE ({expression}) LIMIT 0")
         except duckdb.Error as exc:
             message = str(exc).splitlines()[0]
             raise ValueError(f"Invalid filter: {message}") from exc
         return expression
 
-    def filtered_row_count(self, filter_sql: str) -> int:
+    def filtered_row_count(self, filter_sql: str, source_id: Any = None) -> int:
         if not filter_sql:
-            return self.row_count()
-        value = self.con.execute(f"SELECT COUNT(*) FROM {self.relation_sql()} WHERE ({filter_sql})").fetchone()[0]
+            return self.row_count_for_source(source_id)
+        value = self.con.execute(f"SELECT COUNT(*) FROM {self.relation_sql_for_source(source_id)} WHERE ({filter_sql})").fetchone()[0]
         return int(value)

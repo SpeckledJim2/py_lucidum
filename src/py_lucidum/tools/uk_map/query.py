@@ -74,19 +74,20 @@ UNIT_POINT_FIELDS = (
 
 def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] | None = None) -> dict[str, Any]:
     with dataset.lock:
-        columns = dataset.column_map()
+        source_id = dataset.normalise_source(request.get("source"))
+        columns = dataset.column_map_for_source(source_id)
         level = normalise_level(request.get("level"))
         compact_unit_points = level == "unit" and bool(request.get("compactUnitPoints"))
         response = normalise_response(request, columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
         app_defaults = defaults or {}
         join_column = normalise_join_column(level, request, app_defaults, columns)
-        filter_sql = dataset.normalise_filter(request.get("filter"))
+        filter_sql = dataset.normalise_filter(request.get("filter"), source_id=source_id)
 
-        row_count = dataset.row_count()
-        filtered_row_count = dataset.filtered_row_count(filter_sql)
-        denominator_summary = summarize_denominator(dataset, [response], denominator, filter_sql)
-        response_summaries = response_summary(dataset, [response], denominator, filter_sql)
+        row_count = dataset.row_count_for_source(source_id)
+        filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
+        denominator_summary = summarize_denominator(dataset, [response], denominator, filter_sql, source_id=source_id)
+        response_summaries = response_summary(dataset, [response], denominator, filter_sql, source_id=source_id)
         point_summary: dict[str, Any] | None = None
         if level == "unit":
             latitude_column = normalise_coordinate_column("latitude", request, app_defaults, columns)
@@ -99,11 +100,12 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 response,
                 denominator,
                 filter_sql,
+                source_id=source_id,
                 compact=compact_unit_points,
             )
             rows = [] if compact_unit_points else rows_or_points
         else:
-            rows = map_rows(dataset, join_column, response, denominator, filter_sql)
+            rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
         warnings = denominator_warnings(denominator, denominator_summary)
         plotted_count = int(point_summary["plotted_count"]) if point_summary else len(rows)
         if plotted_count == 0:
@@ -118,6 +120,7 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
             "level_label": level_info["label"],
             "join_column": join_column,
             "join_property": level_info["join_property"],
+            "source": source_id,
             "row_count": row_count,
             "filtered_row_count": filtered_row_count,
             "filter": filter_sql,
@@ -236,8 +239,9 @@ def map_rows(
     response: dict[str, str],
     denominator: dict[str, str | None],
     filter_sql: str = "",
+    source_id: Any = None,
 ) -> list[dict[str, Any]]:
-    sql = build_summary_sql(dataset.relation_sql(), join_column, response, denominator, filter_sql)
+    sql = build_summary_sql(dataset.relation_sql_for_source(source_id), join_column, response, denominator, filter_sql)
     cursor = dataset.con.execute(sql)
     column_names = [d[0] for d in cursor.description]
     rows = [dict(zip(column_names, row)) for row in cursor.fetchall()]
@@ -303,11 +307,12 @@ def unit_rows(
     response: dict[str, str],
     denominator: dict[str, str | None],
     filter_sql: str = "",
+    source_id: Any = None,
     *,
     compact: bool = False,
 ) -> tuple[list[dict[str, Any]] | dict[str, list[Any]], dict[str, int]]:
     sql = build_unit_summary_sql(
-        dataset.relation_sql(),
+        dataset.relation_sql_for_source(source_id),
         join_column,
         latitude_column,
         longitude_column,

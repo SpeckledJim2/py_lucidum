@@ -25,12 +25,13 @@ from py_lucidum.core import (
 
 def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
     with dataset.lock:
-        columns = dataset.column_map()
+        source_id = dataset.normalise_source(request.get("source"))
+        columns = dataset.column_map_for_source(source_id)
         x_col = str(request.get("x") or "")
         if x_col not in columns:
             raise ValueError("Choose a valid x-axis feature")
 
-        filter_sql = dataset.normalise_filter(request.get("filter"))
+        filter_sql = dataset.normalise_filter(request.get("filter"), source_id=source_id)
         responses = normalise_responses(request.get("responses"), columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
         x_info = columns[x_col]
@@ -49,9 +50,8 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         x_group_kind = "quantile" if quantile_count else x_info.kind
         sigma_multiplier = float(request.get("sigma") or 0)
         include_sigma = sigma_multiplier > 0 and len(responses) >= 2
-        source_id = dataset.normalise_source(request.get("source"))
-        row_count = dataset.row_count()
-        filtered_row_count = dataset.filtered_row_count(filter_sql)
+        row_count = dataset.row_count_for_source(source_id)
+        filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
         denominator_summary = summarize_denominator(dataset, responses, denominator, filter_sql, source_id=source_id)
         response_summaries = response_summary(dataset, responses, denominator, filter_sql, source_id=source_id)
         sql = build_chart_sql(dataset.relation_sql_for_source(source_id), x_sql, responses, denominator, include_sigma, filter_sql)

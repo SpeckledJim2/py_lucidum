@@ -1,0 +1,420 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, quote_ident
+
+
+RESPONSE_COLUMN = "actualNumerator"
+OFFSET_COLUMN = "denominator"
+DEFAULT_OBJECTIVE = "poisson"
+DEFAULT_METRIC = "poisson"
+GBM_OBJECTIVES = (
+    "regression",
+    "regression_l1",
+    "huber",
+    "fair",
+    "poisson",
+    "quantile",
+    "mape",
+    "gamma",
+    "tweedie",
+    "binary",
+    "cross_entropy",
+    "cross_entropy_lambda",
+)
+GBM_METRICS = (
+    "l1",
+    "l2",
+    "rmse",
+    "quantile",
+    "mape",
+    "huber",
+    "fair",
+    "poisson",
+    "gamma",
+    "gamma_deviance",
+    "tweedie",
+    "auc",
+    "average_precision",
+    "binary_logloss",
+    "binary_error",
+    "cross_entropy",
+    "cross_entropy_lambda",
+    "kullback_leibler",
+    "r2",
+)
+LOG_LINK_OBJECTIVES = {"poisson", "gamma", "tweedie"}
+MONOTONE_OBJECTIVES = {"regression", "regression_l1", "huber", "fair", "poisson", "gamma", "tweedie", "binary"}
+CROSS_ENTROPY_OBJECTIVES = {"cross_entropy", "cross_entropy_lambda"}
+HIGH_CARDINALITY_THRESHOLD = 100
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    ok: bool
+    errors: list[str]
+    warnings: list[str]
+
+    def as_payload(self) -> dict[str, Any]:
+        return {"ok": self.ok, "errors": self.errors, "warnings": self.warnings}
+
+
+def default_parameters() -> list[dict[str, Any]]:
+    return [
+        {"name": "objective", "value": DEFAULT_OBJECTIVE, "important": True},
+        {"name": "metric", "value": DEFAULT_METRIC, "important": True},
+        {"name": "num_iterations", "value": 200, "important": True},
+        {"name": "learning_rate", "value": 0.05, "important": True},
+        {"name": "num_leaves", "value": 31, "important": True},
+        {"name": "max_depth", "value": -1, "important": True},
+        {"name": "min_data_in_leaf", "value": 20, "important": True},
+        {"name": "early_stopping_rounds", "value": 25, "important": True},
+        {"name": "feature_fraction", "value": 1.0, "important": False},
+        {"name": "bagging_fraction", "value": 1.0, "important": False},
+        {"name": "bagging_freq", "value": 0, "important": False},
+        {"name": "lambda_l1", "value": 0.0, "important": False},
+        {"name": "lambda_l2", "value": 0.0, "important": False},
+        {"name": "min_gain_to_split", "value": 0.0, "important": False},
+        {"name": "max_bin", "value": 255, "important": False},
+        {"name": "verbosity", "value": -1, "important": False},
+        {"name": "seed", "value": 2026, "important": False},
+    ]
+
+
+def normalise_parameters(raw: Any) -> dict[str, Any]:
+    params = {str(row["name"]): row["value"] for row in default_parameters()}
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, list):
+        items = (
+            (item.get("name"), item.get("value"))
+            for item in raw
+            if isinstance(item, dict) and item.get("name")
+        )
+    else:
+        items = ()
+    for key, value in items:
+        name = str(key).strip()
+        if not name:
+            continue
+        params[name] = coerce_parameter(value)
+    return params
+
+
+def coerce_parameter(value: Any) -> Any:
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip()
+    if text == "":
+        return ""
+    lower = text.lower()
+    if lower in {"true", "false"}:
+        return lower == "true"
+    try:
+        if "." not in text and "e" not in lower:
+            return int(text)
+        return float(text)
+    except ValueError:
+        return text
+
+
+def objective(params: dict[str, Any]) -> str:
+    return str(params.get("objective") or DEFAULT_OBJECTIVE).strip().lower()
+
+
+def metric(params: dict[str, Any]) -> str:
+    return str(params.get("metric") or DEFAULT_METRIC).strip().lower()
+
+
+def parameter_option_errors(params: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    selected_objective = objective(params)
+    selected_metric = metric(params)
+    if selected_objective not in GBM_OBJECTIVES:
+        errors.append(f"Choose a valid LightGBM objective: {selected_objective}")
+    if selected_metric not in GBM_METRICS:
+        errors.append(f"Choose a valid LightGBM metric: {selected_metric}")
+    return errors
+
+
+def uses_log_offset(params: dict[str, Any]) -> bool:
+    return objective(params) in LOG_LINK_OBJECTIVES
+
+
+def selected_response_column(payload: dict[str, Any], columns: dict[str, ColumnInfo]) -> str:
+    candidate = str(payload.get("response") or payload.get("response_column") or RESPONSE_COLUMN).strip()
+    if not candidate or candidate not in columns or not is_numeric_kind(columns[candidate].kind):
+        raise ValueError("Choose a valid numeric GBM response column")
+    return candidate
+
+
+def selected_offset_column(payload: dict[str, Any], columns: dict[str, ColumnInfo]) -> str | None:
+    candidate = str(payload.get("offset") or payload.get("offset_column") or OFFSET_COLUMN).strip()
+    if candidate in {"", "__none__", "N", "Average row value"}:
+        return None
+    if candidate not in columns or not is_numeric_kind(columns[candidate].kind):
+        raise ValueError("Choose a valid numeric GBM denominator column")
+    return candidate
+
+
+def feature_rows(
+    dataset: Dataset,
+    gains: dict[str, float] | None = None,
+    model_features: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    columns = dataset.column_map()
+    distinct_counts = categorical_distinct_counts(dataset)
+    model_feature_map = {
+        str(item.get("name")): item
+        for item in model_features or []
+        if isinstance(item, dict) and item.get("name")
+    }
+    use_model_features = model_features is not None
+    rows: list[dict[str, Any]] = []
+    for column in columns.values():
+        usable = feature_usable(column)
+        disabled_reason = ""
+        if column.name in {RESPONSE_COLUMN, OFFSET_COLUMN}:
+            usable = False
+            disabled_reason = "reserved response/offset column"
+        elif not usable:
+            disabled_reason = "LightGBM feature type is not supported"
+        distinct_count = distinct_counts.get(column.name)
+        high_cardinality = column.kind == "categorical" and (distinct_count or 0) > HIGH_CARDINALITY_THRESHOLD
+        model_feature = model_feature_map.get(column.name, {})
+        include = (
+            usable and column.kind in {"integer", "numeric", "categorical"}
+            if not use_model_features
+            else bool(model_feature) and usable and column.kind in {"integer", "numeric", "categorical"}
+        )
+        gain = model_feature.get("gain") if model_feature else (gains or {}).get(column.name, 0.0)
+        rows.append(
+            {
+                "name": column.name,
+                "duckdb_type": column.duckdb_type,
+                "kind": column.kind,
+                "include": include,
+                "usable": usable,
+                "disabled_reason": disabled_reason,
+                "high_cardinality": high_cardinality,
+                "distinct_count": distinct_count,
+                "monotonicity": display_monotonicity(model_feature.get("monotonicity")) if include else "",
+                "gain": round(float(gain or 0.0), 3),
+            }
+        )
+    return sorted(rows, key=lambda row: (-float(row["gain"]), str(row["name"]).lower()))
+
+
+def feature_usable(column: ColumnInfo) -> bool:
+    return column.kind in {"integer", "numeric", "categorical"}
+
+
+def categorical_distinct_counts(dataset: Dataset) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    columns = [
+        column
+        for column in dataset.column_map().values()
+        if column.kind == "categorical"
+    ]
+    if not columns:
+        return counts
+    select_sql = ", ".join(
+        f"COUNT(DISTINCT {quote_ident(column.name)}) AS {quote_ident('c' + str(index))}"
+        for index, column in enumerate(columns)
+    )
+    row = dataset.con.execute(f"SELECT {select_sql} FROM {dataset.relation_sql()}").fetchone()
+    for index, column in enumerate(columns):
+        counts[column.name] = int(row[index] or 0)
+    return counts
+
+
+def normalise_features(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    features: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("feature") or "").strip()
+        if not name or name not in columns:
+            continue
+        include = item.get("include", True)
+        if isinstance(include, str):
+            include = include.strip().lower() not in {"", "0", "false", "no", "off"}
+        if not include:
+            continue
+        monotonicity = normalise_monotonicity(item.get("monotonicity"))
+        features.append({"name": name, "monotonicity": monotonicity, "kind": columns[name].kind})
+    return features
+
+
+def normalise_monotonicity(raw: Any) -> int:
+    text = str(raw or "").strip().lower()
+    if text in {"", "0", "none", "no"}:
+        return 0
+    if text in {"1", "+1", "increasing", "increase", "up"}:
+        return 1
+    if text in {"-1", "decreasing", "decrease", "down"}:
+        return -1
+    raise ValueError("Use Increasing, 1, Decreasing, -1, or blank for monotonicity")
+
+
+def display_monotonicity(raw: Any) -> str:
+    try:
+        value = normalise_monotonicity(raw)
+    except ValueError:
+        return ""
+    if value > 0:
+        return "Increasing"
+    if value < 0:
+        return "Decreasing"
+    return ""
+
+
+def detect_sample_column(dataset: Dataset, requested: Any = None) -> str | None:
+    columns = dataset.column_map()
+    if requested:
+        name = str(requested).strip()
+        return name if name in columns else None
+    for candidate in ("sample", "Sample", "SAMPLE", "sample_group", "SampleGroup"):
+        if candidate in columns:
+            return candidate
+    return None
+
+
+def validate_request(dataset: Dataset, payload: dict[str, Any]) -> ValidationResult:
+    with dataset.lock:
+        errors: list[str] = []
+        warnings: list[str] = []
+        columns = dataset.column_map()
+        response_col = ""
+        offset_col: str | None = None
+        try:
+            response_col = selected_response_column(payload, columns)
+        except ValueError as exc:
+            errors.append(str(exc))
+        try:
+            offset_col = selected_offset_column(payload, columns)
+        except ValueError as exc:
+            errors.append(str(exc))
+
+        params = normalise_parameters(payload.get("parameters"))
+        selected_objective = objective(params)
+        errors.extend(parameter_option_errors(params))
+        selected_features: list[dict[str, Any]] = []
+        try:
+            selected_features = normalise_features(payload.get("features"), columns)
+        except ValueError as exc:
+            errors.append(str(exc))
+        if not selected_features:
+            errors.append("Choose at least one usable GBM feature")
+
+        for feature in selected_features:
+            column = columns[feature["name"]]
+            if not feature_usable(column):
+                errors.append(f"{feature['name']} cannot be used as a LightGBM feature")
+            if column.name == response_col or (offset_col and column.name == offset_col):
+                errors.append(f"{feature['name']} is reserved for the response or offset")
+            if feature["monotonicity"] and not is_numeric_kind(column.kind):
+                errors.append(f"{feature['name']} must be numeric to use monotonicity")
+            if feature["monotonicity"] and selected_objective in GBM_OBJECTIVES and selected_objective not in MONOTONE_OBJECTIVES:
+                errors.append(f"Monotonicity is not supported for objective {selected_objective}")
+
+        if response_col:
+            errors.extend(response_objective_errors(dataset, selected_objective, response_col))
+        if offset_col:
+            invalid_denominator = int(
+                dataset.con.execute(
+                    f"SELECT COUNT(*) FROM {dataset.relation_sql()} WHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) <= 0 OR {quote_ident(offset_col)} IS NULL"
+                ).fetchone()[0]
+            )
+            if invalid_denominator:
+                warnings.append(f"{invalid_denominator:,} rows have non-positive or missing denominator and will be excluded")
+        else:
+            warnings.append("No denominator column is selected; GBM offset values will be treated as 1")
+
+        sample_column = detect_sample_column(dataset, payload.get("sample_column"))
+        if sample_column:
+            sample_errors = sample_split_errors(dataset, sample_column, offset_col)
+            errors.extend(sample_errors)
+        elif payload.get("create_sample"):
+            warnings.append("A model-local deterministic training/test sample will be created")
+        else:
+            warnings.append("No sample column was found; the GBM will train on all valid rows without early stopping")
+
+        return ValidationResult(ok=not errors, errors=errors, warnings=warnings)
+
+
+def response_objective_errors(dataset: Dataset, selected_objective: str, response_column: str = RESPONSE_COLUMN) -> list[str]:
+    column = quote_ident(response_column)
+    relation = dataset.relation_sql()
+    errors: list[str] = []
+    stats = dataset.con.execute(
+        f"""
+SELECT
+  MIN(TRY_CAST({column} AS DOUBLE)) AS min_y,
+  MAX(TRY_CAST({column} AS DOUBLE)) AS max_y,
+  COUNT(*) FILTER (WHERE TRY_CAST({column} AS DOUBLE) IS NULL) AS missing_y,
+  COUNT(DISTINCT TRY_CAST({column} AS DOUBLE)) AS distinct_y
+FROM {relation}
+"""
+    ).fetchone()
+    min_y, max_y, missing_y, distinct_y = stats
+    if missing_y:
+        errors.append(f"{missing_y:,} response values are missing or non-numeric")
+    if selected_objective == "gamma" and (min_y is None or min_y <= 0):
+        errors.append("Gamma objective requires strictly positive response values")
+    if selected_objective in {"poisson", "tweedie"} and (min_y is None or min_y < 0):
+        errors.append(f"{selected_objective} objective requires non-negative response values")
+    if selected_objective == "binary":
+        if min_y not in {0, 1} or max_y not in {0, 1} or int(distinct_y or 0) > 2:
+            errors.append("Binary objective requires response values of 0 and 1 only")
+    if selected_objective in CROSS_ENTROPY_OBJECTIVES and (min_y is None or min_y < 0 or max_y is None or max_y > 1):
+        errors.append(f"{selected_objective} objective requires response values between 0 and 1")
+    return errors
+
+
+def sample_split_errors(dataset: Dataset, sample_column: str, offset_column: str | None = OFFSET_COLUMN) -> list[str]:
+    col = quote_ident(sample_column)
+    relation = dataset.relation_sql()
+    denominator_filter = f"WHERE TRY_CAST({quote_ident(offset_column)} AS DOUBLE) > 0" if offset_column else ""
+    rows = dataset.con.execute(
+        f"""
+SELECT LOWER(TRIM(CAST({col} AS VARCHAR))) AS sample, COUNT(*) AS row_count
+FROM {relation}
+{denominator_filter}
+GROUP BY sample
+"""
+    ).fetchall()
+    counts = {str(sample or ""): int(row_count) for sample, row_count in rows}
+    errors: list[str] = []
+    if counts.get("training", 0) == 0:
+        errors.append(f"Sample column {sample_column} must contain at least one training row")
+    if counts.get("test", 0) == 0:
+        errors.append(f"Sample column {sample_column} must contain at least one test row for early stopping")
+    return errors
+
+
+__all__ = [
+    "DEFAULT_METRIC",
+    "DEFAULT_OBJECTIVE",
+    "GBM_METRICS",
+    "GBM_OBJECTIVES",
+    "OFFSET_COLUMN",
+    "RESPONSE_COLUMN",
+    "ValidationResult",
+    "default_parameters",
+    "detect_sample_column",
+    "display_monotonicity",
+    "feature_rows",
+    "normalise_features",
+    "normalise_parameters",
+    "selected_offset_column",
+    "selected_response_column",
+    "uses_log_offset",
+    "validate_request",
+]

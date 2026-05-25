@@ -15,6 +15,13 @@ dependencies = [
   "uvicorn[standard]>=0.30",
 ]
 
+[project.optional-dependencies]
+gbm = [
+  "lightgbm>=4.0",
+  "numpy>=2.0",
+  "pandas>=2.2",
+]
+
 [project.scripts]
 lucidum = "py_lucidum.cli:main"
 

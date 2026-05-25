@@ -2,6 +2,7 @@
 datasets/*.csv
 datasets/*.parquet
 !datasets/motor_premiums.parquet
+.lucidum/
 
 # Python/cache/build artifacts
 __pycache__/
