@@ -703,6 +703,7 @@
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
         el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
+        requestAnimationFrame(clampSidebarFilterHeight);
         syncActiveFilterLabels();
         syncActionTimingMonitor(tool);
         setStatus("");
@@ -734,6 +735,14 @@
           el("profileWrap").classList.remove("hidden");
         }
         if (refresh && state.schema) refreshActiveTool();
+      }
+
+      function handleToolClick(tool) {
+        if (state.tool === tool) {
+          setSidebarVisible(!state.sidebarVisible);
+          return;
+        }
+        setTool(tool);
       }
 
       function setSidebarVisible(visible) {
@@ -787,6 +796,14 @@
         state.filterCollapsed = Boolean(collapsed);
         document.querySelector(".sidebar-filter-section")?.classList.toggle("filter-collapsed", state.filterCollapsed);
         syncFilterCollapseButton();
+        if (!state.filterCollapsed) {
+          requestAnimationFrame(() => {
+            const savedHeight = Number(localStorage.getItem("py_lucidum_sidebar_filter_height"));
+            const section = document.querySelector(".sidebar-filter-section");
+            const currentHeight = section?.getBoundingClientRect().height || 0;
+            setSidebarFilterHeight(Number.isFinite(savedHeight) && savedHeight > 0 ? savedHeight : currentHeight);
+          });
+        }
       }
 
       function syncFilterCollapseButton() {
@@ -1005,6 +1022,7 @@
         button.setAttribute("aria-expanded", String(!state.kpiCollapsed));
         button.setAttribute("aria-label", state.kpiCollapsed ? "Expand KPIs" : "Collapse KPIs");
         button.title = state.kpiCollapsed ? "Expand KPIs" : "Collapse KPIs";
+        requestAnimationFrame(clampSidebarFilterHeight);
       }
 
       function renderKpis() {
@@ -3876,7 +3894,8 @@
         const resizer = el("sidebarFilterResizer");
         const savedHeight = Number(localStorage.getItem("py_lucidum_sidebar_filter_height"));
         if (Number.isFinite(savedHeight) && savedHeight > 0) {
-          setSidebarFilterHeight(savedHeight);
+          document.documentElement.style.setProperty("--sidebar-filter-height", `${Math.round(savedHeight)}px`);
+          if (!state.filterCollapsed) setSidebarFilterHeight(savedHeight);
         }
 
         let dragging = false;
@@ -3922,15 +3941,34 @@
       function setSidebarFilterHeight(rawHeight) {
         if (state.filterCollapsed) return;
         const section = document.querySelector(".sidebar-filter-section");
-        const aside = section?.closest("aside");
-        const occupiedHeight = Array.from(aside?.children || [])
-          .filter((child) => child !== section)
-          .reduce((total, child) => total + child.getBoundingClientRect().height, 0);
-        const availableHeight = (aside?.getBoundingClientRect().height || window.innerHeight) - occupiedHeight - 8;
+        const aside = el("appSidebar");
+        if (!section || !aside) return;
+        const toolSection = el("toolSelectorSection");
+        const kpiSection = document.querySelector(".sidebar-kpi-section");
+        const outerHeight = (element) => {
+          if (!element || element.classList.contains("hidden")) return 0;
+          const style = getComputedStyle(element);
+          return element.getBoundingClientRect().height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+        };
+        const asideStyle = getComputedStyle(aside);
+        const contentHeight = aside.getBoundingClientRect().height - (parseFloat(asideStyle.paddingTop) || 0) - (parseFloat(asideStyle.paddingBottom) || 0);
+        const kpiVisible = kpiSection && !kpiSection.classList.contains("hidden") && !state.kpiCollapsed;
+        const kpiStyle = kpiSection ? getComputedStyle(kpiSection) : null;
+        const kpiMarginBottom = kpiVisible && kpiStyle ? (parseFloat(kpiStyle.marginBottom) || 0) : 0;
+        const sectionStyle = getComputedStyle(section);
+        const sectionMargins = (parseFloat(sectionStyle.marginTop) || 0) + (parseFloat(sectionStyle.marginBottom) || 0);
+        const availableHeight = contentHeight - outerHeight(toolSection);
         const minHeight = 168;
-        const maxHeight = Math.max(minHeight, availableHeight);
+        const minKpiHeight = kpiVisible ? 132 : 0;
+        const maxHeight = Math.max(minHeight, availableHeight - minKpiHeight - kpiMarginBottom - sectionMargins);
         const height = Math.min(Math.max(rawHeight, minHeight), maxHeight);
         document.documentElement.style.setProperty("--sidebar-filter-height", `${Math.round(height)}px`);
+      }
+
+      function clampSidebarFilterHeight() {
+        const section = document.querySelector(".sidebar-filter-section");
+        if (!section || state.filterCollapsed) return;
+        setSidebarFilterHeight(section.getBoundingClientRect().height);
       }
 
       function setupChartControlsResize() {
@@ -4134,9 +4172,9 @@
         });
         el("chartTab").addEventListener("click", () => setView("chart"));
         el("tableTab").addEventListener("click", () => setView("table"));
-        el("profileTool").addEventListener("click", () => setTool("column_profile"));
-        el("lineBarTool").addEventListener("click", () => setTool("line_bar"));
-        el("ukMapTool").addEventListener("click", () => setTool("uk_map"));
+        el("profileTool").addEventListener("click", () => handleToolClick("column_profile"));
+        el("lineBarTool").addEventListener("click", () => handleToolClick("line_bar"));
+        el("ukMapTool").addEventListener("click", () => handleToolClick("uk_map"));
         el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
         el("filterFooterToggleBtn").addEventListener("click", () => setFilterFooterVisible(state.filterFooterCollapsed));
         el("kpiCollapseBtn").addEventListener("click", () => setKpiCollapsed(!state.kpiCollapsed));
@@ -4190,8 +4228,7 @@
           refreshActiveTool({ force: true });
         });
         window.addEventListener("resize", () => {
-          const filterSection = document.querySelector(".sidebar-filter-section");
-          if (filterSection && state.sidebarVisible && !state.filterCollapsed) setSidebarFilterHeight(filterSection.getBoundingClientRect().height);
+          if (state.sidebarVisible) clampSidebarFilterHeight();
           if (state.tool === "line_bar") {
             const controls = document.querySelector(".chart-side-controls");
             if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
