@@ -421,6 +421,20 @@
         return currentDataSource()?.columns || state.schema?.columns || [];
       }
 
+      function isModelPredictionColumn(column) {
+        return ["gbm_prediction", "glm_prediction"].includes(String(column?.name || ""));
+      }
+
+      function expectedDisplayColumns() {
+        const columns = [...numericColumns()];
+        if (state.expectedSort === "alpha") {
+          columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        }
+        const predictionColumns = columns.filter(isModelPredictionColumn);
+        const otherColumns = columns.filter((column) => !isModelPredictionColumn(column));
+        return [...predictionColumns, ...otherColumns];
+      }
+
       function preferredStartupSource(availableSources, requestedSource) {
         if (availableSources.some((source) => source.id === requestedSource)) return requestedSource;
         const activePredictionSource = availableSources.find((source) => source.kind === "gbm_predictions" && source.active);
@@ -1489,11 +1503,7 @@
           addExpectedButton("No expected line", "", "off", "expected-none-option");
         }
 
-        const columns = [...numericColumns()];
-        if (state.expectedSort === "alpha") {
-          columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-        }
-        for (const col of columns) {
+        for (const col of expectedDisplayColumns()) {
           if (query && !col.name.toLowerCase().includes(query)) continue;
           addExpectedButton(col.name, col.name, col.kind);
         }
