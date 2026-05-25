@@ -2600,7 +2600,7 @@
       }
 
       .gbm-section-title {
-        color: #111827;
+        color: var(--text);
         flex: 0 0 auto;
         font-size: 13px;
         font-weight: 800;
@@ -2623,6 +2623,7 @@
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 6px;
+        color: var(--text);
         min-height: 220px;
         overflow: hidden;
       }
@@ -2641,11 +2642,14 @@
       .gbm-grid .tabulator-tableholder,
       .gbm-grid .tabulator-table {
         background: var(--panel) !important;
+        color: var(--text) !important;
       }
 
       .gbm-grid .tabulator-header,
       .gbm-grid .tabulator-header .tabulator-col {
         background: var(--panel-2) !important;
+        border-color: var(--line) !important;
+        color: var(--text) !important;
       }
 
       .gbm-grid.tabulator .tabulator-header .tabulator-col {
@@ -2674,6 +2678,7 @@
         align-items: center;
         background: transparent !important;
         border-right-color: color-mix(in srgb, var(--line) 80%, transparent);
+        color: var(--text) !important;
         display: inline-flex;
         min-height: 20px;
         padding: 1px 6px;
@@ -2738,6 +2743,7 @@
       }
 
       .gbm-feature-kind {
+        color: var(--muted);
         flex: 0 0 auto;
         margin-left: auto;
         text-align: right;
@@ -2764,7 +2770,7 @@
       }
 
       .gbm-shap-label {
-        color: #111827;
+        color: var(--text);
         font-size: 12px;
         font-weight: 800;
         margin-right: 4px;
@@ -2845,11 +2851,27 @@
         color: color-mix(in srgb, var(--text) 70%, #991b1b);
       }
 
+      body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-disabled,
+      body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-disabled .tabulator-cell,
+      body.dark .gbm-fallback-table tr.gbm-feature-disabled,
+      body.dark .gbm-fallback-table tr.gbm-feature-disabled td {
+        background: color-mix(in srgb, #ef4444 24%, var(--panel)) !important;
+        color: #fecaca !important;
+      }
+
       #gbmFeatureGrid .tabulator-row.gbm-feature-warning,
       #gbmFeatureGrid .tabulator-row.gbm-feature-warning .tabulator-cell,
       .gbm-fallback-table tr.gbm-feature-warning,
       .gbm-fallback-table tr.gbm-feature-warning td {
         background: color-mix(in srgb, #facc15 22%, var(--panel)) !important;
+      }
+
+      body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-warning,
+      body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-warning .tabulator-cell,
+      body.dark .gbm-fallback-table tr.gbm-feature-warning,
+      body.dark .gbm-fallback-table tr.gbm-feature-warning td {
+        background: color-mix(in srgb, #facc15 18%, var(--panel)) !important;
+        color: var(--text) !important;
       }
 
       .gbm-use-cell,

@@ -687,15 +687,19 @@ export function createGbmTool({
     const xInterval = niceIterationInterval(maxIteration);
     const xMax = Math.ceil(maxIteration / xInterval) * xInterval;
     const title = evaluationTitle(rows, primaryMetric);
+    const textColor = cssVar("--text", "#3f3f46");
+    const mutedColor = cssVar("--muted", "#4b5563");
+    const lineColor = cssVar("--line", "#e5e7eb");
+    const panelColor = cssVar("--panel", "#ffffff");
     evaluationChart = window.echarts.init(target);
     evaluationChart.setOption({
       animation: false,
-      color: ["#ff140f", "#050505", "#2563eb", "#7c3aed"],
+      color: ["#ff140f", cssVar("--actual-line", "#050505"), "#2563eb", "#7c3aed"],
       title: {
         text: title,
         left: "center",
         top: 8,
-        textStyle: { color: "#3f3f46", fontSize: 12, fontWeight: 800, lineHeight: 15 },
+        textStyle: { color: textColor, fontSize: 12, fontWeight: 800, lineHeight: 15 },
       },
       legend: {
         orient: "vertical",
@@ -703,10 +707,13 @@ export function createGbmTool({
         top: "middle",
         itemWidth: 10,
         itemHeight: 10,
-        textStyle: { color: "#3f3f46", fontSize: 12 },
+        textStyle: { color: textColor, fontSize: 12 },
       },
       tooltip: {
         trigger: "axis",
+        backgroundColor: panelColor,
+        borderColor: lineColor,
+        textStyle: { color: textColor },
         valueFormatter: (value) => formatEvaluationValue(value),
       },
       grid: { left: 12, right: 82, top: 42, bottom: 38, containLabel: true },
@@ -715,17 +722,17 @@ export function createGbmTool({
         min: 0,
         max: xMax,
         interval: xInterval,
-        axisLabel: { color: "#4b5563", formatter: (value) => String(Math.round(Number(value))) },
-        axisLine: { lineStyle: { color: "#4b5563" } },
-        splitLine: { lineStyle: { color: "#e5e7eb" } },
+        axisLabel: { color: mutedColor, formatter: (value) => String(Math.round(Number(value))) },
+        axisLine: { lineStyle: { color: mutedColor } },
+        splitLine: { lineStyle: { color: lineColor } },
       },
       yAxis: {
         type: "value",
         scale: true,
         splitNumber: 4,
-        axisLabel: { color: "#4b5563", formatter: (value) => formatEvaluationAxisValue(value) },
-        axisLine: { show: true, lineStyle: { color: "#4b5563" } },
-        splitLine: { lineStyle: { color: "#e5e7eb" } },
+        axisLabel: { color: mutedColor, formatter: (value) => formatEvaluationAxisValue(value) },
+        axisLine: { show: true, lineStyle: { color: mutedColor } },
+        splitLine: { lineStyle: { color: lineColor } },
       },
       series: rows.map((row) => ({
         name: evaluationSeriesName(row, metricNames.size > 1),
@@ -897,6 +904,10 @@ export function createGbmTool({
     return window.CSS?.escape ? window.CSS.escape(value) : String(value).replace(/"/g, '\\"');
   }
 
+  function cssVar(name, fallback) {
+    return getComputedStyle(document.body).getPropertyValue(name).trim() || fallback;
+  }
+
   function loadTabulator() {
     if (window.Tabulator) return Promise.resolve(window.Tabulator);
     if (tabulatorPromise) return tabulatorPromise;
@@ -921,6 +932,7 @@ export function createGbmTool({
     buildRequest,
     fetchData,
     render,
+    refreshTheme: renderEvaluationChart,
     syncSidebarFromSchema,
     useCached,
   };

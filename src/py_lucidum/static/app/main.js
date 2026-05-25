@@ -4341,6 +4341,7 @@
           applyMapBackground();
           if (state.tool === "line_bar" && state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
           if (state.tool === "uk_map") measureToolRender("uk_map", () => resizeMap());
+          if (state.tool === "gbm") measureToolRender("gbm", () => gbmTool.refreshTheme());
         });
         el("reloadBtn").addEventListener("click", async () => {
           setStatus("");
