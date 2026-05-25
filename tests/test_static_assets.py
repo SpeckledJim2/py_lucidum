@@ -248,7 +248,14 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("gbmTool.syncSidebarFromSchema();", js)
         self.assertIn("function syncSidebarFromSchema()", js)
         self.assertIn("function sourceColumns()", js)
+        self.assertIn("function preferredStartupSource(availableSources, requestedSource)", js)
+        self.assertIn('const activePredictionSource = availableSources.find((source) => source.kind === "gbm_predictions" && source.active);', js)
+        self.assertIn('const predictionSource = availableSources.find((source) => source.kind === "gbm_predictions");', js)
+        self.assertIn("state.source = preferredStartupSource(availableSources, requestedSource);", js)
         self.assertIn('source: state.source || "dataset"', js)
+        self.assertIn('const previousExpected = el("expectedNumerator").value;', js)
+        self.assertIn('fillMetricSelect(el("expectedNumerator"), true);', js)
+        self.assertIn('el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";', js)
 
     def test_monitor_page_disables_cache(self) -> None:
         headers, body = self.assert_no_store("/monitor")

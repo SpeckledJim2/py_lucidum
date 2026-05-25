@@ -162,7 +162,7 @@ class GbmModelStore:
         where_sql = f"\n  WHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
         return f"""(
 SELECT
-  base.*,
+  base.* EXCLUDE (__lucidum_row_id),
   prediction.gbm_prediction
 FROM (
   SELECT

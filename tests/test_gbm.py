@@ -470,8 +470,10 @@ COPY (
         self.assertIn("gbm:m1:predictions", source_ids)
         self.assertIn("gbm:m1:shap_long", source_ids)
         prediction_source = next(source for source in schema["data_sources"] if source["id"] == "gbm:m1:predictions")
-        self.assertIn("Segment", [column["name"] for column in prediction_source["columns"]])
-        self.assertIn("gbm_prediction", [column["name"] for column in prediction_source["columns"]])
+        prediction_columns = [column["name"] for column in prediction_source["columns"]]
+        self.assertNotIn("__lucidum_row_id", prediction_columns)
+        self.assertIn("Segment", prediction_columns)
+        self.assertIn("gbm_prediction", prediction_columns)
 
         dataset = Dataset(self.data_path)
         dataset.register_data_source_provider(GbmSourceProvider(GbmModelStore(self.data_path)))

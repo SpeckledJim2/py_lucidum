@@ -243,6 +243,15 @@
           state.schema = await api("/api/schema");
           if (preferredSource) state.source = preferredSource;
           if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
+          const previousActual = el("actualNumerator").value;
+          const previousExpected = el("expectedNumerator").value;
+          const previousDenominator = el("denominator").value;
+          fillMetricSelect(el("actualNumerator"));
+          fillMetricSelect(el("expectedNumerator"), true);
+          fillDenominatorSelect(el("denominator"));
+          el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
+          el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";
+          el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
           renderExpectedNumerators();
           renderFeatures();
           updateAxisControls();
@@ -410,6 +419,14 @@
 
       function sourceColumns() {
         return currentDataSource()?.columns || state.schema?.columns || [];
+      }
+
+      function preferredStartupSource(availableSources, requestedSource) {
+        if (availableSources.some((source) => source.id === requestedSource)) return requestedSource;
+        const activePredictionSource = availableSources.find((source) => source.kind === "gbm_predictions" && source.active);
+        if (activePredictionSource) return activePredictionSource.id;
+        const predictionSource = availableSources.find((source) => source.kind === "gbm_predictions");
+        return predictionSource?.id || "dataset";
       }
 
       function toolEnabled(id) {
@@ -1424,7 +1441,7 @@
       function chooseDefaults() {
         const requestedSource = requestedDefault("source");
         const availableSources = state.schema.data_sources || [];
-        state.source = availableSources.some((source) => source.id === requestedSource) ? requestedSource : "dataset";
+        state.source = preferredStartupSource(availableSources, requestedSource);
         const requestedX = requestedDefault("x");
         state.x = columnExists(requestedX) ? requestedX : sourceColumns()[0]?.name || null;
         fillMetricSelect(el("actualNumerator"));
