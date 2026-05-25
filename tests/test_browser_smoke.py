@@ -409,7 +409,8 @@ class BrowserSmokeTests(unittest.TestCase):
                 page.get_by_text("Features", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation log", exact=True).wait_for(timeout=10_000)
-                page.locator("#gbmActiveModelSelect").wait_for(timeout=10_000)
+                page.locator("#gbmModelSelect").wait_for(timeout=10_000)
+                page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.11",

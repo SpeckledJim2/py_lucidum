@@ -182,7 +182,7 @@ export function createGbmTool({
     `;
     bindTabs(mount);
     bindModelTable(mount);
-    syncSidebarModelSelect(data.models || [], data.active_model_id);
+    syncSidebarModelChooser(data.models || [], data.active_model_id);
     bindFeatureActions();
     renderTables(data);
     if (data.active_model_id) loadModelDetail(data.active_model_id);
@@ -274,18 +274,120 @@ export function createGbmTool({
     notice.classList.toggle("hidden", !text);
   }
 
-  function syncSidebarModelSelect(models, activeModelId) {
-    const select = el("gbmActiveModelSelect");
-    if (!select) return;
-    select.innerHTML = "";
-    select.append(new Option("No active model", ""));
-    for (const model of models) {
-      select.append(new Option(model.label || model.model_id, model.model_id));
+  function syncSidebarModelChooser(models, activeModelId) {
+    const list = el("gbmModelSelect");
+    const meta = el("gbmModelSelectedMeta");
+    if (!list) return;
+    const normalisedModels = uniqueModels(models.map(normaliseModel).filter((model) => model.model_id));
+    const activeModel = normalisedModels.find((model) => model.model_id === activeModelId) || null;
+    if (meta) meta.textContent = activeModel ? modelLabel(activeModel) : "No active model";
+    const modelsByGroup = new Map();
+    for (const model of normalisedModels) {
+      const group = modelGroupLabel(model);
+      if (!modelsByGroup.has(group)) modelsByGroup.set(group, []);
+      modelsByGroup.get(group).push(model);
     }
-    select.value = activeModelId || "";
-    select.onchange = () => {
-      if (select.value) activateModel(select.value);
+    const groups = [...modelsByGroup.keys()];
+    if (!state.gbmModelGroupsInitialised) {
+      groups.forEach((group) => state.collapsedGbmModelGroups.add(group));
+      const openGroup = activeModel ? modelGroupLabel(activeModel) : groups[0];
+      if (openGroup) state.collapsedGbmModelGroups.delete(openGroup);
+      state.gbmModelGroupsInitialised = true;
+    }
+    for (const group of state.collapsedGbmModelGroups) {
+      if (!groups.includes(group)) state.collapsedGbmModelGroups.delete(group);
+    }
+    list.innerHTML = "";
+    if (!normalisedModels.length) {
+      list.innerHTML = `<div class="gbm-empty-state">No GBM models have been trained yet.</div>`;
+      return;
+    }
+    for (const group of groups) {
+      const collapsed = state.collapsedGbmModelGroups.has(group);
+      const heading = document.createElement("button");
+      heading.type = "button";
+      heading.className = "saved-filter-theme gbm-model-theme";
+      heading.dataset.gbmModelGroup = group;
+      heading.setAttribute("aria-expanded", String(!collapsed));
+      heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} GBM models`);
+      heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} GBM models`;
+      heading.innerHTML = `<span class="saved-filter-theme-icon" aria-hidden="true"></span><span class="saved-filter-theme-label">${escapeHtml(group)}</span>`;
+      heading.addEventListener("click", () => toggleGbmModelGroup(group));
+      list.append(heading);
+      for (const model of modelsByGroup.get(group) || []) {
+        const active = model.model_id === activeModelId;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `feature gbm-model-option${active ? " active" : ""}`;
+        button.dataset.gbmModelId = model.model_id;
+        button.dataset.gbmModelGroup = group;
+        button.hidden = collapsed;
+        button.setAttribute("role", "option");
+        button.setAttribute("aria-selected", String(active));
+        button.innerHTML = `<span class="saved-filter-name">${escapeHtml(modelLabel(model))}</span><span class="gbm-model-detail">${escapeHtml(modelDetailLabel(model))}</span>`;
+        button.addEventListener("click", () => {
+          if (!active) activateModel(model.model_id);
+        });
+        list.append(button);
+      }
+    }
+  }
+
+  function toggleGbmModelGroup(group) {
+    const collapsed = !state.collapsedGbmModelGroups.has(group);
+    if (collapsed) {
+      state.collapsedGbmModelGroups.add(group);
+    } else {
+      state.collapsedGbmModelGroups.delete(group);
+    }
+    const list = el("gbmModelSelect");
+    list.querySelectorAll(".gbm-model-theme").forEach((heading) => {
+      if (heading.dataset.gbmModelGroup !== group) return;
+      heading.setAttribute("aria-expanded", String(!collapsed));
+      heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} GBM models`);
+      heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} GBM models`;
+    });
+    list.querySelectorAll(".gbm-model-option").forEach((button) => {
+      if (button.dataset.gbmModelGroup === group) button.hidden = collapsed;
+    });
+  }
+
+  function normaliseModel(model) {
+    return {
+      ...model,
+      model_id: String(model?.model_id || ""),
+      label: String(model?.label || ""),
+      response_column: String(model?.response_column || "actualNumerator"),
+      offset_column: model?.offset_column ? String(model.offset_column) : "",
+      metric: String(model?.metric || ""),
+      best_iteration: Number(model?.best_iteration || 0),
+      created_at: String(model?.created_at || ""),
+      active: Boolean(model?.active),
     };
+  }
+
+  function uniqueModels(models) {
+    const seen = new Set();
+    return models.filter((model) => {
+      if (seen.has(model.model_id)) return false;
+      seen.add(model.model_id);
+      return true;
+    });
+  }
+
+  function modelGroupLabel(model) {
+    return `${model.response_column || "actualNumerator"} / ${model.offset_column || "Average row value"}`;
+  }
+
+  function modelLabel(model) {
+    return model.label || model.model_id;
+  }
+
+  function modelDetailLabel(model) {
+    const parts = [];
+    if (model.metric) parts.push(model.metric);
+    if (model.best_iteration) parts.push(`iter ${model.best_iteration.toLocaleString()}`);
+    return parts.join(" · ");
   }
 
   function syncSidebarFromSchema() {
@@ -293,16 +395,22 @@ export function createGbmTool({
     const models = [];
     const seen = new Set();
     for (const source of sources) {
-      if (!String(source.id || "").startsWith("gbm:") || !source.model_id || seen.has(source.model_id)) continue;
+      if (source.kind !== "gbm_predictions" || !source.model_id || seen.has(source.model_id)) continue;
       seen.add(source.model_id);
       models.push({
         model_id: source.model_id,
         label: String(source.label || source.model_id).replace(/\s+-\s+(Predictions|SHAP values|SHAP summary)$/i, ""),
         active: Boolean(source.active),
+        response_column: source.response_column,
+        offset_column: source.offset_column,
+        created_at: source.created_at,
+        objective: source.objective,
+        metric: source.metric,
+        best_iteration: source.best_iteration,
       });
     }
     const activeModel = models.find((model) => model.active)?.model_id || "";
-    syncSidebarModelSelect(models, activeModel);
+    syncSidebarModelChooser(models, activeModel);
   }
 
   async function renderTables(data) {
@@ -650,7 +758,7 @@ export function createGbmTool({
       if (state.tool === tool) {
         measureToolRender(tool, () => render(result.config));
       } else {
-        syncSidebarModelSelect(result.config?.models || [], result.config?.active_model_id);
+        syncSidebarModelChooser(result.config?.models || [], result.config?.active_model_id);
         await refreshActiveTool({ force: true });
       }
     } catch (error) {

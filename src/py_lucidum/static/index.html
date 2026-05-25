@@ -96,11 +96,6 @@
             </div>
           </section>
 
-          <section id="gbmSidebarPanel" class="section gbm-sidebar-panel hidden">
-            <h2>GBM model</h2>
-            <select id="gbmActiveModelSelect" aria-label="Active GBM model"></select>
-          </section>
-
           <section class="section sidebar-kpi-section hidden">
             <div class="kpi-header">
               <button id="kpiCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse KPIs" aria-expanded="true" title="Collapse KPIs">
@@ -120,6 +115,18 @@
               </div>
             </div>
             <div id="kpiSelect" class="feature-list kpi-list" role="listbox" aria-label="KPIs"></div>
+          </section>
+
+          <section id="gbmSidebarPanel" class="section gbm-sidebar-panel hidden">
+            <div id="sidebarGbmResizer" class="sidebar-gbm-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize KPI and GBM model controls"></div>
+            <div class="gbm-model-header">
+              <button id="gbmModelCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse GBM models" aria-expanded="true" title="Collapse GBM models">
+                <span class="filter-collapse-icon" aria-hidden="true"></span>
+              </button>
+              <h2>GBM models</h2>
+              <span id="gbmModelSelectedMeta" class="gbm-model-selected-meta"></span>
+            </div>
+            <div id="gbmModelSelect" class="feature-list gbm-model-list" role="listbox" aria-label="GBM models"></div>
           </section>
 
           <section class="section sidebar-filter-section filter-collapsed">

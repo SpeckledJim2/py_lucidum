@@ -228,6 +228,12 @@ class GbmSourceProvider:
                     "kind": info["kind"],
                     "model_id": model.get("model_id"),
                     "active": bool(model.get("active")),
+                    "response_column": model.get("response_column"),
+                    "offset_column": model.get("offset_column"),
+                    "created_at": model.get("created_at"),
+                    "objective": model.get("objective"),
+                    "metric": model.get("metric"),
+                    "best_iteration": model.get("best_iteration"),
                     "row_count": schema["row_count"],
                     "columns": schema["columns"],
                 }

@@ -274,6 +274,8 @@ class GbmToolTests(unittest.TestCase):
                     "created_at": f"2026-05-25T00:00:0{model_id[-1]}Z",
                     "objective": "poisson",
                     "metric": "poisson",
+                    "response_column": "actualNumerator",
+                    "offset_column": "denominator",
                     "best_iteration": 7,
                     "training_rows": 2,
                     "test_rows": 1,
@@ -406,6 +408,8 @@ COPY (
                 "created_at": "2026-05-25T00:00:00Z",
                 "objective": "poisson",
                 "metric": "poisson",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
                 "best_iteration": 7,
                 "training_rows": 2,
                 "test_rows": 1,
@@ -470,6 +474,10 @@ COPY (
         self.assertIn("gbm:m1:predictions", source_ids)
         self.assertIn("gbm:m1:shap_long", source_ids)
         prediction_source = next(source for source in schema["data_sources"] if source["id"] == "gbm:m1:predictions")
+        self.assertEqual(prediction_source["response_column"], "actualNumerator")
+        self.assertEqual(prediction_source["offset_column"], "denominator")
+        self.assertEqual(prediction_source["metric"], "poisson")
+        self.assertEqual(prediction_source["best_iteration"], 7)
         prediction_columns = [column["name"] for column in prediction_source["columns"]]
         self.assertNotIn("__lucidum_row_id", prediction_columns)
         self.assertIn("Segment", prediction_columns)
