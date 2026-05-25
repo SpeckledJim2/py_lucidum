@@ -5,11 +5,47 @@ import json
 import os
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
 from py_lucidum.app import create_app
+from py_lucidum.app.servers import ServerStopError, list_lucidum_servers, stop_lucidum_server
+
+
+class FakeConnection:
+    def __init__(self, host: str, port: int, status: str = "LISTEN") -> None:
+        self.status = status
+        self.laddr = SimpleNamespace(ip=host, port=port)
+
+
+class FakeProcess:
+    def __init__(
+        self,
+        pid: int,
+        username: str = "test-user",
+        name: str = "python",
+        cmdline: list[str] | None = None,
+        create_time: float = 100.0,
+        listeners: list[FakeConnection] | None = None,
+    ) -> None:
+        self.info = {
+            "pid": pid,
+            "username": username,
+            "name": name,
+            "cmdline": cmdline if cmdline is not None else ["python", "-m", "py_lucidum"],
+            "create_time": create_time,
+        }
+        self.terminated = False
+        self._listeners = listeners or []
+
+    def net_connections(self, kind: str = "inet") -> list[FakeConnection]:
+        return self._listeners
+
+    def terminate(self) -> None:
+        self.terminated = True
 
 
 def asgi_request(
@@ -200,6 +236,98 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(valid_api_status, 200)
         self.assertEqual(valid_api_headers.get("cache-control"), "no-store")
         self.assertEqual(telemetry_headers.get("cache-control"), None)
+
+    def test_lucidum_servers_endpoint_uses_existing_token_auth(self) -> None:
+        app = create_app(self.data_path, token="dev-token")
+
+        missing_status, _, missing_body = asgi_request(app, "GET", "/api/lucidum-servers")
+        valid_status, valid_headers, valid_body = asgi_request(app, "GET", "/api/lucidum-servers?token=dev-token")
+
+        self.assertEqual(missing_status, 401)
+        self.assertIn(b"Invalid or missing app token", missing_body)
+        self.assertEqual(valid_status, 200)
+        self.assertEqual(valid_headers.get("cache-control"), "no-store")
+        payload = json.loads(valid_body)
+        self.assertGreaterEqual(payload["count"], 1)
+        current = next(server for server in payload["servers"] if server["current"])
+        self.assertEqual(current["pid"], os.getpid())
+        self.assertEqual(current["dataset"], "sample.csv")
+
+    def test_lucidum_server_discovery_lists_current_and_same_user_servers(self) -> None:
+        state = SimpleNamespace(
+            lucidum_server_metadata={
+                "dataset_name": "sample.csv",
+                "dataset_path": str(self.data_path),
+                "display_url": "http://127.0.0.1:8000/?token=secret-token",
+                "host": "127.0.0.1",
+                "port": 8000,
+            },
+            shutdown_callback=Mock(),
+        )
+        current = FakeProcess(100, cmdline=["pytest"], create_time=10.0)
+        sibling = FakeProcess(200, cmdline=["python", "-m", "py_lucidum", "--demo"], create_time=20.0, listeners=[FakeConnection("127.0.0.1", 8050)])
+        other_user = FakeProcess(300, username="other", cmdline=["lucidum", "--demo"])
+        unrelated = FakeProcess(400, cmdline=["python", "script.py"])
+        helper = FakeProcess(500, name="node", cmdline=["node", "kernel.js", "--working-dir", "/tmp/py_lucidum"])
+
+        servers = list_lucidum_servers(state, processes=[current, sibling, other_user, unrelated, helper], current=current)
+
+        self.assertEqual([server["pid"] for server in servers], [100, 200])
+        self.assertTrue(servers[0]["current"])
+        self.assertTrue(servers[0]["stoppable"])
+        self.assertEqual(servers[0]["display_url"], "http://127.0.0.1:8000/")
+        self.assertIn({"host": "127.0.0.1", "port": 8000}, servers[0]["listeners"])
+        self.assertFalse(servers[1]["current"])
+        self.assertEqual(servers[1]["listeners"], [{"host": "127.0.0.1", "port": 8050}])
+
+    def test_lucidum_server_stop_uses_current_shutdown_callback(self) -> None:
+        callback = Mock()
+        state = SimpleNamespace(shutdown_callback=callback)
+        current = FakeProcess(100, create_time=10.0)
+
+        with patch("py_lucidum.app.servers.threading.Timer") as timer:
+            result = stop_lucidum_server(
+                state,
+                100,
+                10.0,
+                process_factory=lambda pid: current,
+                current=current,
+            )
+
+        self.assertEqual(result["pid"], 100)
+        timer.assert_called_once()
+        self.assertEqual(timer.call_args.args[0], 0.2)
+        self.assertIs(timer.call_args.args[1], callback)
+
+    def test_lucidum_server_stop_terminates_sibling_process(self) -> None:
+        state = SimpleNamespace()
+        current = FakeProcess(100, create_time=10.0)
+        sibling = FakeProcess(200, create_time=20.0, cmdline=["lucidum", "--demo"])
+
+        result = stop_lucidum_server(
+            state,
+            200,
+            20.0,
+            process_factory=lambda pid: sibling,
+            current=current,
+        )
+
+        self.assertEqual(result["pid"], 200)
+        self.assertTrue(sibling.terminated)
+
+    def test_lucidum_server_stop_rejects_pid_reuse_and_non_lucidum_processes(self) -> None:
+        state = SimpleNamespace()
+        current = FakeProcess(100, create_time=10.0)
+        stale = FakeProcess(200, create_time=30.0, cmdline=["lucidum", "--demo"])
+        unrelated = FakeProcess(300, create_time=40.0, cmdline=["python", "script.py"])
+        helper = FakeProcess(400, name="node", create_time=50.0, cmdline=["node", "kernel.js", "--working-dir", "/tmp/py_lucidum"])
+
+        with self.assertRaisesRegex(ServerStopError, "no longer matches"):
+            stop_lucidum_server(state, 200, 20.0, process_factory=lambda pid: stale, current=current)
+        with self.assertRaisesRegex(ServerStopError, "not a local lucidum server"):
+            stop_lucidum_server(state, 300, 40.0, process_factory=lambda pid: unrelated, current=current)
+        with self.assertRaisesRegex(ServerStopError, "not a local lucidum server"):
+            stop_lucidum_server(state, 400, 50.0, process_factory=lambda pid: helper, current=current)
 
     def test_telemetry_polling_is_excluded_from_totals(self) -> None:
         app = create_app(self.data_path, token="")

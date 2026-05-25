@@ -96,6 +96,16 @@ function setPanelState(panelId, stateId, label, tone = "") {
   el(stateId).textContent = label;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[char]);
+}
+
 function activityLabel(event) {
   if (!event) return "--";
   return event.action || [event.method, event.path].filter(Boolean).join(" ") || "--";
@@ -118,6 +128,13 @@ function textCell(row, value, className = "") {
   const cell = document.createElement("td");
   cell.textContent = value === null || value === undefined || value === "" ? "--" : String(value);
   if (className) cell.className = className;
+  row.append(cell);
+  return cell;
+}
+
+function buttonCell(row, button) {
+  const cell = document.createElement("td");
+  cell.append(button);
   row.append(cell);
   return cell;
 }
@@ -160,6 +177,7 @@ function renderMetrics(snapshot) {
   el("peakRamMetric").textContent = formatMegabytes(process.peak_rss_mb);
   el("processCpuMetric").textContent = formatPercent(process.cpu_percent);
   el("systemCpuMetric").textContent = `system ${formatPercent(process.system_cpu_percent)}`;
+  el("serverPanelTitle").textContent = process.pid ? `Server (PID ${process.pid})` : "Server";
   el("activeClientsMetric").textContent = formatNumber(totals.active_clients);
   el("inFlightMetric").textContent = formatNumber(inFlight);
   el("appActionsMetric").textContent = formatNumber(totals.app_actions);
@@ -175,12 +193,11 @@ function renderMetrics(snapshot) {
   heartbeatNode.textContent = heartbeatLabel(heartbeat);
   heartbeatNode.classList.toggle("error", Number(heartbeat.status) >= 400);
   const processDetails = [
-    process.pid ? `PID ${process.pid}` : "",
     Number.isFinite(Number(process.memory_percent)) ? `Process RAM ${formatPercent(process.memory_percent)}` : "",
     Number.isFinite(Number(systemMemory.used_percent)) ? `System RAM ${formatPercent(systemMemory.used_percent)}` : "",
     Number.isFinite(Number(systemMemory.total_mb)) ? `Total RAM ${formatGigabytesFromMegabytes(systemMemory.total_mb)}` : "",
   ].filter(Boolean);
-  el("processMemoryMeta").textContent = processDetails.length ? processDetails.join(" · ") : "PID --";
+  el("processMemoryMeta").textContent = processDetails.length ? processDetails.join(" · ") : "Process RAM --";
   if (systemMemoryUsed >= 95) {
     setPanelState("serverPanel", "serverState", "critical", "error");
   } else if (systemMemoryUsed >= 85) {
@@ -241,8 +258,100 @@ function renderActivity(activity) {
   });
 }
 
-function renderSnapshot(snapshot) {
+function listenerLabel(listeners) {
+  if (!Array.isArray(listeners) || !listeners.length) return "--";
+  return listeners.map((listener) => {
+    const host = listener.host || "localhost";
+    return listener.port ? `${host}:${listener.port}` : host;
+  }).join(", ");
+}
+
+function listenerUrl(listener) {
+  if (!listener?.port) return "";
+  let host = listener.host || "127.0.0.1";
+  if (host === "0.0.0.0" || host === "::" || host === "[::]") host = "127.0.0.1";
+  const bracketedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${bracketedHost}:${listener.port}/`;
+}
+
+function serverUrl(server) {
+  if (server.display_url) return server.display_url;
+  const listeners = Array.isArray(server.listeners) ? server.listeners : [];
+  return listenerUrl(listeners[0]);
+}
+
+function serverHref(server) {
+  const url = serverUrl(server);
+  if (!url || !server.current || !token) return url;
+  try {
+    const href = new URL(url, window.location.href);
+    href.searchParams.set("token", token);
+    return href.toString();
+  } catch (_) {
+    return url;
+  }
+}
+
+function serverTitle(server) {
+  return serverUrl(server) || server.dataset || server.command || `PID ${server.pid || "--"}`;
+}
+
+function serverCell(row, server, title) {
+  const cell = document.createElement("td");
+  cell.className = "server-title";
+  const href = serverHref(server);
+  if (href) {
+    const link = document.createElement("a");
+    link.className = "server-link";
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = title;
+    cell.append(link);
+  } else {
+    cell.textContent = title || "--";
+  }
+  row.append(cell);
+  return cell;
+}
+
+function renderLucidumServers(payload) {
+  const servers = payload?.servers || [];
+  const body = el("lucidumServersBody");
+  body.replaceChildren();
+  el("lucidumServersMeta").textContent = `${formatNumber(payload?.count ?? servers.length)} running`;
+  if (!servers.length) {
+    body.append(emptyRow(5, "No lucidum servers found"));
+    return;
+  }
+
+  servers.forEach((server) => {
+    const row = document.createElement("tr");
+    row.classList.toggle("current-server-row", Boolean(server.current));
+    const title = serverTitle(server);
+    const titleCell = serverCell(row, server, title);
+    titleCell.title = [server.dataset_path, server.command].filter(Boolean).join(" · ");
+    textCell(row, listenerLabel(server.listeners), "server-listeners");
+    const pidText = server.current ? `${server.pid} current` : server.pid;
+    textCell(row, pidText);
+    textCell(row, server.create_time ? formatTime(server.create_time * 1000) : "--");
+    const button = document.createElement("button");
+    button.className = "server-stop-button";
+    button.type = "button";
+    button.textContent = "X";
+    button.disabled = !server.stoppable;
+    button.title = server.stoppable ? `Stop PID ${server.pid}` : "Cannot stop this server from the monitor";
+    button.setAttribute("aria-label", button.title);
+    button.dataset.pid = String(server.pid || "");
+    button.dataset.createTime = String(server.create_time || "");
+    buttonCell(row, button);
+    body.append(row);
+  });
+}
+
+function renderSnapshot(snapshot, serversPayload) {
   renderMetrics(snapshot);
+  renderLucidumServers(serversPayload);
   renderClients(snapshot.clients || []);
   renderActivity(snapshot.recent_activity || []);
 }
@@ -266,13 +375,33 @@ async function loadTelemetry() {
   return JSON.parse(text);
 }
 
-async function postJson(path) {
+async function loadLucidumServers() {
+  const response = await fetch("/api/lucidum-servers", {
+    headers: {
+      "Content-Type": "application/json",
+      "x-lucidum-token": token,
+    },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    let message = text;
+    try {
+      message = JSON.parse(text).detail || text;
+    } catch (_) {
+    }
+    throw new Error(message);
+  }
+  return JSON.parse(text);
+}
+
+async function postJson(path, payload) {
   const response = await fetch(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-lucidum-token": token,
     },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
   });
   const text = await response.text();
   if (!response.ok) {
@@ -288,8 +417,8 @@ async function postJson(path) {
 
 async function refreshTelemetry() {
   try {
-    const snapshot = await loadTelemetry();
-    renderSnapshot(snapshot);
+    const [snapshot, serversPayload] = await Promise.all([loadTelemetry(), loadLucidumServers()]);
+    renderSnapshot(snapshot, serversPayload);
     setStatus(state.paused ? "Paused" : "");
   } catch (error) {
     setStatus(error.message, true);
@@ -324,7 +453,7 @@ function syncThemeButton() {
   button.title = label;
 }
 
-function confirmStopApp() {
+function confirmStopApp(message = "Stop the local lucidum server?") {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "stop-confirm-overlay";
@@ -332,7 +461,7 @@ function confirmStopApp() {
       <div class="stop-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="stopConfirmTitle">
         <div class="stop-confirm-content">
           <img class="stop-confirm-icon" src="/favicon.ico" alt="">
-          <p id="stopConfirmTitle">Stop the local lucidum server?</p>
+          <p id="stopConfirmTitle">${escapeHtml(message)}</p>
         </div>
         <div class="stop-confirm-actions">
           <button class="ghost stop-confirm-cancel" type="button">Cancel</button>
@@ -400,6 +529,22 @@ async function stopApp() {
   }
 }
 
+async function stopLucidumServer(server) {
+  const title = serverTitle(server);
+  if (!(await confirmStopApp(`Stop lucidum server ${title} (PID ${server.pid})?`))) return;
+  setStatus(`Stopping PID ${server.pid}...`);
+  try {
+    await postJson("/api/lucidum-servers/stop", { pid: server.pid, create_time: server.create_time });
+    if (server.current) {
+      showStoppedOverlay();
+      return;
+    }
+    await refreshTelemetry();
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
 function bindControls() {
   el("pauseBtn").addEventListener("click", () => setPaused(!state.paused));
   el("themeBtn").addEventListener("click", () => {
@@ -407,6 +552,16 @@ function bindControls() {
     syncThemeButton();
   });
   el("stopAppBtn").addEventListener("click", stopApp);
+  el("lucidumServersBody").addEventListener("click", async (event) => {
+    const button = event.target?.closest?.(".server-stop-button");
+    if (!button || button.disabled) return;
+    await stopLucidumServer({
+      pid: Number(button.dataset.pid),
+      create_time: Number(button.dataset.createTime),
+      current: Boolean(button.closest("tr")?.classList.contains("current-server-row")),
+      display_url: button.closest("tr")?.querySelector(".server-title")?.textContent || "",
+    });
+  });
 }
 
 bindControls();

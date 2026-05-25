@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import os
 import threading
 from collections.abc import Sequence
 from pathlib import Path
@@ -13,6 +14,7 @@ from py_lucidum.core import Dataset, load_kpis, load_saved_filters, resolve_filt
 
 from .assets import NoStoreStaticFiles, no_store_file_response, no_store_html_response
 from .context import AppContext
+from .servers import ServerStopError, list_lucidum_servers, stop_lucidum_server
 from .telemetry import TelemetryMiddleware, TelemetryStore
 
 
@@ -120,6 +122,11 @@ def create_app(
     app.state.dataset = dataset
     app.state.telemetry = TelemetryStore()
     app.state.token = token
+    app.state.lucidum_server_metadata = {
+        "pid": os.getpid(),
+        "dataset_path": str(dataset.path),
+        "dataset_name": dataset.path.name,
+    }
     app.state.filters_path = filters_path
     app.state.use_saved_filters = use_saved_filters
     app.state.resolved_filters_path = resolve_filters_path(filters_path, use_saved_filters=use_saved_filters)
@@ -184,6 +191,23 @@ def create_app(
         check_token(request)
         response.headers["Cache-Control"] = "no-store"
         return app.state.telemetry.snapshot()
+
+    @app.get("/api/lucidum-servers")
+    def lucidum_servers(request: Request, response: Response) -> dict[str, Any]:
+        check_token(request)
+        response.headers["Cache-Control"] = "no-store"
+        servers = list_lucidum_servers(app.state)
+        return {"count": len(servers), "servers": servers}
+
+    @app.post("/api/lucidum-servers/stop")
+    def stop_lucidum_server_route(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        check_token(request)
+        try:
+            return stop_lucidum_server(app.state, int(payload.get("pid")), float(payload.get("create_time")))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Choose a valid lucidum server process") from exc
+        except ServerStopError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     @app.post("/api/reload")
     def reload_dataset(request: Request) -> dict[str, Any]:

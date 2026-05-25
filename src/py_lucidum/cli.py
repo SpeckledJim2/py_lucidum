@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 import uvicorn
 
 from .app import create_app
+from .app.servers import safe_display_url
 from .demo import demo_dataset_path
 
 
@@ -191,6 +192,15 @@ def _start_app_server(
     state = getattr(app, "state", None)
     if state is not None:
         state.shutdown_callback = lambda: setattr(server, "should_exit", True)
+        metadata = getattr(state, "lucidum_server_metadata", None)
+        if not isinstance(metadata, dict):
+            metadata = {}
+            state.lucidum_server_metadata = metadata
+        metadata.update({
+            "host": host,
+            "port": port,
+            "display_url": safe_display_url(url),
+        })
     _run_server(server, run_in_background=run_in_background)
 
 

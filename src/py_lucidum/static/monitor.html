@@ -49,7 +49,7 @@
         <section class="operations-grid" aria-label="Telemetry summary">
           <article id="serverPanel" class="status-panel server-panel">
             <div class="panel-title-row">
-              <h2>Server</h2>
+              <h2 id="serverPanelTitle">Server</h2>
               <span id="serverState" class="state-pill">steady</span>
             </div>
             <div class="primary-metric">
@@ -73,7 +73,7 @@
                 <small id="systemCpuMetric">system --</small>
               </div>
             </div>
-            <div id="processMemoryMeta" class="diagnostic-line">PID --</div>
+            <div id="processMemoryMeta" class="diagnostic-line">Process RAM --</div>
           </article>
 
           <article id="activityPanel" class="status-panel">
@@ -132,6 +132,27 @@
               <strong id="slowestActionMetric">--</strong>
             </div>
           </article>
+        </section>
+
+        <section id="lucidumServersPanel" class="panel lucidum-servers-panel">
+          <div class="section-header">
+            <h2>lucidum servers</h2>
+            <span id="lucidumServersMeta" class="meta">Checking...</span>
+          </div>
+          <div class="table-wrap lucidum-servers-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Server</th>
+                  <th>Listeners</th>
+                  <th>PID</th>
+                  <th>Started</th>
+                  <th>Stop</th>
+                </tr>
+              </thead>
+              <tbody id="lucidumServersBody"></tbody>
+            </table>
+          </div>
         </section>
 
         <div id="status" class="status" role="status" aria-live="polite"></div>

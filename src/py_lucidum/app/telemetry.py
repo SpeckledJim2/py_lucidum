@@ -16,6 +16,7 @@ APP_ACTIONS = {
     ("GET", "/api/schema"): "Load schema",
     ("POST", "/api/reload"): "Reload dataset",
     ("POST", "/api/shutdown"): "Stop app",
+    ("POST", "/api/lucidum-servers/stop"): "Stop Lucidum server",
     ("POST", "/api/column-profile/summary"): "Column profile summary",
     ("POST", "/api/column-profile/detail"): "Column profile detail",
     ("POST", "/api/chart"): "Line/bar chart",
@@ -23,7 +24,7 @@ APP_ACTIONS = {
     ("POST", "/api/uk-map/summary"): "UK map summary",
 }
 HEARTBEAT_PATH = "/api/health"
-EXCLUDED_PATHS = {"/api/telemetry"}
+EXCLUDED_PATHS = {"/api/telemetry", "/api/lucidum-servers"}
 UNKNOWN_USER_AGENT = "(unknown)"
 BYTES_PER_MB = 1024 * 1024
 

@@ -232,6 +232,11 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertTrue(server.open_browser)
         self.assertIs(server.browser_opener, opener_mock)
         self.assertEqual(run_server_mock.call_args.kwargs["run_in_background"], False)
+        self.assertEqual(
+            app.state.lucidum_server_metadata,
+            {"host": "127.0.0.1", "port": 0, "display_url": "http://127.0.0.1:0/"},
+        )
+        self.assertTrue(callable(app.state.shutdown_callback))
 
     def test_serve_checks_busy_port_before_printing_or_building_app(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

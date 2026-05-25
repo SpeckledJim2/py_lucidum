@@ -441,8 +441,8 @@ main {
 .performance-content {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(170px, max-content);
-  gap: 14px;
+  grid-template-columns: minmax(165px, 1fr) minmax(0, max-content);
+  gap: 10px;
   align-items: start;
 }
 
@@ -481,6 +481,10 @@ main {
   font-size: 12px;
 }
 
+.status:empty {
+  display: none;
+}
+
 .status.error {
   color: var(--danger);
 }
@@ -494,6 +498,65 @@ main {
 
 .clients-panel {
   flex: 0 0 auto;
+}
+
+.lucidum-servers-panel {
+  flex: 0 0 auto;
+}
+
+.lucidum-servers-table-wrap {
+  max-height: min(135px, 20vh);
+}
+
+.lucidum-servers-panel table {
+  font-size: 11px;
+}
+
+.lucidum-servers-panel th,
+.lucidum-servers-panel td {
+  padding: 3px 8px;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+
+.current-server-row td {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.server-title,
+.server-listeners {
+  white-space: nowrap;
+}
+
+.server-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.server-link:hover {
+  text-decoration: underline;
+}
+
+.server-stop-button {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+  padding: 0;
+}
+
+.server-stop-button:disabled {
+  cursor: default;
+  opacity: 0.35;
 }
 
 .recent-activity-panel {
@@ -538,7 +601,13 @@ td {
   padding: 7px 9px;
   border-bottom: 1px solid var(--line);
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
+}
+
+.clients-panel th,
+.clients-panel td {
+  padding: 4px 9px;
+  line-height: 1.2;
 }
 
 .recent-activity-panel table {
@@ -582,12 +651,14 @@ tbody tr:last-child td {
 .pill {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
+  min-height: 16px;
   border-radius: 999px;
-  padding: 1px 7px;
+  padding: 0 6px;
   background: var(--panel-2);
   color: var(--muted);
   border: 1px solid var(--line);
+  font-size: 11px;
+  line-height: 14px;
   white-space: nowrap;
 }
 
