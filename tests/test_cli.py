@@ -45,7 +45,7 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertTrue(server.event.is_set())
         self.assertEqual(server.thread_name, threading.current_thread().name)
 
-    def test_lucidum_server_started_message_uses_stop_instruction(self) -> None:
+    def test_lucidum_server_started_message_is_quiet_by_default(self) -> None:
         async def app(scope: object, receive: object, send: object) -> None:
             return None
 
@@ -58,13 +58,9 @@ class CliRuntimeTests(unittest.TestCase):
             browser_opener=opener,
         )
 
-        with self.assertLogs("uvicorn.error", level="INFO") as logs:
+        with self.assertNoLogs("uvicorn.error", level="INFO"):
             server._log_started_message([])
 
-        self.assertEqual(
-            logs.output,
-            ["INFO:uvicorn.error:Uvicorn running on http://127.0.0.1:8000/ (Use the app Stop app button to quit)"],
-        )
         opener.assert_not_called()
 
     def test_lucidum_server_opens_browser_after_started_message(self) -> None:
@@ -81,7 +77,7 @@ class CliRuntimeTests(unittest.TestCase):
             browser_opener=opener,
         )
 
-        with self.assertLogs("uvicorn.error", level="INFO"):
+        with self.assertNoLogs("uvicorn.error", level="INFO"):
             server._log_started_message([])
 
         opener.assert_called_once_with("http://127.0.0.1:8000/")
@@ -231,6 +227,8 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(server.display_url, url)
         self.assertTrue(server.open_browser)
         self.assertIs(server.browser_opener, opener_mock)
+        self.assertEqual(server.config.log_level, "warning")
+        self.assertFalse(server.config.access_log)
         self.assertEqual(run_server_mock.call_args.kwargs["run_in_background"], False)
         self.assertEqual(
             app.state.lucidum_server_metadata,
@@ -390,7 +388,7 @@ class CliRuntimeTests(unittest.TestCase):
             schema = app.state.dataset.schema()
 
             self.assertEqual(url, "http://127.0.0.1:8052/")
-            self.assertIn(f"py_lucidum serving {data_path.resolve()}", stdout.getvalue())
+            self.assertIn(f"lucidum serving {data_path.resolve()}", stdout.getvalue())
             start_server_mock.assert_called_once()
             self.assertEqual([column["name"] for column in schema["columns"]], ["x", "Actual"])
             self.assertEqual(schema["row_count"], 2)

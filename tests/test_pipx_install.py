@@ -86,7 +86,7 @@ class PipxInstallTests(unittest.TestCase):
                     process.kill()
                     stdout, stderr = process.communicate(timeout=10)
 
-            self.assertIn(f"py_lucidum serving {data_path.resolve()}", stdout)
+            self.assertIn(f"lucidum serving {data_path.resolve()}", stdout)
             self.assertNotIn("Traceback", stdout + stderr)
 
     def _wait_for_health(self, port: int, process: subprocess.Popen[str]) -> None:

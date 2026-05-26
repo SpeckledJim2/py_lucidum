@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import ipaddress
-import logging
 import secrets
 import socket
 import threading
@@ -49,11 +48,6 @@ class LucidumServer(uvicorn.Server):
         self.browser_opener = browser_opener or webbrowser.open
 
     def _log_started_message(self, listeners: Sequence[socket.SocketType]) -> None:
-        message = f"Uvicorn running on {self.display_url} ({self.stop_instruction})"
-        logging.getLogger("uvicorn.error").info(
-            message,
-            extra={"color_message": message},
-        )
         if self.open_browser:
             self.browser_opener(self.display_url)
 
@@ -188,7 +182,7 @@ def _start_app_server(
     run_in_background: bool,
 ) -> None:
     ensure_port_available(host, port)
-    config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning", access_log=False)
     server = LucidumServer(config, url, _stop_instruction(run_in_background), open_browser=open_browser)
     state = getattr(app, "state", None)
     if state is not None:
@@ -278,7 +272,7 @@ def serve(
     )
     url = _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
-    print(f"py_lucidum serving {Path(path).resolve()}", flush=True)
+    print(f"lucidum serving {Path(path).resolve()}", flush=True)
     _print_open_urls(app, host, selected_port, url)
     print(f"Saved filters: {saved_filters_status(app)}", flush=True)
     print(f"KPIs: {kpis_status(app)}", flush=True)
