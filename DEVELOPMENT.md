@@ -19,8 +19,9 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.tools.line_bar` implements chart aggregation and line/bar routes.
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
 - `py_lucidum.tools.glm` registers a lightweight shell route for future modelling work.
-- `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM training, validation, persistence, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
-- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the current app shell and existing tools, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, and `src/py_lucidum/static/app/model-tool-shell.js` owns remaining modelling shell UI.
+- `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM training, validation, persistence, tree summary/detail, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
+- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the current app shell and existing tools, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/model-tool-shell.js` owns remaining modelling shell UI.
+- Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/` and lazy-loaded by the tools that need them. GBM currently uses Tabulator for editable grids and D3 for tree diagrams.
 
 Tool code should depend on `core` and the app registration context, but tools should not depend on each other. Shared behavior should move into `core` or another shared module only when there is real reuse.
 
@@ -57,6 +58,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
   - `POST /api/gbm/train`
   - `GET /api/gbm/jobs/{job_id}`
   - `GET /api/gbm/models/{model_id}`
+  - `GET /api/gbm/models/{model_id}/trees`
+  - `GET /api/gbm/models/{model_id}/trees/{tree_index}`
   - `POST /api/gbm/models/{model_id}/activate`
 
 `/api/chart` is retained for compatibility with the current frontend. New integrations should prefer the namespaced line-bar endpoint.
@@ -119,13 +122,15 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - GLM and GBM are opt-in tools (`--tools glm,gbm`) and are not part of the default user-facing tool set.
 - GLM still returns a shell `status: "not_implemented"` response.
 - GBM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
-- GBM training imports LightGBM, pandas, and numpy lazily through the `gbm` optional extra. These packages must not become base install dependencies.
+- GBM training imports LightGBM, pandas, and numpy lazily through the `gbm` optional extra. These packages must not become base install dependencies. On macOS, LightGBM's native library may also require Homebrew `libomp`; missing `libomp.dylib` should be reported as an actionable GBM dependency error, not a server 500.
 - GBM uses the sidebar Actual and denominator/KPI controls as the model response and offset/exposure inputs. The filter controls remain hidden while GBM is active because training ignores the global filter.
 - GBM artifacts are stored beside the source dataset under `.lucidum/models/gbm/`, with one directory per model.
 - GBM `feature_config.json` is the persisted source of truth for the trained model's selected features, monotonicity settings, and Gain values.
 - GBM config and activation responses must drive the UI's `Use`, `Monotonicity`, `Gain`, and parameter tables from the active model, so switching models mirrors exactly what was trained.
 - GBM model outputs publish data sources through the shared `data_sources` contract using IDs such as `gbm:<model_id>:predictions`, `gbm:<model_id>:shap_long`, and `gbm:<model_id>:shap_summary`.
-- LightGBM-specific training, objective handling, offsets, SHAP, feature importance, and tree extraction belong in backend GBM modules, not in frontend code.
+- The `gbm:<model_id>:shap_long` source ID is retained for compatibility, but the stored SHAP values artifact is wide: `__lucidum_row_id` plus one numeric SHAP column per selected feature. `gbm:<model_id>:shap_summary` remains one row per feature.
+- LightGBM-specific training, objective handling, offsets, SHAP, feature importance, tree extraction, and tree label normalization belong in backend GBM modules, not in frontend code.
+- GBM tree routes read persisted `tree_table.parquet` and `tree_dump.json` artifacts. The list route returns compact tree metadata; the detail route returns a frontend-ready split/leaf hierarchy with decoded categorical thresholds, edge labels, default-branch markers, and node values for colouring.
 
 **Performance timings**
 
@@ -165,6 +170,7 @@ Standard checks before committing:
 node --check src/py_lucidum/static/app.js
 node --check src/py_lucidum/static/app/main.js
 node --check src/py_lucidum/static/app/gbm-tool.js
+node --check src/py_lucidum/static/app/gbm-tree-viewer.js
 node --check src/py_lucidum/static/app/model-tool-shell.js
 git diff --check
 ```
@@ -192,8 +198,8 @@ The current test suite should cover:
 - Line-and-bar aggregation, filters, transforms, grouping, sorting, saved filters, CSV reads, and Parquet reads.
 - UK map area, sector, and unit aggregation, alias defaults, coordinate validation, and custom column defaults.
 - Tool registry defaults, optional GLM/GBM registration, and the default `dataset` data-source contract.
-- GBM validation, sidecar model store behavior, optional dependency failures, active-model feature/parameter refresh, model data-source publishing, Gain ordering, and chart/map use of prediction sources.
-- Browser smoke behavior for loading profile, chart, map, and GBM tools without unexpected extra API requests or stale active-model state.
+- GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, active-model feature/parameter refresh, model data-source publishing, Gain ordering, SHAP row limits, tree summary/detail routes, and chart/map use of prediction sources.
+- Browser smoke behavior for loading profile, chart, map, and GBM tools without unexpected extra API requests or stale active-model state, including the GBM tree viewer.
 
 ## Future Work
 

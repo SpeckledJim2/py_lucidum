@@ -2609,7 +2609,7 @@
       .gbm-toolbar {
         display: flex;
         align-items: flex-start;
-        justify-content: space-between;
+        justify-content: flex-start;
         gap: 12px;
         flex: 0 0 auto;
         margin-bottom: 10px;
@@ -2621,15 +2621,17 @@
 
       .gbm-actions {
         display: flex;
-        align-items: center;
+        align-items: stretch;
+        flex-direction: column;
         flex-wrap: nowrap;
-        gap: 6px;
+        gap: 8px;
         min-width: 0;
       }
 
       .gbm-action-button {
         flex: 0 0 auto;
         min-height: 24px;
+        width: 100%;
       }
 
       .gbm-sample-button.active {
@@ -2659,6 +2661,10 @@
         overflow: hidden;
         min-height: 0;
         flex: 1 1 auto;
+      }
+
+      .gbm-tab-panel[data-gbm-panel="trees"] {
+        height: 100%;
       }
 
       .gbm-feature-layout {
@@ -2700,6 +2706,39 @@
         display: grid;
         grid-template-rows: 300px minmax(0, 1fr);
         gap: 10px;
+      }
+
+      .gbm-parameter-section {
+        min-height: 0;
+      }
+
+      .gbm-parameter-layout {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 7fr) minmax(150px, 3fr);
+        height: 100%;
+        min-height: 0;
+      }
+
+      .gbm-parameter-table-column,
+      .gbm-parameter-controls-column {
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-parameter-table-column {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .gbm-parameter-table-column > .gbm-grid {
+        flex: 1 1 auto;
+      }
+
+      .gbm-parameter-controls-column {
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
       }
 
       .gbm-grid {
@@ -2842,43 +2881,66 @@
 
       .gbm-shap-rows {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         flex: 0 0 auto;
+        flex-direction: column;
         flex-wrap: nowrap;
-        gap: 6px;
-        margin-right: 8px;
+        gap: 0;
         min-height: 24px;
-        padding-right: 12px;
-        border-right: 1px solid var(--line);
       }
 
       .gbm-shap-label {
         color: var(--text);
+        display: block;
         font-size: 12px;
-        font-weight: 800;
-        margin-right: 4px;
+        font-weight: 700;
+        line-height: 1.2;
+        margin: 0 0 6px;
+      }
+
+      .gbm-shap-options {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 4px;
+        min-width: 0;
+        width: 100%;
       }
 
       .gbm-shap-option {
         align-items: center;
         border: 1px solid var(--line);
         border-radius: 5px;
+        color: var(--text);
+        cursor: pointer;
         display: inline-flex;
-        flex: 0 0 auto;
-        gap: 5px;
+        flex: 1 1 0;
+        gap: 4px;
+        justify-content: center;
         min-height: 24px;
-        padding: 2px 7px;
+        min-width: 0;
+        padding: 2px 5px;
         font-size: 12px;
         background: var(--panel);
+        width: 100%;
+      }
+
+      .gbm-shap-option:has(input:checked) {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+        font-weight: 700;
       }
 
       .gbm-shap-option input {
+        block-size: 1px;
+        inline-size: 1px;
         margin: 0;
-        accent-color: var(--accent);
+        opacity: 0;
+        pointer-events: none;
+        position: absolute;
       }
 
-      .gbm-evaluation-chart,
-      .gbm-tree-chart {
+      .gbm-evaluation-chart {
         min-height: 220px;
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -2890,12 +2952,237 @@
         width: 100%;
       }
 
-      .gbm-tree-chart {
-        height: 560px;
+      .gbm-tree-viewer {
+        display: grid;
+        grid-template-columns: minmax(420px, var(--gbm-tree-summary-width, 560px)) 7px minmax(360px, 1fr);
+        gap: 6px;
+        height: 100%;
+        min-height: 0;
       }
 
-      .gbm-tree-toolbar {
-        margin-bottom: 8px;
+      .gbm-tree-viewer.resizing {
+        user-select: none;
+      }
+
+      .gbm-tree-summary-panel,
+      .gbm-tree-diagram-panel {
+        min-height: 0;
+      }
+
+      .gbm-tree-section-header,
+      .gbm-tree-diagram-header {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 10px;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        min-width: 0;
+      }
+
+      .gbm-tree-section-header .gbm-section-title,
+      .gbm-tree-diagram-header .gbm-section-title {
+        margin: 0;
+      }
+
+      .gbm-tree-detail-summary {
+        color: var(--text);
+        line-height: 1.22;
+        left: 14px;
+        max-width: min(560px, calc(100% - 28px));
+        pointer-events: none;
+        position: absolute;
+        top: 12px;
+        z-index: 2;
+      }
+
+      .gbm-tree-detail-title {
+        font-size: 13px;
+        font-weight: 800;
+        margin-bottom: 2px;
+      }
+
+      .gbm-tree-detail-line {
+        color: var(--muted);
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .gbm-tree-detail-line span {
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .gbm-tree-svg-mount {
+        inset: 0;
+        position: absolute;
+      }
+
+      .gbm-tree-search {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        color: var(--text);
+        font: inherit;
+        font-size: 12px;
+        height: 25px;
+        min-width: 0;
+        padding: 2px 8px;
+        width: min(170px, 48%);
+      }
+
+      .gbm-tree-summary-grid {
+        flex: 1 1 auto;
+        height: 100%;
+        min-height: 0;
+      }
+
+      .gbm-tree-resizer {
+        align-self: stretch;
+        background: linear-gradient(to right, transparent 0 2px, var(--line) 2px 5px, transparent 5px 7px);
+        border-radius: 6px;
+        cursor: col-resize;
+        min-height: 0;
+        touch-action: none;
+      }
+
+      .gbm-tree-resizer:hover,
+      .gbm-tree-resizer.dragging {
+        background: color-mix(in srgb, var(--accent) 34%, transparent);
+      }
+
+      .gbm-tree-summary-grid .tabulator-row.tabulator-selected,
+      .gbm-tree-summary-grid .tabulator-row.tabulator-selected .tabulator-cell,
+      .gbm-tree-fallback-table tr.active,
+      .gbm-tree-fallback-table tr.active td {
+        background: color-mix(in srgb, var(--accent) 24%, var(--panel)) !important;
+        color: var(--text) !important;
+      }
+
+      body.dark .gbm-tree-summary-grid .tabulator-row.tabulator-selected,
+      body.dark .gbm-tree-summary-grid .tabulator-row.tabulator-selected .tabulator-cell,
+      body.dark .gbm-tree-fallback-table tr.active,
+      body.dark .gbm-tree-fallback-table tr.active td {
+        background: color-mix(in srgb, var(--accent) 32%, var(--panel)) !important;
+        color: var(--text) !important;
+      }
+
+      .gbm-tree-features-cell {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        width: 100%;
+      }
+
+      .gbm-tree-controls {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .gbm-tree-zoom,
+      .gbm-tree-palette {
+        display: flex;
+        flex: 0 0 auto;
+        gap: 0;
+      }
+
+      .gbm-tree-zoom button,
+      .gbm-tree-palette button {
+        min-height: 25px;
+      }
+
+      .gbm-tree-zoom button {
+        min-width: 28px;
+      }
+
+      .gbm-tree-chart {
+        --gbm-tree-split-fill: #dbeafe;
+        --gbm-tree-leaf-fill: #fef3c7;
+        --gbm-tree-node-stroke: #64748b;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        flex: 1 1 auto;
+        min-height: 420px;
+        min-width: 0;
+        overflow: hidden;
+        position: relative;
+      }
+
+      body.dark .gbm-tree-chart {
+        --gbm-tree-split-fill: #1e3a5f;
+        --gbm-tree-leaf-fill: #4a3414;
+        --gbm-tree-node-stroke: #94a3b8;
+      }
+
+      .gbm-tree-svg {
+        background: var(--panel);
+        color: var(--text);
+        cursor: grab;
+        display: block;
+        height: 100%;
+        width: 100%;
+      }
+
+      .gbm-tree-svg:active {
+        cursor: grabbing;
+      }
+
+      .gbm-tree-link {
+        fill: none;
+        marker-end: url(#gbmTreeArrow);
+        stroke: color-mix(in srgb, var(--muted) 76%, transparent);
+        stroke-linecap: round;
+        stroke-width: 1.6;
+      }
+
+      .gbm-tree-link-default {
+        stroke-width: 2.8;
+      }
+
+      .gbm-tree-arrow {
+        fill: color-mix(in srgb, var(--muted) 76%, transparent);
+      }
+
+      .gbm-tree-edge-label {
+        fill: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        paint-order: stroke;
+        stroke: var(--panel);
+        stroke-linejoin: round;
+        stroke-width: 4px;
+      }
+
+      .gbm-tree-split-node,
+      .gbm-tree-leaf-node {
+        stroke: var(--gbm-tree-node-stroke);
+        stroke-width: 1.4;
+      }
+
+      .gbm-tree-node-label {
+        font-size: 12px;
+        font-weight: 400;
+        pointer-events: none;
+      }
+
+      .gbm-tree-empty {
+        align-items: center;
+        color: var(--muted);
+        display: flex;
+        font-size: 12px;
+        height: 100%;
+        justify-content: center;
+        padding: 16px;
+        text-align: center;
       }
 
       .gbm-model-table,
@@ -2904,17 +3191,120 @@
         border-collapse: collapse;
       }
 
+      .gbm-model-table-wrap {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--text);
+        height: 100%;
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .gbm-model-table {
+        font-size: 11px;
+        line-height: 1.15;
+        table-layout: fixed;
+      }
+
       .gbm-model-table th,
       .gbm-model-table td,
       .gbm-fallback-table th,
       .gbm-fallback-table td {
         border-bottom: 1px solid var(--line);
-        padding: 7px 8px;
+        padding: 1px 6px;
         text-align: left;
       }
 
+      .gbm-model-table th {
+        background: var(--panel-2);
+        border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+        color: var(--text);
+        font-weight: 700;
+        height: 20px;
+      }
+
+      .gbm-model-table td {
+        border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+        color: var(--text);
+        height: 22px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+
+      .gbm-model-table td.numeric,
+      .gbm-model-table th:nth-child(7),
+      .gbm-model-table th:nth-child(8),
+      .gbm-model-table th:nth-child(9),
+      .gbm-model-table th:nth-child(10),
+      .gbm-model-table th:nth-child(11) {
+        text-align: right;
+      }
+
+      .gbm-model-table th:nth-child(1) {
+        width: 15%;
+      }
+
+      .gbm-model-table th:nth-child(2) {
+        width: 8%;
+      }
+
+      .gbm-model-table th:nth-child(3),
+      .gbm-model-table th:nth-child(4) {
+        width: 10%;
+      }
+
+      .gbm-model-table th:nth-child(5),
+      .gbm-model-table th:nth-child(6),
+      .gbm-model-table th:nth-child(12) {
+        width: 7%;
+      }
+
+      .gbm-model-table th:nth-child(7),
+      .gbm-model-table th:nth-child(8),
+      .gbm-model-table th:nth-child(9),
+      .gbm-model-table th:nth-child(10),
+      .gbm-model-table th:nth-child(11),
+      .gbm-model-table th:nth-child(13) {
+        width: 6%;
+      }
+
       .gbm-model-table tr.active td {
-        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+      }
+
+      .gbm-model-table tr:hover td {
+        background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+      }
+
+      .gbm-model-name-cell {
+        min-width: 0;
+      }
+
+      .gbm-model-name-main {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .gbm-model-activate-button {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        min-height: 18px;
+        padding: 0 6px;
+      }
+
+      .gbm-model-activate-button:hover {
+        background: color-mix(in srgb, var(--accent) 15%, var(--panel));
       }
 
       .gbm-fallback-table input,

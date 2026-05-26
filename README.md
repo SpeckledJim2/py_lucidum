@@ -32,6 +32,13 @@ To enable GBM model training, install the optional modelling extra:
 .venv/bin/python -m pip install -e ".[gbm]"
 ```
 
+On macOS, LightGBM also needs the OpenMP runtime. If training fails with a
+`libomp.dylib` load error, install it with:
+
+```bash
+brew install libomp
+```
+
 For a user-level command available outside this checkout, install with `pipx`:
 
 ```bash
@@ -175,7 +182,7 @@ The GBM tool is opt-in:
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm
 ```
 
-The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. Models are saved beside the dataset under `.lucidum/models/gbm/`. Selecting a saved GBM makes it active and refreshes the feature table, parameter table, evaluation plot, tree viewer, and plot-ready model outputs. Once a model is active, its predictions and SHAP outputs appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
+The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. Models are saved beside the dataset under `.lucidum/models/gbm/`. Selecting a saved GBM makes it active and refreshes the feature table, parameter table, evaluation plot, tree viewer, and plot-ready model outputs. The tree viewer reads saved LightGBM tree artifacts, shows a searchable tree list, and renders the selected tree with zoom and colour controls. Once a model is active, its predictions and SHAP outputs appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
 
 ## Development
 

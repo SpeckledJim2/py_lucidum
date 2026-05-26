@@ -9,9 +9,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.request import urlopen
 
+import duckdb
 import uvicorn
 
 from py_lucidum.app import create_app
+from py_lucidum.core import sql_literal
 from py_lucidum.tools.gbm.store import GbmModelStore
 
 
@@ -80,9 +82,14 @@ class BrowserSmokeTests(unittest.TestCase):
                         "created_at": created_at,
                         "objective": "gamma",
                         "metric": "gamma",
+                        "response_column": "actualNumerator",
+                        "offset_column": "denominator",
                         "best_iteration": 3,
                         "training_rows": 2,
                         "test_rows": 1,
+                        "scored_rows": 3,
+                        "sample_column": "sample",
+                        "timings": {"training_seconds": 1.234 if model_id == "browser-smoke-model" else 62.0},
                         "feature_importance": [],
                         "sources": {},
                     },
@@ -114,7 +121,66 @@ class BrowserSmokeTests(unittest.TestCase):
                         "warnings": [],
                     },
                 )
-                store.write_json(model_dir / "tree_dump.json", {"tree_info": []})
+                store.write_json(
+                    model_dir / "tree_dump.json",
+                    {
+                        "feature_names": ["Age", "Segment"],
+                        "feature_infos": {
+                            "Age": {"values": []},
+                            "Segment": {"values": [0, 1, 2]},
+                        },
+                        "pandas_categorical": [["A", "B", "C"]],
+                        "tree_info": [
+                            {
+                                "tree_index": 0,
+                                "tree_structure": {
+                                    "split_index": 0,
+                                    "split_feature": 0,
+                                    "split_gain": 5.0,
+                                    "threshold": 35,
+                                    "decision_type": "<=",
+                                    "default_left": True,
+                                    "internal_value": 1.0,
+                                    "internal_count": 3,
+                                    "left_child": {"leaf_index": 0, "leaf_value": 0.8, "leaf_count": 1},
+                                    "right_child": {
+                                        "split_index": 1,
+                                        "split_feature": 1,
+                                        "split_gain": 2.0,
+                                        "threshold": "0||2",
+                                        "decision_type": "==",
+                                        "default_left": False,
+                                        "internal_value": 1.2,
+                                        "internal_count": 2,
+                                        "left_child": {"leaf_index": 1, "leaf_value": 1.1, "leaf_count": 1},
+                                        "right_child": {"leaf_index": 2, "leaf_value": 1.4, "leaf_count": 1},
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                )
+                con = duckdb.connect(database=":memory:")
+                try:
+                    con.execute(
+                        f"""
+COPY (
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-S1' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 5.0 AS split_gain, '35' AS threshold,
+         '<=' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type, 1.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL
+  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 1.0, 1
+  UNION ALL
+  SELECT 0, 2, '0-S1', '0-L1', '0-L2', '0-S0', 'Segment', 2.0, '0||2', '==', 'right', 'None', 1.2, 2.0, 2
+  UNION ALL
+  SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, 1.1, 1.0, 1
+  UNION ALL
+  SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, 1.4, 1.0, 1
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+                    )
+                finally:
+                    con.close()
             store.activate_model("browser-smoke-model")
             base_url, server, thread = self.start_app(
                 data_path,
@@ -500,7 +566,135 @@ class BrowserSmokeTests(unittest.TestCase):
                 self.assertTrue(chart_options["yScale"])
                 self.assertEqual(chart_options["seriesNames"], ["train", "test"])
                 self.assertTrue(chart_options["showSymbol"])
+                page.get_by_role("button", name="Tree viewer").click()
+                page.locator("#gbmTreeSummaryGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator("#gbmTreeChart svg.gbm-tree-svg").wait_for(state="attached", timeout=10_000)
+                tree_state = page.evaluate(
+                    """
+                    async () => {
+                      const chart = document.querySelector("#gbmTreeChart");
+                      const plainFill = chart.querySelector("rect.gbm-tree-split-node")?.getAttribute("fill") || "";
+                      const beforeZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
+                      document.querySelector('[data-gbm-tree-zoom="in"]').click();
+                      await new Promise((resolve) => setTimeout(resolve, 220));
+                      const afterZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
+                      chart.querySelector("svg.gbm-tree-svg")?.dispatchEvent(new WheelEvent("wheel", {
+                        deltaY: -420,
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: chart.getBoundingClientRect().left + chart.getBoundingClientRect().width / 2,
+                        clientY: chart.getBoundingClientRect().top + chart.getBoundingClientRect().height / 2,
+                      }));
+                      await new Promise((resolve) => setTimeout(resolve, 120));
+                      const afterWheelZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
+                      document.querySelector('[data-gbm-tree-palette="viridis"]').click();
+                      await new Promise((resolve) => setTimeout(resolve, 50));
+                      const afterPaletteZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
+                      const viridisFill = chart.querySelector("rect.gbm-tree-split-node")?.getAttribute("fill") || "";
+                      const rootLabel = chart.querySelector(".gbm-tree-node-label");
+                      const rootLabelSpans = [...(rootLabel?.querySelectorAll("tspan") || [])];
+                      return {
+                        rows: document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-row").length,
+                        selectedRows: document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-row.tabulator-selected").length,
+                        selectedTree: document.querySelector("#gbmTreeSummaryGrid .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field='tree']")?.textContent.trim() || "",
+                        detailSummary: document.querySelector("#gbmTreeDetailSummary")?.textContent.replace(/\\s+/g, " ").trim() || "",
+                        summaryInsideChart: Boolean(document.querySelector("#gbmTreeChart > #gbmTreeDetailSummary")),
+                        summaryWidth: document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width || 0,
+                        treeColumnWidth: document.querySelector("#gbmTreeSummaryGrid .tabulator-col[tabulator-field='tree']")?.getBoundingClientRect().width || 0,
+                        dimColumnWidth: document.querySelector("#gbmTreeSummaryGrid .tabulator-col[tabulator-field='dim']")?.getBoundingClientRect().width || 0,
+                        headers: [...document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-col-title")]
+                          .map((node) => node.textContent.trim()).filter(Boolean),
+                        splitNodes: chart.querySelectorAll("rect.gbm-tree-split-node").length,
+                        leafNodes: chart.querySelectorAll("ellipse.gbm-tree-leaf-node").length,
+                        nodeTitles: chart.querySelectorAll(".gbm-tree-node title").length,
+                        edgeLabels: [...chart.querySelectorAll(".gbm-tree-edge-label")].map((node) => node.textContent.trim()),
+                        arrowheads: chart.querySelectorAll("marker#gbmTreeArrow").length,
+                        zoomButtons: document.querySelectorAll("[data-gbm-tree-zoom]").length,
+                        beforeZoom,
+                        afterZoom,
+                        afterWheelZoom,
+                        afterPaletteZoom,
+                        textFills: [...chart.querySelectorAll(".gbm-tree-node-label")].map((node) => node.getAttribute("fill")),
+                        rootLabelLines: rootLabelSpans.map((node) => node.textContent.trim()),
+                        rootLabelWeights: rootLabelSpans.map((node) => node.getAttribute("font-weight")),
+                        plainFill,
+                        viridisFill,
+                      };
+                    }
+                    """,
+                )
+                self.assertGreaterEqual(tree_state["rows"], 1)
+                self.assertEqual(tree_state["selectedRows"], 1)
+                self.assertEqual(tree_state["selectedTree"], "0")
+                self.assertIn("Tree 0", tree_state["detailSummary"])
+                self.assertIn("Dimensionality: 2", tree_state["detailSummary"])
+                self.assertIn("Tree features:", tree_state["detailSummary"])
+                self.assertIn("Tree gain: 7", tree_state["detailSummary"])
+                self.assertTrue(tree_state["summaryInsideChart"])
+                self.assertGreater(tree_state["summaryWidth"], 500)
+                self.assertLessEqual(tree_state["treeColumnWidth"], 50)
+                self.assertLessEqual(tree_state["dimColumnWidth"], 46)
+                self.assertEqual(tree_state["headers"], ["tree", "dim", "features", "gain"])
+                self.assertGreaterEqual(tree_state["splitNodes"], 1)
+                self.assertGreaterEqual(tree_state["leafNodes"], 2)
+                self.assertEqual(tree_state["nodeTitles"], 0)
+                self.assertIn("<= 35", tree_state["edgeLabels"])
+                self.assertIn("else", tree_state["edgeLabels"])
+                self.assertEqual(tree_state["arrowheads"], 1)
+                self.assertEqual(tree_state["zoomButtons"], 3)
+                self.assertNotEqual(tree_state["beforeZoom"], tree_state["afterZoom"])
+                self.assertNotEqual(tree_state["afterZoom"], tree_state["afterWheelZoom"])
+                self.assertEqual(tree_state["afterWheelZoom"], tree_state["afterPaletteZoom"])
+                self.assertIn("#111827", tree_state["textFills"])
+                self.assertTrue(set(tree_state["textFills"]).issubset({"#111827", "#ffffff"}))
+                self.assertEqual(tree_state["rootLabelLines"][:2], ["Tree 0", "Age"])
+                self.assertEqual(tree_state["rootLabelWeights"][:2], ["700", "700"])
+                self.assertIn("400", tree_state["rootLabelWeights"][2:])
+                self.assertNotEqual(tree_state["plainFill"], tree_state["viridisFill"])
+                resizer = page.locator("#gbmTreeResizer")
+                resizer_box = resizer.bounding_box()
+                self.assertIsNotNone(resizer_box)
+                summary_width_before = page.locator(".gbm-tree-summary-panel").evaluate("node => node.getBoundingClientRect().width")
+                page.mouse.move(resizer_box["x"] + resizer_box["width"] / 2, resizer_box["y"] + 24)
+                page.mouse.down()
+                page.mouse.move(resizer_box["x"] + resizer_box["width"] / 2 - 80, resizer_box["y"] + 24)
+                page.mouse.up()
+                summary_width_after = page.locator(".gbm-tree-summary-panel").evaluate("node => node.getBoundingClientRect().width")
+                self.assertLess(summary_width_after, summary_width_before - 40)
                 page.get_by_text("Model navigator").click()
+                navigator_state = page.evaluate(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll(".gbm-model-table th")].map((node) => node.textContent.trim());
+                      const rows = [...document.querySelectorAll(".gbm-model-table tbody tr")];
+                      const firstRow = rows.find((row) => row.textContent.includes("Browser smoke model"));
+                      const secondRow = rows.find((row) => row.textContent.includes("Second smoke model"));
+                      const firstCells = [...(firstRow?.querySelectorAll("td") || [])].map((node) => node.textContent.trim());
+                      const secondCells = [...(secondRow?.querySelectorAll("td") || [])].map((node) => node.textContent.trim());
+                      const table = document.querySelector(".gbm-model-table");
+                      const cell = table?.querySelector("td");
+                      return {
+                        headers,
+                        firstCells,
+                        secondCells,
+                        fontSize: cell ? getComputedStyle(cell).fontSize : "",
+                        lineHeight: cell ? getComputedStyle(cell).lineHeight : "",
+                        wrapped: Boolean(document.querySelector(".gbm-model-table-wrap")),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    navigator_state["headers"],
+                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Train", "Test", "Scored", "Best iter.", "Run time", "Sample", ""],
+                )
+                self.assertEqual(navigator_state["fontSize"], "11px")
+                self.assertIn("actualNumerator", navigator_state["firstCells"])
+                self.assertIn("denominator", navigator_state["firstCells"])
+                self.assertIn("sample", navigator_state["firstCells"])
+                self.assertIn("1.2s", navigator_state["firstCells"])
+                self.assertIn("1m 02s", navigator_state["secondCells"])
+                self.assertTrue(navigator_state["wrapped"])
                 page.locator("tr", has_text="Second smoke model").get_by_role("button", name="Activate").click()
                 page.get_by_text("Features and parameters").click()
                 page.wait_for_function(
@@ -549,8 +743,17 @@ class BrowserSmokeTests(unittest.TestCase):
                         const tableHolder = document.querySelector("#gbmFeatureGrid .tabulator-tableholder");
                         const tab = document.querySelector(".gbm-tabs .tab");
                         const shap = document.querySelector("#gbmShapRows");
+                        const shapOptions = document.querySelector(".gbm-shap-options");
+                        const firstShapInput = document.querySelector("input[name='gbmShapRows']");
+                        const checkedShapOption = document.querySelector(".gbm-shap-option:has(input:checked)");
                         const sample = document.querySelector("#gbmCreateSampleBtn");
                         const train = document.querySelector("#gbmTrainBtn");
+                        const controlTitle = document.querySelector(".gbm-parameter-controls-column .gbm-section-title");
+                        const parameterTitle = document.querySelector(".gbm-parameter-table-column .gbm-section-title");
+                        const parameterLayout = document.querySelector(".gbm-parameter-layout");
+                        const parameterTableColumn = document.querySelector(".gbm-parameter-table-column");
+                        const parameterControlsColumn = document.querySelector(".gbm-parameter-controls-column");
+                        const parameterActions = document.querySelector(".gbm-parameter-controls-column .gbm-actions");
                         const parameterGrid = document.querySelector("#gbmParameterGrid");
                         const evaluationChart = document.querySelector("#gbmEvaluationChart");
                         const evaluationPanel = evaluationChart?.parentElement;
@@ -574,6 +777,11 @@ class BrowserSmokeTests(unittest.TestCase):
                             gridWidth: grid.width,
                             rightWidth: right.width,
                             shapRadios: document.querySelectorAll("input[name='gbmShapRows']").length,
+                            shapLabels: [...document.querySelectorAll("#gbmShapRows .gbm-shap-option span")].map((node) => node.textContent.trim()),
+                            shapOptionsDisplay: shapOptions ? getComputedStyle(shapOptions).display : "",
+                            shapOptionsDirection: shapOptions ? getComputedStyle(shapOptions).flexDirection : "",
+                            shapInputOpacity: firstShapInput ? getComputedStyle(firstShapInput).opacity : "",
+                            checkedShapBackground: checkedShapOption ? getComputedStyle(checkedShapOption).backgroundColor : "",
                             featureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox").length,
                             disabledFeatureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-feature-disabled .gbm-use-checkbox").length,
                             rowHeight: firstRow ? firstRow.getBoundingClientRect().height : 0,
@@ -586,6 +794,17 @@ class BrowserSmokeTests(unittest.TestCase):
                             sampleLeft: sample ? Math.round(sample.getBoundingClientRect().left) : 0,
                             sampleTop: sample ? Math.round(sample.getBoundingClientRect().top) : 0,
                             trainTop: train ? Math.round(train.getBoundingClientRect().top) : 0,
+                            controlTitleTop: controlTitle ? Math.round(controlTitle.getBoundingClientRect().top) : 0,
+                            controlTitleText: controlTitle ? controlTitle.textContent.trim() : "",
+                            parameterTitleTop: parameterTitle ? Math.round(parameterTitle.getBoundingClientRect().top) : 0,
+                            parameterGridTop: parameterGrid ? Math.round(parameterGrid.getBoundingClientRect().top) : 0,
+                            parameterLayoutWidth: parameterLayout ? Math.round(parameterLayout.getBoundingClientRect().width) : 0,
+                            parameterTableColumnWidth: parameterTableColumn ? Math.round(parameterTableColumn.getBoundingClientRect().width) : 0,
+                            parameterControlsColumnWidth: parameterControlsColumn ? Math.round(parameterControlsColumn.getBoundingClientRect().width) : 0,
+                            parameterActionsDirection: parameterActions ? getComputedStyle(parameterActions).flexDirection : "",
+                            shapParentInControls: Boolean(shap?.closest(".gbm-parameter-controls-column")),
+                            sampleParentInControls: Boolean(sample?.closest(".gbm-parameter-controls-column")),
+                            trainParentInControls: Boolean(train?.closest(".gbm-parameter-controls-column")),
                             parameterGridHeight: parameterGrid ? Math.round(parameterGrid.getBoundingClientRect().height) : 0,
                             evaluationChartHeight: evaluationChart ? Math.round(evaluationChart.getBoundingClientRect().height) : 0,
                             evaluationPanelHeight: evaluationPanel ? Math.round(evaluationPanel.getBoundingClientRect().height) : 0,
@@ -616,16 +835,33 @@ class BrowserSmokeTests(unittest.TestCase):
                 self.assertGreater(layout["toolWidth"], layout["visualWidth"] * 0.85)
                 self.assertGreater(layout["gridWidth"], 320)
                 self.assertGreater(layout["rightWidth"], 300)
-                self.assertGreaterEqual(layout["shapRadios"], 3)
+                self.assertEqual(layout["shapRadios"], 4)
+                self.assertEqual(layout["shapLabels"], ["0", "10k", "100k", "All"])
+                self.assertEqual(layout["shapOptionsDisplay"], "flex")
+                self.assertEqual(layout["shapOptionsDirection"], "row")
+                self.assertEqual(layout["shapInputOpacity"], "0")
+                self.assertNotEqual(layout["checkedShapBackground"], layout["rowBackground"])
                 self.assertGreater(layout["featureCheckboxes"], 0)
                 self.assertEqual(layout["disabledFeatureCheckboxes"], 0)
                 self.assertLess(layout["rowHeight"], 28)
                 self.assertEqual(layout["gainAlign"], "center")
                 self.assertEqual(layout["rowBackground"], layout["holderBackground"])
-                self.assertLess(layout["shapRight"], layout["sampleLeft"])
-                self.assertLessEqual(abs(layout["tabTop"] - layout["shapTop"]), 2)
-                self.assertLessEqual(abs(layout["tabTop"] - layout["sampleTop"]), 2)
-                self.assertLessEqual(abs(layout["tabTop"] - layout["trainTop"]), 2)
+                self.assertTrue(layout["shapParentInControls"])
+                self.assertTrue(layout["sampleParentInControls"])
+                self.assertTrue(layout["trainParentInControls"])
+                self.assertEqual(layout["controlTitleText"], "Control")
+                self.assertLessEqual(abs(layout["controlTitleTop"] - layout["parameterTitleTop"]), 2)
+                self.assertEqual(layout["parameterActionsDirection"], "column")
+                self.assertGreater(layout["parameterLayoutWidth"], 0)
+                self.assertAlmostEqual(
+                    layout["parameterTableColumnWidth"] / layout["parameterLayoutWidth"],
+                    0.7,
+                    delta=0.08,
+                )
+                self.assertGreater(layout["parameterControlsColumnWidth"], 120)
+                self.assertLessEqual(abs(layout["trainTop"] - layout["parameterGridTop"]), 2)
+                self.assertLess(layout["trainTop"], layout["shapTop"])
+                self.assertGreater(layout["sampleTop"], layout["shapTop"])
                 self.assertGreaterEqual(layout["parameterGridHeight"], 260)
                 self.assertGreaterEqual(layout["evaluationChartHeight"], 220)
                 self.assertLess(layout["evaluationChartHeight"], layout["evaluationPanelHeight"])

@@ -10,6 +10,7 @@ from .jobs import GbmJobManager
 from .sources import GbmSourceProvider
 from .store import GbmModelStore
 from .training import MissingGbmDependency, gbm_dependencies
+from .trees import tree_detail, tree_summary
 from .validation import (
     OFFSET_COLUMN,
     RESPONSE_COLUMN,
@@ -106,9 +107,10 @@ def register(app: FastAPI, context: AppContext) -> None:
             "models": store.list_models(),
             "active_model_id": store.active_model_id(),
             "shap_options": [
-                {"value": "zero", "label": "Zero rows"},
-                {"value": "10k", "label": "10k rows"},
-                {"value": "all", "label": "All rows"},
+                {"value": "0", "label": "0"},
+                {"value": "10k", "label": "10k"},
+                {"value": "100k", "label": "100k"},
+                {"value": "all", "label": "All"},
             ],
         }
 
@@ -159,6 +161,22 @@ def register(app: FastAPI, context: AppContext) -> None:
         if not job:
             raise HTTPException(status_code=404, detail="Choose a valid GBM job")
         return job.as_payload()
+
+    @app.get("/api/gbm/models/{model_id}/trees")
+    async def model_trees_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        try:
+            return tree_summary(store, model_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/gbm/models/{model_id}/trees/{tree_index}")
+    async def model_tree_endpoint(request: Request, model_id: str, tree_index: int) -> dict[str, Any]:
+        context.check_token(request)
+        try:
+            return tree_detail(store, model_id, tree_index)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/gbm/models/{model_id}")
     async def model_endpoint(request: Request, model_id: str) -> dict[str, Any]:

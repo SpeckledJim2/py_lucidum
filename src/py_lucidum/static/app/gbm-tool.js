@@ -1,3 +1,5 @@
+import { createGbmTreeViewer } from "./gbm-tree-viewer.js";
+
 const GBM_PARAMETER_OPTIONS = {
   objective: [
     "regression",
@@ -72,6 +74,7 @@ export function createGbmTool({
   let isTraining = false;
   let evaluationChart = null;
   let evaluationResizeObserver = null;
+  const treeViewer = createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNotice });
 
   function buildRequest() {
     if (!state.schema) return null;
@@ -131,6 +134,7 @@ export function createGbmTool({
     const mount = el("modelToolWrap");
     if (!mount) return;
     disposeEvaluationChart();
+    treeViewer.dispose();
     mount.innerHTML = `
       <div class="gbm-tool">
         <div id="gbmNotice" class="gbm-notice hidden" role="alert" aria-live="polite"></div>
@@ -139,14 +143,6 @@ export function createGbmTool({
             <button class="tab ${activeTab === "features" ? "active" : ""}" type="button" data-gbm-tab="features">Features and parameters</button>
             <button class="tab ${activeTab === "models" ? "active" : ""}" type="button" data-gbm-tab="models">Model navigator</button>
             <button class="tab ${activeTab === "trees" ? "active" : ""}" type="button" data-gbm-tab="trees">Tree viewer</button>
-          </div>
-          <div class="gbm-actions">
-            <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
-              <span class="gbm-shap-label">SHAP rows</span>
-              ${shapOptionsHtml(data.shap_options || [])}
-            </div>
-            <button id="gbmCreateSampleBtn" class="tab gbm-action-button gbm-sample-button ${state.gbmCreateSample ? "active" : ""}" type="button" aria-pressed="${state.gbmCreateSample ? "true" : "false"}">${state.gbmCreateSample ? "Sample pending" : "Create sample column"}</button>
-            <button id="gbmTrainBtn" class="tab gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining ? "disabled aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
           </div>
         </div>
         <div class="gbm-tab-panel ${activeTab === "features" ? "" : "hidden"}" data-gbm-panel="features">
@@ -157,10 +153,27 @@ export function createGbmTool({
               <div id="gbmFeatureFallback" class="gbm-fallback-table"></div>
             </section>
             <section class="gbm-right-panel">
-              <section class="gbm-panel-section">
-                <h3 class="gbm-section-title">Parameters</h3>
-                <div id="gbmParameterGrid" class="gbm-grid gbm-parameter-grid"></div>
-                <div id="gbmParameterFallback" class="gbm-fallback-table"></div>
+              <section class="gbm-panel-section gbm-parameter-section">
+                <div class="gbm-parameter-layout">
+                  <div class="gbm-parameter-table-column">
+                    <h3 class="gbm-section-title">Parameters</h3>
+                    <div id="gbmParameterGrid" class="gbm-grid gbm-parameter-grid"></div>
+                    <div id="gbmParameterFallback" class="gbm-fallback-table"></div>
+                  </div>
+                  <div class="gbm-parameter-controls-column">
+                    <h3 class="gbm-section-title">Control</h3>
+                    <div class="gbm-actions">
+                      <button id="gbmTrainBtn" class="tab gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining ? "disabled aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
+                      <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
+                        <span class="gbm-shap-label">SHAP rows</span>
+                        <div class="gbm-shap-options">
+                          ${shapOptionsHtml(data.shap_options || [])}
+                        </div>
+                      </div>
+                      <button id="gbmCreateSampleBtn" class="tab gbm-action-button gbm-sample-button ${state.gbmCreateSample ? "active" : ""}" type="button" aria-pressed="${state.gbmCreateSample ? "true" : "false"}">${state.gbmCreateSample ? "Sample pending" : "Create sample column"}</button>
+                    </div>
+                  </div>
+                </div>
               </section>
               <section class="gbm-panel-section">
                 <h3 class="gbm-section-title">Evaluation log</h3>
@@ -173,10 +186,41 @@ export function createGbmTool({
           <div class="gbm-model-table-wrap">${modelTableHtml(data.models || [])}</div>
         </div>
         <div class="gbm-tab-panel ${activeTab === "trees" ? "" : "hidden"}" data-gbm-panel="trees">
-          <div class="gbm-tree-toolbar">
-            <select id="gbmTreeSelect" aria-label="GBM tree"></select>
+          <div id="gbmTreeViewer" class="gbm-tree-viewer">
+            <section class="gbm-panel-section gbm-tree-summary-panel">
+              <div class="gbm-tree-section-header">
+                <h3 class="gbm-section-title">Select tree</h3>
+                <input id="gbmTreeSearch" class="gbm-tree-search" type="search" placeholder="Search" aria-label="Search trees" />
+              </div>
+              <div id="gbmTreeSummaryGrid" class="gbm-grid gbm-tree-summary-grid"></div>
+              <div id="gbmTreeSummaryFallback" class="gbm-fallback-table"></div>
+            </section>
+            <div id="gbmTreeResizer" class="gbm-tree-resizer" role="separator" aria-orientation="vertical" aria-label="Resize tree selector"></div>
+            <section class="gbm-panel-section gbm-tree-diagram-panel">
+              <div class="gbm-tree-diagram-header">
+                <h3 class="gbm-section-title">Tree viewer</h3>
+                <div class="gbm-tree-controls">
+                  <div class="gbm-tree-zoom segmented" role="group" aria-label="Tree zoom">
+                    <button type="button" data-gbm-tree-zoom="out" aria-label="Zoom out">-</button>
+                    <button type="button" data-gbm-tree-zoom="reset" aria-label="Reset zoom">Reset</button>
+                    <button type="button" data-gbm-tree-zoom="in" aria-label="Zoom in">+</button>
+                  </div>
+                  <div class="gbm-tree-palette segmented" role="group" aria-label="Tree colour mode">
+                    <button type="button" data-gbm-tree-palette="plain" aria-pressed="true">Plain</button>
+                    <button type="button" data-gbm-tree-palette="divergent" aria-pressed="false">Divergent</button>
+                    <button type="button" data-gbm-tree-palette="spectral" aria-pressed="false">Spectral</button>
+                    <button type="button" data-gbm-tree-palette="viridis" aria-pressed="false">Viridis</button>
+                  </div>
+                </div>
+              </div>
+              <div id="gbmTreeChart" class="gbm-tree-chart" aria-label="GBM tree diagram">
+                <div id="gbmTreeDetailSummary" class="gbm-tree-detail-summary">
+                  <h3 class="gbm-section-title">Tree viewer</h3>
+                </div>
+                <div id="gbmTreeSvgMount" class="gbm-tree-svg-mount"></div>
+              </div>
+            </section>
           </div>
-          <div id="gbmTreeChart" class="gbm-tree-chart"></div>
         </div>
       </div>
     `;
@@ -186,6 +230,7 @@ export function createGbmTool({
     bindFeatureActions();
     renderTables(data);
     if (data.active_model_id) loadModelDetail(data.active_model_id);
+    if (activeTab === "trees") treeViewer.render(data.active_model_id || "");
     setDuckDbTiming(tool, data.timings || {});
     setClientTiming(tool, data.client_timings || {});
     setRenderTiming(tool, 0);
@@ -194,9 +239,10 @@ export function createGbmTool({
 
   function shapOptionsHtml(options) {
     const rows = options.length ? options : [
-      { value: "zero", label: "Zero rows" },
-      { value: "10k", label: "10k rows" },
-      { value: "all", label: "All rows" },
+      { value: "0", label: "0" },
+      { value: "10k", label: "10k" },
+      { value: "100k", label: "100k" },
+      { value: "all", label: "All" },
     ];
     return rows.map((row, index) => `
       <label class="gbm-shap-option">
@@ -631,22 +677,80 @@ export function createGbmTool({
     if (!models.length) return `<div class="gbm-empty-state">No GBM models have been trained yet.</div>`;
     return `
       <table class="gbm-model-table">
-        <thead><tr><th>Model</th><th>Objective</th><th>Metric</th><th>Train</th><th>Test</th><th>Best iter.</th><th></th></tr></thead>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Created</th>
+            <th>Response</th>
+            <th>Weight</th>
+            <th>Objective</th>
+            <th>Metric</th>
+            <th>Train</th>
+            <th>Test</th>
+            <th>Scored</th>
+            <th>Best iter.</th>
+            <th>Run time</th>
+            <th>Sample</th>
+            <th></th>
+          </tr>
+        </thead>
         <tbody>
           ${models.map((model) => `
             <tr class="${model.active ? "active" : ""}">
-              <td>${escapeHtml(model.label || model.model_id)}</td>
+              <td class="gbm-model-name-cell">
+                <span class="gbm-model-name-main">${escapeHtml(model.label || model.model_id)}</span>
+              </td>
+              <td>${escapeHtml(formatModelCreated(model.created_at))}</td>
+              <td>${escapeHtml(model.response_column || "actualNumerator")}</td>
+              <td>${escapeHtml(model.offset_column || "Average row value")}</td>
               <td>${escapeHtml(model.objective || "")}</td>
               <td>${escapeHtml(model.metric || "")}</td>
-              <td>${Number(model.training_rows || 0).toLocaleString()}</td>
-              <td>${Number(model.test_rows || 0).toLocaleString()}</td>
-              <td>${Number(model.best_iteration || 0).toLocaleString()}</td>
-              <td><button type="button" data-gbm-activate="${escapeHtml(model.model_id)}">${model.active ? "Active" : "Activate"}</button></td>
+              <td class="numeric">${formatModelCount(model.training_rows)}</td>
+              <td class="numeric">${formatModelCount(model.test_rows)}</td>
+              <td class="numeric">${formatModelCount(model.scored_rows)}</td>
+              <td class="numeric">${formatModelCount(model.best_iteration)}</td>
+              <td class="numeric">${escapeHtml(formatModelRuntime(model))}</td>
+              <td>${escapeHtml(formatSampleMode(model.sample_column))}</td>
+              <td><button class="gbm-model-activate-button" type="button" data-gbm-activate="${escapeHtml(model.model_id)}">${model.active ? "Active" : "Activate"}</button></td>
             </tr>
           `).join("")}
         </tbody>
       </table>
     `;
+  }
+
+  function formatModelCount(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? Math.round(number).toLocaleString() : "0";
+  }
+
+  function formatModelRuntime(model) {
+    const seconds = Number(model?.timings?.training_seconds ?? model?.training_seconds);
+    if (!Number.isFinite(seconds) || seconds < 0) return "--";
+    if (seconds < 1) return `${Math.round(seconds * 1000).toLocaleString()}ms`;
+    if (seconds < 60) return `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = Math.round(seconds % 60);
+    return `${minutes}m ${remainder.toString().padStart(2, "0")}s`;
+  }
+
+  function formatModelCreated(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return String(value);
+    return date.toLocaleString(undefined, {
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      month: "short",
+    });
+  }
+
+  function formatSampleMode(value) {
+    const text = String(value || "").trim();
+    if (!text) return "All rows";
+    if (text === "__gbm_sample") return "Model-local 80/20";
+    return text;
   }
 
   function bindModelTable(mount) {
@@ -690,7 +794,7 @@ export function createGbmTool({
       offset: el("denominator")?.value || "denominator",
       features: currentFeatureRows(),
       parameters: currentParameters(),
-      shap_rows: document.querySelector("input[name='gbmShapRows']:checked")?.value || "zero",
+      shap_rows: document.querySelector("input[name='gbmShapRows']:checked")?.value || "0",
       sample_column: config?.sample_column || "",
       create_sample: Boolean(state.gbmCreateSample),
     };
@@ -770,7 +874,6 @@ export function createGbmTool({
     try {
       activeDetail = await api(`/api/gbm/models/${encodeURIComponent(modelId)}`, { method: "GET" });
       renderEvaluationChart();
-      renderTreeViewer();
     } catch (_) {
       activeDetail = null;
     }
@@ -949,51 +1052,6 @@ export function createGbmTool({
     }
   }
 
-  function renderTreeViewer() {
-    const select = el("gbmTreeSelect");
-    const target = el("gbmTreeChart");
-    const trees = activeDetail?.tree_dump?.tree_info || [];
-    if (!select || !target) return;
-    select.innerHTML = "";
-    trees.forEach((tree, index) => select.append(new Option(`Tree ${index + 1}`, String(index))));
-    select.onchange = () => renderTree(Number(select.value || 0));
-    renderTree(0);
-  }
-
-  function renderTree(index) {
-    const target = el("gbmTreeChart");
-    if (!target || !window.echarts) return;
-    const tree = activeDetail?.tree_dump?.tree_info?.[index]?.tree_structure;
-    const chart = window.echarts.init(target);
-    chart.setOption({
-      animation: false,
-      tooltip: { trigger: "item" },
-      series: [{
-        type: "tree",
-        data: [treeNode(tree)],
-        top: 20,
-        bottom: 20,
-        left: 40,
-        right: 160,
-        symbolSize: 8,
-        label: { position: "left", verticalAlign: "middle", align: "right", fontSize: 11 },
-        leaves: { label: { position: "right", align: "left" } },
-        expandAndCollapse: true,
-      }],
-    });
-  }
-
-  function treeNode(node) {
-    if (!node) return { name: "No tree" };
-    if (node.leaf_index !== undefined) {
-      return { name: `leaf ${node.leaf_index}: ${formatGain(node.leaf_value)}` };
-    }
-    return {
-      name: `${node.split_feature} <= ${node.threshold}`,
-      children: [treeNode(node.left_child), treeNode(node.right_child)],
-    };
-  }
-
   function formatGain(value) {
     const number = Number(value || 0);
     if (!Number.isFinite(number)) return "0.000";
@@ -1040,7 +1098,10 @@ export function createGbmTool({
     buildRequest,
     fetchData,
     render,
-    refreshTheme: renderEvaluationChart,
+    refreshTheme() {
+      renderEvaluationChart();
+      treeViewer.refreshTheme();
+    },
     syncSidebarFromSchema,
     useCached,
   };

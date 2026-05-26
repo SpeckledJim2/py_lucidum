@@ -27,9 +27,13 @@ from .validation import (
 
 
 class MissingGbmDependency(RuntimeError):
-    def __init__(self, missing: str):
-        super().__init__(f"Install GBM dependencies with `pip install 'py-lucidum[gbm]'` to train LightGBM models. Missing: {missing}")
+    def __init__(self, missing: str, hint: str | None = None):
+        message = f"Install GBM dependencies with `pip install 'py-lucidum[gbm]'` to train LightGBM models. Missing: {missing}"
+        if hint:
+            message = f"{message}. {hint}"
+        super().__init__(message)
         self.missing = missing
+        self.hint = hint
 
 
 def gbm_dependencies() -> tuple[Any, Any, Any]:
@@ -39,6 +43,13 @@ def gbm_dependencies() -> tuple[Any, Any, Any]:
     except ImportError:
         lgb = None
         missing.append("lightgbm")
+        hint = None
+    except OSError as exc:
+        lgb = None
+        missing.append("lightgbm runtime")
+        hint = "On macOS, install the OpenMP runtime with `brew install libomp`." if "libomp" in str(exc) else str(exc)
+    else:
+        hint = None
     try:
         import numpy as np  # type: ignore[import-not-found]
     except ImportError:
@@ -50,7 +61,7 @@ def gbm_dependencies() -> tuple[Any, Any, Any]:
         pd = None
         missing.append("pandas")
     if missing:
-        raise MissingGbmDependency(", ".join(missing))
+        raise MissingGbmDependency(", ".join(missing), hint)
     return lgb, np, pd
 
 
@@ -212,11 +223,10 @@ FROM {dataset.relation_sql()}
     tree_table = tree_dataframe(pd, booster)
     write_dataframe_parquet(tree_table, store.artifact_path(model_id, "tree_table"))
 
-    shap_mode = str(payload.get("shap_rows") or "zero").strip().lower()
+    shap_mode = str(payload.get("shap_rows") or "0").strip().lower()
     shap_summary_rows: list[dict[str, Any]] = []
     if shap_mode not in {"zero", "0", "none"}:
         shap_frame, shap_summary = shap_dataframes(
-            lgb=lgb,
             np=np,
             pd=pd,
             booster=booster,
@@ -224,8 +234,6 @@ FROM {dataset.relation_sql()}
             score_frame=work_frame,
             feature_names=feature_names,
             model_id=model_id,
-            prediction=prediction,
-            response_col=response_col,
             shap_mode=shap_mode,
             best_iteration=best_iteration,
         )
@@ -298,6 +306,8 @@ def shap_row_limit(mode: str, row_count: int) -> int:
         return row_count
     if mode in {"10k", "10000", "10,000"}:
         return min(10000, row_count)
+    if mode in {"100k", "100000", "100,000"}:
+        return min(100000, row_count)
     try:
         return min(max(0, int(mode)), row_count)
     except ValueError:
@@ -306,7 +316,6 @@ def shap_row_limit(mode: str, row_count: int) -> int:
 
 def shap_dataframes(
     *,
-    lgb: Any,
     np: Any,
     pd: Any,
     booster: Any,
@@ -314,8 +323,6 @@ def shap_dataframes(
     score_frame: Any,
     feature_names: list[str],
     model_id: str,
-    prediction: Any,
-    response_col: str,
     shap_mode: str,
     best_iteration: int,
 ) -> tuple[Any, Any]:
@@ -326,35 +333,31 @@ def shap_dataframes(
     if contributions.ndim == 3:
         contributions = contributions[:, :, 0]
     feature_contribs = contributions[:, : len(feature_names)]
-    rows: list[dict[str, Any]] = []
-    for row_index, (_, source_row) in enumerate(sampled_scores.iterrows()):
-        row_id = int(source_row["__lucidum_row_id"])
-        for feature_index, feature_name in enumerate(feature_names):
-            value = source_row.get(feature_name)
-            if pd.isna(value):
-                value = None
-            rows.append(
-                {
-                    "__lucidum_row_id": row_id,
-                    "gbm_model_id": model_id,
-                    "feature": feature_name,
-                    "feature_value": value,
-                    "shap_value": float(feature_contribs[row_index, feature_index]),
-                    "gbm_prediction": float(prediction[row_index]),
-                    "gbm_response": float(source_row[response_col]) if not pd.isna(source_row[response_col]) else None,
-                    response_col: float(source_row[response_col]) if not pd.isna(source_row[response_col]) else None,
-                }
-            )
-    shap_frame = pd.DataFrame(rows)
+
+    shap_frame = pd.DataFrame(
+        {
+            "__lucidum_row_id": sampled_scores["__lucidum_row_id"].astype("int64").to_numpy(),
+            **{
+                feature_name: feature_contribs[:, feature_index].astype(float)
+                for feature_index, feature_name in enumerate(feature_names)
+            },
+        }
+    )
     if shap_frame.empty:
         summary = pd.DataFrame(columns=["gbm_model_id", "feature", "mean_abs_shap", "mean_shap", "row_count"])
     else:
-        summary = (
-            shap_frame.assign(abs_shap=lambda frame: np.abs(frame["shap_value"]))
-            .groupby("feature", as_index=False)
-            .agg(mean_abs_shap=("abs_shap", "mean"), mean_shap=("shap_value", "mean"), row_count=("shap_value", "size"))
+        summary = pd.DataFrame(
+            [
+                {
+                    "gbm_model_id": model_id,
+                    "feature": feature_name,
+                    "mean_abs_shap": float(np.abs(shap_frame[feature_name]).mean()),
+                    "mean_shap": float(shap_frame[feature_name].mean()),
+                    "row_count": int(shap_frame[feature_name].count()),
+                }
+                for feature_name in feature_names
+            ]
         )
-        summary.insert(0, "gbm_model_id", model_id)
         summary = summary.sort_values("mean_abs_shap", ascending=False)
     return shap_frame, summary
 

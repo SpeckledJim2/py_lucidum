@@ -189,7 +189,6 @@ INNER JOIN read_parquet({sql_literal(str(source_path))}) prediction USING (__luc
             "features": self.read_json(self.artifact_path(model_id, "feature_config"), []),
             "parameters": self.read_json(self.artifact_path(model_id, "parameters"), {}),
             "training_log": self.read_json(self.artifact_path(model_id, "training_log"), {}),
-            "tree_dump": self.read_json(self.artifact_path(model_id, "tree_dump"), {}),
             "active": self.active_model_id() == model_id,
         }
         return detail

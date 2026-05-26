@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 import unittest
 from pathlib import Path
@@ -14,7 +15,8 @@ from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.demo import demo_dataset_path
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
-from py_lucidum.tools.gbm.training import MissingGbmDependency, should_use_offset_init_score, train_model
+from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
+from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, default_parameters, feature_rows, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
@@ -118,6 +120,15 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(next(row["value"] for row in payload["parameters"] if row["name"] == "metric"), "poisson")
         self.assertEqual(payload["parameter_options"]["objective"], list(GBM_OBJECTIVES))
         self.assertEqual(payload["parameter_options"]["metric"], list(GBM_METRICS))
+        self.assertEqual(
+            payload["shap_options"],
+            [
+                {"value": "0", "label": "0"},
+                {"value": "10k", "label": "10k"},
+                {"value": "100k", "label": "100k"},
+                {"value": "all", "label": "All"},
+            ],
+        )
         self.assertIn("Gain", Path("docs/specs/gbm-tool_plan.md").read_text(encoding="utf-8"))
         age = next(row for row in payload["features"] if row["name"] == "Age")
         self.assertEqual(age["gain"], 0.0)
@@ -135,6 +146,22 @@ class GbmToolTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("py-lucidum[gbm]", json.loads(body)["detail"])
+
+    def test_gbm_dependencies_reports_missing_lightgbm_runtime(self) -> None:
+        real_import = builtins.__import__
+
+        def import_with_missing_lightgbm_runtime(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "lightgbm":
+                raise OSError("Library not loaded: @rpath/libomp.dylib")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=import_with_missing_lightgbm_runtime):
+            with self.assertRaises(MissingGbmDependency) as raised:
+                gbm_dependencies()
+
+        message = str(raised.exception)
+        self.assertIn("lightgbm runtime", message)
+        self.assertIn("brew install libomp", message)
 
     def test_validation_catches_missing_fixed_columns_and_invalid_monotonicity(self) -> None:
         missing_path = self.root / "missing.csv"
@@ -381,7 +408,7 @@ COPY (
                 ],
                 "parameters": parameters,
                 "sample_column": "",
-                "shap_rows": "zero",
+                "shap_rows": "0",
             },
         )
 
@@ -396,6 +423,57 @@ COPY (
         finally:
             con.close()
         self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "gbm_prediction"])
+
+    def test_shap_row_limit_supports_compact_choices(self) -> None:
+        self.assertEqual(shap_row_limit("0", 123456), 0)
+        self.assertEqual(shap_row_limit("10k", 123456), 10000)
+        self.assertEqual(shap_row_limit("100k", 123456), 100000)
+        self.assertEqual(shap_row_limit("all", 123456), 123456)
+
+    def test_shap_values_are_written_as_wide_numeric_feature_columns(self) -> None:
+        try:
+            import numpy as np
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        test_case = self
+
+        class Booster:
+            def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
+                test_case.assertTrue(pred_contrib)
+                test_case.assertEqual(num_iteration, 3)
+                test_case.assertEqual(list(frame.columns), ["Age", "Segment"])
+                return np.array([[0.2, -0.1, 0.0], [0.5, 0.3, 0.0]])
+
+        shap_frame, summary = shap_dataframes(
+            np=np,
+            pd=pd,
+            booster=Booster(),
+            feature_frame=pd.DataFrame({"Age": [30, 40], "Segment": ["A", "GU"]}),
+            score_frame=pd.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40], "Segment": ["A", "GU"]}),
+            feature_names=["Age", "Segment"],
+            model_id="m1",
+            shap_mode="10k",
+            best_iteration=3,
+        )
+
+        self.assertEqual(list(shap_frame.columns), ["__lucidum_row_id", "Age", "Segment"])
+        self.assertEqual(shap_frame["__lucidum_row_id"].tolist(), [1, 2])
+        self.assertEqual(shap_frame["Age"].tolist(), [0.2, 0.5])
+        self.assertNotIn("feature_value", shap_frame.columns)
+        self.assertEqual(set(summary["feature"]), {"Age", "Segment"})
+
+        shap_path = self.root / "shap_values.parquet"
+        write_dataframe_parquet(shap_frame, shap_path)
+        con = duckdb.connect(database=":memory:")
+        try:
+            artifact_columns = con.execute(f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(shap_path))})").fetchall()
+        finally:
+            con.close()
+        self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "Age", "Segment"])
+        self.assertTrue(str(artifact_columns[0][1]).startswith("BIGINT"))
+        self.assertTrue(str(artifact_columns[1][1]).startswith("DOUBLE"))
 
     def write_model_artifacts(self) -> GbmModelStore:
         store = GbmModelStore(self.data_path)
@@ -438,7 +516,7 @@ COPY (
             con.execute(
                 f"""
 COPY (
-  SELECT 1 AS __lucidum_row_id, 'Age' AS feature, 0.2 AS shap_value, 11.5 AS gbm_prediction
+  SELECT 1 AS __lucidum_row_id, 0.2 AS Age, -0.1 AS Segment
 ) TO '{model_dir / "shap_values.parquet"}' (FORMAT PARQUET)
 """
             )
@@ -449,10 +527,129 @@ COPY (
 ) TO '{model_dir / "shap_summary.parquet"}' (FORMAT PARQUET)
 """
             )
+            con.execute(
+                f"""
+COPY (
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-S1' AS right_child,
+         NULL AS parent_index, 'Segment' AS split_feature, 6.5 AS split_gain, '0||2' AS threshold,
+         '==' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type, 1.2 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL
+  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 2.0, 2
+  UNION ALL
+  SELECT 0, 2, '0-S1', '0-L1', '0-L2', '0-S0', 'Age', 2.5, '35', '<=', 'right', 'None', 1.6, 1.0, 1
+  UNION ALL
+  SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, 1.3, 1.0, 1
+  UNION ALL
+  SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, 1.9, 1.0, 1
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+            )
         finally:
             con.close()
+        store.write_json(
+            model_dir / "tree_dump.json",
+            {
+                "feature_names": ["Age", "Segment"],
+                "feature_infos": {
+                    "Age": {"values": []},
+                    "Segment": {"values": [0, 1, 2]},
+                },
+                "pandas_categorical": [["A", "B", "C"]],
+                "tree_info": [
+                    {
+                        "tree_index": 0,
+                        "tree_structure": {
+                            "split_index": 0,
+                            "split_feature": 1,
+                            "split_gain": 6.5,
+                            "threshold": "0||2",
+                            "decision_type": "==",
+                            "default_left": True,
+                            "internal_value": 1.2,
+                            "internal_count": 3,
+                            "left_child": {
+                                "leaf_index": 0,
+                                "leaf_value": 0.8,
+                                "leaf_count": 2,
+                            },
+                            "right_child": {
+                                "split_index": 1,
+                                "split_feature": 0,
+                                "split_gain": 2.5,
+                                "threshold": 35,
+                                "decision_type": "<=",
+                                "default_left": False,
+                                "internal_value": 1.6,
+                                "internal_count": 1,
+                                "left_child": {
+                                    "leaf_index": 1,
+                                    "leaf_value": 1.3,
+                                    "leaf_count": 1,
+                                },
+                                "right_child": {
+                                    "leaf_index": 2,
+                                    "leaf_value": 1.9,
+                                    "leaf_count": 1,
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        )
         store.activate_model("m1")
         return store
+
+    def test_tree_summary_and_detail_read_saved_artifacts(self) -> None:
+        store = self.write_model_artifacts()
+
+        summary = tree_summary(store, "m1")
+        detail = tree_detail(store, "m1", 0)
+
+        self.assertEqual(summary["trees"], [{"tree": 0, "dim": 2, "features": "Segment x Age", "gain": 9}])
+        self.assertEqual(detail["tree"], 0)
+        self.assertEqual(detail["root"]["type"], "split")
+        self.assertEqual(detail["root"]["feature"], "Segment")
+        self.assertEqual(detail["root"]["threshold"], "A / C")
+        self.assertEqual(detail["root"]["children"][0]["edge_label"], "== A / C")
+        self.assertTrue(detail["root"]["children"][0]["default_branch"])
+        self.assertEqual(detail["root"]["children"][1]["type"], "split")
+        self.assertEqual(detail["root"]["children"][1]["feature"], "Age")
+        self.assertIn("Tree 0", detail["root"]["label"])
+        self.assertIn(1.9, detail["values"])
+
+    def test_tree_routes_work_without_lightgbm_imports(self) -> None:
+        self.write_model_artifacts()
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+            summary_status, summary_body = asgi_get(app, "/api/gbm/models/m1/trees")
+            detail_status, detail_body = asgi_get(app, "/api/gbm/models/m1/trees/0")
+
+        self.assertEqual(summary_status, 200)
+        self.assertEqual(detail_status, 200)
+        self.assertEqual(json.loads(summary_body)["trees"][0]["features"], "Segment x Age")
+        self.assertEqual(json.loads(detail_body)["root"]["feature"], "Segment")
+
+    def test_tree_endpoints_return_empty_payloads_for_missing_artifacts(self) -> None:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir("empty")
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": "empty",
+                "label": "Empty",
+                "created_at": "2026-05-25T00:00:00Z",
+                "objective": "poisson",
+                "metric": "poisson",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "sources": {},
+            },
+        )
+
+        self.assertEqual(tree_summary(store, "empty"), {"model_id": "empty", "trees": []})
+        self.assertEqual(tree_detail(store, "empty", 0), {"model_id": "empty", "tree": 0, "root": None, "values": []})
 
     def test_model_sources_are_exposed_and_chartable(self) -> None:
         store = self.write_model_artifacts()
