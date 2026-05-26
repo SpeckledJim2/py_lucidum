@@ -220,6 +220,7 @@ def train_model(
     feature_frame = work_frame[feature_names].copy()
     for name in categorical_features:
         feature_frame[name] = feature_frame[name].astype("category")
+    categorical_labels = categorical_feature_labels(feature_frame, categorical_features)
 
     offset_values = work_frame[offset_col].astype("float64") if offset_col else pd.Series([1.0] * len(work_frame), index=work_frame.index)
     log_offset = np.log(offset_values.to_numpy(dtype="float64"))
@@ -370,9 +371,7 @@ def train_model(
     )
     evaluation_frame = evaluation_dataframe(pd, evaluation_result)
     write_dataframe_parquet(evaluation_frame, store.artifact_path(model_id, "evaluation"))
-    tree_dump = booster.dump_model(num_iteration=best_iteration)
-    store.write_json(store.artifact_path(model_id, "tree_dump"), tree_dump)
-    tree_table = tree_dataframe(pd, booster)
+    tree_table = tree_dataframe(pd, booster, categorical_labels=categorical_labels)
     write_dataframe_parquet(tree_table, store.artifact_path(model_id, "tree_table"))
 
     elapsed = time.perf_counter() - started
@@ -641,11 +640,77 @@ def should_use_offset_init_score(params: dict[str, Any], offset_col: str | None)
     return bool(offset_col and uses_log_offset(params))
 
 
-def tree_dataframe(pd: Any, booster: Any) -> Any:
+def tree_dataframe(pd: Any, booster: Any, categorical_labels: dict[str, list[str]] | None = None) -> Any:
     try:
-        return booster.trees_to_dataframe()
+        frame = booster.trees_to_dataframe()
     except Exception:
-        return pd.DataFrame(columns=["tree_index", "node_depth", "node_index", "split_feature", "threshold", "value"])
+        frame = pd.DataFrame(
+            columns=[
+                "tree_index",
+                "node_depth",
+                "node_index",
+                "left_child",
+                "right_child",
+                "parent_index",
+                "split_feature",
+                "split_gain",
+                "threshold",
+                "threshold_label",
+                "decision_type",
+                "missing_direction",
+                "missing_type",
+                "value",
+                "weight",
+                "count",
+            ]
+        )
+    return tree_dataframe_with_threshold_labels(pd, frame, categorical_labels or {})
+
+
+def categorical_feature_labels(feature_frame: Any, categorical_features: list[str]) -> dict[str, list[str]]:
+    labels: dict[str, list[str]] = {}
+    for name in categorical_features:
+        if name not in feature_frame:
+            continue
+        categories = getattr(getattr(feature_frame[name], "cat", None), "categories", None)
+        if categories is not None:
+            labels[name] = [str(value) for value in categories]
+    return labels
+
+
+def tree_dataframe_with_threshold_labels(pd: Any, frame: Any, categorical_labels: dict[str, list[str]]) -> Any:
+    if frame is None:
+        frame = pd.DataFrame()
+    frame = frame.copy()
+    if "threshold_label" not in frame.columns:
+        frame["threshold_label"] = None
+    if not categorical_labels or frame.empty:
+        return frame
+    required = {"split_feature", "decision_type", "threshold"}
+    if not required.issubset(set(frame.columns)):
+        return frame
+    labels: list[str | None] = []
+    for _, row in frame.iterrows():
+        feature = str(row.get("split_feature") or "").strip()
+        decision_type = str(row.get("decision_type") or "").strip()
+        threshold = row.get("threshold")
+        if decision_type == "==" and feature in categorical_labels and not bool(pd.isna(threshold)):
+            labels.append(decode_categorical_threshold(threshold, categorical_labels[feature]))
+        else:
+            labels.append(None)
+    frame["threshold_label"] = labels
+    return frame
+
+
+def decode_categorical_threshold(value: Any, categories: list[str]) -> str | None:
+    labels: list[str] = []
+    for part in str(value).split("||"):
+        try:
+            index = int(float(part))
+        except ValueError:
+            continue
+        labels.append(categories[index] if 0 <= index < len(categories) else str(index))
+    return " / ".join(labels) if labels else None
 
 
 def shap_row_limit(mode: str, row_count: int) -> int:

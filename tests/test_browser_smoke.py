@@ -125,45 +125,6 @@ class BrowserSmokeTests(unittest.TestCase):
                         "warnings": [],
                     },
                 )
-                store.write_json(
-                    model_dir / "tree_dump.json",
-                    {
-                        "feature_names": ["Age", "Segment"],
-                        "feature_infos": {
-                            "Age": {"values": []},
-                            "Segment": {"values": [0, 1, 2]},
-                        },
-                        "pandas_categorical": [["A", "B", "C"]],
-                        "tree_info": [
-                            {
-                                "tree_index": 0,
-                                "tree_structure": {
-                                    "split_index": 0,
-                                    "split_feature": 0,
-                                    "split_gain": 5.0,
-                                    "threshold": 35,
-                                    "decision_type": "<=",
-                                    "default_left": True,
-                                    "internal_value": 1.0,
-                                    "internal_count": 3,
-                                    "left_child": {"leaf_index": 0, "leaf_value": 0.8, "leaf_count": 1},
-                                    "right_child": {
-                                        "split_index": 1,
-                                        "split_feature": 1,
-                                        "split_gain": 2.0,
-                                        "threshold": "0||2",
-                                        "decision_type": "==",
-                                        "default_left": False,
-                                        "internal_value": 1.2,
-                                        "internal_count": 2,
-                                        "left_child": {"leaf_index": 1, "leaf_value": 1.1, "leaf_count": 1},
-                                        "right_child": {"leaf_index": 2, "leaf_value": 1.4, "leaf_count": 1},
-                                    },
-                                },
-                            }
-                        ],
-                    },
-                )
                 con = duckdb.connect(database=":memory:")
                 try:
                     con.execute(
@@ -171,15 +132,16 @@ class BrowserSmokeTests(unittest.TestCase):
 COPY (
   SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-S1' AS right_child,
          NULL AS parent_index, 'Age' AS split_feature, 5.0 AS split_gain, '35' AS threshold,
-         '<=' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type, 1.0 AS value, 3.0 AS weight, 3 AS count
+         NULL AS threshold_label, '<=' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type,
+         1.0 AS value, 3.0 AS weight, 3 AS count
   UNION ALL
-  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 1.0, 1
+  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 1.0, 1
   UNION ALL
-  SELECT 0, 2, '0-S1', '0-L1', '0-L2', '0-S0', 'Segment', 2.0, '0||2', '==', 'right', 'None', 1.2, 2.0, 2
+  SELECT 0, 2, '0-S1', '0-L1', '0-L2', '0-S0', 'Segment', 2.0, '0||2', 'A / C', '==', 'right', 'None', 1.2, 2.0, 2
   UNION ALL
-  SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, 1.1, 1.0, 1
+  SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.1, 1.0, 1
   UNION ALL
-  SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, 1.4, 1.0, 1
+  SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.4, 1.0, 1
 ) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
 """
                     )

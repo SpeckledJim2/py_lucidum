@@ -1,50 +1,51 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
 from typing import Any
 
 import duckdb
 
-from py_lucidum.core import sql_literal
+from py_lucidum.core import quote_ident, sql_literal
 
 from .store import GbmModelStore
 
 
 MAX_SPLIT_LABEL_LENGTH = 160
+TREE_DETAIL_COLUMNS = [
+    "tree_index",
+    "node_depth",
+    "node_index",
+    "left_child",
+    "right_child",
+    "parent_index",
+    "split_feature",
+    "split_gain",
+    "threshold",
+    "threshold_label",
+    "decision_type",
+    "missing_direction",
+    "missing_type",
+    "value",
+    "weight",
+    "count",
+]
 
 
 def tree_summary(store: GbmModelStore, model_id: str) -> dict[str, Any]:
     store.manifest(model_id)
     rows = tree_summary_from_table(store, model_id)
-    if not rows:
-        rows = tree_summary_from_dump(store, model_id)
     return {"model_id": model_id, "trees": rows}
 
 
 def tree_detail(store: GbmModelStore, model_id: str, tree_index: int) -> dict[str, Any]:
     store.manifest(model_id)
-    dump = store.read_json(store.artifact_path(model_id, "tree_dump"), {})
-    if not isinstance(dump, dict):
-        dump = {}
-    tree_info = selected_tree_info(dump, tree_index)
-    if not tree_info:
+    rows = tree_rows_from_table(store, model_id, tree_index)
+    if not rows:
         return {"model_id": model_id, "tree": tree_index, "root": None, "values": []}
-    root = tree_info.get("tree_structure")
-    if not isinstance(root, dict):
-        return {"model_id": model_id, "tree": tree_index, "root": None, "values": []}
-    feature_names = [str(name) for name in dump.get("feature_names", []) if name is not None]
-    feature_config = store.read_json(store.artifact_path(model_id, "feature_config"), [])
-    category_map = categorical_feature_map(dump, feature_config if isinstance(feature_config, list) else [])
     values: list[float] = []
-    normalised = normalise_tree_node(
-        root,
-        tree_index=tree_index,
-        feature_names=feature_names,
-        category_map=category_map,
-        values=values,
-        is_root=True,
-    )
+    normalised = normalise_tree_rows(rows, tree_index=tree_index, values=values)
+    if not normalised:
+        return {"model_id": model_id, "tree": tree_index, "root": None, "values": []}
     return {"model_id": model_id, "tree": tree_index, "root": normalised, "values": values}
 
 
@@ -81,99 +82,129 @@ ORDER BY tree_index, node_depth, node_index
     return [summary_row(item["tree"], item["features"], item["gain"]) for item in sorted(grouped.values(), key=lambda row: row["tree"])]
 
 
-def tree_summary_from_dump(store: GbmModelStore, model_id: str) -> list[dict[str, Any]]:
-    dump = store.read_json(store.artifact_path(model_id, "tree_dump"), {})
-    if not isinstance(dump, dict):
+def tree_rows_from_table(store: GbmModelStore, model_id: str, tree_index: int) -> list[dict[str, Any]]:
+    path = store.artifact_path(model_id, "tree_table")
+    if not path.exists():
         return []
-    feature_names = [str(name) for name in dump.get("feature_names", []) if name is not None]
-    rows: list[dict[str, Any]] = []
-    for index, tree in enumerate(dump.get("tree_info", []) or []):
-        if not isinstance(tree, dict):
-            continue
-        tree_index = int(tree.get("tree_index", index) or 0)
-        features: list[str] = []
-        gain = 0.0
-        for node in iter_split_nodes(tree.get("tree_structure")):
-            feature = feature_name(node.get("split_feature"), feature_names)
-            if feature and feature not in features:
-                features.append(feature)
-            split_gain = node.get("split_gain")
-            gain_value = finite_float(split_gain)
-            if gain_value is not None:
-                gain += gain_value
-        rows.append(summary_row(tree_index, features, gain))
-    return sorted(rows, key=lambda row: row["tree"])
+    con = duckdb.connect(database=":memory:")
+    try:
+        try:
+            columns = parquet_columns(con, path)
+            if "tree_index" not in columns or "node_index" not in columns:
+                return []
+            select_sql = ", ".join(select_expression(name, columns) for name in TREE_DETAIL_COLUMNS)
+            order_columns = [name for name in ("node_depth", "node_index") if name in columns]
+            order_sql = ", ".join(quote_ident(name) for name in order_columns) or "node_index"
+            records = con.execute(
+                f"""
+SELECT {select_sql}
+FROM read_parquet({sql_literal(str(path))})
+WHERE tree_index = ?
+ORDER BY {order_sql}
+""",
+                [int(tree_index)],
+            ).fetchall()
+        except duckdb.Error:
+            return []
+    finally:
+        con.close()
+    return [dict(zip(TREE_DETAIL_COLUMNS, record)) for record in records]
 
 
-def normalise_tree_node(
-    node: dict[str, Any],
+def parquet_columns(con: duckdb.DuckDBPyConnection, path: Any) -> set[str]:
+    records = con.execute(f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(path))})").fetchall()
+    return {str(record[0]) for record in records if record and record[0] is not None}
+
+
+def select_expression(name: str, columns: set[str]) -> str:
+    if name in columns:
+        return quote_ident(name)
+    return f"NULL AS {quote_ident(name)}"
+
+
+def normalise_tree_rows(rows: list[dict[str, Any]], *, tree_index: int, values: list[float]) -> dict[str, Any] | None:
+    rows_by_id = {clean_node_ref(row.get("node_index")): row for row in rows if clean_node_ref(row.get("node_index"))}
+    if not rows_by_id:
+        return None
+    root = next((row for row in rows if not clean_node_ref(row.get("parent_index"))), None)
+    if root is None:
+        root = min(rows, key=lambda row: (finite_float(row.get("node_depth")) or 0.0, clean_node_ref(row.get("node_index"))))
+    return normalise_table_node(root, rows_by_id=rows_by_id, tree_index=tree_index, values=values, is_root=True, seen=set())
+
+
+def normalise_table_node(
+    row: dict[str, Any],
     *,
+    rows_by_id: dict[str, dict[str, Any]],
     tree_index: int,
-    feature_names: list[str],
-    category_map: dict[str, list[str]],
     values: list[float],
+    seen: set[str],
     is_root: bool = False,
-) -> dict[str, Any]:
-    if "leaf_index" in node:
-        value = finite_float(node.get("leaf_value"))
-        if value is not None:
-            values.append(value)
-        leaf_index = int(node.get("leaf_index") or 0)
+) -> dict[str, Any] | None:
+    node_id = clean_node_ref(row.get("node_index"))
+    if not node_id or node_id in seen:
+        return None
+    seen.add(node_id)
+    feature = clean_feature_name(row.get("split_feature"))
+    value = finite_float(row.get("value"))
+    if value is not None:
+        values.append(value)
+    cover = count_int(row.get("count"))
+
+    if not feature:
+        leaf_index = node_index_number(node_id)
         return {
-            "id": f"{tree_index}-L{leaf_index}",
+            "id": node_id,
             "type": "leaf",
             "leaf_index": leaf_index,
-            "cover": int(node.get("leaf_count") or 0),
+            "cover": cover,
             "value": value,
-            "label": node_label("Leaf", node.get("leaf_count"), None, value, is_root=False),
-            "tooltip": node_tooltip("Leaf", node.get("leaf_count"), None, value),
+            "label": node_label("Leaf", cover, None, value, is_root=is_root, tree_index=tree_index if is_root else None),
+            "tooltip": node_tooltip("Leaf", cover, None, value, tree_index=tree_index if is_root else None),
             "children": [],
         }
 
-    feature = feature_name(node.get("split_feature"), feature_names)
-    value = finite_float(node.get("internal_value"))
-    gain = finite_float(node.get("split_gain"))
-    if value is not None:
-        values.append(value)
-    decision_type = str(node.get("decision_type") or "<=").strip() or "<="
-    threshold = split_threshold_label(node.get("threshold"), feature, decision_type, category_map)
-    default_left = bool(node.get("default_left"))
-    left_child = node.get("left_child") if isinstance(node.get("left_child"), dict) else None
-    right_child = node.get("right_child") if isinstance(node.get("right_child"), dict) else None
+    gain = finite_float(row.get("split_gain"))
+    decision_type = str(row.get("decision_type") or "<=").strip() or "<="
+    threshold = split_threshold_label(row.get("threshold"), decision_type, row.get("threshold_label"))
+    default_left = str(row.get("missing_direction") or "").strip().lower() == "left"
     children: list[dict[str, Any]] = []
+    left_child = rows_by_id.get(clean_node_ref(row.get("left_child")))
+    right_child = rows_by_id.get(clean_node_ref(row.get("right_child")))
     if left_child:
-        child = normalise_tree_node(
+        child = normalise_table_node(
             left_child,
+            rows_by_id=rows_by_id,
             tree_index=tree_index,
-            feature_names=feature_names,
-            category_map=category_map,
             values=values,
+            seen=seen,
         )
-        child["edge_label"] = branch_label(decision_type, threshold["label"], left=True)
-        child["edge_tooltip"] = branch_label(decision_type, threshold["full"], left=True)
-        child["default_branch"] = default_left
-        children.append(child)
+        if child:
+            child["edge_label"] = branch_label(decision_type, threshold["label"], left=True)
+            child["edge_tooltip"] = branch_label(decision_type, threshold["full"], left=True)
+            child["default_branch"] = default_left
+            children.append(child)
     if right_child:
-        child = normalise_tree_node(
+        child = normalise_table_node(
             right_child,
+            rows_by_id=rows_by_id,
             tree_index=tree_index,
-            feature_names=feature_names,
-            category_map=category_map,
             values=values,
+            seen=seen,
         )
-        child["edge_label"] = "else"
-        child["edge_tooltip"] = f"else {branch_label(decision_type, threshold['full'], left=True)}"
-        child["default_branch"] = not default_left
-        children.append(child)
+        if child:
+            child["edge_label"] = "else"
+            child["edge_tooltip"] = f"else {branch_label(decision_type, threshold['full'], left=True)}"
+            child["default_branch"] = not default_left
+            children.append(child)
 
-    split_index = int(node.get("split_index") or 0)
-    label = node_label(feature, node.get("internal_count"), gain, value, is_root=is_root, tree_index=tree_index)
+    label = node_label(feature, cover, gain, value, is_root=is_root, tree_index=tree_index)
     return {
-        "id": f"{tree_index}-S{split_index}",
+        "id": node_id,
         "type": "split",
-        "split_index": split_index,
+        "split_index": node_index_number(node_id),
         "feature": feature,
-        "cover": int(node.get("internal_count") or 0),
+        "cover": cover,
         "gain": gain,
         "value": value,
         "decision_type": decision_type,
@@ -181,66 +212,17 @@ def normalise_tree_node(
         "threshold_full": threshold["full"],
         "default_child": "left" if default_left else "right",
         "label": label,
-        "tooltip": node_tooltip(feature, node.get("internal_count"), gain, value, tree_index=tree_index if is_root else None),
+        "tooltip": node_tooltip(feature, cover, gain, value, tree_index=tree_index if is_root else None),
         "children": children,
     }
 
 
-def selected_tree_info(dump: dict[str, Any], tree_index: int) -> dict[str, Any] | None:
-    for index, tree in enumerate(dump.get("tree_info", []) or []):
-        if isinstance(tree, dict) and int(tree.get("tree_index", index) or 0) == tree_index:
-            return tree
-    return None
-
-
-def categorical_feature_map(dump: dict[str, Any], feature_config: list[dict[str, Any]] | None = None) -> dict[str, list[str]]:
-    feature_infos = dump.get("feature_infos") if isinstance(dump.get("feature_infos"), dict) else {}
-    feature_names = [str(name) for name in dump.get("feature_names", []) if name is not None]
-    categorical_names = [
-        name for name in feature_names
-        if isinstance(feature_infos.get(name), dict) and feature_infos[name].get("values")
-    ]
-    configured_categoricals = {
-        str(item.get("name"))
-        for item in (feature_config or [])
-        if isinstance(item, dict) and "categorical" in str(item.get("kind") or "").lower()
-    }
-    categorical_names.extend(
-        name for name in feature_names
-        if name in configured_categoricals and name not in categorical_names
-    )
-    categories = dump.get("pandas_categorical") if isinstance(dump.get("pandas_categorical"), list) else []
-    result: dict[str, list[str]] = {}
-    for name, values in zip(categorical_names, categories):
-        if isinstance(values, list):
-            result[name] = [str(value) for value in values]
-    return result
-
-
-def split_threshold_label(raw_threshold: Any, feature: str, decision_type: str, category_map: dict[str, list[str]]) -> dict[str, str]:
-    text = threshold_text(raw_threshold)
-    if decision_type == "==" and feature in category_map:
-        decoded = decode_category_threshold(text, category_map[feature])
-        if decoded:
-            text = decoded
-    elif decision_type == "==":
+def split_threshold_label(raw_threshold: Any, decision_type: str, decoded_label: Any = None) -> dict[str, str]:
+    text = clean_label(decoded_label) or threshold_text(raw_threshold)
+    if decision_type == "==" and not clean_label(decoded_label):
         text = text.replace("||", " / ")
     compact = compact_label(text)
     return {"label": compact, "full": text}
-
-
-def decode_category_threshold(text: str, categories: list[str]) -> str:
-    labels: list[str] = []
-    for part in text.split("||"):
-        try:
-            index = int(float(part))
-        except ValueError:
-            continue
-        if 0 <= index < len(categories):
-            labels.append(categories[index])
-        else:
-            labels.append(str(index))
-    return " / ".join(labels)
 
 
 def branch_label(decision_type: str, threshold: str, *, left: bool) -> str:
@@ -285,23 +267,6 @@ def node_tooltip(title: str, cover: Any, gain: float | None, value: float | None
     return "\n".join(node_label(title, cover, gain, value, is_root=tree_index is not None, tree_index=tree_index))
 
 
-def iter_split_nodes(node: Any) -> Iterable[dict[str, Any]]:
-    if not isinstance(node, dict):
-        return
-    if "split_index" in node:
-        yield node
-        yield from iter_split_nodes(node.get("left_child"))
-        yield from iter_split_nodes(node.get("right_child"))
-
-
-def feature_name(value: Any, feature_names: list[str]) -> str:
-    if isinstance(value, int) and 0 <= value < len(feature_names):
-        return feature_names[value]
-    if isinstance(value, float) and value.is_integer() and 0 <= int(value) < len(feature_names):
-        return feature_names[int(value)]
-    return clean_feature_name(value) or "Feature"
-
-
 def clean_feature_name(value: Any) -> str:
     if value is None:
         return ""
@@ -309,6 +274,30 @@ def clean_feature_name(value: Any) -> str:
     if not text or text.upper() == "NA" or text.lower() == "nan":
         return ""
     return text
+
+
+def clean_label(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return ""
+    return text
+
+
+def clean_node_ref(value: Any) -> str:
+    return clean_label(value)
+
+
+def node_index_number(node_id: Any) -> int:
+    text = clean_node_ref(node_id)
+    for marker in ("-S", "-L"):
+        if marker in text:
+            try:
+                return int(text.rsplit(marker, 1)[1])
+            except ValueError:
+                return 0
+    return 0
 
 
 def finite_float(value: Any) -> float | None:
@@ -319,6 +308,11 @@ def finite_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def count_int(value: Any) -> int:
+    number = finite_float(value)
+    return int(round(number)) if number is not None else 0
 
 
 def format_count(value: Any) -> str:
@@ -351,4 +345,4 @@ def summary_row(tree: int, features: list[str], gain: float) -> dict[str, Any]:
     }
 
 
-__all__ = ["tree_detail", "tree_summary", "tree_summary_from_dump", "tree_summary_from_table"]
+__all__ = ["tree_detail", "tree_summary", "tree_summary_from_table"]

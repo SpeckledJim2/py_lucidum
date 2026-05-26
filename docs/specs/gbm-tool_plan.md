@@ -61,7 +61,7 @@ Chosen defaults:
   - During training, a compact toolbar status shows the current iteration and latest metric while the evaluation plot updates from live job progress.
   - The ECharts evaluation title is a single line containing evaluation metric, test metric, and best iteration with the same font size.
 - **Model navigator** tab lists saved models, key parameters, train/test metrics, timings, and active-model selection.
-- **Tree viewer** tab provides a searchable tree summary table plus a graphical D3 tree from saved LightGBM dump output. The diagram supports zoom, fit/reset, colour palettes, decoded categorical thresholds, edge labels, and default-branch highlighting.
+- **Tree viewer** tab provides a searchable tree summary table plus a graphical D3 tree from saved `tree_table.parquet` output. The diagram supports zoom, fit/reset, colour palettes, decoded categorical thresholds, edge labels, and default-branch highlighting.
 - Keep the existing dense, utilitarian app visual style.
 
 ## Test Plan

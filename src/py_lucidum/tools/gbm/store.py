@@ -22,7 +22,6 @@ ARTIFACT_FILES = {
     "shap_summary": "shap_summary.parquet",
     "evaluation": "evaluation.parquet",
     "tree_table": "tree_table.parquet",
-    "tree_dump": "tree_dump.json",
     "manifest": "manifest.json",
     "feature_config": "feature_config.json",
     "parameters": "parameters.json",

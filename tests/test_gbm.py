@@ -19,7 +19,7 @@ from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_progress_payload, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_progress_payload, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, categorical_distinct_counts, default_parameters, feature_rows, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
@@ -841,6 +841,7 @@ COPY (
         finally:
             con.close()
         self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "gbm_prediction"])
+        self.assertFalse((store.model_dir(result["model_id"]) / "tree_dump.json").exists())
         self.assertTrue(any(item.get("phase") == "training" for item in progress))
         self.assertTrue(any(item.get("phase") == "scoring" for item in progress))
         self.assertTrue(any(item.get("phase") == "artifacts" for item in progress))
@@ -959,6 +960,43 @@ COPY (
         self.assertTrue(str(artifact_columns[0][1]).startswith("BIGINT"))
         self.assertTrue(str(artifact_columns[1][1]).startswith("DOUBLE"))
 
+    def test_tree_dataframe_adds_decoded_categorical_threshold_labels(self) -> None:
+        try:
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class Booster:
+            def trees_to_dataframe(self) -> Any:
+                return pd.DataFrame(
+                    [
+                        {
+                            "tree_index": 0,
+                            "node_depth": 1,
+                            "node_index": "0-S0",
+                            "split_feature": "Segment",
+                            "threshold": "0||2",
+                            "decision_type": "==",
+                            "value": 1.2,
+                        },
+                        {
+                            "tree_index": 0,
+                            "node_depth": 2,
+                            "node_index": "0-S1",
+                            "split_feature": "Age",
+                            "threshold": "35",
+                            "decision_type": "<=",
+                            "value": 1.6,
+                        },
+                    ]
+                )
+
+        frame = tree_dataframe(pd, Booster(), categorical_labels={"Segment": ["A", "B", "C"]})
+
+        labels = frame["threshold_label"].tolist()
+        self.assertEqual(labels[0], "A / C")
+        self.assertTrue(pd.isna(labels[1]))
+
     def write_model_artifacts(self) -> GbmModelStore:
         store = GbmModelStore(self.data_path)
         model_dir = store.create_model_dir("m1")
@@ -1016,71 +1054,21 @@ COPY (
 COPY (
   SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-S1' AS right_child,
          NULL AS parent_index, 'Segment' AS split_feature, 6.5 AS split_gain, '0||2' AS threshold,
-         '==' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type, 1.2 AS value, 3.0 AS weight, 3 AS count
+         'A / C' AS threshold_label, '==' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type,
+         1.2 AS value, 3.0 AS weight, 3 AS count
   UNION ALL
-  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 2.0, 2
+  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 2.0, 2
   UNION ALL
-  SELECT 0, 2, '0-S1', '0-L1', '0-L2', '0-S0', 'Age', 2.5, '35', '<=', 'right', 'None', 1.6, 1.0, 1
+  SELECT 0, 2, '0-S1', '0-L1', '0-L2', '0-S0', 'Age', 2.5, '35', NULL, '<=', 'right', 'None', 1.6, 1.0, 1
   UNION ALL
-  SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, 1.3, 1.0, 1
+  SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.3, 1.0, 1
   UNION ALL
-  SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, 1.9, 1.0, 1
+  SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.9, 1.0, 1
 ) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
 """
             )
         finally:
             con.close()
-        store.write_json(
-            model_dir / "tree_dump.json",
-            {
-                "feature_names": ["Age", "Segment"],
-                "feature_infos": {
-                    "Age": {"values": []},
-                    "Segment": {"values": [0, 1, 2]},
-                },
-                "pandas_categorical": [["A", "B", "C"]],
-                "tree_info": [
-                    {
-                        "tree_index": 0,
-                        "tree_structure": {
-                            "split_index": 0,
-                            "split_feature": 1,
-                            "split_gain": 6.5,
-                            "threshold": "0||2",
-                            "decision_type": "==",
-                            "default_left": True,
-                            "internal_value": 1.2,
-                            "internal_count": 3,
-                            "left_child": {
-                                "leaf_index": 0,
-                                "leaf_value": 0.8,
-                                "leaf_count": 2,
-                            },
-                            "right_child": {
-                                "split_index": 1,
-                                "split_feature": 0,
-                                "split_gain": 2.5,
-                                "threshold": 35,
-                                "decision_type": "<=",
-                                "default_left": False,
-                                "internal_value": 1.6,
-                                "internal_count": 1,
-                                "left_child": {
-                                    "leaf_index": 1,
-                                    "leaf_value": 1.3,
-                                    "leaf_count": 1,
-                                },
-                                "right_child": {
-                                    "leaf_index": 2,
-                                    "leaf_value": 1.9,
-                                    "leaf_count": 1,
-                                },
-                            },
-                        },
-                    }
-                ],
-            },
-        )
         store.activate_model("m1")
         return store
 
@@ -1101,6 +1089,45 @@ COPY (
         self.assertEqual(detail["root"]["children"][1]["feature"], "Age")
         self.assertIn("Tree 0", detail["root"]["label"])
         self.assertIn(1.9, detail["values"])
+
+    def test_tree_detail_falls_back_to_raw_categorical_codes_without_threshold_label(self) -> None:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir("old-table")
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": "old-table",
+                "label": "Old table",
+                "created_at": "2026-05-25T00:00:00Z",
+                "objective": "poisson",
+                "metric": "poisson",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "sources": {},
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, 'Segment' AS split_feature, 6.5 AS split_gain, '0||2' AS threshold,
+         '==' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type, 1.2 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL
+  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 2.0, 2
+  UNION ALL
+  SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, 1.9, 1.0, 1
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+
+        detail = tree_detail(store, "old-table", 0)
+
+        self.assertEqual(detail["root"]["threshold"], "0 / 2")
+        self.assertEqual(detail["root"]["children"][0]["edge_label"], "== 0 / 2")
 
     def test_tree_routes_work_without_lightgbm_imports(self) -> None:
         self.write_model_artifacts()
