@@ -1159,12 +1159,13 @@ COPY (
                 self.assertEqual(page.locator("#filterInput").input_value(), "")
 
                 footer_value = page.locator("#filterInput").input_value()
-                page.locator("#filterFooterToggleBtn").click()
                 self.assertEqual(page.locator("#filterFooter").get_attribute("aria-hidden"), "true")
-                self.assertFalse(page.locator("#filterInput").is_visible())
                 page.locator("#filterFooterToggleBtn").click()
                 self.assertEqual(page.locator("#filterFooter").get_attribute("aria-hidden"), "false")
                 self.assertEqual(page.locator("#filterInput").input_value(), footer_value)
+                page.locator("#filterFooterToggleBtn").click()
+                self.assertEqual(page.locator("#filterFooter").get_attribute("aria-hidden"), "true")
+                self.assertFalse(page.locator("#filterInput").is_visible())
 
                 driver_heading.click()
                 self.assertEqual(driver_heading.get_attribute("aria-expanded"), "false")

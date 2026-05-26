@@ -450,7 +450,7 @@ export function createGbmTool({
     }
     list.innerHTML = "";
     if (!normalisedModels.length) {
-      list.innerHTML = `<div class="gbm-empty-state">No GBM models have been trained yet.</div>`;
+      list.innerHTML = `<div class="gbm-empty-state">No GBMs trained yet</div>`;
       return;
     }
     for (const group of groups) {
@@ -787,7 +787,7 @@ export function createGbmTool({
   }
 
   function modelTableHtml(models) {
-    if (!models.length) return `<div class="gbm-empty-state">No GBM models have been trained yet.</div>`;
+    if (!models.length) return `<div class="gbm-empty-state">No GBMs trained yet</div>`;
     return `
       <table class="gbm-model-table">
         <thead>

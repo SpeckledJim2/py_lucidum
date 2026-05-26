@@ -57,7 +57,7 @@
         gbmModelGroupsInitialised: false,
         filterOperator: "and",
         filterCollapsed: true,
-        filterFooterCollapsed: false,
+        filterFooterCollapsed: true,
         filterSelectionMode: "single",
         collapsedSavedFilterThemes: new Set(),
         savedFilterThemesInitialised: false,

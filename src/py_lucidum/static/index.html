@@ -10,7 +10,7 @@
     <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
     <link rel="stylesheet" href="/static/app.css" />
   </head>
-  <body>
+  <body class="filter-footer-collapsed">
     <script>
       if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
         document.body.classList.add("dark");
@@ -28,7 +28,7 @@
           <button id="sidebarToggleBtn" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-controls="appSidebar" aria-expanded="true" title="Collapse sidebar">
             <span class="sidebar-toggle-icon" aria-hidden="true"></span>
           </button>
-          <button id="filterFooterToggleBtn" class="footer-toggle" type="button" aria-label="Hide filter footer" aria-controls="filterFooter" aria-expanded="true" title="Hide filter footer">
+          <button id="filterFooterToggleBtn" class="footer-toggle" type="button" aria-label="Show filter footer" aria-controls="filterFooter" aria-expanded="false" title="Show filter footer">
             <span class="footer-toggle-icon" aria-hidden="true"></span>
           </button>
         </div>
@@ -123,7 +123,7 @@
               <button id="gbmModelCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse GBM models" aria-expanded="true" title="Collapse GBM models">
                 <span class="filter-collapse-icon" aria-hidden="true"></span>
               </button>
-              <h2>GBM models</h2>
+              <h2>GBMs</h2>
               <span id="gbmModelSelectedMeta" class="gbm-model-selected-meta"></span>
             </div>
             <div id="gbmModelSelect" class="feature-list gbm-model-list" role="listbox" aria-label="GBM models"></div>
@@ -355,7 +355,7 @@
           </div>
         </main>
       </div>
-      <footer id="filterFooter" class="filter-footer">
+      <footer id="filterFooter" class="filter-footer" aria-hidden="true">
         <div class="footer-filter-controls">
           <button id="filterClearBtn" class="filter-action" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
           <button id="filterApplyBtn" class="filter-action" type="button" title="Apply filter" aria-label="Apply filter">&#9654;</button>
