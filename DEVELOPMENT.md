@@ -61,6 +61,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
   - `GET /api/gbm/models/{model_id}/trees`
   - `GET /api/gbm/models/{model_id}/trees/{tree_index}`
   - `POST /api/gbm/models/{model_id}/activate`
+  - `POST /api/gbm/models/{model_id}/rename`
+  - `DELETE /api/gbm/models/{model_id}`
 
 `/api/chart` is retained for compatibility with the current frontend. New integrations should prefer the namespaced line-bar endpoint.
 
@@ -131,7 +133,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - GBM uses the sidebar Actual and denominator/KPI controls as the model response and offset/exposure inputs. The filter controls remain hidden while GBM is active because training ignores the global filter.
 - GBM artifacts are stored beside the source dataset under `.lucidum/models/gbm/`, with one directory per model.
 - GBM `feature_config.json` is the persisted source of truth for the trained model's selected features, monotonicity settings, and Gain values.
-- GBM config and activation responses must drive the UI's `Use`, `Monotonicity`, `Gain`, and parameter tables from the active model, so switching models mirrors exactly what was trained.
+- GBM config, activation, rename, and delete responses must drive the UI's `Use`, `Monotonicity`, `Gain`, model navigator, sidebar model list, and parameter tables from the active model, so switching models mirrors exactly what was trained.
+- GBM model IDs are folder names under `.lucidum/models/gbm/` and must stay source-ID safe: letters, numbers, dots, underscores, and hyphens only. Renaming a model renames the folder and updates manifest source IDs; deleting the active model promotes the newest remaining model, or clears active state if none remain.
 - GBM is the one normal chooser that still displays invalid dataset columns; they must render as disabled invalid rows and must not be sent to LightGBM.
 - GBM training and model-output sources must use explicit readable-column projections. Avoid `SELECT *` on the raw dataset path because unreadable columns can fail even when they are not selected as model features.
 - GBM model outputs publish data sources through the shared `data_sources` contract using IDs such as `gbm:<model_id>:predictions`, `gbm:<model_id>:shap_long`, and `gbm:<model_id>:shap_summary`.

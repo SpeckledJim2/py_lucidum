@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+import duckdb
 
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 
@@ -45,7 +48,12 @@ SOURCE_KINDS = {
     },
 }
 
+MODEL_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 SOURCE_RE = re.compile(r"^gbm:([A-Za-z0-9_.-]+):(predictions|shap_long|shap_summary)$")
+
+
+class GbmModelNameError(ValueError):
+    pass
 
 
 def dedupe_columns(columns: list[str]) -> list[str]:
@@ -98,10 +106,15 @@ class GbmModelStore:
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         return f"{prefix}-{timestamp}-{uuid4().hex[:8]}"
 
+    def validate_model_id(self, model_id: str, *, for_new_name: bool = False) -> str:
+        text = str(model_id or "").strip()
+        if not text or text in {".", ".."} or not MODEL_ID_RE.fullmatch(text):
+            message = "Choose a valid GBM model name" if for_new_name else "Choose a valid GBM model id"
+            raise GbmModelNameError(f"{message}: letters, numbers, dots, underscores, and hyphens only")
+        return text
+
     def model_dir(self, model_id: str) -> Path:
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", model_id):
-            raise ValueError("Choose a valid GBM model id")
-        return self.root / model_id
+        return self.root / self.validate_model_id(model_id)
 
     def create_model_dir(self, model_id: str) -> Path:
         self.ensure_root()
@@ -154,6 +167,10 @@ class GbmModelStore:
         model_id = payload.get("model_id")
         return str(model_id) if model_id else None
 
+    def clear_active_model(self) -> None:
+        if self.active_path.exists():
+            self.active_path.unlink()
+
     def activate_model(self, model_id: str) -> dict[str, Any]:
         manifest = self.manifest(model_id)
         self.ensure_root()
@@ -162,12 +179,90 @@ class GbmModelStore:
         manifest["active"] = True
         return manifest
 
+    def rename_model(self, model_id: str, new_model_id: str) -> dict[str, Any]:
+        new_id = self.validate_model_id(new_model_id, for_new_name=True)
+        old_id = self.validate_model_id(model_id)
+        manifest = self.manifest(old_id)
+        if new_id == old_id:
+            return self.activate_model(old_id) if self.active_model_id() == old_id else dict(manifest)
+        source = self.model_dir(old_id)
+        target = self.model_dir(new_id)
+        if target.exists():
+            raise GbmModelNameError(f"GBM model already exists: {new_id}")
+        source.rename(target)
+        manifest = self._renamed_manifest(manifest, old_id, new_id)
+        self.write_json(self.artifact_path(new_id, "manifest"), manifest)
+        self._rewrite_shap_summary_model_id(new_id)
+        if self.active_model_id() == old_id:
+            self.activate_model(new_id)
+            manifest["active"] = True
+        return manifest
+
+    def delete_model(self, model_id: str) -> dict[str, Any]:
+        deleted_id = self.validate_model_id(model_id)
+        manifest = self.manifest(deleted_id)
+        was_active = self.active_model_id() == deleted_id
+        shutil.rmtree(self.model_dir(deleted_id))
+        if was_active:
+            remaining = self.list_models()
+            next_id = str(remaining[0].get("model_id") or "") if remaining else ""
+            if next_id:
+                self.activate_model(next_id)
+            else:
+                self.clear_active_model()
+        return manifest
+
+    def _renamed_manifest(self, manifest: dict[str, Any], old_id: str, new_id: str) -> dict[str, Any]:
+        renamed = dict(manifest)
+        renamed["model_id"] = new_id
+        renamed["label"] = new_id
+        sources = renamed.get("sources")
+        if isinstance(sources, dict):
+            renamed["sources"] = {
+                str(kind): self._renamed_source_id(value, old_id, new_id)
+                for kind, value in sources.items()
+            }
+        return renamed
+
+    def _renamed_source_id(self, value: Any, old_id: str, new_id: str) -> Any:
+        if not isinstance(value, str):
+            return value
+        match = SOURCE_RE.match(value)
+        if not match or match.group(1) != old_id:
+            return value
+        return self.source_id(new_id, match.group(2))
+
+    def _rewrite_shap_summary_model_id(self, model_id: str) -> None:
+        path = self.artifact_path(model_id, "shap_summary")
+        if not path.exists():
+            return
+        con = duckdb.connect(database=":memory:")
+        try:
+            columns = con.execute(f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(path))})").fetchall()
+            if "gbm_model_id" not in {str(row[0]) for row in columns}:
+                return
+            temp = path.with_suffix(path.suffix + ".tmp")
+            con.execute(
+                f"""
+COPY (
+  SELECT * REPLACE ({sql_literal(model_id)} AS gbm_model_id)
+  FROM read_parquet({sql_literal(str(path))})
+) TO {sql_literal(str(temp))} (FORMAT PARQUET)
+"""
+            )
+            temp.replace(path)
+        finally:
+            con.close()
+
     def source_ref(self, source_id: str) -> GbmSourceRef | None:
         match = SOURCE_RE.match(source_id)
         if not match:
             return None
         model_id, source_kind = match.groups()
-        path = self.source_path(model_id, source_kind)
+        try:
+            path = self.source_path(model_id, source_kind)
+        except ValueError:
+            return None
         if not path.exists():
             return None
         return GbmSourceRef(model_id=model_id, source_kind=source_kind)
@@ -286,6 +381,7 @@ class GbmSourceProvider:
 
 __all__ = [
     "ARTIFACT_FILES",
+    "GbmModelNameError",
     "GbmModelStore",
     "GbmSourceProvider",
     "GbmSourceRef",

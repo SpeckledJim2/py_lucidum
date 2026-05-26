@@ -82,6 +82,34 @@ def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, b
     return status, response_body
 
 
+def asgi_delete(app: Any, path: str) -> tuple[int, bytes]:
+    messages: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "DELETE",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+    status = next(message for message in messages if message["type"] == "http.response.start")["status"]
+    response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
+    return status, response_body
+
+
 class GbmToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
@@ -111,6 +139,14 @@ class GbmToolTests(unittest.TestCase):
         self.assertIn("/api/gbm/train", paths)
         self.assertIn("/api/gbm/sample", paths)
         self.assertIn("/api/gbm/models", paths)
+        self.assertIn("/api/gbm/models/{model_id}", paths)
+        self.assertIn("/api/gbm/models/{model_id}/activate", paths)
+        self.assertIn("/api/gbm/models/{model_id}/rename", paths)
+        model_route_methods: set[str] = set()
+        for route in app.routes:
+            if route.path == "/api/gbm/models/{model_id}":
+                model_route_methods.update(getattr(route, "methods", set()))
+        self.assertIn("DELETE", model_route_methods)
 
         status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
@@ -604,6 +640,124 @@ class GbmToolTests(unittest.TestCase):
         self.assertFalse(features["Age"]["include"])
         self.assertTrue(features["Segment"]["include"])
         self.assertEqual(features["Segment"]["gain"], 4.0)
+
+    def test_rename_active_model_updates_folder_manifest_sources_and_schema(self) -> None:
+        store = self.write_model_artifacts()
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 'm1' AS gbm_model_id, 'Age' AS feature, 0.2 AS mean_abs_shap, 0.2 AS mean_shap, 1 AS row_count
+) TO {sql_literal(str(store.artifact_path("m1", "shap_summary")))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_post_json(app, "/api/gbm/models/m1/rename", {"new_model_id": "renamed-model"})
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertFalse(store.model_dir("m1").exists())
+        self.assertTrue(store.model_dir("renamed-model").exists())
+        self.assertEqual(payload["config"]["active_model_id"], "renamed-model")
+        self.assertEqual(payload["model"]["model_id"], "renamed-model")
+        self.assertEqual(payload["model"]["label"], "renamed-model")
+        self.assertEqual(payload["model"]["sources"]["predictions"], "gbm:renamed-model:predictions")
+        manifest = store.manifest("renamed-model")
+        self.assertEqual(manifest["model_id"], "renamed-model")
+        self.assertEqual(manifest["label"], "renamed-model")
+        self.assertEqual(manifest["sources"]["predictions"], "gbm:renamed-model:predictions")
+        self.assertEqual(store.active_model_id(), "renamed-model")
+
+        shap_summary_path = store.artifact_path("renamed-model", "shap_summary")
+        con = duckdb.connect(database=":memory:")
+        try:
+            shap_ids = con.execute(
+                f"SELECT DISTINCT gbm_model_id FROM read_parquet({sql_literal(str(shap_summary_path))})"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(shap_ids, [("renamed-model",)])
+
+        schema_status, schema_body = asgi_get(app, "/api/schema")
+        source_ids = [source["id"] for source in json.loads(schema_body)["data_sources"]]
+        self.assertEqual(schema_status, 200)
+        self.assertIn("gbm:renamed-model:predictions", source_ids)
+        self.assertIn("gbm:renamed-model:shap_long", source_ids)
+        self.assertNotIn("gbm:m1:predictions", source_ids)
+        prediction_source = next(source for source in json.loads(schema_body)["data_sources"] if source["id"] == "gbm:renamed-model:predictions")
+        self.assertEqual(prediction_source["label"], "renamed-model - Predictions")
+
+    def test_rename_model_rejects_invalid_duplicate_and_missing_models(self) -> None:
+        store = self.write_model_artifacts()
+        store.create_model_dir("taken")
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        invalid_status, invalid_body = asgi_post_json(app, "/api/gbm/models/m1/rename", {"new_model_id": "bad/name"})
+        duplicate_status, duplicate_body = asgi_post_json(app, "/api/gbm/models/m1/rename", {"new_model_id": "taken"})
+        missing_status, missing_body = asgi_post_json(app, "/api/gbm/models/missing/rename", {"new_model_id": "renamed"})
+
+        self.assertEqual(invalid_status, 400)
+        self.assertIn("valid GBM model name", json.loads(invalid_body)["detail"])
+        self.assertEqual(duplicate_status, 400)
+        self.assertIn("already exists", json.loads(duplicate_body)["detail"])
+        self.assertEqual(missing_status, 404)
+        self.assertIn("valid GBM model", json.loads(missing_body)["detail"])
+
+    def test_delete_active_model_promotes_newest_remaining_model(self) -> None:
+        store = GbmModelStore(self.data_path)
+        for model_id, created_at in (
+            ("older", "2026-05-25T00:00:00Z"),
+            ("newer", "2026-05-25T00:00:02Z"),
+        ):
+            model_dir = store.create_model_dir(model_id)
+            store.write_json(
+                model_dir / "manifest.json",
+                {
+                    "model_id": model_id,
+                    "label": model_id,
+                    "created_at": created_at,
+                    "objective": "poisson",
+                    "metric": "poisson",
+                    "response_column": "actualNumerator",
+                    "offset_column": "denominator",
+                    "best_iteration": 3,
+                    "training_rows": 2,
+                    "sources": {},
+                },
+            )
+        store.activate_model("older")
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_delete(app, "/api/gbm/models/older")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertFalse(store.model_dir("older").exists())
+        self.assertTrue(store.model_dir("newer").exists())
+        self.assertEqual(payload["config"]["active_model_id"], "newer")
+        self.assertEqual(store.active_model_id(), "newer")
+
+    def test_delete_final_model_clears_active_model_and_schema_sources(self) -> None:
+        store = self.write_model_artifacts()
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_delete(app, "/api/gbm/models/m1")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertFalse(store.model_dir("m1").exists())
+        self.assertIsNone(payload["config"]["active_model_id"])
+        self.assertEqual(payload["config"]["models"], [])
+        self.assertIsNone(store.active_model_id())
+
+        schema_status, schema_body = asgi_get(app, "/api/schema")
+        source_ids = [source["id"] for source in json.loads(schema_body)["data_sources"]]
+        self.assertEqual(schema_status, 200)
+        self.assertNotIn("gbm:m1:predictions", source_ids)
 
     def test_validation_accepts_sidebar_response_and_no_denominator(self) -> None:
         dataset = Dataset(self.data_path)

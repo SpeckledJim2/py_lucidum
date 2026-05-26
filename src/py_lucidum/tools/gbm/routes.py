@@ -9,7 +9,7 @@ from py_lucidum.app.context import AppContext
 from .jobs import GbmJobManager
 from .sample import SAMPLE_COLUMN, create_generated_sample, sample_metadata
 from .sources import GbmSourceProvider
-from .store import GbmModelStore
+from .store import GbmModelNameError, GbmModelStore
 from .training import MissingGbmDependency, gbm_dependencies
 from .trees import tree_detail, tree_summary
 from .validation import (
@@ -209,5 +209,26 @@ def register(app: FastAPI, context: AppContext) -> None:
         try:
             manifest = store.activate_model(model_id)
             return {"model": manifest, "config": config_payload()}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/gbm/models/{model_id}/rename")
+    async def rename_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        payload = await request.json()
+        try:
+            manifest = store.rename_model(model_id, str(payload.get("new_model_id") or ""))
+            return {"model": manifest, "config": config_payload()}
+        except GbmModelNameError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/gbm/models/{model_id}")
+    async def delete_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        try:
+            manifest = store.delete_model(model_id)
+            return {"deleted_model_id": model_id, "model": manifest, "config": config_payload()}
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

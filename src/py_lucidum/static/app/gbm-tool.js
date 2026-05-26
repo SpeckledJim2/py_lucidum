@@ -70,6 +70,7 @@ export function createGbmTool({
   let tabulatorPromise = null;
   let featureTable = null;
   let parameterTable = null;
+  let modelTable = null;
   let activeTab = "features";
   let config = null;
   let activeDetail = null;
@@ -195,7 +196,14 @@ export function createGbmTool({
           </div>
         </div>
         <div class="gbm-tab-panel ${activeTab === "models" ? "" : "hidden"}" data-gbm-panel="models">
-          <div class="gbm-model-table-wrap">${modelTableHtml(data.models || [])}</div>
+          <div class="gbm-model-navigator">
+            <div class="gbm-model-actions" role="group" aria-label="GBM model actions">
+              <button id="gbmRenameModelBtn" class="tab gbm-inline-action-button" type="button">Rename</button>
+              <button id="gbmDeleteModelBtn" class="danger-action gbm-model-delete-button" type="button">Delete</button>
+            </div>
+            <div id="gbmModelGrid" class="gbm-grid gbm-model-grid"></div>
+            <div id="gbmModelFallback" class="gbm-fallback-table"></div>
+          </div>
         </div>
         <div class="gbm-tab-panel ${activeTab === "trees" ? "" : "hidden"}" data-gbm-panel="trees">
           <div id="gbmTreeViewer" class="gbm-tree-viewer">
@@ -237,7 +245,7 @@ export function createGbmTool({
       </div>
     `;
     bindTabs(mount);
-    bindModelTable(mount);
+    bindModelActions();
     syncSidebarModelChooser(data.models || [], data.active_model_id);
     bindFeatureActions();
     renderTables(data);
@@ -510,8 +518,14 @@ export function createGbmTool({
       label: String(model?.label || ""),
       response_column: String(model?.response_column || "actualNumerator"),
       offset_column: model?.offset_column ? String(model.offset_column) : "",
+      objective: String(model?.objective || ""),
       metric: String(model?.metric || ""),
       best_iteration: Number(model?.best_iteration || 0),
+      training_rows: Number(model?.training_rows || 0),
+      sample_column: String(model?.sample_column || ""),
+      sample_source: String(model?.sample_source || ""),
+      timings: model?.timings || {},
+      sources: model?.sources || {},
       created_at: String(model?.created_at || ""),
       active: Boolean(model?.active),
     };
@@ -527,7 +541,7 @@ export function createGbmTool({
   }
 
   function modelGroupLabel(model) {
-    return `${model.response_column || "actualNumerator"} / ${model.offset_column || "Average row value"}`;
+    return `${model.response_column || "actualNumerator"} / ${modelWeightLabel(model.offset_column)}`;
   }
 
   function modelLabel(model) {
@@ -567,11 +581,39 @@ export function createGbmTool({
   async function renderTables(data) {
     featureTable = null;
     parameterTable = null;
+    modelTable = null;
     const features = data.features || [];
     const parameters = data.parameters || [];
+    const models = modelRows(data.models || []);
     try {
       const Tabulator = await loadTabulator();
       if (!config || data !== config) return;
+      const modelFallback = el("gbmModelFallback");
+      if (modelFallback) modelFallback.innerHTML = "";
+      modelTable = new Tabulator("#gbmModelGrid", {
+        data: models,
+        height: "100%",
+        layout: "fitColumns",
+        placeholder: "No GBMs trained yet",
+        initialSort: [{ column: "created_sort", dir: "desc" }],
+        columns: [
+          { title: "Model", field: "model_label", sorter: "string", formatter: modelNameFormatter, widthGrow: 3, headerSort: true },
+          { title: "Created", field: "created_sort", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().created_display), width: 105, headerSort: true },
+          { title: "Response", field: "response_column", sorter: "string", widthGrow: 1.6, headerSort: true },
+          { title: "Weight", field: "weight_display", sorter: "string", widthGrow: 1.2, headerSort: true },
+          { title: "Objective", field: "objective", sorter: "string", widthGrow: 1.1, headerSort: true },
+          { title: "Metric", field: "metric", sorter: "string", widthGrow: 1.1, headerSort: true },
+          { title: "Train", field: "training_rows", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 86, headerSort: true },
+          { title: "Best iter.", field: "best_iteration", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 92, headerSort: true },
+          { title: "Run time", field: "runtime_seconds", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().runtime_display), hozAlign: "right", headerHozAlign: "right", width: 84, headerSort: true },
+          { title: "Sample", field: "sample_display", sorter: "string", widthGrow: 1.1, headerSort: true },
+        ],
+        rowFormatter: (row) => {
+          const item = row.getData();
+          row.getElement().classList.toggle("gbm-model-active-row", Boolean(item.active));
+        },
+      });
+      modelTable.on("rowClick", (_event, row) => activateModel(row.getData().model_id));
       featureTable = new Tabulator("#gbmFeatureGrid", {
         data: features,
         height: "100%",
@@ -611,9 +653,14 @@ export function createGbmTool({
         ],
       });
     } catch (_) {
+      renderModelFallback(models);
       renderFeatureFallback(features);
       renderParameterFallback(parameters);
     }
+  }
+
+  function modelNameFormatter(cell) {
+    return `<span class="gbm-model-name-main">${escapeHtml(cell.getValue() || "")}</span>`;
   }
 
   function featureNameFormatter(cell) {
@@ -786,9 +833,27 @@ export function createGbmTool({
     `;
   }
 
-  function modelTableHtml(models) {
-    if (!models.length) return `<div class="gbm-empty-state">No GBMs trained yet</div>`;
-    return `
+  function modelRows(models) {
+    return uniqueModels(models.map(normaliseModel).filter((model) => model.model_id)).map((model) => ({
+      ...model,
+      model_label: modelLabel(model),
+      created_sort: modelCreatedSort(model.created_at),
+      created_display: formatModelCreated(model.created_at),
+      weight_display: modelWeightLabel(model.offset_column),
+      runtime_seconds: modelRuntimeSeconds(model),
+      runtime_display: formatModelRuntime(model),
+      sample_display: formatSampleMode(model.sample_column, model.sample_source),
+    }));
+  }
+
+  function renderModelFallback(models) {
+    const target = el("gbmModelFallback");
+    if (!target) return;
+    if (!models.length) {
+      target.innerHTML = `<div class="gbm-empty-state">No GBMs trained yet</div>`;
+      return;
+    }
+    target.innerHTML = `
       <table class="gbm-model-table">
         <thead>
           <tr>
@@ -799,37 +864,34 @@ export function createGbmTool({
             <th>Objective</th>
             <th>Metric</th>
             <th>Train</th>
-            <th>Test</th>
-            <th>Scored</th>
             <th>Best iter.</th>
             <th>Run time</th>
             <th>Sample</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>
           ${models.map((model) => `
-            <tr class="${model.active ? "active" : ""}">
+            <tr class="${model.active ? "active" : ""}" data-gbm-model-row="${escapeHtml(model.model_id)}">
               <td class="gbm-model-name-cell">
-                <span class="gbm-model-name-main">${escapeHtml(model.label || model.model_id)}</span>
+                <span class="gbm-model-name-main">${escapeHtml(model.model_label)}</span>
               </td>
-              <td>${escapeHtml(formatModelCreated(model.created_at))}</td>
-              <td>${escapeHtml(model.response_column || "actualNumerator")}</td>
-              <td>${escapeHtml(model.offset_column || "Average row value")}</td>
+              <td>${escapeHtml(model.created_display)}</td>
+              <td>${escapeHtml(model.response_column)}</td>
+              <td>${escapeHtml(model.weight_display)}</td>
               <td>${escapeHtml(model.objective || "")}</td>
               <td>${escapeHtml(model.metric || "")}</td>
               <td class="numeric">${formatModelCount(model.training_rows)}</td>
-              <td class="numeric">${formatModelCount(model.test_rows)}</td>
-              <td class="numeric">${formatModelCount(model.scored_rows)}</td>
               <td class="numeric">${formatModelCount(model.best_iteration)}</td>
-              <td class="numeric">${escapeHtml(formatModelRuntime(model))}</td>
-              <td>${escapeHtml(formatSampleMode(model.sample_column, model.sample_source))}</td>
-              <td><button class="gbm-model-activate-button" type="button" data-gbm-activate="${escapeHtml(model.model_id)}">${model.active ? "Active" : "Activate"}</button></td>
+              <td class="numeric">${escapeHtml(model.runtime_display)}</td>
+              <td>${escapeHtml(model.sample_display)}</td>
             </tr>
           `).join("")}
         </tbody>
       </table>
     `;
+    for (const row of target.querySelectorAll("[data-gbm-model-row]")) {
+      row.addEventListener("click", () => activateModel(row.dataset.gbmModelRow));
+    }
   }
 
   function formatModelCount(value) {
@@ -837,9 +899,14 @@ export function createGbmTool({
     return Number.isFinite(number) && number > 0 ? Math.round(number).toLocaleString() : "0";
   }
 
-  function formatModelRuntime(model) {
+  function modelRuntimeSeconds(model) {
     const seconds = Number(model?.timings?.training_seconds ?? model?.training_seconds);
-    if (!Number.isFinite(seconds) || seconds < 0) return "--";
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : -1;
+  }
+
+  function formatModelRuntime(model) {
+    const seconds = modelRuntimeSeconds(model);
+    if (seconds < 0) return "--";
     if (seconds < 1) return `${Math.round(seconds * 1000).toLocaleString()}ms`;
     if (seconds < 60) return `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })}s`;
     const minutes = Math.floor(seconds / 60);
@@ -851,12 +918,15 @@ export function createGbmTool({
     if (!value) return "";
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return String(value);
-    return date.toLocaleString(undefined, {
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      month: "short",
-    });
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const hour = String(date.getHours()).padStart(2, "0");
+    const minute = String(date.getMinutes()).padStart(2, "0");
+    return `${date.getDate()} ${months[date.getMonth()]} ${hour}:${minute}`;
+  }
+
+  function modelCreatedSort(value) {
+    const time = new Date(value || "").getTime();
+    return Number.isFinite(time) ? time : 0;
   }
 
   function formatSampleMode(value, source = "") {
@@ -866,10 +936,27 @@ export function createGbmTool({
     return text;
   }
 
-  function bindModelTable(mount) {
-    for (const button of mount.querySelectorAll("[data-gbm-activate]")) {
-      button.addEventListener("click", () => activateModel(button.dataset.gbmActivate));
-    }
+  function modelWeightLabel(value) {
+    const text = String(value || "").trim();
+    return !text || text === "__none__" || text === "Average row value" ? "N" : text;
+  }
+
+  function bindModelActions() {
+    el("gbmRenameModelBtn")?.addEventListener("click", renameActiveModel);
+    el("gbmDeleteModelBtn")?.addEventListener("click", deleteActiveModel);
+    syncModelActionButtons();
+  }
+
+  function syncModelActionButtons() {
+    const disabled = !currentActiveModelId();
+    const rename = el("gbmRenameModelBtn");
+    const del = el("gbmDeleteModelBtn");
+    if (rename) rename.disabled = disabled;
+    if (del) del.disabled = disabled;
+  }
+
+  function currentActiveModelId() {
+    return String(config?.active_model_id || (config?.models || []).find((model) => model.active)?.model_id || "");
   }
 
   function currentFeatureRows() {
@@ -1003,18 +1090,63 @@ export function createGbmTool({
     if (!modelId) return;
     try {
       const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/activate`, { method: "POST", body: "{}" });
-      await reloadSchema(result.model?.sources?.predictions);
-      clearToolCaches();
-      config = result.config;
-      if (state.tool === tool) {
-        measureToolRender(tool, () => render(result.config));
-      } else {
-        syncSidebarModelChooser(result.config?.models || [], result.config?.active_model_id);
-        await refreshActiveTool({ force: true });
-      }
+      await applyModelMutationResult(result);
     } catch (error) {
       setGbmNotice(error.message);
     }
+  }
+
+  async function renameActiveModel() {
+    const modelId = currentActiveModelId();
+    if (!modelId) return;
+    const newModelId = window.prompt("Rename GBM model", modelId);
+    if (newModelId === null) return;
+    const trimmed = newModelId.trim();
+    if (!trimmed || trimmed === modelId) return;
+    try {
+      const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/rename`, {
+        method: "POST",
+        body: JSON.stringify({ new_model_id: trimmed }),
+      });
+      await applyModelMutationResult(result);
+    } catch (error) {
+      setGbmNotice(error.message);
+    }
+  }
+
+  async function deleteActiveModel() {
+    const modelId = currentActiveModelId();
+    if (!modelId) return;
+    const confirmed = confirm(`Delete GBM model "${modelId}"? This deletes its .lucidum model folder.`);
+    if (!confirmed) return;
+    try {
+      const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: "{}" });
+      await applyModelMutationResult(result);
+    } catch (error) {
+      setGbmNotice(error.message);
+    }
+  }
+
+  async function applyModelMutationResult(result) {
+    const nextConfig = result.config || config || {};
+    await reloadSchema(preferredModelSource(result, nextConfig));
+    clearToolCaches();
+    config = nextConfig;
+    activeDetail = null;
+    setGbmNotice("");
+    if (state.tool === tool) {
+      measureToolRender(tool, () => render(nextConfig));
+    } else {
+      syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
+      await refreshActiveTool({ force: true });
+    }
+  }
+
+  function preferredModelSource(result, data) {
+    const direct = result?.deleted_model_id ? "" : result?.model?.sources?.predictions;
+    if (direct) return direct;
+    const activeModel = (data?.models || []).find((item) => item.active);
+    return activeModel?.sources?.predictions || "dataset";
   }
 
   async function loadModelDetail(modelId) {

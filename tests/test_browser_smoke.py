@@ -522,6 +522,59 @@ COPY (
                 page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").click()
                 page.locator("#gbmParameterGrid input.gbm-parameter-input").wait_for(timeout=10_000)
                 page.keyboard.press("Escape")
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
+                navigator_state = page.evaluate(
+                    """
+                    () => ({
+                      headers: [...document.querySelectorAll("#gbmModelGrid .tabulator-col-title")]
+                        .map((node) => node.textContent.trim()).filter(Boolean),
+                      rows: document.querySelectorAll("#gbmModelGrid .tabulator-row").length,
+                      activeRows: document.querySelectorAll("#gbmModelGrid .tabulator-row.gbm-model-active-row").length,
+                      hasActivateButton: Boolean(document.querySelector(".gbm-model-activate-button, [data-gbm-activate]")),
+                    })
+                    """
+                )
+                self.assertEqual(
+                    navigator_state["headers"],
+                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Train", "Best iter.", "Run time", "Sample"],
+                )
+                self.assertEqual(navigator_state["rows"], 2)
+                self.assertEqual(navigator_state["activeRows"], 1)
+                self.assertFalse(navigator_state["hasActivateButton"])
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
+                page.wait_for_function(
+                    """
+                    () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row.gbm-model-active-row")]
+                      .some((row) => row.textContent.includes("Second smoke model"))
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Features and parameters").click()
+                self.assertEqual(
+                    page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
+                    "0.22",
+                )
+                page.get_by_role("button", name="Model navigator").click()
+                page.evaluate("() => { window.prompt = () => 'renamed-smoke-model'; }")
+                page.locator("#gbmRenameModelBtn").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model").wait_for(timeout=10_000)
+                page.locator("#gbmModelSelectedMeta", has_text="renamed-smoke-model").wait_for(timeout=10_000)
+                page.evaluate("() => { window.confirm = () => true; }")
+                page.locator("#gbmDeleteModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => !document.body.textContent.includes("renamed-smoke-model")
+                      && document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(page.locator("#gbmModelGrid .tabulator-row").count(), 1)
+                page.get_by_role("button", name="Features and parameters").click()
+                self.assertEqual(
+                    page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
+                    "0.11",
+                )
                 live_job_succeed = {"value": False}
 
                 def train_route(route: Any) -> None:
@@ -785,54 +838,65 @@ COPY (
                 page.mouse.up()
                 summary_width_after = page.locator(".gbm-tree-summary-panel").evaluate("node => node.getBoundingClientRect().width")
                 self.assertLess(summary_width_after, summary_width_before - 40)
-                page.get_by_text("Model navigator").click()
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 navigator_state = page.evaluate(
                     """
                     () => {
-                      const headers = [...document.querySelectorAll(".gbm-model-table th")].map((node) => node.textContent.trim());
-                      const rows = [...document.querySelectorAll(".gbm-model-table tbody tr")];
+                      const headers = [...document.querySelectorAll("#gbmModelGrid .tabulator-col-title")]
+                        .map((node) => node.textContent.trim()).filter(Boolean);
+                      const rows = [...document.querySelectorAll("#gbmModelGrid .tabulator-row")];
+                      const activeRow = document.querySelector("#gbmModelGrid .tabulator-row.gbm-model-active-row");
                       const firstRow = rows.find((row) => row.textContent.includes("Browser smoke model"));
-                      const secondRow = rows.find((row) => row.textContent.includes("Second smoke model"));
-                      const firstCells = [...(firstRow?.querySelectorAll("td") || [])].map((node) => node.textContent.trim());
-                      const secondCells = [...(secondRow?.querySelectorAll("td") || [])].map((node) => node.textContent.trim());
-                      const table = document.querySelector(".gbm-model-table");
-                      const cell = table?.querySelector("td");
+                      const firstCells = [...(firstRow?.querySelectorAll(".tabulator-cell") || [])].map((node) => node.textContent.trim());
+                      const cell = document.querySelector("#gbmModelGrid .tabulator-cell");
                       return {
                         headers,
+                        rowCount: rows.length,
+                        activeText: activeRow?.textContent || "",
                         firstCells,
-                        secondCells,
                         fontSize: cell ? getComputedStyle(cell).fontSize : "",
                         lineHeight: cell ? getComputedStyle(cell).lineHeight : "",
-                        wrapped: Boolean(document.querySelector(".gbm-model-table-wrap")),
+                        wrapped: Boolean(document.querySelector(".gbm-model-navigator")),
+                        hasDeletedModel: document.body.textContent.includes("renamed-smoke-model"),
                       };
                     }
                     """
                 )
                 self.assertEqual(
                     navigator_state["headers"],
-                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Train", "Test", "Scored", "Best iter.", "Run time", "Sample", ""],
+                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Train", "Best iter.", "Run time", "Sample"],
                 )
+                self.assertEqual(navigator_state["rowCount"], 1)
+                self.assertIn("Browser smoke model", navigator_state["activeText"])
                 self.assertEqual(navigator_state["fontSize"], "11px")
                 self.assertIn("actualNumerator", navigator_state["firstCells"])
                 self.assertIn("denominator", navigator_state["firstCells"])
                 self.assertIn("SAMPLE", navigator_state["firstCells"])
                 self.assertIn("1.2s", navigator_state["firstCells"])
-                self.assertIn("1m 02s", navigator_state["secondCells"])
                 self.assertTrue(navigator_state["wrapped"])
-                page.locator("tr", has_text="Second smoke model").get_by_role("button", name="Activate").click()
-                page.get_by_text("Features and parameters").click()
+                self.assertFalse(navigator_state["hasDeletedModel"])
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
+                page.wait_for_function(
+                    """
+                    () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row.gbm-model-active-row")]
+                      .some((row) => row.textContent.includes("Browser smoke model"))
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Features and parameters").click()
                 page.wait_for_function(
                     """
                     () => [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
                       .find((row) => row.textContent.includes("learning_rate"))
                       ?.querySelector(".tabulator-cell[tabulator-field='value']")
-                      ?.textContent.trim() === "0.22"
+                      ?.textContent.trim() === "0.11"
                     """,
                     timeout=10_000,
                 )
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").text_content(),
-                    "123",
+                    "77",
                 )
                 feature_state = page.evaluate(
                     """
@@ -850,10 +914,10 @@ COPY (
                     }
                     """
                 )
-                self.assertFalse(feature_state["age"]["checked"])
-                self.assertTrue(feature_state["segment"]["checked"])
-                self.assertEqual(feature_state["age"]["monotonicity"], "")
-                self.assertEqual(feature_state["segment"]["gain"], "6.000")
+                self.assertTrue(feature_state["age"]["checked"])
+                self.assertFalse(feature_state["segment"]["checked"])
+                self.assertEqual(feature_state["age"]["monotonicity"], "Increasing")
+                self.assertEqual(feature_state["age"]["gain"], "5.000")
                 layout = page.evaluate(
                     """
                     () => {

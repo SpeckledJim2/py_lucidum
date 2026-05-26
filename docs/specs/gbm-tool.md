@@ -54,7 +54,7 @@ Note that LightGBM accepts both objective (used for training) and metric (used f
 
 ## Model navigator tab
 
-This is a table showing every fitted model and it's key parameters and value of the objective/metric on train and test. Clicking on a model in the table makes that the "active model", i.e. the one that is displayed in the Line and Bar charts and tree tool.
+This is a sortable table showing every fitted model and its key parameters and train objective/metric context. Clicking on a model row makes that the "active model", i.e. the one that is displayed in the Line and Bar charts and tree tool. The tab also lets users rename a model to a valid folder name or delete its `.lucidum/models/gbm/` folder; deleting the active model selects the newest remaining model when one exists.
 
 ## Tree viewer tab
 
