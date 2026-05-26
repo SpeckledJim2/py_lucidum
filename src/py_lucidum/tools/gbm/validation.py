@@ -18,6 +18,8 @@ RESPONSE_COLUMN = "actualNumerator"
 OFFSET_COLUMN = "denominator"
 DEFAULT_OBJECTIVE = "poisson"
 DEFAULT_METRIC = "poisson"
+DEFAULT_TRAINING_MODE = "normal"
+TRAINING_MODES = ("normal", "ebm")
 GBM_OBJECTIVES = (
     "regression",
     "regression_l1",
@@ -138,6 +140,11 @@ def metric(params: dict[str, Any]) -> str:
     return str(params.get("metric") or DEFAULT_METRIC).strip().lower()
 
 
+def normalise_training_mode(raw: Any) -> str:
+    mode = str(raw or DEFAULT_TRAINING_MODE).strip().lower()
+    return mode or DEFAULT_TRAINING_MODE
+
+
 def parameter_option_errors(params: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     selected_objective = objective(params)
@@ -147,6 +154,15 @@ def parameter_option_errors(params: dict[str, Any]) -> list[str]:
     if selected_metric not in GBM_METRICS:
         errors.append(f"Choose a valid LightGBM metric: {selected_metric}")
     return errors
+
+
+def ebm_available(dataset: Dataset, offset_column: str | None = OFFSET_COLUMN) -> bool:
+    columns = dataset.column_map()
+    if not dataset_sample_column(dataset):
+        return False
+    checked_offset = offset_column if offset_column and offset_column in columns and is_numeric_kind(columns[offset_column].kind) else None
+    counts = dataset_training_sample_counts(dataset, checked_offset)
+    return counts.get("training", 0) > 0 and counts.get("test", 0) > 0
 
 
 def uses_log_offset(params: dict[str, Any]) -> bool:
@@ -320,6 +336,9 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
         params = normalise_parameters(payload.get("parameters"))
         selected_objective = objective(params)
         errors.extend(parameter_option_errors(params))
+        selected_training_mode = normalise_training_mode(payload.get("training_mode"))
+        if selected_training_mode not in TRAINING_MODES:
+            errors.append(f"Choose a valid GBM training mode: {selected_training_mode}")
         selected_features: list[dict[str, Any]] = []
         try:
             selected_features = normalise_features(payload.get("features"), columns)
@@ -378,7 +397,27 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
             if feature["name"] in reserved_sample_names:
                 errors.append(f"{feature['name']} is reserved for the GBM sample split")
 
+        if selected_training_mode == "ebm":
+            early_stopping_rounds = integer_parameter(params, "early_stopping_rounds", 0)
+            num_leaves = integer_parameter(params, "num_leaves", 0)
+            if not sample_column:
+                errors.append("EBM mode requires a dataset SAMPLE column with training and test rows")
+            elif sample_column and (counts := dataset_training_sample_counts(dataset, offset_col)):
+                if counts.get("training", 0) == 0 or counts.get("test", 0) == 0:
+                    errors.append("EBM mode requires SAMPLE to contain training and test rows after denominator filtering")
+            if early_stopping_rounds <= 0:
+                errors.append("EBM mode requires early_stopping_rounds greater than 0")
+            if num_leaves < 2:
+                errors.append("EBM mode requires num_leaves of at least 2")
+
         return ValidationResult(ok=not errors, errors=errors, warnings=warnings)
+
+
+def integer_parameter(params: dict[str, Any], name: str, default: int) -> int:
+    try:
+        return int(params.get(name, default) or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def response_objective_errors(dataset: Dataset, selected_objective: str, response_column: str = RESPONSE_COLUMN) -> list[str]:
@@ -432,17 +471,21 @@ def sample_split_messages(counts: dict[str, int], *, source_label: str) -> tuple
 __all__ = [
     "DEFAULT_METRIC",
     "DEFAULT_OBJECTIVE",
+    "DEFAULT_TRAINING_MODE",
     "GBM_METRICS",
     "GBM_OBJECTIVES",
     "OFFSET_COLUMN",
     "RESPONSE_COLUMN",
+    "TRAINING_MODES",
     "ValidationResult",
     "default_parameters",
     "detect_sample_column",
+    "ebm_available",
     "display_monotonicity",
     "feature_rows",
     "normalise_features",
     "normalise_parameters",
+    "normalise_training_mode",
     "selected_offset_column",
     "selected_response_column",
     "uses_log_offset",

@@ -40,6 +40,8 @@ Chosen defaults:
 - For log-link objectives such as `poisson`, `gamma`, and `tweedie`, use `log(selected denominator)` as LightGBM `init_score`. If no denominator is selected, treat offset values as 1.
 - If a canonical `SAMPLE` column exists, train on `training`, early-stop on `test`, score `validation` as holdout diagnostics, and score all valid rows. If not, train all valid rows, disable early stopping, and show a warning.
 - "Create sample column" creates a reusable generated deterministic 60/20/20 training/test/validation assignment in `.lucidum/models/gbm/generated_sample.parquet`, not in the original dataset.
+- `training_mode` is persisted as `normal` or `ebm`, defaulting old models to `normal`. EBM is shown only for physical dataset `SAMPLE` splits with training and test rows, never for generated sidecars.
+- EBM starts with 2-leaf trees at learning rate `0.3`, advances to 3+ leaves via a LightGBM callback after `early_stopping_rounds` test-metric plateaus, restores the configured learning rate after the 2-leaf stage, and treats `num_iterations` as the total cap across all stages.
 - Feature validation disables unusable types, shows unreadable dataset columns as invalid disabled rows, flags high-cardinality categoricals, and allows monotonicity only for numeric features and compatible objectives.
 - Training reads only selected features plus required response, offset, and sample columns from the raw dataset. Prediction sources join back only readable source columns.
 - After training, persist LightGBM gain feature importance and use it to refresh the feature grid.
@@ -58,6 +60,7 @@ Chosen defaults:
   - After training or active-model switching, the feature grid must mirror the active model's persisted feature config: `Use`, `Monotonicity`, `Gain`, and sort order.
   - Objective and metric parameter rows are dropdowns containing supported single-response LightGBM options; other parameters remain editable text inputs.
   - Right side contains parameter grid, SHAP row-count selector, green Train GBM button, and ECharts evaluation plot.
+  - When EBM is available, a Normal/EBM radio group sits below SHAP rows and includes a tooltip noting the 2-leaf `0.3` learning rate.
   - During training, a compact toolbar status shows the current iteration and latest metric while the evaluation plot updates from live job progress.
   - The ECharts evaluation title is a single line containing evaluation metric, test metric, and best iteration with the same font size.
 - **Model navigator** tab lists saved models, key parameters, train/test metrics, timings, and active-model selection.

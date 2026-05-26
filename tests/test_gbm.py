@@ -20,7 +20,7 @@ from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_progress_payload, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
-from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, categorical_distinct_counts, default_parameters, feature_rows, normalise_parameters, validate_request
+from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, categorical_distinct_counts, default_parameters, ebm_available, feature_rows, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
 
@@ -155,6 +155,8 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["response"], "actualNumerator")
         self.assertEqual(payload["offset"], "denominator")
+        self.assertEqual(payload["training_mode"], "normal")
+        self.assertTrue(payload["ebm_available"])
         self.assertEqual(payload["sample_column"], "SAMPLE")
         self.assertEqual(payload["sample"]["source"], "dataset")
         self.assertEqual(
@@ -218,6 +220,7 @@ class GbmToolTests(unittest.TestCase):
 
         self.assertEqual(second["source"], "generated")
         self.assertEqual(first_rows, second_rows)
+        self.assertFalse(ebm_available(dataset))
 
         result = validate_request(
             dataset,
@@ -245,8 +248,10 @@ class GbmToolTests(unittest.TestCase):
         app = create_app(data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["sample"]["source"], "none")
+        self.assertEqual(payload["sample"]["source"], "none")
+        self.assertFalse(payload["ebm_available"])
 
         status, body = asgi_post_json(app, "/api/gbm/sample", {})
         payload = json.loads(body)
@@ -254,6 +259,7 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["sample"]["source"], "generated")
         self.assertEqual(payload["config"]["sample"]["source"], "generated")
+        self.assertFalse(payload["config"]["ebm_available"])
 
     def test_train_endpoint_reports_missing_optional_dependencies(self) -> None:
         app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
@@ -383,6 +389,25 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(payload["evaluation"], {"training": {"poisson": [1.4, 1.3]}, "test": {"poisson": [1.2]}})
         self.assertEqual(payload["message"], "training, tree 3/10, test poisson 1.2")
 
+    def test_lightgbm_progress_payload_includes_ebm_leaf_stage(self) -> None:
+        class Env:
+            begin_iteration = 0
+            iteration = 2
+            evaluation_result_list = [("test", "poisson", 1.2, False)]
+
+        payload = lightgbm_progress_payload(
+            Env(),
+            metric_name="poisson",
+            total_iterations=10,
+            evaluation_result={"test": {"poisson": [1.4, 1.3, 1.2]}},
+            stage={"leaf_stage": 2, "target_leaf_stage": 5, "stage_start_iteration": 1},
+        )
+
+        self.assertEqual(payload["leaf_stage"], 2)
+        self.assertEqual(payload["target_leaf_stage"], 5)
+        self.assertEqual(payload["stage_start_iteration"], 1)
+        self.assertEqual(payload["message"], "training, leaves 2, tree 3/10, test poisson 1.2")
+
     def test_validation_catches_missing_fixed_columns_and_invalid_monotonicity(self) -> None:
         missing_path = self.root / "missing.csv"
         missing_path.write_text("Age,Segment\n1,A\n", encoding="utf-8")
@@ -426,6 +451,66 @@ class GbmToolTests(unittest.TestCase):
         errors = "; ".join(result.errors)
         self.assertIn("Choose a valid LightGBM objective: not_a_real_objective", errors)
         self.assertIn("Choose a valid LightGBM metric: not_a_real_metric", errors)
+
+    def test_validation_rejects_invalid_ebm_requirements(self) -> None:
+        dataset = Dataset(self.data_path)
+
+        result = validate_request(
+            dataset,
+            {
+                "features": self.request_features(),
+                "parameters": default_parameters() + [
+                    {"name": "early_stopping_rounds", "value": 0},
+                    {"name": "num_leaves", "value": 1},
+                ],
+                "sample_column": "SAMPLE",
+                "training_mode": "ebm",
+            },
+        )
+
+        self.assertFalse(result.ok)
+        errors = "; ".join(result.errors)
+        self.assertIn("EBM mode requires early_stopping_rounds greater than 0", errors)
+        self.assertIn("EBM mode requires num_leaves of at least 2", errors)
+
+        no_sample_path = self.root / "ebm_no_sample.csv"
+        no_sample_path.write_text(
+            "actualNumerator,denominator,Age\n"
+            "1,1,30\n"
+            "2,1,40\n",
+            encoding="utf-8",
+        )
+        result = validate_request(
+            Dataset(no_sample_path),
+            {
+                "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+                "parameters": default_parameters(),
+                "training_mode": "ebm",
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("EBM mode requires a dataset SAMPLE column", "; ".join(result.errors))
+
+        no_test_after_filter_path = self.root / "ebm_no_test_after_filter.csv"
+        no_test_after_filter_path.write_text(
+            "actualNumerator,denominator,Age,SAMPLE\n"
+            "1,1,30,training\n"
+            "2,0,40,test\n",
+            encoding="utf-8",
+        )
+        result = validate_request(
+            Dataset(no_test_after_filter_path),
+            {
+                "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+                "parameters": default_parameters(),
+                "sample_column": "SAMPLE",
+                "training_mode": "ebm",
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("EBM mode requires SAMPLE to contain training and test rows after denominator filtering", "; ".join(result.errors))
 
     def test_cross_entropy_objectives_require_probability_response(self) -> None:
         dataset = Dataset(self.data_path)
@@ -635,8 +720,10 @@ class GbmToolTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["config"]["active_model_id"], "m2")
+        self.assertEqual(payload["config"]["training_mode"], "normal")
         self.assertEqual(parameters["learning_rate"], 0.2)
         self.assertEqual(parameters["num_iterations"], 102)
+        self.assertNotIn("training_mode", parameters)
         self.assertFalse(features["Age"]["include"])
         self.assertTrue(features["Segment"]["include"])
         self.assertEqual(features["Segment"]["gain"], 4.0)
@@ -908,6 +995,70 @@ COPY (
         self.assertIn("Age", result["source_columns"])
         self.assertNotIn("BadText", result["source_columns"])
         self.assertTrue(any("__lucidum_row_id" in sql for sql in guarded.sql))
+
+    def test_ebm_training_switches_leaf_stages_and_persists_mode(self) -> None:
+        try:
+            import lightgbm as lgb
+            import numpy as np
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        data_path = self.root / "ebm_train.csv"
+        rng = np.random.default_rng(6)
+        rows = ["actualNumerator,denominator,x1,x2,SAMPLE"]
+        for index in range(80):
+            sample = "training" if index < 50 else "test" if index < 70 else "validation"
+            x1 = float(rng.normal())
+            x2 = float(rng.normal())
+            y = float(rng.normal())
+            rows.append(f"{y},1,{x1},{x2},{sample}")
+        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        dataset = Dataset(data_path)
+        store = GbmModelStore(data_path)
+        progress: list[dict[str, Any]] = []
+        parameters = default_parameters() + [
+            {"name": "objective", "value": "regression"},
+            {"name": "metric", "value": "l2"},
+            {"name": "num_iterations", "value": 12},
+            {"name": "early_stopping_rounds", "value": 1},
+            {"name": "num_leaves", "value": 4},
+            {"name": "learning_rate", "value": 0.05},
+            {"name": "min_data_in_leaf", "value": 1},
+            {"name": "seed", "value": 6},
+        ]
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "EBM",
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [{"name": "x1", "include": True}, {"name": "x2", "include": True}],
+                "parameters": parameters,
+                "sample_column": "SAMPLE",
+                "shap_rows": "0",
+                "training_mode": "ebm",
+            },
+            progress_callback=progress.append,
+        )
+
+        booster = lgb.Booster(model_file=str(store.artifact_path(result["model_id"], "model")))
+        leaf_counts = [int(tree["num_leaves"]) for tree in booster.dump_model()["tree_info"]]
+        stored_parameters = store.read_json(store.artifact_path(result["model_id"], "parameters"))
+        training_log = store.read_json(store.artifact_path(result["model_id"], "training_log"))
+
+        self.assertEqual(result["training_mode"], "ebm")
+        self.assertEqual(stored_parameters["training_mode"], "ebm")
+        self.assertEqual(stored_parameters["num_leaves"], 4)
+        self.assertEqual(stored_parameters["learning_rate"], 0.05)
+        self.assertEqual(result["ebm"]["initial_learning_rate"], 0.3)
+        self.assertEqual(result["ebm"]["configured_learning_rate"], 0.05)
+        self.assertEqual([stage["num_leaves"] for stage in result["ebm"]["stages"]], [2, 3, 4])
+        self.assertGreaterEqual(max(leaf_counts), 3)
+        self.assertLessEqual(len(leaf_counts), 12)
+        self.assertEqual(training_log["ebm"]["target_num_leaves"], 4)
+        self.assertTrue(any(item.get("leaf_stage") == 3 for item in progress if item.get("phase") == "training"))
 
     def test_shap_row_limit_supports_compact_choices(self) -> None:
         self.assertEqual(shap_row_limit("0", 123456), 0)
@@ -1185,6 +1336,7 @@ COPY (
         self.assertEqual(prediction_source["response_column"], "actualNumerator")
         self.assertEqual(prediction_source["offset_column"], "denominator")
         self.assertEqual(prediction_source["metric"], "poisson")
+        self.assertEqual(prediction_source["training_mode"], "normal")
         self.assertEqual(prediction_source["best_iteration"], 7)
         prediction_columns = [column["name"] for column in prediction_source["columns"]]
         self.assertNotIn("__lucidum_row_id", prediction_columns)

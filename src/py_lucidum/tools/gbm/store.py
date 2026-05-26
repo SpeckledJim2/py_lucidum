@@ -14,6 +14,7 @@ import duckdb
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 
 from .sample import GENERATED_SAMPLE_FILENAME
+from .validation import DEFAULT_TRAINING_MODE
 
 
 ARTIFACT_FILES = {
@@ -141,6 +142,7 @@ class GbmModelStore:
         manifest = self.read_json(path)
         if not isinstance(manifest, dict):
             raise ValueError("Choose a valid GBM model")
+        manifest.setdefault("training_mode", DEFAULT_TRAINING_MODE)
         return manifest
 
     def list_models(self) -> list[dict[str, Any]]:
@@ -155,6 +157,7 @@ class GbmModelStore:
             manifest = self.read_json(manifest_path, {})
             if isinstance(manifest, dict):
                 item = dict(manifest)
+                item.setdefault("training_mode", DEFAULT_TRAINING_MODE)
                 item["active"] = item.get("model_id") == active
                 models.append(item)
         return sorted(models, key=lambda item: str(item.get("created_at", "")), reverse=True)
@@ -370,6 +373,7 @@ class GbmSourceProvider:
                     "created_at": model.get("created_at"),
                     "objective": model.get("objective"),
                     "metric": model.get("metric"),
+                    "training_mode": model.get("training_mode", DEFAULT_TRAINING_MODE),
                     "best_iteration": model.get("best_iteration"),
                     "row_count": schema["row_count"],
                     "columns": schema["columns"],

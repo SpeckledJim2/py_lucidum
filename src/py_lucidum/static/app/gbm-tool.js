@@ -183,6 +183,7 @@ export function createGbmTool({
                           ${shapOptionsHtml(data.shap_options || [])}
                         </div>
                       </div>
+                      ${data.ebm_available ? trainingModeHtml(data.training_mode) : ""}
                       ${shouldShowCreateSampleButton(data.sample) ? '<button id="gbmCreateSampleBtn" class="tab gbm-action-button gbm-sample-button" type="button">Create sample column</button>' : ""}
                     </div>
                   </div>
@@ -271,6 +272,26 @@ export function createGbmTool({
         <span>${escapeHtml(row.label)}</span>
       </label>
     `).join("");
+  }
+
+  function trainingModeHtml(mode) {
+    const selected = normaliseTrainingMode(mode);
+    const ebmTitle = "EBM starts with 2-leaf trees at learning rate 0.3, then uses the configured learning rate for 3+ leaves.";
+    return `
+      <div id="gbmTrainingMode" class="gbm-shap-rows gbm-mode-rows" role="radiogroup" aria-label="Training mode" title="${escapeHtml(ebmTitle)}">
+        <span class="gbm-shap-label gbm-mode-label">Training mode</span>
+        <div class="gbm-shap-options gbm-mode-options">
+          <label class="gbm-shap-option gbm-mode-option">
+            <input type="radio" name="gbmTrainingMode" value="normal" ${selected === "normal" ? "checked" : ""} />
+            <span>Normal</span>
+          </label>
+          <label class="gbm-shap-option gbm-mode-option" title="${escapeHtml(ebmTitle)}">
+            <input type="radio" name="gbmTrainingMode" value="ebm" ${selected === "ebm" ? "checked" : ""} />
+            <span>EBM</span>
+          </label>
+        </div>
+      </div>
+    `;
   }
 
   function shouldShowCreateSampleButton(sample) {
@@ -520,6 +541,7 @@ export function createGbmTool({
       offset_column: model?.offset_column ? String(model.offset_column) : "",
       objective: String(model?.objective || ""),
       metric: String(model?.metric || ""),
+      training_mode: normaliseTrainingMode(model?.training_mode),
       best_iteration: Number(model?.best_iteration || 0),
       training_rows: Number(model?.training_rows || 0),
       sample_column: String(model?.sample_column || ""),
@@ -529,6 +551,10 @@ export function createGbmTool({
       created_at: String(model?.created_at || ""),
       active: Boolean(model?.active),
     };
+  }
+
+  function normaliseTrainingMode(value) {
+    return String(value || "normal").trim().toLowerCase() === "ebm" ? "ebm" : "normal";
   }
 
   function uniqueModels(models) {
@@ -571,6 +597,7 @@ export function createGbmTool({
         created_at: source.created_at,
         objective: source.objective,
         metric: source.metric,
+        training_mode: source.training_mode,
         best_iteration: source.best_iteration,
       });
     }
@@ -603,6 +630,7 @@ export function createGbmTool({
           { title: "Weight", field: "weight_display", sorter: "string", widthGrow: 1.2, headerSort: true },
           { title: "Objective", field: "objective", sorter: "string", widthGrow: 1.1, headerSort: true },
           { title: "Metric", field: "metric", sorter: "string", widthGrow: 1.1, headerSort: true },
+          { title: "Mode", field: "training_mode_display", sorter: "string", width: 70, headerSort: true },
           { title: "Train", field: "training_rows", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 86, headerSort: true },
           { title: "Best iter.", field: "best_iteration", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 92, headerSort: true },
           { title: "Run time", field: "runtime_seconds", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().runtime_display), hozAlign: "right", headerHozAlign: "right", width: 84, headerSort: true },
@@ -840,6 +868,7 @@ export function createGbmTool({
       created_sort: modelCreatedSort(model.created_at),
       created_display: formatModelCreated(model.created_at),
       weight_display: modelWeightLabel(model.offset_column),
+      training_mode_display: model.training_mode === "ebm" ? "EBM" : "Normal",
       runtime_seconds: modelRuntimeSeconds(model),
       runtime_display: formatModelRuntime(model),
       sample_display: formatSampleMode(model.sample_column, model.sample_source),
@@ -863,6 +892,7 @@ export function createGbmTool({
             <th>Weight</th>
             <th>Objective</th>
             <th>Metric</th>
+            <th>Mode</th>
             <th>Train</th>
             <th>Best iter.</th>
             <th>Run time</th>
@@ -880,6 +910,7 @@ export function createGbmTool({
               <td>${escapeHtml(model.weight_display)}</td>
               <td>${escapeHtml(model.objective || "")}</td>
               <td>${escapeHtml(model.metric || "")}</td>
+              <td>${escapeHtml(model.training_mode_display)}</td>
               <td class="numeric">${formatModelCount(model.training_rows)}</td>
               <td class="numeric">${formatModelCount(model.best_iteration)}</td>
               <td class="numeric">${escapeHtml(model.runtime_display)}</td>
@@ -984,6 +1015,11 @@ export function createGbmTool({
     });
   }
 
+  function currentTrainingMode() {
+    if (!config?.ebm_available) return "normal";
+    return normaliseTrainingMode(document.querySelector("input[name='gbmTrainingMode']:checked")?.value || config?.training_mode);
+  }
+
   async function train() {
     if (isTraining) return;
     setStatus("");
@@ -995,6 +1031,7 @@ export function createGbmTool({
       features: currentFeatureRows(),
       parameters: currentParameters(),
       shap_rows: document.querySelector("input[name='gbmShapRows']:checked")?.value || "0",
+      training_mode: currentTrainingMode(),
       sample_column: config?.sample?.column || config?.sample_column || "",
       sample_source: config?.sample?.source || "none",
       create_sample: false,

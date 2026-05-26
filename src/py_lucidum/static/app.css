@@ -3364,9 +3364,9 @@
       }
 
       .gbm-model-table td.numeric,
-      .gbm-model-table th:nth-child(7),
       .gbm-model-table th:nth-child(8),
-      .gbm-model-table th:nth-child(9) {
+      .gbm-model-table th:nth-child(9),
+      .gbm-model-table th:nth-child(10) {
         text-align: right;
       }
 
@@ -3385,13 +3385,14 @@
 
       .gbm-model-table th:nth-child(5),
       .gbm-model-table th:nth-child(6),
-      .gbm-model-table th:nth-child(10) {
+      .gbm-model-table th:nth-child(7),
+      .gbm-model-table th:nth-child(11) {
         width: 8%;
       }
 
-      .gbm-model-table th:nth-child(7),
       .gbm-model-table th:nth-child(8),
-      .gbm-model-table th:nth-child(9) {
+      .gbm-model-table th:nth-child(9),
+      .gbm-model-table th:nth-child(10) {
         width: 6%;
       }
 

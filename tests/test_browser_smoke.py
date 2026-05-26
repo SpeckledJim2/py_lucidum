@@ -85,6 +85,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         "created_at": created_at,
                         "objective": "gamma",
                         "metric": "gamma",
+                        "training_mode": "ebm" if model_id.endswith("-2") else "normal",
                         "response_column": "actualNumerator",
                         "offset_column": "denominator",
                         "best_iteration": 3,
@@ -111,6 +112,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     {
                         "objective": "gamma",
                         "metric": "gamma",
+                        "training_mode": "ebm" if model_id.endswith("-2") else "normal",
                         "learning_rate": learning_rate,
                         "num_iterations": 123 if model_id.endswith("-2") else 77,
                     },
@@ -449,6 +451,7 @@ COPY (
                 page.get_by_text("Train GBM").wait_for(timeout=10_000)
                 page.get_by_text("Gain").first.wait_for(timeout=10_000)
                 page.get_by_text("SHAP rows").wait_for(timeout=10_000)
+                page.get_by_text("Training mode").wait_for(timeout=10_000)
                 page.get_by_text("Features", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation log", exact=True).wait_for(timeout=10_000)
@@ -499,7 +502,7 @@ COPY (
                 )
                 self.assertEqual(
                     navigator_state["headers"],
-                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Train", "Best iter.", "Run time", "Sample"],
+                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Train", "Best iter.", "Run time", "Sample"],
                 )
                 self.assertEqual(navigator_state["rows"], 2)
                 self.assertEqual(navigator_state["activeRows"], 1)
@@ -517,6 +520,7 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.22",
                 )
+                self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
                 page.get_by_role("button", name="Model navigator").click()
                 page.evaluate("() => { window.prompt = () => 'renamed-smoke-model'; }")
                 page.locator("#gbmRenameModelBtn").click()
@@ -537,6 +541,7 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.11",
                 )
+                self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='normal']").is_checked())
                 live_job_succeed = {"value": False}
 
                 def train_route(route: Any) -> None:
@@ -827,13 +832,14 @@ COPY (
                 )
                 self.assertEqual(
                     navigator_state["headers"],
-                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Train", "Best iter.", "Run time", "Sample"],
+                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Train", "Best iter.", "Run time", "Sample"],
                 )
                 self.assertEqual(navigator_state["rowCount"], 1)
                 self.assertIn("Browser smoke model", navigator_state["activeText"])
                 self.assertEqual(navigator_state["fontSize"], "11px")
                 self.assertIn("actualNumerator", navigator_state["firstCells"])
                 self.assertIn("denominator", navigator_state["firstCells"])
+                self.assertIn("Normal", navigator_state["firstCells"])
                 self.assertIn("SAMPLE", navigator_state["firstCells"])
                 self.assertIn("1.2s", navigator_state["firstCells"])
                 self.assertTrue(navigator_state["wrapped"])
@@ -896,6 +902,8 @@ COPY (
                         const shapOptions = document.querySelector(".gbm-shap-options");
                         const firstShapInput = document.querySelector("input[name='gbmShapRows']");
                         const checkedShapOption = document.querySelector(".gbm-shap-option:has(input:checked)");
+                        const mode = document.querySelector("#gbmTrainingMode");
+                        const checkedModeOption = document.querySelector(".gbm-mode-option:has(input:checked)");
                         const sampleStatus = document.querySelector("#gbmSampleStatus");
                         const train = document.querySelector("#gbmTrainBtn");
                         const controlTitle = document.querySelector(".gbm-parameter-controls-column .gbm-section-title");
@@ -932,6 +940,11 @@ COPY (
                             shapOptionsDirection: shapOptions ? getComputedStyle(shapOptions).flexDirection : "",
                             shapInputOpacity: firstShapInput ? getComputedStyle(firstShapInput).opacity : "",
                             checkedShapBackground: checkedShapOption ? getComputedStyle(checkedShapOption).backgroundColor : "",
+                            modeRadios: document.querySelectorAll("input[name='gbmTrainingMode']").length,
+                            modeLabels: [...document.querySelectorAll("#gbmTrainingMode .gbm-mode-option span")].map((node) => node.textContent.trim()),
+                            checkedModeValue: document.querySelector("input[name='gbmTrainingMode']:checked")?.value || "",
+                            modeTitle: mode ? mode.getAttribute("title") : "",
+                            checkedModeBackground: checkedModeOption ? getComputedStyle(checkedModeOption).backgroundColor : "",
                             featureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox").length,
                             disabledFeatureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-feature-disabled .gbm-use-checkbox").length,
                             rowHeight: firstRow ? firstRow.getBoundingClientRect().height : 0,
@@ -953,6 +966,7 @@ COPY (
                             parameterControlsColumnWidth: parameterControlsColumn ? Math.round(parameterControlsColumn.getBoundingClientRect().width) : 0,
                             parameterActionsDirection: parameterActions ? getComputedStyle(parameterActions).flexDirection : "",
                             shapParentInControls: Boolean(shap?.closest(".gbm-parameter-controls-column")),
+                            modeParentInControls: Boolean(mode?.closest(".gbm-parameter-controls-column")),
                             sampleParentInControls: Boolean(sampleStatus?.closest(".gbm-parameter-controls-column")),
                             trainParentInControls: Boolean(train?.closest(".gbm-parameter-controls-column")),
                             parameterGridHeight: parameterGrid ? Math.round(parameterGrid.getBoundingClientRect().height) : 0,
@@ -991,12 +1005,18 @@ COPY (
                 self.assertEqual(layout["shapOptionsDirection"], "row")
                 self.assertEqual(layout["shapInputOpacity"], "0")
                 self.assertNotEqual(layout["checkedShapBackground"], layout["rowBackground"])
+                self.assertEqual(layout["modeRadios"], 2)
+                self.assertEqual(layout["modeLabels"], ["Normal", "EBM"])
+                self.assertEqual(layout["checkedModeValue"], "normal")
+                self.assertIn("2-leaf trees at learning rate 0.3", layout["modeTitle"])
+                self.assertNotEqual(layout["checkedModeBackground"], layout["rowBackground"])
                 self.assertGreater(layout["featureCheckboxes"], 0)
                 self.assertEqual(layout["disabledFeatureCheckboxes"], 0)
                 self.assertLess(layout["rowHeight"], 28)
                 self.assertEqual(layout["gainAlign"], "center")
                 self.assertEqual(layout["rowBackground"], layout["holderBackground"])
                 self.assertTrue(layout["shapParentInControls"])
+                self.assertTrue(layout["modeParentInControls"])
                 self.assertTrue(layout["sampleParentInControls"])
                 self.assertTrue(layout["trainParentInControls"])
                 self.assertIn("SAMPLE column found", layout["sampleStatusText"])

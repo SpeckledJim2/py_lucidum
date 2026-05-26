@@ -23,6 +23,7 @@ from .validation import (
     detect_sample_column,
     display_monotonicity,
     metric,
+    normalise_training_mode,
     objective,
     normalise_features,
     normalise_parameters,
@@ -34,6 +35,7 @@ from .validation import (
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+EBM_INITIAL_LEARNING_RATE = 0.3
 
 
 class MissingGbmDependency(RuntimeError):
@@ -73,6 +75,143 @@ def gbm_dependencies() -> tuple[Any, Any, Any]:
     if missing:
         raise MissingGbmDependency(", ".join(missing), hint)
     return lgb, np, pd
+
+
+class EbmStageController:
+    def __init__(
+        self,
+        *,
+        lgb: Any,
+        metric_name: str,
+        target_num_leaves: int,
+        configured_learning_rate: Any,
+        early_stopping_rounds: int,
+        total_iterations: int,
+    ):
+        self.lgb = lgb
+        self.metric_name = metric_name
+        self.target_num_leaves = max(2, int(target_num_leaves or 2))
+        self.configured_learning_rate = configured_learning_rate
+        self.early_stopping_rounds = max(1, int(early_stopping_rounds or 1))
+        self.total_iterations = max(1, int(total_iterations or 1))
+        self.current_num_leaves = 2
+        self.stage_start_iteration = 1
+        self.stage_best_iteration: int | None = None
+        self.stage_best_score: float | None = None
+        self.best_iteration: int | None = None
+        self.best_score: float | None = None
+        self.best_result_list: list[Any] | None = None
+        self.higher_is_better: bool | None = None
+        self.stages: list[dict[str, Any]] = []
+        self._closed = False
+        self.order = 40
+        self.before_iteration = False
+
+    def __call__(self, env: Any) -> None:
+        current_iteration = int(getattr(env, "iteration", 0) or 0) - int(getattr(env, "begin_iteration", 0) or 0) + 1
+        selected = self._selected_metric(getattr(env, "evaluation_result_list", None))
+        if not selected:
+            return
+        score = json_safe_number(selected[2])
+        if score is None:
+            return
+        higher_is_better = bool(selected[3])
+        result_list = list(getattr(env, "evaluation_result_list", None) or [])
+        self.higher_is_better = higher_is_better
+        if self._is_improvement(score, self.stage_best_score, higher_is_better):
+            self.stage_best_score = score
+            self.stage_best_iteration = current_iteration
+        if self._is_improvement(score, self.best_score, higher_is_better):
+            self.best_score = score
+            self.best_iteration = current_iteration
+            self.best_result_list = result_list
+        if current_iteration >= self.total_iterations:
+            return
+        if self.stage_best_iteration is None:
+            return
+        if current_iteration - self.stage_best_iteration < self.early_stopping_rounds:
+            return
+        if self.current_num_leaves < self.target_num_leaves:
+            self._close_stage(current_iteration, "plateau")
+            self.current_num_leaves += 1
+            self.stage_start_iteration = current_iteration + 1
+            self.stage_best_iteration = None
+            self.stage_best_score = None
+            reset_params = {"num_leaves": self.current_num_leaves, "learning_rate": self.configured_learning_rate}
+            env.model.reset_parameter(reset_params)
+            env.params.update(reset_params)
+            return
+        self._close_stage(current_iteration, "final_plateau")
+        self._closed = True
+        best_iteration = (self.best_iteration or current_iteration) - 1
+        best_score = self.best_result_list or result_list
+        raise self.lgb.callback.EarlyStopException(best_iteration, best_score)
+
+    def _selected_metric(self, evaluation_result_list: Any) -> Any | None:
+        test_rows = [
+            item
+            for item in evaluation_result_list or []
+            if len(item) >= 4 and str(item[0]).lower() == "test"
+        ]
+        for item in test_rows:
+            if str(item[1]) == self.metric_name:
+                return item
+        return test_rows[0] if test_rows else None
+
+    def _is_improvement(self, score: float, best_score: float | None, higher_is_better: bool) -> bool:
+        if best_score is None:
+            return True
+        return score > best_score if higher_is_better else score < best_score
+
+    def _close_stage(self, end_iteration: int, reason: str) -> None:
+        if self.stages and self.stages[-1].get("end_iteration") is None:
+            self.stages[-1].update(
+                {
+                    "end_iteration": end_iteration,
+                    "best_iteration": self.stage_best_iteration,
+                    "best_score": self.stage_best_score,
+                    "stop_reason": reason,
+                }
+            )
+            return
+        self.stages.append(
+            {
+                "num_leaves": self.current_num_leaves,
+                "learning_rate": EBM_INITIAL_LEARNING_RATE if self.current_num_leaves == 2 else self.configured_learning_rate,
+                "start_iteration": self.stage_start_iteration,
+                "end_iteration": end_iteration,
+                "best_iteration": self.stage_best_iteration,
+                "best_score": self.stage_best_score,
+                "metric": self.metric_name,
+                "dataset": "test",
+                "stop_reason": reason,
+            }
+        )
+
+    def finish(self, final_iteration: int) -> None:
+        if self._closed:
+            return
+        self._close_stage(max(1, int(final_iteration or 1)), "iteration_cap")
+        self._closed = True
+
+    def progress_context(self) -> dict[str, Any]:
+        return {
+            "leaf_stage": self.current_num_leaves,
+            "target_leaf_stage": self.target_num_leaves,
+            "stage_start_iteration": self.stage_start_iteration,
+        }
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "target_num_leaves": self.target_num_leaves,
+            "initial_learning_rate": EBM_INITIAL_LEARNING_RATE,
+            "configured_learning_rate": self.configured_learning_rate,
+            "early_stopping_rounds": self.early_stopping_rounds,
+            "best_iteration": self.best_iteration,
+            "best_score": self.best_score,
+            "higher_is_better": self.higher_is_better,
+            "stages": self.stages,
+        }
 
 
 def write_dataframe_parquet(frame: Any, path: Path) -> None:
@@ -147,12 +286,22 @@ def train_model(
         raise ValueError("; ".join(validation.errors))
 
     params = normalise_parameters(payload.get("parameters"))
+    training_mode = normalise_training_mode(payload.get("training_mode"))
     selected_objective = objective(params)
     params["objective"] = selected_objective
     num_boost_round = max(1, int(params.pop("num_iterations", 200) or 200))
     early_stopping_rounds = max(0, int(params.pop("early_stopping_rounds", 0) or 0))
     selected_metric = metric(params)
     params["metric"] = selected_metric
+    configured_num_leaves = max(2, int(params.get("num_leaves", 31) or 31))
+    configured_learning_rate = params.get("learning_rate", 0.05)
+    stored_params = dict(params)
+    stored_params["num_iterations"] = num_boost_round
+    stored_params["early_stopping_rounds"] = early_stopping_rounds
+    stored_params["training_mode"] = training_mode
+    if training_mode == "ebm":
+        params["num_leaves"] = 2
+        params["learning_rate"] = EBM_INITIAL_LEARNING_RATE
 
     with dataset.lock:
         columns = dataset.column_map()
@@ -252,6 +401,16 @@ def train_model(
     validation_init = log_offset[validation_mask.to_numpy()] if use_offset_init_score and bool(validation_mask.any()) else None
 
     evaluation_result: dict[str, dict[str, list[float]]] = {}
+    ebm_controller: EbmStageController | None = None
+    if training_mode == "ebm":
+        ebm_controller = EbmStageController(
+            lgb=lgb,
+            metric_name=selected_metric,
+            target_num_leaves=configured_num_leaves,
+            configured_learning_rate=configured_learning_rate,
+            early_stopping_rounds=early_stopping_rounds,
+            total_iterations=num_boost_round,
+        )
     callbacks = [lgb.record_evaluation(evaluation_result)]
     callbacks.append(
         lightgbm_progress_callback(
@@ -259,9 +418,12 @@ def train_model(
             total_iterations=num_boost_round,
             evaluation_result=evaluation_result,
             progress_callback=progress_callback,
+            stage_provider=ebm_controller.progress_context if ebm_controller else None,
         )
     )
-    if len(valid_sets) > 1 and early_stopping_rounds > 0:
+    if ebm_controller:
+        callbacks.append(ebm_controller)
+    elif len(valid_sets) > 1 and early_stopping_rounds > 0:
         callbacks.append(lgb.early_stopping(early_stopping_rounds, verbose=False))
     callbacks.append(lgb.log_evaluation(period=0))
 
@@ -273,7 +435,14 @@ def train_model(
         valid_names=valid_names,
         callbacks=callbacks,
     )
-    best_iteration = int(getattr(booster, "best_iteration", 0) or num_boost_round)
+    final_iteration = int(booster.current_iteration() if hasattr(booster, "current_iteration") else num_boost_round)
+    if ebm_controller:
+        ebm_controller.finish(final_iteration)
+    best_iteration = int(
+        (ebm_controller.best_iteration if ebm_controller and ebm_controller.best_iteration else None)
+        or getattr(booster, "best_iteration", 0)
+        or num_boost_round
+    )
     append_holdout_evaluation(
         lgb=lgb,
         booster=booster,
@@ -375,10 +544,12 @@ def train_model(
     write_dataframe_parquet(tree_table, store.artifact_path(model_id, "tree_table"))
 
     elapsed = time.perf_counter() - started
+    ebm_metadata = ebm_controller.metadata() if ebm_controller else None
     manifest = {
         "model_id": model_id,
         "label": model_label,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "training_mode": training_mode,
         "objective": str(params.get("objective")),
         "metric": selected_metric,
         "response_column": response_col,
@@ -401,9 +572,14 @@ def train_model(
             **({"shap_long": store.source_id(model_id, "shap_long"), "shap_summary": store.source_id(model_id, "shap_summary")} if shap_summary_rows else {}),
         },
     }
+    if ebm_metadata:
+        manifest["ebm"] = ebm_metadata
     store.write_json(store.artifact_path(model_id, "feature_config"), feature_config)
-    store.write_json(store.artifact_path(model_id, "parameters"), params | {"num_iterations": num_boost_round, "early_stopping_rounds": early_stopping_rounds})
-    store.write_json(store.artifact_path(model_id, "training_log"), {"evaluation": evaluation_result, "warnings": validation.warnings})
+    store.write_json(store.artifact_path(model_id, "parameters"), stored_params)
+    store.write_json(
+        store.artifact_path(model_id, "training_log"),
+        {"evaluation": evaluation_result, "warnings": validation.warnings, **({"ebm": ebm_metadata} if ebm_metadata else {})},
+    )
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
     store.activate_model(model_id)
     manifest["active"] = True
@@ -456,6 +632,7 @@ def lightgbm_progress_callback(
     total_iterations: int,
     evaluation_result: dict[str, dict[str, list[float]]],
     progress_callback: ProgressCallback | None,
+    stage_provider: Callable[[], dict[str, Any]] | None = None,
 ) -> Any:
     def callback(env: Any) -> None:
         emit_progress(
@@ -465,6 +642,7 @@ def lightgbm_progress_callback(
                 metric_name=metric_name,
                 total_iterations=total_iterations,
                 evaluation_result=evaluation_result,
+                stage=stage_provider() if stage_provider else None,
             ),
         )
 
@@ -516,14 +694,15 @@ def lightgbm_progress_payload(
     metric_name: str,
     total_iterations: int,
     evaluation_result: dict[str, dict[str, list[float]]],
+    stage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     begin_iteration = int(getattr(env, "begin_iteration", 0) or 0)
     current_iteration = int(getattr(env, "iteration", 0) or 0) - begin_iteration + 1
     total = max(1, int(total_iterations or 1))
     latest = latest_from_evaluation_result_list(getattr(env, "evaluation_result_list", None))
     preferred = preferred_progress_metric(latest, metric_name)
-    message = training_progress_message(current_iteration, total, preferred, metric_name)
-    return {
+    message = training_progress_message(current_iteration, total, preferred, metric_name, stage)
+    payload = {
         "phase": "training",
         "message": message,
         "iteration": current_iteration,
@@ -533,6 +712,9 @@ def lightgbm_progress_payload(
         "latest": latest,
         "evaluation": json_safe_evaluation(evaluation_result),
     }
+    if stage:
+        payload.update(stage)
+    return payload
 
 
 def latest_from_evaluation_result_list(evaluation_result_list: Any) -> list[dict[str, Any]]:
@@ -576,13 +758,14 @@ def progress_metric_sort_key(item: dict[str, Any], metric_name: str | None) -> t
     return dataset_rank, metric_rank, metric
 
 
-def training_progress_message(iteration: int, total: int, preferred: dict[str, Any] | None, metric_name: str) -> str:
+def training_progress_message(iteration: int, total: int, preferred: dict[str, Any] | None, metric_name: str, stage: dict[str, Any] | None = None) -> str:
+    prefix = f"training, leaves {stage['leaf_stage']}, tree {iteration}/{total}" if stage and stage.get("leaf_stage") else f"training, tree {iteration}/{total}"
     if not preferred:
-        return f"training, tree {iteration}/{total}"
+        return prefix
     dataset = "train" if str(preferred.get("dataset") or "").lower() == "training" else str(preferred.get("dataset") or "metric")
     metric = str(preferred.get("metric") or metric_name)
     value = format_progress_value(preferred.get("value"))
-    return f"training, tree {iteration}/{total}, {dataset} {metric} {value}".rstrip()
+    return f"{prefix}, {dataset} {metric} {value}".rstrip()
 
 
 def json_safe_evaluation(evaluation: dict[str, dict[str, list[Any]]]) -> dict[str, dict[str, list[float | None]]]:

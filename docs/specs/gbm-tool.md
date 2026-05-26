@@ -43,6 +43,7 @@ This is made up of two side by side components:
 - the user selects the required features from a left hand side grid type control (I used rhandsontable for R - pick a suitable fast and open source replacement for this app). This control should show all columns in the dataset in the first column, then a checkbox control in the second column to control whether the feature should be included in the GBM or not.  Use grey colour coding and disable the checkboxes for any column types that can't be used in a LightGBM (e.g. date columns). Colour in amber any "high-cardinality" columns that might not be a good choice to include. Show unreadable/invalid dataset columns as disabled red rows with type `invalid`. Also distinguish numeric and categorical features using colour coding.  Include a column called monotonicity which specifies if the selected feature should be monotonic. Use "Increasing", "1" for increasing, "Decreasing", "-1" for decreasing and blank for no monotonicity. Only numeric features can be monotonic.
 - the user selects the LightGBM core parameters and learning control parameters from a top right control.  Show all possible LightGBM parameters in this control, but put the most important ones at the top. This should be scrollable as it's a long list.
 - include a button to specify whether SHAP values should be created for 0 rows, 10k rows, 100k rows, or all rows.
+- if a physical `SAMPLE` column is present with both `training` and `test` rows, include a model-mode radio button below the SHAP row selector with `Normal` and `EBM`.
 - include a green "train GBM" button at the top which starts model training and diagnostic creation
 - while training, show live progress with the current tree/iteration and train/test metric values, and update the evaluation chart as new LightGBM evaluation results arrive.
 - the user specifys a `SAMPLE` column which contains `training`, `test`, and optionally `validation`/other levels. The model is trained on the training rows and early stopping takes place on the test rows. But model predictions are calculated for ALL rows (that pass the weight filtering).
@@ -51,6 +52,12 @@ This is made up of two side by side components:
 - bottom right I want to see the "evaluation" chart - this is the value of the selected model metric after each round of training. Show this for training and also test rows if present.
 
 Note that LightGBM accepts both objective (used for training) and metric (used for early stopping) - I need to be able to specify both.
+
+## EBM mode
+
+EBM means Explainable Boosting Machine. Normal mode trains the existing LightGBM as before. EBM mode starts with 2-leaf trees and uses learning rate `0.3` for that 2-leaf stage. When the selected test metric has not improved for `early_stopping_rounds`, the training callback switches to 3 leaves and restores the configured learning rate. The same stage-local early stopping process repeats for 4, 5, and later leaf counts until the configured `num_leaves` is reached. `num_iterations` is the total cap across all stages, not a per-stage cap.
+
+EBM mode requires a physical dataset `SAMPLE` column with `training` and `test` rows after denominator filtering. Generated sample sidecars do not enable this mode. Persist each model's training mode in the model metadata so switching saved models updates the radio button.
 
 ## Model navigator tab
 

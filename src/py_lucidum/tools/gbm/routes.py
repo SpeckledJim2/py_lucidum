@@ -17,9 +17,12 @@ from .validation import (
     RESPONSE_COLUMN,
     GBM_METRICS,
     GBM_OBJECTIVES,
+    DEFAULT_TRAINING_MODE,
     default_parameters,
     detect_sample_column,
+    ebm_available,
     feature_rows,
+    normalise_training_mode,
     validate_request,
 )
 
@@ -61,6 +64,16 @@ def register(app: FastAPI, context: AppContext) -> None:
             return [item for item in importance if isinstance(item, dict)]
         return None
 
+    def active_training_mode() -> str:
+        model_id = store.active_model_id()
+        if not model_id:
+            return DEFAULT_TRAINING_MODE
+        try:
+            manifest = store.manifest(model_id)
+        except ValueError:
+            return DEFAULT_TRAINING_MODE
+        return normalise_training_mode(manifest.get("training_mode"))
+
     def parameter_rows() -> list[dict[str, Any]]:
         values: dict[str, Any] = {}
         model_id = store.active_model_id()
@@ -84,6 +97,8 @@ def register(app: FastAPI, context: AppContext) -> None:
 
         for name, value in values.items():
             text_name = str(name)
+            if text_name == "training_mode":
+                continue
             if text_name not in seen:
                 rows.append({"name": text_name, "value": value, "important": False})
         return rows
@@ -100,6 +115,7 @@ def register(app: FastAPI, context: AppContext) -> None:
                 reserved_names=sample_reserved,
             )
             sample_column = detect_sample_column(context.dataset)
+            can_use_ebm = ebm_available(context.dataset)
         return {
             "tool": "gbm",
             "status": "ready",
@@ -107,6 +123,8 @@ def register(app: FastAPI, context: AppContext) -> None:
             "offset": OFFSET_COLUMN,
             "sample_column": sample_column,
             "sample": sample,
+            "training_mode": active_training_mode(),
+            "ebm_available": can_use_ebm,
             "parameters": parameter_rows(),
             "parameter_options": {
                 "objective": list(GBM_OBJECTIVES),
