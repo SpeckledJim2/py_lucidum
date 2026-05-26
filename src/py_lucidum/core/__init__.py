@@ -17,7 +17,7 @@ from .metrics import (
     summarize_denominator,
     weighted_value_sql,
 )
-from .schema import ColumnInfo, infer_kind, is_numeric_kind, json_number, parse_positive_float, suggested_band_width
+from .schema import ColumnInfo, duckdb_error_message, infer_kind, is_numeric_kind, json_number, parse_positive_float, suggested_band_width
 from .sql import quote_ident, sql_literal
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "denominator_valid_condition",
     "denominator_value_sql",
     "denominator_warnings",
+    "duckdb_error_message",
     "infer_kind",
     "is_numeric_kind",
     "json_number",

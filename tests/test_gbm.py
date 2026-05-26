@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,10 +15,11 @@ import duckdb
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.demo import demo_dataset_path
+from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, write_dataframe_parquet
-from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, default_parameters, feature_rows, normalise_parameters, validate_request
+from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_progress_payload, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, categorical_distinct_counts, default_parameters, feature_rows, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
 
@@ -163,6 +165,104 @@ class GbmToolTests(unittest.TestCase):
         self.assertIn("lightgbm runtime", message)
         self.assertIn("brew install libomp", message)
 
+    def test_gbm_job_payload_includes_progress(self) -> None:
+        job = GbmJob(id="j1", status="running", progress={"phase": "training", "iteration": 3})
+
+        payload = job.as_payload()
+
+        self.assertEqual(payload["progress"], {"phase": "training", "iteration": 3})
+
+    def test_gbm_job_manager_records_and_preserves_progress_on_failure(self) -> None:
+        dataset = Dataset(self.data_path)
+        store = GbmModelStore(self.data_path)
+        manager = GbmJobManager()
+
+        def fake_train_model(dataset_arg: Dataset, store_arg: GbmModelStore, payload: dict[str, Any], progress_callback: Any = None) -> dict[str, Any]:
+            self.assertIs(dataset_arg, dataset)
+            self.assertIs(store_arg, store)
+            self.assertEqual(payload, {"label": "broken"})
+            progress_callback(
+                {
+                    "phase": "training",
+                    "message": "training, tree 1/2, test poisson 1.2",
+                    "iteration": 1,
+                    "evaluation": {"test": {"poisson": [1.2]}},
+                }
+            )
+            raise ValueError("boom")
+
+        with patch("py_lucidum.tools.gbm.jobs.train_model", side_effect=fake_train_model):
+            job = manager.start(dataset, store, {"label": "broken"})
+            for _ in range(100):
+                snapshot = manager.get(job.id)
+                if snapshot and snapshot.status == "failed":
+                    break
+                time.sleep(0.01)
+
+        snapshot = manager.get(job.id)
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.status, "failed")
+        self.assertEqual(snapshot.error, "boom")
+        self.assertEqual(snapshot.progress["phase"], "failed")
+        self.assertEqual(snapshot.progress["message"], "boom")
+        self.assertEqual(snapshot.progress["iteration"], 1)
+        self.assertEqual(snapshot.progress["evaluation"], {"test": {"poisson": [1.2]}})
+
+    def test_gbm_job_route_returns_progress(self) -> None:
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        job = GbmJob(
+            id="progress-job",
+            status="running",
+            progress={
+                "phase": "training",
+                "message": "training, tree 2/10, test poisson 1.1",
+                "iteration": 2,
+                "total_iterations": 10,
+                "percent": 18,
+                "metric": "poisson",
+                "latest": [{"dataset": "test", "metric": "poisson", "value": 1.1}],
+                "evaluation": {"training": {"poisson": [1.3, 1.2]}, "test": {"poisson": [1.2, 1.1]}},
+            },
+        )
+        app.state.gbm_jobs._jobs[job.id] = job
+
+        status, body = asgi_get(app, "/api/gbm/jobs/progress-job")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["progress"]["phase"], "training")
+        self.assertEqual(payload["progress"]["iteration"], 2)
+        self.assertEqual(payload["progress"]["latest"][0]["value"], 1.1)
+
+    def test_lightgbm_progress_payload_is_json_safe(self) -> None:
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class Env:
+            iteration = 2
+            begin_iteration = 0
+            evaluation_result_list = [
+                ("training", "poisson", np.float64(1.3), False),
+                ("test", "poisson", np.float64(1.2), False),
+            ]
+
+        payload = lightgbm_progress_payload(
+            Env(),
+            metric_name="poisson",
+            total_iterations=10,
+            evaluation_result={"training": {"poisson": [np.float64(1.4), np.float64(1.3)]}, "test": {"poisson": [np.float64(1.2)]}},
+        )
+
+        self.assertEqual(payload["phase"], "training")
+        self.assertEqual(payload["iteration"], 3)
+        self.assertEqual(payload["total_iterations"], 10)
+        self.assertEqual(payload["percent"], 27.0)
+        self.assertEqual(payload["latest"], [{"dataset": "test", "metric": "poisson", "value": 1.2}, {"dataset": "training", "metric": "poisson", "value": 1.3}])
+        self.assertEqual(payload["evaluation"], {"training": {"poisson": [1.4, 1.3]}, "test": {"poisson": [1.2]}})
+        self.assertEqual(payload["message"], "training, tree 3/10, test poisson 1.2")
+
     def test_validation_catches_missing_fixed_columns_and_invalid_monotonicity(self) -> None:
         missing_path = self.root / "missing.csv"
         missing_path.write_text("Age,Segment\n1,A\n", encoding="utf-8")
@@ -235,6 +335,84 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(rows[1]["name"], "Segment")
         self.assertEqual(rows[1]["gain"], 1.5)
         self.assertEqual(next(row for row in rows if row["name"] == "sample")["gain"], 0.0)
+
+    def test_feature_rows_include_invalid_columns_without_counting_them(self) -> None:
+        original_probe = Dataset.probe_column_readable
+
+        def fake_probe(dataset: Dataset, column: Any) -> None:
+            if column.name == "Segment":
+                raise duckdb.InvalidInputException(
+                    'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                    'value "bad" is not valid UTF8!'
+                )
+            original_probe(dataset, column)
+
+        with patch.object(Dataset, "probe_column_readable", fake_probe):
+            dataset = Dataset(self.data_path)
+            counts = categorical_distinct_counts(dataset)
+            rows = feature_rows(dataset, {"Segment": 1.5, "Age": 9.25})
+            result = validate_request(
+                dataset,
+                {
+                    "response": "actualNumerator",
+                    "offset": "denominator",
+                    "features": [{"name": "Segment", "include": True, "monotonicity": ""}],
+                    "parameters": default_parameters(),
+                    "sample_column": "sample",
+                },
+            )
+
+        by_name = {row["name"]: row for row in rows}
+        self.assertNotIn("Segment", counts)
+        self.assertEqual(by_name["Segment"]["kind"], "invalid")
+        self.assertTrue(by_name["Segment"]["invalid"])
+        self.assertFalse(by_name["Segment"]["usable"])
+        self.assertFalse(by_name["Segment"]["include"])
+        self.assertEqual(by_name["Segment"]["disabled_reason"], "Invalid string encoding found in Parquet data.")
+        self.assertIn("valid GBM feature: Segment", "; ".join(result.errors))
+
+    def test_gbm_config_returns_invalid_feature_rows(self) -> None:
+        original_probe = Dataset.probe_column_readable
+
+        def fake_probe(dataset: Dataset, column: Any) -> None:
+            if column.name == "Segment":
+                raise duckdb.InvalidInputException(
+                    'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                    'value "bad" is not valid UTF8!'
+                )
+            original_probe(dataset, column)
+
+        with patch.object(Dataset, "probe_column_readable", fake_probe):
+            app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+            status, body = asgi_get(app, "/api/gbm/config")
+
+        payload = json.loads(body)
+        segment = next(row for row in payload["features"] if row["name"] == "Segment")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(segment["kind"], "invalid")
+        self.assertTrue(segment["invalid"])
+        self.assertFalse(segment["usable"])
+        self.assertFalse(segment["include"])
+        self.assertEqual(segment["disabled_reason"], "Invalid string encoding found in Parquet data.")
+
+    def test_training_projection_omits_unselected_invalid_columns(self) -> None:
+        dataset = Dataset(self.data_path)
+        dataset.record_invalid_column("Segment", "Invalid string encoding found in Parquet data.")
+        columns = dataset.column_map()
+        projection = training_projection_columns(
+            response_col="actualNumerator",
+            offset_col="denominator",
+            sample_column="sample",
+            feature_names=["Age"],
+            columns=columns,
+        )
+        sql = training_select_sql(dataset.relation_sql(), projection, "\nWHERE TRY_CAST(denominator AS DOUBLE) > 0")
+
+        self.assertEqual(projection, ["actualNumerator", "denominator", "sample", "Age"])
+        self.assertNotIn("*", sql)
+        self.assertNotIn("Segment", sql)
+        self.assertIn('"Age"', sql)
 
     def test_active_model_feature_rows_mirror_saved_feature_config(self) -> None:
         dataset = Dataset(self.data_path)
@@ -395,6 +573,7 @@ COPY (
             {"name": "early_stopping_rounds", "value": 0},
         ]
         store = GbmModelStore(repro_path)
+        progress: list[dict[str, Any]] = []
         result = train_model(
             dataset,
             store,
@@ -410,6 +589,7 @@ COPY (
                 "sample_column": "",
                 "shap_rows": "0",
             },
+            progress_callback=progress.append,
         )
 
         self.assertEqual(result["objective"], "poisson")
@@ -423,6 +603,72 @@ COPY (
         finally:
             con.close()
         self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "gbm_prediction"])
+        self.assertTrue(any(item.get("phase") == "training" for item in progress))
+        self.assertTrue(any(item.get("phase") == "scoring" for item in progress))
+        self.assertTrue(any(item.get("phase") == "artifacts" for item in progress))
+        training_progress = next(item for item in progress if item.get("phase") == "training")
+        self.assertIn("iteration", training_progress)
+        self.assertIn("evaluation", training_progress)
+
+    def test_training_with_default_features_does_not_read_invalid_unselected_column(self) -> None:
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            self.skipTest("LightGBM is not installed")
+
+        data_path = self.root / "invalid_unused.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age,BadText,sample\n"
+            "10,100,30,bad,training\n"
+            "20,200,40,bad,test\n"
+            "30,300,50,bad,training\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        dataset.record_invalid_column("BadText", "Invalid string encoding found in Parquet data.")
+        features = feature_rows(dataset)
+
+        class GuardedConnection:
+            def __init__(self, inner: Any):
+                self.inner = inner
+                self.sql: list[str] = []
+
+            def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+                text = str(sql)
+                self.sql.append(text)
+                if "BadText" in text or "ROW_NUMBER() OVER () AS __lucidum_row_id,\n  *" in text:
+                    raise AssertionError(text)
+                return self.inner.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self.inner, name)
+
+        guarded = GuardedConnection(dataset.con)
+        dataset.con = guarded  # type: ignore[assignment]
+        parameters = default_parameters() + [
+            {"name": "num_iterations", "value": 3},
+            {"name": "early_stopping_rounds", "value": 0},
+            {"name": "min_data_in_leaf", "value": 1},
+        ]
+        store = GbmModelStore(data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "Invalid unused",
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": features,
+                "parameters": parameters,
+                "sample_column": "sample",
+                "shap_rows": "0",
+            },
+        )
+
+        self.assertIn("Age", result["source_columns"])
+        self.assertNotIn("BadText", result["source_columns"])
+        self.assertTrue(any("__lucidum_row_id" in sql for sql in guarded.sql))
 
     def test_shap_row_limit_supports_compact_choices(self) -> None:
         self.assertEqual(shap_row_limit("0", 123456), 0)
@@ -701,6 +947,26 @@ COPY (
 
         self.assertEqual(result["source"], "gbm:m1:predictions")
         self.assertEqual([row["x"] for row in result["rows"]], ["A", "B"])
+
+    def test_prediction_source_relation_uses_safe_explicit_projection(self) -> None:
+        store = self.write_model_artifacts()
+        original_probe = Dataset.probe_column_readable
+
+        def fake_probe(dataset: Dataset, column: Any) -> None:
+            if column.name == "Segment":
+                raise duckdb.InvalidInputException(
+                    'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                    'value "bad" is not valid UTF8!'
+                )
+            original_probe(dataset, column)
+
+        with patch.object(Dataset, "probe_column_readable", fake_probe):
+            relation_sql = store.relation_sql("gbm:m1:predictions")
+
+        self.assertNotIn("base.*", relation_sql)
+        self.assertNotIn('"Segment"', relation_sql)
+        self.assertIn('base."Age"', relation_sql)
+        self.assertIn("prediction.gbm_prediction", relation_sql)
 
     def test_uk_map_can_use_prediction_source(self) -> None:
         self.write_model_artifacts()

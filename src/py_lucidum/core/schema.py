@@ -32,6 +32,18 @@ def is_numeric_kind(kind: str) -> bool:
     return kind in {"integer", "numeric"}
 
 
+def duckdb_error_message(error: Any) -> str:
+    message = str(error).splitlines()[0].strip()
+    prefix = "Invalid Input Error: "
+    if message.startswith(prefix):
+        message = message[len(prefix):]
+    if "Invalid string encoding found in Parquet file" in message:
+        return "Invalid string encoding found in Parquet data."
+    if len(message) > 240:
+        return f"{message[:237]}..."
+    return message or "DuckDB could not read this column."
+
+
 def json_number(value: Any) -> float | int | None:
     if value is None:
         return None

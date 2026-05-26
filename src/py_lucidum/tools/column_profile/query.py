@@ -7,7 +7,7 @@ from typing import Any
 
 import duckdb
 
-from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, quote_ident
+from py_lucidum.core import ColumnInfo, Dataset, duckdb_error_message, is_numeric_kind, json_number, quote_ident
 
 
 PROFILE_TOP_VALUE_LIMIT = 5
@@ -19,17 +19,21 @@ PROFILE_DETAIL_EXACT_LEVEL_BIN_LIMIT = 100
 
 def profile(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
     with dataset.lock:
-        columns = dataset.column_map()
+        columns = dataset.all_column_map()
+        invalid_columns = dataset.invalid_column_errors()
         filter_sql = dataset.normalise_filter(request.get("filter"))
         row_count = dataset.row_count()
         filtered_row_count = dataset.filtered_row_count(filter_sql)
         column_profiles = []
         skipped_columns = []
         for column in columns.values():
+            if column.name in invalid_columns:
+                skipped_columns.append({"name": column.name, "error": invalid_columns[column.name]})
+                continue
             try:
                 column_profiles.append(profile_column(dataset, column, filter_sql, filtered_row_count))
             except duckdb.Error as exc:
-                skipped_columns.append(skipped_profile_column(column, exc))
+                skipped_columns.append(skipped_profile_column(dataset, column, exc))
         return {
             "row_count": row_count,
             "filtered_row_count": filtered_row_count,
@@ -42,10 +46,13 @@ def profile(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
 
 def profile_detail(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
     with dataset.lock:
-        columns = dataset.column_map()
+        columns = dataset.all_column_map()
         column_name = str(request.get("column") or "")
         if column_name not in columns:
             raise ValueError("Choose a valid profile column")
+        invalid_columns = dataset.invalid_column_errors()
+        if column_name in invalid_columns:
+            raise ValueError(f"Could not profile {column_name}: {invalid_columns[column_name]}")
         column = columns[column_name]
         filter_sql = dataset.normalise_filter(request.get("filter"))
         row_count = dataset.row_count()
@@ -100,15 +107,16 @@ def profile_detail(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
                 )
                 detail["blank_count"] = categorical_blank_count(dataset, column, filter_sql)
         except duckdb.Error as exc:
-            raise ValueError(profile_column_error_message(column, exc)) from exc
+            message = dataset.record_invalid_column(column.name, exc)
+            raise ValueError(f"Could not profile {column.name}: {message}") from exc
 
         return detail
 
 
-def skipped_profile_column(column: ColumnInfo, error: duckdb.Error) -> dict[str, str]:
+def skipped_profile_column(dataset: Dataset, column: ColumnInfo, error: duckdb.Error) -> dict[str, str]:
     return {
         "name": column.name,
-        "error": profile_error_message(error),
+        "error": dataset.record_invalid_column(column.name, error),
     }
 
 
@@ -124,19 +132,11 @@ def profile_warnings(skipped_columns: list[dict[str, str]]) -> list[str]:
 
 
 def profile_column_error_message(column: ColumnInfo, error: duckdb.Error) -> str:
-    return f"Could not profile {column.name}: {profile_error_message(error)}"
+    return f"Could not profile {column.name}: {duckdb_error_message(error)}"
 
 
 def profile_error_message(error: duckdb.Error) -> str:
-    message = str(error).splitlines()[0].strip()
-    prefix = "Invalid Input Error: "
-    if message.startswith(prefix):
-        message = message[len(prefix):]
-    if "Invalid string encoding found in Parquet file" in message:
-        return "Invalid string encoding found in Parquet data."
-    if len(message) > 240:
-        return f"{message[:237]}..."
-    return message or "DuckDB could not read this column."
+    return duckdb_error_message(error)
 
 
 def numeric_detail_bin_count(distinct_count: int) -> int:

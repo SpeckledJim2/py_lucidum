@@ -6,7 +6,7 @@ from typing import Any
 
 import duckdb
 
-from .schema import ColumnInfo, infer_kind, is_numeric_kind, suggested_band_width
+from .schema import ColumnInfo, duckdb_error_message, infer_kind, is_numeric_kind, suggested_band_width
 from .sql import quote_ident, sql_literal
 
 
@@ -17,6 +17,7 @@ class Dataset:
             raise FileNotFoundError(f"Dataset does not exist: {self.path}")
         self.con = duckdb.connect(database=":memory:")
         self._schema: list[ColumnInfo] | None = None
+        self._invalid_column_errors: dict[str, str] | None = None
         self._row_count: int | None = None
         self._band_suggestions: dict[str, float | int | None] | None = None
         self._lock = threading.RLock()
@@ -63,6 +64,7 @@ class Dataset:
     def data_sources(self) -> list[dict[str, Any]]:
         with self._lock:
             schema = self.schema()
+            invalid_columns = schema.get("invalid_columns", [])
             sources = [
                 {
                     "id": "dataset",
@@ -70,6 +72,7 @@ class Dataset:
                     "kind": "dataset",
                     "row_count": schema["row_count"],
                     "columns": schema["columns"],
+                    "invalid_columns": invalid_columns,
                 }
             ]
             for provider in self._source_providers:
@@ -81,41 +84,108 @@ class Dataset:
     def reload(self) -> None:
         with self._lock:
             self._schema = None
+            self._invalid_column_errors = None
             self._row_count = None
             self._band_suggestions = None
 
     def schema(self) -> dict[str, Any]:
         with self._lock:
-            if self._schema is None:
-                rows = self.con.execute(f"DESCRIBE SELECT * FROM {self.relation_sql()}").fetchall()
-                base_schema = [
-                    ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
-                    for row in rows
-                ]
-                suggestions = self.band_suggestions(base_schema)
-                self._schema = [
-                    ColumnInfo(
-                        name=col.name,
-                        duckdb_type=col.duckdb_type,
-                        kind=col.kind,
-                        band_suggestion=suggestions.get(col.name),
-                    )
-                    for col in base_schema
-                ]
+            columns = self.valid_schema_columns()
+            invalid_columns = self.invalid_columns()
             return {
                 "path": str(self.path),
                 "file_size": self.path.stat().st_size,
                 "row_count": self.row_count(),
-                "columns": [
-                    {
-                        "name": c.name,
-                        "duckdb_type": c.duckdb_type,
-                        "kind": c.kind,
-                        "band_suggestion": c.band_suggestion,
-                    }
-                    for c in self._schema
-                ],
+                "columns": [self.column_payload(c) for c in columns],
+                "invalid_columns": invalid_columns,
+                "warnings": self.invalid_column_warnings(invalid_columns),
             }
+
+    def _ensure_schema(self) -> list[ColumnInfo]:
+        if self._schema is None:
+            rows = self.con.execute(f"DESCRIBE SELECT * FROM {self.relation_sql()}").fetchall()
+            base_schema = [
+                ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
+                for row in rows
+            ]
+            try:
+                suggestions = self.band_suggestions(base_schema)
+            except duckdb.Error:
+                suggestions = {}
+            self._schema = [
+                ColumnInfo(
+                    name=col.name,
+                    duckdb_type=col.duckdb_type,
+                    kind=col.kind,
+                    band_suggestion=suggestions.get(col.name),
+                )
+                for col in base_schema
+            ]
+        return self._schema
+
+    def column_payload(self, column: ColumnInfo) -> dict[str, Any]:
+        return {
+            "name": column.name,
+            "duckdb_type": column.duckdb_type,
+            "kind": column.kind,
+            "band_suggestion": column.band_suggestion,
+        }
+
+    def invalid_columns(self) -> list[dict[str, str]]:
+        errors = self.invalid_column_errors()
+        return [
+            {"name": column.name, "error": errors[column.name]}
+            for column in self._ensure_schema()
+            if column.name in errors
+        ]
+
+    def invalid_column_errors(self) -> dict[str, str]:
+        if self._invalid_column_errors is None:
+            self._invalid_column_errors = self.detect_invalid_columns(self._ensure_schema())
+        return dict(self._invalid_column_errors)
+
+    def record_invalid_column(self, name: str, error: Any) -> str:
+        message = error if isinstance(error, str) else duckdb_error_message(error)
+        if self._invalid_column_errors is None:
+            self._invalid_column_errors = self.detect_invalid_columns(self._ensure_schema())
+        self._invalid_column_errors[str(name)] = str(message)
+        return str(message)
+
+    def detect_invalid_columns(self, columns: list[ColumnInfo]) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        for column in columns:
+            try:
+                self.probe_column_readable(column)
+            except duckdb.Error as exc:
+                errors[column.name] = duckdb_error_message(exc)
+        return errors
+
+    def probe_column_readable(self, column: ColumnInfo) -> None:
+        column_sql = quote_ident(column.name)
+        if column.kind == "categorical":
+            sql = f"SELECT COUNT(DISTINCT {column_sql}) FROM {self.relation_sql()}"
+        elif column.kind in {"integer", "numeric"}:
+            sql = f"SELECT COUNT(TRY_CAST({column_sql} AS DOUBLE)) FROM {self.relation_sql()}"
+        elif column.kind in {"date", "datetime"}:
+            sql = f"SELECT COUNT({column_sql}), MIN({column_sql}), MAX({column_sql}) FROM {self.relation_sql()}"
+        else:
+            sql = f"SELECT COUNT({column_sql}) FROM {self.relation_sql()}"
+        self.con.execute(sql).fetchone()
+
+    def valid_schema_columns(self) -> list[ColumnInfo]:
+        errors = self.invalid_column_errors()
+        return [column for column in self._ensure_schema() if column.name not in errors]
+
+    def invalid_column_warnings(self, invalid_columns: list[dict[str, str]] | None = None) -> list[str]:
+        columns = invalid_columns if invalid_columns is not None else self.invalid_columns()
+        if not columns:
+            return []
+        names = [column["name"] for column in columns]
+        visible_names = ", ".join(names[:3])
+        if len(names) > 3:
+            visible_names = f"{visible_names}, and {len(names) - 3} more"
+        plural = "s" if len(names) != 1 else ""
+        return [f"Skipped {len(names)} unreadable column{plural}: {visible_names}."]
 
     def row_count(self) -> int:
         if self._row_count is None:
@@ -214,6 +284,9 @@ FROM sample
         return self._band_suggestions
 
     def column_map(self) -> dict[str, ColumnInfo]:
+        return {c.name: c for c in self.valid_schema_columns()}
+
+    def all_column_map(self) -> dict[str, ColumnInfo]:
         return {c.name: c for c in self._schema_columns()}
 
     def column_map_for_source(self, source_id: Any = None) -> dict[str, ColumnInfo]:
@@ -232,9 +305,7 @@ FROM sample
         }
 
     def _schema_columns(self) -> list[ColumnInfo]:
-        self.schema()
-        assert self._schema is not None
-        return self._schema
+        return self._ensure_schema()
 
     def normalise_filter(self, raw: Any, source_id: Any = None) -> str:
         expression = str(raw or "").strip()

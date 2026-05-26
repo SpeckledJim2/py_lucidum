@@ -176,6 +176,28 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(payload["warnings"], ["Skipped 1 unreadable column: Segment."])
         self.assertNotIn("/tmp/bad.parquet", json.dumps(payload))
 
+    def test_profile_endpoint_reports_shared_invalid_columns(self) -> None:
+        original_probe = Dataset.probe_column_readable
+
+        def fake_probe(dataset: Dataset, column: Any) -> None:
+            if column.name == "Segment":
+                raise duckdb.InvalidInputException(
+                    'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                    'value "bad" is not valid UTF8!'
+                )
+            original_probe(dataset, column)
+
+        with patch.object(Dataset, "probe_column_readable", fake_probe):
+            app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)
+            status, _, body = asgi_post_json(app, "/api/column-profile/summary", {"filter": ""})
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual([column["name"] for column in payload["columns"]], ["Age", "Score", "QuoteDate"])
+        self.assertEqual(payload["skipped_columns"], [
+            {"name": "Segment", "error": "Invalid string encoding found in Parquet data."},
+        ])
+
     def test_profile_detail_endpoint_includes_duckdb_timing(self) -> None:
         app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)
 

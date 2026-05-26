@@ -8,6 +8,7 @@ Chosen defaults:
 
 - Store artifacts in `.lucidum/models/gbm/` next to the source dataset.
 - Train through a background job with polling.
+- Report live job progress through the existing polling endpoint during LightGBM training.
 - Use the sidebar Actual and denominator/KPI controls as the GBM response and offset/exposure selections.
 - Keep LightGBM/backend modelling code cleanly separated from frontend UI code.
 - Use Tabulator for the editable feature/parameter grids, vendored locally and lazy-loaded only for GBM.
@@ -25,6 +26,7 @@ Chosen defaults:
   - `routes.py`: HTTP request/response handling only.
 - Add a GBM model store with one directory per model containing `manifest.json`, `model.txt`, prediction/SHAP/evaluation/tree Parquet artifacts, feature config, parameters, and training log.
 - Add GBM routes for config, validation, training, job polling, model listing/loading, and active-model selection.
+- Job polling responses include transient progress snapshots with current phase, iteration, train/test metric values, and live evaluation history.
 - Add GBM tree routes for model tree lists and selected tree detail.
 - Extend the shared data-source contract with:
   - `gbm:<model_id>:predictions`
@@ -38,8 +40,10 @@ Chosen defaults:
 - For log-link objectives such as `poisson`, `gamma`, and `tweedie`, use `log(selected denominator)` as LightGBM `init_score`. If no denominator is selected, treat offset values as 1.
 - If a sample column exists, train on `training`, early-stop on `test`, and score all valid rows. If not, train all valid rows, disable early stopping, and show a warning.
 - "Create sample column" creates a model-local deterministic 80/20 train/test assignment in the sidecar folder, not in the original dataset.
-- Feature validation disables unusable types, flags high-cardinality categoricals, and allows monotonicity only for numeric features and compatible objectives.
+- Feature validation disables unusable types, shows unreadable dataset columns as invalid disabled rows, flags high-cardinality categoricals, and allows monotonicity only for numeric features and compatible objectives.
+- Training reads only selected features plus required response, offset, and sample columns from the raw dataset. Prediction sources join back only readable source columns.
 - After training, persist LightGBM gain feature importance and use it to refresh the feature grid.
+- During training, a LightGBM callback updates the in-memory job with current iteration and metric values so the browser can update status text and the evaluation chart before the model is persisted.
 - SHAP row options are `0`, `10k`, `100k`, and `all`. SHAP values are stored as a wide artifact keyed by `__lucidum_row_id`, with one numeric column per selected feature; the summary artifact remains one row per feature.
 
 ## UI
@@ -54,6 +58,7 @@ Chosen defaults:
   - After training or active-model switching, the feature grid must mirror the active model's persisted feature config: `Use`, `Monotonicity`, `Gain`, and sort order.
   - Objective and metric parameter rows are dropdowns containing supported single-response LightGBM options; other parameters remain editable text inputs.
   - Right side contains parameter grid, SHAP row-count selector, green Train GBM button, and ECharts evaluation plot.
+  - During training, a compact toolbar status shows the current iteration and latest metric while the evaluation plot updates from live job progress.
   - The ECharts evaluation title is a single line containing evaluation metric, test metric, and best iteration with the same font size.
 - **Model navigator** tab lists saved models, key parameters, train/test metrics, timings, and active-model selection.
 - **Tree viewer** tab provides a searchable tree summary table plus a graphical D3 tree from saved LightGBM dump output. The diagram supports zoom, fit/reset, colour palettes, decoded categorical thresholds, edge labels, and default-branch highlighting.
@@ -65,6 +70,7 @@ Chosen defaults:
   - GBM remains opt-in and imports no modelling libraries unless enabled.
   - Missing optional dependencies return an actionable install-extra error.
   - Missing LightGBM native runtime dependencies return an actionable error, including the macOS `brew install libomp` hint for `libomp.dylib`.
+  - Live job progress is returned through job polling and remains JSON-safe.
   - Backend validation catches invalid selected response/denominator columns, invalid objectives, invalid sample splits, unusable features, and invalid monotonicity.
   - Model store creates, lists, loads, activates, and validates sidecar artifacts.
   - Data-source registry exposes GBM prediction and SHAP sources.

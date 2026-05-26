@@ -38,6 +38,9 @@ const GBM_PARAMETER_OPTIONS = {
   ],
 };
 
+const GBM_RUNNING_POLL_MS = 500;
+const GBM_QUEUED_POLL_MS = 1000;
+
 export function createGbmTool({
   api,
   clearToolCaches,
@@ -72,6 +75,7 @@ export function createGbmTool({
   let activeDetail = null;
   let pollTimer = null;
   let isTraining = false;
+  let liveProgress = null;
   let evaluationChart = null;
   let evaluationResizeObserver = null;
   const treeViewer = createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNotice });
@@ -144,6 +148,7 @@ export function createGbmTool({
             <button class="tab ${activeTab === "models" ? "active" : ""}" type="button" data-gbm-tab="models">Model navigator</button>
             <button class="tab ${activeTab === "trees" ? "active" : ""}" type="button" data-gbm-tab="trees">Tree viewer</button>
           </div>
+          <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${escapeHtml(liveProgress?.message || "")}</div>
         </div>
         <div class="gbm-tab-panel ${activeTab === "features" ? "" : "hidden"}" data-gbm-panel="features">
           <div class="gbm-feature-layout">
@@ -231,6 +236,7 @@ export function createGbmTool({
     renderTables(data);
     if (data.active_model_id) loadModelDetail(data.active_model_id);
     if (activeTab === "trees") treeViewer.render(data.active_model_id || "");
+    if (liveProgress) renderLiveProgress(liveProgress);
     setDuckDbTiming(tool, data.timings || {});
     setClientTiming(tool, data.client_timings || {});
     setRenderTiming(tool, 0);
@@ -318,6 +324,15 @@ export function createGbmTool({
     }
     notice.textContent = text;
     notice.classList.toggle("hidden", !text);
+  }
+
+  function setTrainingStatus(message, phase = "") {
+    const status = el("gbmTrainingStatus");
+    if (!status) return;
+    const text = String(message || "");
+    status.textContent = text;
+    status.dataset.phase = String(phase || "");
+    status.classList.toggle("hidden", !text);
   }
 
   function syncSidebarModelChooser(models, activeModelId) {
@@ -490,6 +505,7 @@ export function createGbmTool({
         rowFormatter: (row) => {
           const data = row.getData();
           const element = row.getElement();
+          element.classList.toggle("gbm-feature-invalid", isInvalidFeature(data));
           element.classList.toggle("gbm-feature-disabled", !isFeatureSelectable(data));
           element.classList.toggle("gbm-feature-warning", isFeatureSelectable(data) && Boolean(data.high_cardinality));
         },
@@ -529,6 +545,7 @@ export function createGbmTool({
 
   function featureTypeLabel(feature) {
     const kind = String(feature?.kind || "");
+    if (isInvalidFeature(feature) || kind === "invalid") return "invalid";
     if (kind === "categorical") {
       const count = Number(feature?.distinct_count);
       if (Number.isFinite(count)) return `categorical (${count.toLocaleString()})`;
@@ -557,8 +574,13 @@ export function createGbmTool({
     return !reserved.has(feature.name);
   }
 
+  function isInvalidFeature(feature) {
+    return Boolean(feature?.invalid) || String(feature?.kind || "") === "invalid";
+  }
+
   function featureRowClasses(feature) {
     return [
+      isInvalidFeature(feature) ? "gbm-feature-invalid" : "",
       isFeatureSelectable(feature) ? "" : "gbm-feature-disabled",
       isFeatureSelectable(feature) && feature.high_cardinality ? "gbm-feature-warning" : "",
     ].filter(Boolean).join(" ");
@@ -808,32 +830,43 @@ export function createGbmTool({
       setGroupMeta(tool, "Training GBM...");
       startToolTiming(tool);
       setTrainingState(true);
+      liveProgress = null;
+      setTrainingStatus("Training GBM...", "queued");
       const job = await api("/api/gbm/train", { method: "POST", body: JSON.stringify(payload), clientTiming: true });
-      pollJob(job.job_id);
+      applyJobProgress(job);
+      pollJob(job.job_id, 0);
     } catch (error) {
       setTrainingState(false);
       setToolTimingFailed(tool);
+      setTrainingStatus("");
       setGbmNotice(error.message);
     }
   }
 
-  function pollJob(jobId) {
+  function pollJob(jobId, delay = GBM_QUEUED_POLL_MS) {
     clearTimeout(pollTimer);
     pollTimer = setTimeout(async () => {
       try {
         const job = await api(`/api/gbm/jobs/${encodeURIComponent(jobId)}`, { method: "GET", clientTiming: true });
+        applyJobProgress(job);
         if (job.status === "queued" || job.status === "running") {
-          setGroupMeta(tool, job.status === "queued" ? "GBM queued..." : "Training GBM...");
-          pollJob(jobId);
+          if (!job.progress) {
+            const fallback = job.status === "queued" ? "GBM queued..." : "Training GBM...";
+            setTrainingStatus(fallback, job.status);
+            setGroupMeta(tool, fallback);
+          }
+          pollJob(jobId, job.status === "running" ? GBM_RUNNING_POLL_MS : GBM_QUEUED_POLL_MS);
           return;
         }
         if (job.status === "failed") {
           setTrainingState(false);
           setToolTimingFailed(tool);
+          if (!job.progress) setTrainingStatus("GBM failed", "failed");
           setGbmNotice(job.error || "GBM training failed");
           setGroupMeta(tool, "GBM failed");
           return;
         }
+        liveProgress = null;
         await reloadSchema(job.result?.sources?.predictions);
         clearToolCaches();
         state.gbmCreateSample = false;
@@ -842,6 +875,7 @@ export function createGbmTool({
         cache.requestKey = stableConfigKey();
         cache.data = data;
         setTrainingState(false);
+        setTrainingStatus("");
         measureToolRender(tool, () => render(data));
         refreshActiveTool({ force: true });
       } catch (error) {
@@ -849,7 +883,29 @@ export function createGbmTool({
         setToolTimingFailed(tool);
         setGbmNotice(error.message);
       }
-    }, 1000);
+    }, Math.max(0, delay));
+  }
+
+  function applyJobProgress(job) {
+    if (!job?.progress) return;
+    renderLiveProgress(job.progress);
+  }
+
+  function renderLiveProgress(progress) {
+    liveProgress = progress;
+    setTrainingStatus(progress.message || "", progress.phase || "");
+    if (progress.message) setGroupMeta(tool, progress.message);
+    if (progress.evaluation) {
+      renderEvaluationChart({
+        evaluation: progress.evaluation,
+        progress,
+        metric: progress.metric,
+        manifest: {
+          metric: progress.metric,
+          best_iteration: progress.iteration,
+        },
+      });
+    }
   }
 
   async function activateModel(modelId) {
@@ -879,12 +935,12 @@ export function createGbmTool({
     }
   }
 
-  function renderEvaluationChart() {
+  function renderEvaluationChart(source = null) {
     const target = el("gbmEvaluationChart");
-    if (!target || !window.echarts || !activeDetail?.training_log?.evaluation) return;
-    disposeEvaluationChart();
+    const detail = source || activeDetail;
+    const evaluation = detail?.training_log?.evaluation || detail?.evaluation;
+    if (!target || !window.echarts || !evaluation) return;
     const rows = [];
-    const evaluation = activeDetail.training_log.evaluation;
     for (const [datasetName, metrics] of Object.entries(evaluation)) {
       for (const [metricName, values] of Object.entries(metrics)) {
         rows.push({ datasetName, metricName, values });
@@ -893,16 +949,19 @@ export function createGbmTool({
     if (!rows.length) return;
     rows.sort(compareEvaluationRows);
     const metricNames = new Set(rows.map((row) => row.metricName));
-    const primaryMetric = String(activeDetail?.manifest?.metric || rows[0]?.metricName || "metric");
+    const primaryMetric = String(detail?.manifest?.metric || detail?.metric || rows[0]?.metricName || "metric");
     const maxIteration = Math.max(1, ...rows.map((row) => row.values.length));
     const xInterval = niceIterationInterval(maxIteration);
     const xMax = Math.ceil(maxIteration / xInterval) * xInterval;
-    const title = evaluationTitle(rows, primaryMetric);
+    const title = evaluationTitle(rows, primaryMetric, detail?.manifest || {}, detail?.progress || null);
     const textColor = cssVar("--text", "#3f3f46");
     const mutedColor = cssVar("--muted", "#4b5563");
     const lineColor = cssVar("--line", "#e5e7eb");
     const panelColor = cssVar("--panel", "#ffffff");
-    evaluationChart = window.echarts.init(target);
+    if (!evaluationChart) {
+      evaluationChart = window.echarts.init(target);
+      bindEvaluationResize(target);
+    }
     evaluationChart.setOption({
       animation: false,
       color: ["#ff140f", cssVar("--actual-line", "#050505"), "#2563eb", "#7c3aed"],
@@ -954,8 +1013,7 @@ export function createGbmTool({
         lineStyle: { width: 2 },
         data: row.values.map((value, index) => [index + 1, value]),
       })),
-    });
-    bindEvaluationResize(target);
+    }, true);
     requestAnimationFrame(() => evaluationChart?.resize());
   }
 
@@ -978,20 +1036,37 @@ export function createGbmTool({
     return 2;
   }
 
-  function evaluationTitle(rows, primaryMetric) {
-    const manifest = activeDetail?.manifest || {};
+  function evaluationTitle(rows, primaryMetric, manifest = {}, progress = null) {
     const bestIteration = Math.max(0, Number(manifest.best_iteration || 0));
     const metric = primaryMetric || rows[0]?.metricName || "metric";
     const testRow = rows.find((row) => row.datasetName === "test" && row.metricName === metric)
       || rows.find((row) => row.datasetName === "test")
       || rows.find((row) => row.metricName === metric)
       || rows[0];
-    const bestValue = valueAtIteration(testRow?.values || [], bestIteration) ?? lastFiniteValue(testRow?.values || []);
+    const livePoint = progress ? preferredLiveMetric(progress.latest || [], metric) : null;
+    const liveValue = Number(livePoint?.value);
+    const bestValue = Number.isFinite(liveValue) ? liveValue : valueAtIteration(testRow?.values || [], bestIteration) ?? lastFiniteValue(testRow?.values || []);
     const parts = [];
     parts.push(`evaluation metric: ${metric}`);
     if (bestValue !== null) parts.push(`test metric: ${formatEvaluationValue(bestValue)}`);
-    if (bestIteration) parts.push(`best iteration: ${bestIteration.toLocaleString()}`);
+    if (progress?.iteration) {
+      parts.push(`iteration: ${Number(progress.iteration).toLocaleString()}`);
+    } else if (bestIteration) {
+      parts.push(`best iteration: ${bestIteration.toLocaleString()}`);
+    }
     return parts.join(", ");
+  }
+
+  function preferredLiveMetric(latest, metric) {
+    if (!Array.isArray(latest) || !latest.length) return null;
+    return [...latest].sort((left, right) => liveMetricSortKey(left, metric).localeCompare(liveMetricSortKey(right, metric)))[0];
+  }
+
+  function liveMetricSortKey(item, metric) {
+    const dataset = String(item?.dataset || "").toLowerCase();
+    const datasetRank = dataset === "test" ? "0" : ["validation", "valid"].includes(dataset) ? "1" : ["training", "train"].includes(dataset) ? "2" : "3";
+    const metricRank = String(item?.metric || "") === String(metric || "") ? "0" : "1";
+    return `${datasetRank}:${metricRank}:${item?.metric || ""}`;
   }
 
   function valueAtIteration(values, iteration) {
@@ -1099,7 +1174,11 @@ export function createGbmTool({
     fetchData,
     render,
     refreshTheme() {
-      renderEvaluationChart();
+      if (liveProgress?.evaluation) {
+        renderLiveProgress(liveProgress);
+      } else {
+        renderEvaluationChart();
+      }
       treeViewer.refreshTheme();
     },
     syncSidebarFromSchema,

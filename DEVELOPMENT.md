@@ -73,6 +73,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - Other local files under `datasets/` remain ignored.
 - Parquet is the preferred working format for speed; CSV remains supported for convenience.
 - `GET /api/schema` includes `data_sources`. The default source is `dataset`; model outputs publish named tabular artifacts through this same contract.
+- `GET /api/schema` excludes unreadable columns from `columns` and reports them as `invalid_columns` with sanitized errors. Normal tools should use the safe column maps; only diagnostics or choosers that explicitly report invalid columns should use the all-column map.
 - Line/Bar accepts a `source` request field and defaults it to `dataset`. Unknown sources are rejected before query execution.
 
 **Defaults, saved filters, and KPIs**
@@ -93,7 +94,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
 **Column profile**
 
 - Column profile is the first default tool when enabled.
-- Summary requests return every dataset column with inferred kind, DuckDB type, filtered missing count, exact distinct count, and min/max for numeric/date-like columns.
+- Summary requests return every readable dataset column with inferred kind, DuckDB type, filtered missing count, exact distinct count, and min/max for numeric/date-like columns.
+- Unreadable columns are omitted from profile summaries and returned through `skipped_columns` with sanitized errors.
 - Detail requests return value counts for categorical columns and histogram/stat tables for numeric/date-like columns.
 - Profile requests respect the same active footer/saved-filter expression as the other tools.
 
@@ -123,10 +125,13 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - GLM still returns a shell `status: "not_implemented"` response.
 - GBM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
 - GBM training imports LightGBM, pandas, and numpy lazily through the `gbm` optional extra. These packages must not become base install dependencies. On macOS, LightGBM's native library may also require Homebrew `libomp`; missing `libomp.dylib` should be reported as an actionable GBM dependency error, not a server 500.
+- GBM training runs as an in-memory background job. `GET /api/gbm/jobs/{job_id}` returns transient `progress` while the job is queued/running, including phase, message, iteration, train/test metric points, and live evaluation history. Persisted training history remains `training_log.json` and `evaluation.parquet`.
 - GBM uses the sidebar Actual and denominator/KPI controls as the model response and offset/exposure inputs. The filter controls remain hidden while GBM is active because training ignores the global filter.
 - GBM artifacts are stored beside the source dataset under `.lucidum/models/gbm/`, with one directory per model.
 - GBM `feature_config.json` is the persisted source of truth for the trained model's selected features, monotonicity settings, and Gain values.
 - GBM config and activation responses must drive the UI's `Use`, `Monotonicity`, `Gain`, and parameter tables from the active model, so switching models mirrors exactly what was trained.
+- GBM is the one normal chooser that still displays invalid dataset columns; they must render as disabled invalid rows and must not be sent to LightGBM.
+- GBM training and model-output sources must use explicit readable-column projections. Avoid `SELECT *` on the raw dataset path because unreadable columns can fail even when they are not selected as model features.
 - GBM model outputs publish data sources through the shared `data_sources` contract using IDs such as `gbm:<model_id>:predictions`, `gbm:<model_id>:shap_long`, and `gbm:<model_id>:shap_summary`.
 - The `gbm:<model_id>:shap_long` source ID is retained for compatibility, but the stored SHAP values artifact is wide: `__lucidum_row_id` plus one numeric SHAP column per selected feature. `gbm:<model_id>:shap_summary` remains one row per feature.
 - LightGBM-specific training, objective handling, offsets, SHAP, feature importance, tree extraction, and tree label normalization belong in backend GBM modules, not in frontend code.
@@ -198,8 +203,8 @@ The current test suite should cover:
 - Line-and-bar aggregation, filters, transforms, grouping, sorting, saved filters, CSV reads, and Parquet reads.
 - UK map area, sector, and unit aggregation, alias defaults, coordinate validation, and custom column defaults.
 - Tool registry defaults, optional GLM/GBM registration, and the default `dataset` data-source contract.
-- GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, active-model feature/parameter refresh, model data-source publishing, Gain ordering, SHAP row limits, tree summary/detail routes, and chart/map use of prediction sources.
-- Browser smoke behavior for loading profile, chart, map, and GBM tools without unexpected extra API requests or stale active-model state, including the GBM tree viewer.
+- GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, live job progress, active-model feature/parameter refresh, model data-source publishing, Gain ordering, SHAP row limits, tree summary/detail routes, and chart/map use of prediction sources.
+- Browser smoke behavior for loading profile, chart, map, and GBM tools without unexpected extra API requests or stale active-model state, including live GBM progress and the GBM tree viewer.
 
 ## Future Work
 

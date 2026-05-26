@@ -2619,6 +2619,30 @@
         position: static;
       }
 
+      .gbm-training-status {
+        align-self: center;
+        color: var(--muted);
+        flex: 0 1 auto;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.2;
+        margin-left: auto;
+        max-width: min(560px, 48%);
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .gbm-training-status[data-phase="failed"] {
+        color: var(--danger);
+      }
+
+      .gbm-training-status[data-phase="succeeded"] {
+        color: #15803d;
+      }
+
       .gbm-actions {
         display: flex;
         align-items: stretch;
@@ -3316,20 +3340,47 @@
       #gbmFeatureGrid .tabulator-row.gbm-feature-disabled .tabulator-cell,
       .gbm-fallback-table tr.gbm-feature-disabled,
       .gbm-fallback-table tr.gbm-feature-disabled td {
-        background: color-mix(in srgb, #ef4444 14%, var(--panel)) !important;
+        background: color-mix(in srgb, var(--muted) 9%, var(--panel)) !important;
       }
 
       #gbmFeatureGrid .tabulator-row.gbm-feature-disabled .tabulator-cell,
       .gbm-fallback-table tr.gbm-feature-disabled td {
-        color: color-mix(in srgb, var(--text) 70%, #991b1b);
+        color: color-mix(in srgb, var(--text) 62%, var(--muted));
       }
 
       body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-disabled,
       body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-disabled .tabulator-cell,
       body.dark .gbm-fallback-table tr.gbm-feature-disabled,
       body.dark .gbm-fallback-table tr.gbm-feature-disabled td {
+        background: color-mix(in srgb, var(--muted) 16%, var(--panel)) !important;
+        color: color-mix(in srgb, var(--text) 68%, var(--muted)) !important;
+      }
+
+      #gbmFeatureGrid .tabulator-row.gbm-feature-invalid,
+      #gbmFeatureGrid .tabulator-row.gbm-feature-invalid .tabulator-cell,
+      .gbm-fallback-table tr.gbm-feature-invalid,
+      .gbm-fallback-table tr.gbm-feature-invalid td {
+        background: color-mix(in srgb, #ef4444 14%, var(--panel)) !important;
+        color: color-mix(in srgb, var(--text) 70%, #991b1b) !important;
+      }
+
+      #gbmFeatureGrid .tabulator-row.gbm-feature-invalid .gbm-feature-kind,
+      .gbm-fallback-table tr.gbm-feature-invalid .gbm-feature-kind {
+        color: #991b1b;
+        font-weight: 700;
+      }
+
+      body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-invalid,
+      body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-invalid .tabulator-cell,
+      body.dark .gbm-fallback-table tr.gbm-feature-invalid,
+      body.dark .gbm-fallback-table tr.gbm-feature-invalid td {
         background: color-mix(in srgb, #ef4444 24%, var(--panel)) !important;
         color: #fecaca !important;
+      }
+
+      body.dark #gbmFeatureGrid .tabulator-row.gbm-feature-invalid .gbm-feature-kind,
+      body.dark .gbm-fallback-table tr.gbm-feature-invalid .gbm-feature-kind {
+        color: #fecaca;
       }
 
       #gbmFeatureGrid .tabulator-row.gbm-feature-warning,

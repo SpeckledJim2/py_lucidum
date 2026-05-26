@@ -46,6 +46,28 @@ SOURCE_KINDS = {
 SOURCE_RE = re.compile(r"^gbm:([A-Za-z0-9_.-]+):(predictions|shap_long|shap_summary)$")
 
 
+def dedupe_columns(columns: list[str]) -> list[str]:
+    projected: list[str] = []
+    seen: set[str] = set()
+    for column in columns:
+        name = str(column or "").strip()
+        if not name or name in seen or name == "__lucidum_row_id":
+            continue
+        projected.append(name)
+        seen.add(name)
+    return projected
+
+
+def prediction_source_select_sql(source_columns: list[str]) -> str:
+    return ",\n  ".join(f"base.{quote_ident(name)}" for name in source_columns)
+
+
+def row_number_source_projection_sql(source_columns: list[str]) -> str:
+    columns_sql = ",\n    ".join(quote_ident(name) for name in source_columns)
+    suffix = f",\n    {columns_sql}" if columns_sql else ""
+    return f"ROW_NUMBER() OVER () AS __lucidum_row_id{suffix}"
+
+
 @dataclass(frozen=True)
 class GbmSourceRef:
     model_id: str
@@ -160,18 +182,29 @@ class GbmModelStore:
         manifest = self.manifest(ref.model_id)
         offset_col = str(manifest.get("offset_column") or "").strip()
         where_sql = f"\n  WHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
+        source_columns = self.source_columns(manifest)
+        select_sql = prediction_source_select_sql(source_columns)
+        base_projection_sql = row_number_source_projection_sql(source_columns)
         return f"""(
 SELECT
-  base.* EXCLUDE (__lucidum_row_id),
+  {select_sql}{',' if select_sql else ''}
   prediction.gbm_prediction
 FROM (
   SELECT
-    ROW_NUMBER() OVER () AS __lucidum_row_id,
-    *
+    {base_projection_sql}
   FROM {self.dataset_relation_sql()}{where_sql}
 ) base
 INNER JOIN read_parquet({sql_literal(str(source_path))}) prediction USING (__lucidum_row_id)
 )"""
+
+    def source_columns(self, manifest: dict[str, Any]) -> list[str]:
+        raw_columns = manifest.get("source_columns")
+        if isinstance(raw_columns, list):
+            columns = [str(name).strip() for name in raw_columns if str(name or "").strip()]
+            if columns:
+                return dedupe_columns(columns)
+        dataset = Dataset(self.dataset_path)
+        return list(dataset.column_map())
 
     def dataset_relation_sql(self) -> str:
         path = sql_literal(str(self.dataset_path))

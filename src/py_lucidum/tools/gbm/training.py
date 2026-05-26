@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import duckdb
 
@@ -24,6 +24,9 @@ from .validation import (
     uses_log_offset,
     validate_request,
 )
+
+
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class MissingGbmDependency(RuntimeError):
@@ -75,9 +78,47 @@ def write_dataframe_parquet(frame: Any, path: Path) -> None:
         con.close()
 
 
-def train_model(dataset: Dataset, store: GbmModelStore, payload: dict[str, Any]) -> dict[str, Any]:
+def training_projection_columns(
+    *,
+    response_col: str,
+    offset_col: str | None,
+    sample_column: str | None,
+    feature_names: list[str],
+    columns: dict[str, Any],
+) -> list[str]:
+    names = [response_col, offset_col, sample_column, *feature_names]
+    projected: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        text = str(name or "").strip()
+        if not text or text in seen or text not in columns:
+            continue
+        projected.append(text)
+        seen.add(text)
+    return projected
+
+
+def training_select_sql(relation_sql: str, projection_columns: list[str], where_sql: str = "") -> str:
+    select_parts = ["ROW_NUMBER() OVER () AS __lucidum_row_id"]
+    select_parts.extend(quote_ident(name) for name in projection_columns)
+    select_sql = ",\n  ".join(select_parts)
+    return f"""
+SELECT
+  {select_sql}
+FROM {relation_sql}
+{where_sql}
+"""
+
+
+def train_model(
+    dataset: Dataset,
+    store: GbmModelStore,
+    payload: dict[str, Any],
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
     lgb, np, pd = gbm_dependencies()
     started = time.perf_counter()
+    emit_progress(progress_callback, {"phase": "preparing", "message": "preparing GBM...", "percent": 0})
     validation = validate_request(dataset, payload)
     if not validation.ok:
         raise ValueError("; ".join(validation.errors))
@@ -95,14 +136,18 @@ def train_model(dataset: Dataset, store: GbmModelStore, payload: dict[str, Any])
         response_col = selected_response_column(payload, columns)
         offset_col = selected_offset_column(payload, columns)
         features = normalise_features(payload.get("features"), columns)
+        feature_names = [feature["name"] for feature in features]
+        sample_column = detect_sample_column(dataset, payload.get("sample_column"))
+        source_columns = list(columns)
+        projection_columns = training_projection_columns(
+            response_col=response_col,
+            offset_col=offset_col,
+            sample_column=sample_column,
+            feature_names=feature_names,
+            columns=columns,
+        )
         where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
-        select_sql = f"""
-SELECT
-  ROW_NUMBER() OVER () AS __lucidum_row_id,
-  *
-FROM {dataset.relation_sql()}
-{where_sql}
-"""
+        select_sql = training_select_sql(dataset.relation_sql(), projection_columns, where_sql)
         score_frame = dataset.con.execute(select_sql).fetch_df()
 
     if score_frame.empty:
@@ -111,7 +156,6 @@ FROM {dataset.relation_sql()}
     model_label = str(payload.get("label") or "GBM").strip() or "GBM"
     model_id = store.create_model_id(model_label)
     model_dir = store.create_model_dir(model_id)
-    feature_names = [feature["name"] for feature in features]
     categorical_features = [feature["name"] for feature in features if feature["kind"] == "categorical"]
     monotone_constraints = [int(feature["monotonicity"]) for feature in features]
     if any(monotone_constraints):
@@ -122,7 +166,6 @@ FROM {dataset.relation_sql()}
     if offset_col:
         work_frame[offset_col] = pd.to_numeric(work_frame[offset_col], errors="coerce")
     response_present = work_frame[response_col].notna()
-    sample_column = detect_sample_column(dataset, payload.get("sample_column"))
     sample_mode = "none"
     if sample_column:
         sample_values = work_frame[sample_column].astype(str).str.strip().str.lower()
@@ -173,6 +216,14 @@ FROM {dataset.relation_sql()}
 
     evaluation_result: dict[str, dict[str, list[float]]] = {}
     callbacks = [lgb.record_evaluation(evaluation_result)]
+    callbacks.append(
+        lightgbm_progress_callback(
+            metric_name=selected_metric,
+            total_iterations=num_boost_round,
+            evaluation_result=evaluation_result,
+            progress_callback=progress_callback,
+        )
+    )
     if len(valid_sets) > 1 and early_stopping_rounds > 0:
         callbacks.append(lgb.early_stopping(early_stopping_rounds, verbose=False))
     callbacks.append(lgb.log_evaluation(period=0))
@@ -189,6 +240,18 @@ FROM {dataset.relation_sql()}
     model_path = store.artifact_path(model_id, "model")
     booster.save_model(str(model_path), num_iteration=best_iteration)
 
+    emit_progress(
+        progress_callback,
+        phase_progress_payload(
+            phase="scoring",
+            message=f"best iteration {best_iteration}, scoring...",
+            percent=90,
+            iteration=best_iteration,
+            total_iterations=num_boost_round,
+            metric=selected_metric,
+            evaluation=evaluation_result,
+        ),
+    )
     raw_score = booster.predict(feature_frame, raw_score=True, num_iteration=best_iteration)
     if use_offset_init_score:
         prediction = np.exp(log_offset + raw_score)
@@ -216,16 +279,21 @@ FROM {dataset.relation_sql()}
     ]
     feature_config = sorted(feature_config, key=lambda item: (-float(item["gain"]), str(item["name"]).lower()))
 
-    evaluation_frame = evaluation_dataframe(pd, evaluation_result)
-    write_dataframe_parquet(evaluation_frame, store.artifact_path(model_id, "evaluation"))
-    tree_dump = booster.dump_model(num_iteration=best_iteration)
-    store.write_json(store.artifact_path(model_id, "tree_dump"), tree_dump)
-    tree_table = tree_dataframe(pd, booster)
-    write_dataframe_parquet(tree_table, store.artifact_path(model_id, "tree_table"))
-
     shap_mode = str(payload.get("shap_rows") or "0").strip().lower()
     shap_summary_rows: list[dict[str, Any]] = []
     if shap_mode not in {"zero", "0", "none"}:
+        emit_progress(
+            progress_callback,
+            phase_progress_payload(
+                phase="shap",
+                message=f"best iteration {best_iteration}, SHAP values...",
+                percent=96,
+                iteration=best_iteration,
+                total_iterations=num_boost_round,
+                metric=selected_metric,
+                evaluation=evaluation_result,
+            ),
+        )
         shap_frame, shap_summary = shap_dataframes(
             np=np,
             pd=pd,
@@ -240,6 +308,25 @@ FROM {dataset.relation_sql()}
         write_dataframe_parquet(shap_frame, store.artifact_path(model_id, "shap_long"))
         write_dataframe_parquet(shap_summary, store.artifact_path(model_id, "shap_summary"))
         shap_summary_rows = shap_summary.to_dict("records")
+
+    emit_progress(
+        progress_callback,
+        phase_progress_payload(
+            phase="artifacts",
+            message=f"best iteration {best_iteration}, tree artifacts...",
+            percent=98,
+            iteration=best_iteration,
+            total_iterations=num_boost_round,
+            metric=selected_metric,
+            evaluation=evaluation_result,
+        ),
+    )
+    evaluation_frame = evaluation_dataframe(pd, evaluation_result)
+    write_dataframe_parquet(evaluation_frame, store.artifact_path(model_id, "evaluation"))
+    tree_dump = booster.dump_model(num_iteration=best_iteration)
+    store.write_json(store.artifact_path(model_id, "tree_dump"), tree_dump)
+    tree_table = tree_dataframe(pd, booster)
+    write_dataframe_parquet(tree_table, store.artifact_path(model_id, "tree_table"))
 
     elapsed = time.perf_counter() - started
     manifest = {
@@ -256,6 +343,7 @@ FROM {dataset.relation_sql()}
         "test_rows": int(test_mask.sum()),
         "scored_rows": int(len(score_frame)),
         "sample_column": sample_mode if sample_mode != "none" else None,
+        "source_columns": source_columns,
         "shap_rows": int(len(shap_summary_rows) and min(len(score_frame), shap_row_limit(shap_mode, len(score_frame)))),
         "timings": {"training_seconds": elapsed},
         "warnings": validation.warnings,
@@ -271,7 +359,180 @@ FROM {dataset.relation_sql()}
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
     store.activate_model(model_id)
     manifest["active"] = True
+    emit_progress(
+        progress_callback,
+        phase_progress_payload(
+            phase="succeeded",
+            message="GBM training complete",
+            percent=100,
+            iteration=best_iteration,
+            total_iterations=num_boost_round,
+            metric=selected_metric,
+            evaluation=evaluation_result,
+        ),
+    )
     return manifest
+
+
+def emit_progress(progress_callback: ProgressCallback | None, progress: dict[str, Any]) -> None:
+    if progress_callback:
+        progress_callback(progress)
+
+
+def phase_progress_payload(
+    *,
+    phase: str,
+    message: str,
+    percent: float | int | None,
+    iteration: int | None = None,
+    total_iterations: int | None = None,
+    metric: str | None = None,
+    evaluation: dict[str, dict[str, list[float]]] | None = None,
+) -> dict[str, Any]:
+    safe_evaluation = json_safe_evaluation(evaluation or {})
+    return {
+        "phase": phase,
+        "message": message,
+        "iteration": iteration,
+        "total_iterations": total_iterations,
+        "percent": json_safe_number(percent),
+        "metric": metric,
+        "latest": latest_from_evaluation(safe_evaluation, metric),
+        "evaluation": safe_evaluation,
+    }
+
+
+def lightgbm_progress_callback(
+    *,
+    metric_name: str,
+    total_iterations: int,
+    evaluation_result: dict[str, dict[str, list[float]]],
+    progress_callback: ProgressCallback | None,
+) -> Any:
+    def callback(env: Any) -> None:
+        emit_progress(
+            progress_callback,
+            lightgbm_progress_payload(
+                env,
+                metric_name=metric_name,
+                total_iterations=total_iterations,
+                evaluation_result=evaluation_result,
+            ),
+        )
+
+    callback.order = 30
+    callback.before_iteration = False
+    return callback
+
+
+def lightgbm_progress_payload(
+    env: Any,
+    *,
+    metric_name: str,
+    total_iterations: int,
+    evaluation_result: dict[str, dict[str, list[float]]],
+) -> dict[str, Any]:
+    begin_iteration = int(getattr(env, "begin_iteration", 0) or 0)
+    current_iteration = int(getattr(env, "iteration", 0) or 0) - begin_iteration + 1
+    total = max(1, int(total_iterations or 1))
+    latest = latest_from_evaluation_result_list(getattr(env, "evaluation_result_list", None))
+    preferred = preferred_progress_metric(latest, metric_name)
+    message = training_progress_message(current_iteration, total, preferred, metric_name)
+    return {
+        "phase": "training",
+        "message": message,
+        "iteration": current_iteration,
+        "total_iterations": total,
+        "percent": round(min(90.0, max(0.0, 90.0 * current_iteration / total)), 1),
+        "metric": metric_name,
+        "latest": latest,
+        "evaluation": json_safe_evaluation(evaluation_result),
+    }
+
+
+def latest_from_evaluation_result_list(evaluation_result_list: Any) -> list[dict[str, Any]]:
+    latest: list[dict[str, Any]] = []
+    for item in evaluation_result_list or []:
+        if len(item) < 3:
+            continue
+        latest.append(
+            {
+                "dataset": str(item[0]),
+                "metric": str(item[1]),
+                "value": json_safe_number(item[2]),
+            }
+        )
+    latest.sort(key=lambda item: progress_metric_sort_key(item, None))
+    return latest
+
+
+def latest_from_evaluation(evaluation: dict[str, dict[str, list[Any]]], metric_name: str | None = None) -> list[dict[str, Any]]:
+    latest: list[dict[str, Any]] = []
+    for dataset_name, metrics in evaluation.items():
+        for name, values in metrics.items():
+            value = last_json_safe_number(values)
+            if value is not None:
+                latest.append({"dataset": dataset_name, "metric": name, "value": value})
+    latest.sort(key=lambda item: progress_metric_sort_key(item, metric_name))
+    return latest
+
+
+def preferred_progress_metric(latest: list[dict[str, Any]], metric_name: str | None) -> dict[str, Any] | None:
+    if not latest:
+        return None
+    return sorted(latest, key=lambda item: progress_metric_sort_key(item, metric_name))[0]
+
+
+def progress_metric_sort_key(item: dict[str, Any], metric_name: str | None) -> tuple[int, int, str]:
+    dataset = str(item.get("dataset") or "").lower()
+    metric = str(item.get("metric") or "")
+    dataset_rank = 0 if dataset == "test" else 1 if dataset in {"validation", "valid"} else 2 if dataset in {"training", "train"} else 3
+    metric_rank = 0 if metric_name and metric == metric_name else 1
+    return dataset_rank, metric_rank, metric
+
+
+def training_progress_message(iteration: int, total: int, preferred: dict[str, Any] | None, metric_name: str) -> str:
+    if not preferred:
+        return f"training, tree {iteration}/{total}"
+    dataset = "train" if str(preferred.get("dataset") or "").lower() == "training" else str(preferred.get("dataset") or "metric")
+    metric = str(preferred.get("metric") or metric_name)
+    value = format_progress_value(preferred.get("value"))
+    return f"training, tree {iteration}/{total}, {dataset} {metric} {value}".rstrip()
+
+
+def json_safe_evaluation(evaluation: dict[str, dict[str, list[Any]]]) -> dict[str, dict[str, list[float | None]]]:
+    safe: dict[str, dict[str, list[float | None]]] = {}
+    for dataset_name, metrics in evaluation.items():
+        safe_metrics: dict[str, list[float | None]] = {}
+        for metric_name, values in metrics.items():
+            safe_metrics[str(metric_name)] = [json_safe_number(value) for value in values]
+        safe[str(dataset_name)] = safe_metrics
+    return safe
+
+
+def json_safe_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def last_json_safe_number(values: list[Any]) -> float | None:
+    for value in reversed(values):
+        number = json_safe_number(value)
+        if number is not None:
+            return number
+    return None
+
+
+def format_progress_value(value: Any) -> str:
+    number = json_safe_number(value)
+    if number is None:
+        return ""
+    return f"{number:.6g}"
 
 
 def evaluation_dataframe(pd: Any, evaluation_result: dict[str, dict[str, list[float]]]) -> Any:
@@ -365,7 +626,10 @@ def shap_dataframes(
 __all__ = [
     "MissingGbmDependency",
     "gbm_dependencies",
+    "lightgbm_progress_payload",
     "should_use_offset_init_score",
     "train_model",
+    "training_projection_columns",
+    "training_select_sql",
     "write_dataframe_parquet",
 ]

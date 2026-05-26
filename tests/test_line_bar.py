@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
 import duckdb
 
@@ -189,6 +190,38 @@ class LineBarToolTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["data_sources"][0]["id"], "dataset")
+
+    def test_dataset_schema_excludes_and_reports_invalid_columns(self) -> None:
+        original_probe = Dataset.probe_column_readable
+
+        def fake_probe(dataset: Dataset, column: Any) -> None:
+            if column.name == "UseofVan":
+                raise duckdb.InvalidInputException(
+                    'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                    'value "bad" is not valid UTF8!'
+                )
+            original_probe(dataset, column)
+
+        with patch.object(Dataset, "probe_column_readable", fake_probe):
+            dataset = Dataset(self.data_path)
+            schema = dataset.schema()
+            sources = dataset.data_sources()
+            app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+            status, _, body = asgi_get(app, "/api/schema")
+
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertNotIn("UseofVan", [column["name"] for column in schema["columns"]])
+        self.assertIn("UseofVan", dataset.all_column_map())
+        self.assertNotIn("UseofVan", dataset.column_map())
+        self.assertEqual(schema["invalid_columns"], [
+            {"name": "UseofVan", "error": "Invalid string encoding found in Parquet data."},
+        ])
+        self.assertEqual(schema["warnings"], ["Skipped 1 unreadable column: UseofVan."])
+        self.assertNotIn("UseofVan", [column["name"] for column in sources[0]["columns"]])
+        self.assertEqual(payload["invalid_columns"], schema["invalid_columns"])
+        self.assertNotIn("UseofVan", [column["name"] for column in payload["data_sources"][0]["columns"]])
 
     def test_chart_accepts_dataset_source_and_rejects_unknown_sources(self) -> None:
         dataset = Dataset(self.data_path)

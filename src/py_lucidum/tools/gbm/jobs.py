@@ -20,6 +20,7 @@ class GbmJob:
     updated_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     result: dict[str, Any] | None = None
     error: str | None = None
+    progress: dict[str, Any] | None = None
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -29,6 +30,7 @@ class GbmJob:
             "updated_at": self.updated_at,
             "result": self.result,
             "error": self.error,
+            "progress": self.progress,
         }
 
 
@@ -52,11 +54,20 @@ class GbmJobManager:
     def _run(self, job_id: str, dataset: Dataset, store: GbmModelStore, payload: dict[str, Any]) -> None:
         self._update(job_id, status="running")
         try:
-            result = train_model(dataset, store, payload)
+            result = train_model(dataset, store, payload, progress_callback=lambda progress: self.update_progress(job_id, progress))
         except Exception as exc:  # surfaced through polling endpoint
+            self.update_progress(job_id, {"phase": "failed", "message": str(exc)})
             self._update(job_id, status="failed", error=str(exc))
             return
+        self.update_progress(job_id, {"phase": "succeeded", "message": "GBM training complete", "percent": 100})
         self._update(job_id, status="succeeded", result=result)
+
+    def update_progress(self, job_id: str, progress: dict[str, Any]) -> None:
+        with self._lock:
+            job = self._jobs[job_id]
+            previous = job.progress if isinstance(job.progress, dict) else {}
+            job.progress = {**previous, **progress}
+            job.updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     def _update(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import socket
 import threading
@@ -7,13 +8,15 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
+from unittest.mock import patch
 from urllib.request import urlopen
 
 import duckdb
 import uvicorn
 
 from py_lucidum.app import create_app
-from py_lucidum.core import sql_literal
+from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.tools.gbm.store import GbmModelStore
 
 
@@ -56,10 +59,10 @@ class BrowserSmokeTests(unittest.TestCase):
             tmp_path = Path(tmp_dir)
             data_path = tmp_path / "sample.csv"
             data_path.write_text(
-                "actualNumerator,denominator,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,sample\n"
-                "10,100,30,A,AB,AB10 1,AB10 1AA,57.1,-2.1,training\n"
-                "20,200,40,B,AB,AB10 1,AB10 1AB,57.2,-2.2,test\n"
-                "30,300,50,C,CD20 2,CD20 2AA,CD20 2AA,56.1,-1.1,training\n",
+                "actualNumerator,denominator,Age,Segment,BadText,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,sample\n"
+                "10,100,30,A,bad,AB,AB10 1,AB10 1AA,57.1,-2.1,training\n"
+                "20,200,40,B,bad,AB,AB10 1,AB10 1AB,57.2,-2.2,test\n"
+                "30,300,50,C,bad,CD20 2,CD20 2AA,CD20 2AA,56.1,-1.1,training\n",
                 encoding="utf-8",
             )
             kpis_path = tmp_path / "kpi_spec.csv"
@@ -182,17 +185,28 @@ COPY (
                 finally:
                     con.close()
             store.activate_model("browser-smoke-model")
-            base_url, server, thread = self.start_app(
-                data_path,
-                tools=["line_bar", "gbm"],
-                kpis_path=kpis_path,
-                use_kpis=True,
-            )
-            try:
-                self.exercise_gbm_tool(base_url)
-            finally:
-                server.should_exit = True
-                thread.join(timeout=5)
+            original_probe = Dataset.probe_column_readable
+
+            def fake_probe(dataset: Dataset, column: Any) -> None:
+                if column.name == "BadText":
+                    raise duckdb.InvalidInputException(
+                        'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                        'value "bad" is not valid UTF8!'
+                    )
+                original_probe(dataset, column)
+
+            with patch.object(Dataset, "probe_column_readable", fake_probe):
+                base_url, server, thread = self.start_app(
+                    data_path,
+                    tools=["line_bar", "gbm"],
+                    kpis_path=kpis_path,
+                    use_kpis=True,
+                )
+                try:
+                    self.exercise_gbm_tool(base_url)
+                finally:
+                    server.should_exit = True
+                    thread.join(timeout=5)
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
@@ -477,6 +491,26 @@ COPY (
                 page.get_by_text("Evaluation log", exact=True).wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)
+                invalid_feature_state = page.evaluate(
+                    """
+                    () => {
+                      const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((item) => item.textContent.includes("BadText"));
+                      return {
+                        found: Boolean(row),
+                        invalidClass: Boolean(row?.classList.contains("gbm-feature-invalid")),
+                        typeText: row?.querySelector(".gbm-feature-kind")?.textContent.trim() || "",
+                        hasCheckbox: Boolean(row?.querySelector(".gbm-use-checkbox")),
+                        monotonicity: row?.querySelector(".tabulator-cell[tabulator-field='monotonicity']")?.textContent.trim() || "",
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(invalid_feature_state["found"])
+                self.assertTrue(invalid_feature_state["invalidClass"])
+                self.assertEqual(invalid_feature_state["typeText"], "invalid")
+                self.assertFalse(invalid_feature_state["hasCheckbox"])
+                self.assertEqual(invalid_feature_state["monotonicity"], "")
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.11",
@@ -487,6 +521,86 @@ COPY (
                 page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").click()
                 page.locator("#gbmParameterGrid input.gbm-parameter-input").wait_for(timeout=10_000)
                 page.keyboard.press("Escape")
+                live_job_succeed = {"value": False}
+
+                def train_route(route: Any) -> None:
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "job_id": "live-job",
+                                "status": "queued",
+                                "created_at": "2026-05-25T00:00:00Z",
+                                "updated_at": "2026-05-25T00:00:00Z",
+                                "result": None,
+                                "error": None,
+                                "progress": None,
+                            }
+                        ),
+                    )
+
+                def job_route(route: Any) -> None:
+                    if live_job_succeed["value"]:
+                        payload = {
+                            "job_id": "live-job",
+                            "status": "succeeded",
+                            "created_at": "2026-05-25T00:00:00Z",
+                            "updated_at": "2026-05-25T00:00:01Z",
+                            "result": {"sources": {}},
+                            "error": None,
+                            "progress": {
+                                "phase": "succeeded",
+                                "message": "GBM training complete",
+                                "iteration": 2,
+                                "total_iterations": 10,
+                                "percent": 100,
+                                "metric": "gamma",
+                                "latest": [{"dataset": "test", "metric": "gamma", "value": 7.2}],
+                                "evaluation": {"training": {"gamma": [7.4, 7.3]}, "test": {"gamma": [7.35, 7.2]}},
+                            },
+                        }
+                    else:
+                        payload = {
+                            "job_id": "live-job",
+                            "status": "running",
+                            "created_at": "2026-05-25T00:00:00Z",
+                            "updated_at": "2026-05-25T00:00:01Z",
+                            "result": None,
+                            "error": None,
+                            "progress": {
+                                "phase": "training",
+                                "message": "training, tree 2/10, test gamma 7.2",
+                                "iteration": 2,
+                                "total_iterations": 10,
+                                "percent": 18,
+                                "metric": "gamma",
+                                "latest": [{"dataset": "test", "metric": "gamma", "value": 7.2}],
+                                "evaluation": {"training": {"gamma": [7.4, 7.3]}, "test": {"gamma": [7.35, 7.2]}},
+                            },
+                        }
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+                page.route("**/api/gbm/train", train_route)
+                page.route("**/api/gbm/jobs/live-job", job_route)
+                page.locator("#gbmTrainBtn").click()
+                page.locator("#gbmTrainingStatus").get_by_text("training, tree 2/10, test gamma 7.2").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text === "evaluation metric: gamma, test metric: 7.2, iteration: 2"
+                        && option.series?.length === 2
+                        && option.series[0].data.length === 2;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                live_job_succeed["value"] = True
+                page.locator("#gbmTrainBtn", has_text="Train GBM").wait_for(timeout=10_000)
+                page.unroute("**/api/gbm/train", train_route)
+                page.unroute("**/api/gbm/jobs/live-job", job_route)
                 gbm_top_before = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
                 page.locator("#gbmCreateSampleBtn").click()
                 self.assertEqual(page.locator("#gbmCreateSampleBtn").text_content(), "Sample pending")

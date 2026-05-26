@@ -166,7 +166,8 @@ def feature_rows(
     gains: dict[str, float] | None = None,
     model_features: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    columns = dataset.column_map()
+    columns = dataset.all_column_map()
+    invalid_columns = dataset.invalid_column_errors()
     distinct_counts = categorical_distinct_counts(dataset)
     model_feature_map = {
         str(item.get("name")): item
@@ -176,30 +177,35 @@ def feature_rows(
     use_model_features = model_features is not None
     rows: list[dict[str, Any]] = []
     for column in columns.values():
-        usable = feature_usable(column)
+        invalid_error = invalid_columns.get(column.name)
+        row_kind = "invalid" if invalid_error else column.kind
+        usable = False if invalid_error else feature_usable(column)
         disabled_reason = ""
-        if column.name in {RESPONSE_COLUMN, OFFSET_COLUMN}:
+        if invalid_error:
+            disabled_reason = invalid_error
+        elif column.name in {RESPONSE_COLUMN, OFFSET_COLUMN}:
             usable = False
             disabled_reason = "reserved response/offset column"
         elif not usable:
             disabled_reason = "LightGBM feature type is not supported"
         distinct_count = distinct_counts.get(column.name)
-        high_cardinality = column.kind == "categorical" and (distinct_count or 0) > HIGH_CARDINALITY_THRESHOLD
+        high_cardinality = row_kind == "categorical" and (distinct_count or 0) > HIGH_CARDINALITY_THRESHOLD
         model_feature = model_feature_map.get(column.name, {})
         include = (
-            usable and column.kind in {"integer", "numeric", "categorical"}
+            usable and row_kind in {"integer", "numeric", "categorical"}
             if not use_model_features
-            else bool(model_feature) and usable and column.kind in {"integer", "numeric", "categorical"}
+            else bool(model_feature) and usable and row_kind in {"integer", "numeric", "categorical"}
         )
         gain = model_feature.get("gain") if model_feature else (gains or {}).get(column.name, 0.0)
         rows.append(
             {
                 "name": column.name,
                 "duckdb_type": column.duckdb_type,
-                "kind": column.kind,
+                "kind": row_kind,
                 "include": include,
                 "usable": usable,
                 "disabled_reason": disabled_reason,
+                "invalid": bool(invalid_error),
                 "high_cardinality": high_cardinality,
                 "distinct_count": distinct_count,
                 "monotonicity": display_monotonicity(model_feature.get("monotonicity")) if include else "",
@@ -240,13 +246,15 @@ def normalise_features(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[st
         if not isinstance(item, dict):
             continue
         name = str(item.get("name") or item.get("feature") or "").strip()
-        if not name or name not in columns:
+        if not name:
             continue
         include = item.get("include", True)
         if isinstance(include, str):
             include = include.strip().lower() not in {"", "0", "false", "no", "off"}
         if not include:
             continue
+        if name not in columns:
+            raise ValueError(f"Choose a valid GBM feature: {name}")
         monotonicity = normalise_monotonicity(item.get("monotonicity"))
         features.append({"name": name, "monotonicity": monotonicity, "kind": columns[name].kind})
     return features

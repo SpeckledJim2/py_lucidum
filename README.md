@@ -12,6 +12,8 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions that can be plotted as chart/map data sources, evaluation plots, model navigation, and tree viewing.
 - **Filters and KPIs**: apply free-form DuckDB `WHERE` filters, saved filter rows, and KPI specs that set Actual/Weight choices and formatting.
 
+Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skipped by the shared schema used by normal selectors. Column Profile reports them as skipped, and the GBM feature chooser shows them as disabled invalid rows.
+
 The GLM tool slot exists in the codebase for future modelling work, but GLM model building is not part of the current user-facing release.
 
 ## Installation
@@ -182,7 +184,7 @@ The GBM tool is opt-in:
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm
 ```
 
-The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. Models are saved beside the dataset under `.lucidum/models/gbm/`. Selecting a saved GBM makes it active and refreshes the feature table, parameter table, evaluation plot, tree viewer, and plot-ready model outputs. The tree viewer reads saved LightGBM tree artifacts, shows a searchable tree list, and renders the selected tree with zoom and colour controls. Once a model is active, its predictions and SHAP outputs appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
+The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. Models are saved beside the dataset under `.lucidum/models/gbm/`. During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs. Selecting a saved GBM makes it active and refreshes the feature table, parameter table, evaluation plot, tree viewer, and plot-ready model outputs. The tree viewer reads saved LightGBM tree artifacts, shows a searchable tree list, and renders the selected tree with zoom and colour controls. Once a model is active, its predictions and SHAP outputs appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
 
 ## Development
 
