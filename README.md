@@ -94,7 +94,7 @@ Parquet is recommended for normal use because DuckDB can read it efficiently.
 - `--x`, `--actual`, `--expected`, and `--denominator` set initial Line/Bar selections.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
-- `--tools` selects enabled tools. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `gbm` after installing the `gbm` extra to train LightGBM models.
+- `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `gbm` after installing the `gbm` extra to train LightGBM models.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
 
@@ -178,7 +178,7 @@ FINANCIAL,Premium,PREMIUM,N,2,currency
 
 ## GBM Models
 
-The GBM tool is opt-in:
+The GBM tool is opt-in. Column Profile remains enabled and opens first:
 
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm

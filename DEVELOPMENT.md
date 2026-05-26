@@ -93,7 +93,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
 
 **Column profile**
 
-- Column profile is the first default tool when enabled.
+- Column profile is the first startup tool.
+- Column profile is mandatory: `--tools` and `create_app(..., tools=...)` cannot remove it, and the backend always reports/registers it first so startup lands on the profile view.
 - Summary requests return every readable dataset column with inferred kind, DuckDB type, filtered missing count, exact distinct count, and min/max for numeric/date-like columns.
 - Unreadable columns are omitted from profile summaries and returned through `skipped_columns` with sanitized errors.
 - Detail requests return value counts for categorical columns and histogram/stat tables for numeric/date-like columns.
@@ -121,7 +122,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
 
 **GLM and GBM**
 
-- GLM and GBM are opt-in tools (`--tools glm,gbm`) and are not part of the default user-facing tool set.
+- GLM and GBM are opt-in tools (`--tools glm,gbm`) and are not part of the default user-facing tool set. Column Profile is still enabled alongside them.
 - GLM still returns a shell `status: "not_implemented"` response.
 - GBM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
 - GBM training imports LightGBM, pandas, and numpy lazily through the `gbm` optional extra. These packages must not become base install dependencies. On macOS, LightGBM's native library may also require Homebrew `libomp`; missing `libomp.dylib` should be reported as an actionable GBM dependency error, not a server 500.

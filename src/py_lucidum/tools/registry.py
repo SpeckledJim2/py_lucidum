@@ -17,6 +17,7 @@ TOOL_MODULES = (
     "py_lucidum.tools.glm",
     "py_lucidum.tools.gbm",
 )
+MANDATORY_TOOL_ID = "column_profile"
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,7 @@ def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
     if not requested:
         requested = default_tool_ids()
 
-    enabled: list[str] = []
+    enabled: list[str] = [MANDATORY_TOOL_ID]
     for name in requested:
         canonical = aliases.get(name.lower())
         if not canonical:
@@ -110,6 +111,7 @@ def register_tools(app: FastAPI, context: AppContext, enabled_tools: Sequence[st
 
 
 __all__ = [
+    "MANDATORY_TOOL_ID",
     "ToolDefinition",
     "default_tool_ids",
     "normalise_tools",

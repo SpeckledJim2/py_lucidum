@@ -136,10 +136,11 @@ class LineBarToolTests(unittest.TestCase):
 
         self.assertIn("/api/chart", paths)
         self.assertIn("/api/line-bar/chart", paths)
+        self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/schema", paths)
         self.assertIn("/api/shutdown", paths)
         self.assertIn("/static", paths)
-        self.assertEqual(app.state.enabled_tools, ["line_bar"])
+        self.assertEqual(app.state.enabled_tools, ["column_profile", "line_bar"])
         self.assertEqual(app.state.defaults["denominator"], "Weight")
         self.assertEqual(
             app.state.saved_filters,
