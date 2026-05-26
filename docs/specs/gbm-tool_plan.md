@@ -38,8 +38,8 @@ Chosen defaults:
 
 - Training uses rows where the selected denominator is positive, equal row weights, the selected sidebar Actual response, and ignores the global filter.
 - For log-link objectives such as `poisson`, `gamma`, and `tweedie`, use `log(selected denominator)` as LightGBM `init_score`. If no denominator is selected, treat offset values as 1.
-- If a sample column exists, train on `training`, early-stop on `test`, and score all valid rows. If not, train all valid rows, disable early stopping, and show a warning.
-- "Create sample column" creates a model-local deterministic 80/20 train/test assignment in the sidecar folder, not in the original dataset.
+- If a canonical `SAMPLE` column exists, train on `training`, early-stop on `test`, score `validation` as holdout diagnostics, and score all valid rows. If not, train all valid rows, disable early stopping, and show a warning.
+- "Create sample column" creates a reusable generated deterministic 60/20/20 training/test/validation assignment in `.lucidum/models/gbm/generated_sample.parquet`, not in the original dataset.
 - Feature validation disables unusable types, shows unreadable dataset columns as invalid disabled rows, flags high-cardinality categoricals, and allows monotonicity only for numeric features and compatible objectives.
 - Training reads only selected features plus required response, offset, and sample columns from the raw dataset. Prediction sources join back only readable source columns.
 - After training, persist LightGBM gain feature importance and use it to refresh the feature grid.

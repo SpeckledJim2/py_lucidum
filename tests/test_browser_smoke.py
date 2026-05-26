@@ -59,7 +59,7 @@ class BrowserSmokeTests(unittest.TestCase):
             tmp_path = Path(tmp_dir)
             data_path = tmp_path / "sample.csv"
             data_path.write_text(
-                "actualNumerator,denominator,Age,Segment,BadText,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,sample\n"
+                "actualNumerator,denominator,Age,Segment,BadText,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,SAMPLE\n"
                 "10,100,30,A,bad,AB,AB10 1,AB10 1AA,57.1,-2.1,training\n"
                 "20,200,40,B,bad,AB,AB10 1,AB10 1AB,57.2,-2.2,test\n"
                 "30,300,50,C,bad,CD20 2,CD20 2AA,CD20 2AA,56.1,-1.1,training\n",
@@ -91,7 +91,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         "training_rows": 2,
                         "test_rows": 1,
                         "scored_rows": 3,
-                        "sample_column": "sample",
+                        "sample_column": "SAMPLE",
+                        "sample_source": "dataset",
                         "timings": {"training_seconds": 1.234 if model_id == "browser-smoke-model" else 62.0},
                         "feature_importance": [],
                         "sources": {},
@@ -602,9 +603,18 @@ COPY (
                 page.unroute("**/api/gbm/train", train_route)
                 page.unroute("**/api/gbm/jobs/live-job", job_route)
                 gbm_top_before = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
-                page.locator("#gbmCreateSampleBtn").click()
-                self.assertEqual(page.locator("#gbmCreateSampleBtn").text_content(), "Sample pending")
-                self.assertEqual(page.locator("#gbmCreateSampleBtn").get_attribute("aria-pressed"), "true")
+                page.locator("#gbmSampleStatus").get_by_text("SAMPLE column found").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#gbmCreateSampleBtn").count(), 0)
+                page.locator("#gbmClearFeaturesBtn").click()
+                page.wait_for_function(
+                    "() => document.querySelectorAll('#gbmFeatureGrid .gbm-use-checkbox:checked').length === 0",
+                    timeout=10_000,
+                )
+                page.locator("#gbmSelectFeaturesBtn").click()
+                page.wait_for_function(
+                    "() => document.querySelectorAll('#gbmFeatureGrid .gbm-use-checkbox:checked').length > 0",
+                    timeout=10_000,
+                )
                 self.assertFalse(page.locator("#gbmNotice").is_visible())
                 self.assertTrue(page.locator("#status").evaluate("node => node.classList.contains('hidden')"))
                 gbm_top_after_sample = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
@@ -805,7 +815,7 @@ COPY (
                 self.assertEqual(navigator_state["fontSize"], "11px")
                 self.assertIn("actualNumerator", navigator_state["firstCells"])
                 self.assertIn("denominator", navigator_state["firstCells"])
-                self.assertIn("sample", navigator_state["firstCells"])
+                self.assertIn("SAMPLE", navigator_state["firstCells"])
                 self.assertIn("1.2s", navigator_state["firstCells"])
                 self.assertIn("1m 02s", navigator_state["secondCells"])
                 self.assertTrue(navigator_state["wrapped"])
@@ -860,7 +870,7 @@ COPY (
                         const shapOptions = document.querySelector(".gbm-shap-options");
                         const firstShapInput = document.querySelector("input[name='gbmShapRows']");
                         const checkedShapOption = document.querySelector(".gbm-shap-option:has(input:checked)");
-                        const sample = document.querySelector("#gbmCreateSampleBtn");
+                        const sampleStatus = document.querySelector("#gbmSampleStatus");
                         const train = document.querySelector("#gbmTrainBtn");
                         const controlTitle = document.querySelector(".gbm-parameter-controls-column .gbm-section-title");
                         const parameterTitle = document.querySelector(".gbm-parameter-table-column .gbm-section-title");
@@ -905,8 +915,8 @@ COPY (
                             tabTop: tab ? Math.round(tab.getBoundingClientRect().top) : 0,
                             shapTop: shap ? Math.round(shap.getBoundingClientRect().top) : 0,
                             shapRight: shap ? Math.round(shap.getBoundingClientRect().right) : 0,
-                            sampleLeft: sample ? Math.round(sample.getBoundingClientRect().left) : 0,
-                            sampleTop: sample ? Math.round(sample.getBoundingClientRect().top) : 0,
+                            sampleStatusText: sampleStatus ? sampleStatus.textContent.trim() : "",
+                            sampleTop: sampleStatus ? Math.round(sampleStatus.getBoundingClientRect().top) : 0,
                             trainTop: train ? Math.round(train.getBoundingClientRect().top) : 0,
                             controlTitleTop: controlTitle ? Math.round(controlTitle.getBoundingClientRect().top) : 0,
                             controlTitleText: controlTitle ? controlTitle.textContent.trim() : "",
@@ -917,7 +927,7 @@ COPY (
                             parameterControlsColumnWidth: parameterControlsColumn ? Math.round(parameterControlsColumn.getBoundingClientRect().width) : 0,
                             parameterActionsDirection: parameterActions ? getComputedStyle(parameterActions).flexDirection : "",
                             shapParentInControls: Boolean(shap?.closest(".gbm-parameter-controls-column")),
-                            sampleParentInControls: Boolean(sample?.closest(".gbm-parameter-controls-column")),
+                            sampleParentInControls: Boolean(sampleStatus?.closest(".gbm-parameter-controls-column")),
                             trainParentInControls: Boolean(train?.closest(".gbm-parameter-controls-column")),
                             parameterGridHeight: parameterGrid ? Math.round(parameterGrid.getBoundingClientRect().height) : 0,
                             evaluationChartHeight: evaluationChart ? Math.round(evaluationChart.getBoundingClientRect().height) : 0,
@@ -963,6 +973,7 @@ COPY (
                 self.assertTrue(layout["shapParentInControls"])
                 self.assertTrue(layout["sampleParentInControls"])
                 self.assertTrue(layout["trainParentInControls"])
+                self.assertIn("SAMPLE column found", layout["sampleStatusText"])
                 self.assertEqual(layout["controlTitleText"], "Control")
                 self.assertLessEqual(abs(layout["controlTitleTop"] - layout["parameterTitleTop"]), 2)
                 self.assertEqual(layout["parameterActionsDirection"], "column")
@@ -974,8 +985,8 @@ COPY (
                 )
                 self.assertGreater(layout["parameterControlsColumnWidth"], 120)
                 self.assertLessEqual(abs(layout["trainTop"] - layout["parameterGridTop"]), 2)
-                self.assertLess(layout["trainTop"], layout["shapTop"])
-                self.assertGreater(layout["sampleTop"], layout["shapTop"])
+                self.assertLess(layout["trainTop"], layout["sampleTop"])
+                self.assertLess(layout["sampleTop"], layout["shapTop"])
                 self.assertGreaterEqual(layout["parameterGridHeight"], 260)
                 self.assertGreaterEqual(layout["evaluationChartHeight"], 220)
                 self.assertLess(layout["evaluationChartHeight"], layout["evaluationPanelHeight"])

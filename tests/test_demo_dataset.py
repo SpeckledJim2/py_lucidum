@@ -45,6 +45,12 @@ class DemoDatasetTests(unittest.TestCase):
         self.assertIn("POSTCODE_UNIT", columns)
         self.assertIn("LATITUDE", columns)
         self.assertIn("LONGITUDE", columns)
+        self.assertIn("SAMPLE", columns)
+        self.assertNotIn("train_test", columns)
+        sample_counts = dict(
+            con.execute("SELECT SAMPLE, COUNT(*) FROM read_parquet(?) GROUP BY SAMPLE", [str(path)]).fetchall()
+        )
+        self.assertEqual(sample_counts, {"training": 30000, "test": 10000, "validation": 10000})
 
     def test_default_filter_spec_expressions_validate_against_demo_dataset(self) -> None:
         dataset = Dataset(py_lucidum.demo_dataset_path())
@@ -56,10 +62,12 @@ class DemoDatasetTests(unittest.TestCase):
 
         self.assertGreater(len(rows), 0)
         self.assertEqual(reader.fieldnames, ["theme", "name", "expression"])
-        self.assertEqual(rows[0]["theme"], "MODEL SPLIT")
-        self.assertEqual(rows[0]["name"], "Training rows")
-        self.assertEqual(rows[1]["theme"], "MODEL SPLIT")
-        self.assertEqual(rows[1]["name"], "Test rows")
+        self.assertEqual(rows[0]["theme"], "SAMPLE")
+        self.assertEqual(rows[0]["name"], "Training")
+        self.assertEqual(rows[1]["theme"], "SAMPLE")
+        self.assertEqual(rows[1]["name"], "Test")
+        self.assertEqual(rows[2]["theme"], "SAMPLE")
+        self.assertEqual(rows[2]["name"], "Validation")
         self.assertGreaterEqual(len({row["theme"] for row in rows}), 6)
         for row in rows:
             with self.subTest(theme=row["theme"], name=row["name"]):

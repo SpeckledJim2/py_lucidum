@@ -153,7 +153,13 @@ export function createGbmTool({
         <div class="gbm-tab-panel ${activeTab === "features" ? "" : "hidden"}" data-gbm-panel="features">
           <div class="gbm-feature-layout">
             <section class="gbm-panel-section gbm-grid-panel">
-              <h3 class="gbm-section-title">Features</h3>
+              <div class="gbm-section-header gbm-feature-section-header">
+                <h3 class="gbm-section-title">Features</h3>
+                <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
+                  <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button" type="button">Clear all</button>
+                  <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button" type="button">Select all</button>
+                </div>
+              </div>
               <div id="gbmFeatureGrid" class="gbm-grid"></div>
               <div id="gbmFeatureFallback" class="gbm-fallback-table"></div>
             </section>
@@ -169,13 +175,14 @@ export function createGbmTool({
                     <h3 class="gbm-section-title">Control</h3>
                     <div class="gbm-actions">
                       <button id="gbmTrainBtn" class="tab gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining ? "disabled aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
+                      ${sampleStatusHtml(data.sample)}
                       <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
                         <span class="gbm-shap-label">SHAP rows</span>
                         <div class="gbm-shap-options">
                           ${shapOptionsHtml(data.shap_options || [])}
                         </div>
                       </div>
-                      <button id="gbmCreateSampleBtn" class="tab gbm-action-button gbm-sample-button ${state.gbmCreateSample ? "active" : ""}" type="button" aria-pressed="${state.gbmCreateSample ? "true" : "false"}">${state.gbmCreateSample ? "Sample pending" : "Create sample column"}</button>
+                      ${shouldShowCreateSampleButton(data.sample) ? '<button id="gbmCreateSampleBtn" class="tab gbm-action-button gbm-sample-button" type="button">Create sample column</button>' : ""}
                     </div>
                   </div>
                 </div>
@@ -258,6 +265,65 @@ export function createGbmTool({
     `).join("");
   }
 
+  function shouldShowCreateSampleButton(sample) {
+    return !sample?.has_dataset_sample && !sample?.has_generated_sample;
+  }
+
+  function sampleStatusHtml(sample) {
+    const info = normaliseSampleInfo(sample);
+    const levels = sampleLevelRowsHtml(info.levels);
+    if (info.source === "dataset") {
+      return `
+        <div id="gbmSampleStatus" class="gbm-sample-status gbm-sample-status-ok" role="status">
+          <span class="gbm-sample-status-title">SAMPLE column found</span>
+          <span class="gbm-sample-status-levels">${levels}</span>
+        </div>
+      `;
+    }
+    if (info.source === "generated") {
+      return `
+        <div id="gbmSampleStatus" class="gbm-sample-status gbm-sample-status-warning" role="status">
+          <span class="gbm-sample-status-title">Generated SAMPLE</span>
+          <span class="gbm-sample-status-levels">${levels}</span>
+          <span class="gbm-sample-status-warning-text">${escapeHtml(info.warning)}</span>
+        </div>
+      `;
+    }
+    return `
+      <div id="gbmSampleStatus" class="gbm-sample-status gbm-sample-status-missing" role="status">
+        <span class="gbm-sample-status-title">No SAMPLE column</span>
+        <span class="gbm-sample-status-detail">${escapeHtml(info.warning)}</span>
+      </div>
+    `;
+  }
+
+  function normaliseSampleInfo(sample) {
+    return {
+      column: sample?.column || "",
+      source: sample?.source || "none",
+      levels: Array.isArray(sample?.levels) ? sample.levels : [],
+      has_dataset_sample: Boolean(sample?.has_dataset_sample),
+      has_generated_sample: Boolean(sample?.has_generated_sample),
+      warning: String(sample?.warning || ""),
+    };
+  }
+
+  function sampleLevelRowsHtml(levels) {
+    const byName = new Map((levels || []).map((level) => [String(level.name || "").toLowerCase(), level]));
+    return ["training", "test", "validation"].map((name) => {
+      const level = byName.get(name) || {};
+      const percent = Number(level.percent || 0);
+      const count = Number(level.row_count || 0);
+      return `<span class="gbm-sample-status-detail">${escapeHtml(name)} ${escapeHtml(formatSamplePercent(percent))} (${escapeHtml(Number.isFinite(count) ? Math.round(count).toLocaleString() : "0")})</span>`;
+    }).join("");
+  }
+
+  function formatSamplePercent(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "0%";
+    return `${number.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+  }
+
   function bindTabs(mount) {
     for (const button of mount.querySelectorAll("[data-gbm-tab]")) {
       button.addEventListener("click", () => {
@@ -268,22 +334,46 @@ export function createGbmTool({
   }
 
   function bindFeatureActions() {
-    el("gbmCreateSampleBtn")?.addEventListener("click", () => {
-      state.gbmCreateSample = true;
-      syncSampleButton();
-      setGbmNotice("");
-    });
+    el("gbmClearFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(false));
+    el("gbmSelectFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(true));
+    el("gbmCreateSampleBtn")?.addEventListener("click", createSampleColumn);
     el("gbmTrainBtn")?.addEventListener("click", train);
-    syncSampleButton();
     syncTrainingButton();
   }
 
-  function syncSampleButton() {
+  async function createSampleColumn() {
     const button = el("gbmCreateSampleBtn");
     if (!button) return;
-    button.textContent = state.gbmCreateSample ? "Sample pending" : "Create sample column";
-    button.classList.toggle("active", Boolean(state.gbmCreateSample));
-    button.setAttribute("aria-pressed", state.gbmCreateSample ? "true" : "false");
+    button.disabled = true;
+    button.textContent = "Creating...";
+    setGbmNotice("");
+    try {
+      const result = await api("/api/gbm/sample", { method: "POST", body: "{}", clientTiming: true });
+      clearToolCaches();
+      config = result.config;
+      measureToolRender(tool, () => render(result.config));
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Create sample column";
+      setGbmNotice(error.message);
+    }
+  }
+
+  function setFeatureIncludes(include) {
+    if (featureTable) {
+      for (const row of featureTable.getRows()) {
+        const data = row.getData();
+        if (isFeatureSelectable(data)) row.update({ include });
+      }
+      return;
+    }
+    for (const checkbox of document.querySelectorAll("[data-gbm-feature]")) {
+      const name = checkbox.getAttribute("data-gbm-feature") || "";
+      const feature = (config?.features || []).find((item) => item.name === name);
+      if (!feature || !isFeatureSelectable(feature)) continue;
+      checkbox.checked = include;
+      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    }
   }
 
   function setTrainingState(active) {
@@ -589,7 +679,8 @@ export function createGbmTool({
   function currentReservedFeatureNames() {
     const response = el("actualNumerator")?.value || "actualNumerator";
     const offset = el("denominator")?.value || "denominator";
-    return new Set([response, offset].filter((value) => value && value !== "__none__"));
+    const sample = config?.sample?.source === "dataset" ? config.sample.column : "";
+    return new Set([response, offset, sample].filter((value) => value && value !== "__none__"));
   }
 
   function renderFeatureFallback(features) {
@@ -732,7 +823,7 @@ export function createGbmTool({
               <td class="numeric">${formatModelCount(model.scored_rows)}</td>
               <td class="numeric">${formatModelCount(model.best_iteration)}</td>
               <td class="numeric">${escapeHtml(formatModelRuntime(model))}</td>
-              <td>${escapeHtml(formatSampleMode(model.sample_column))}</td>
+              <td>${escapeHtml(formatSampleMode(model.sample_column, model.sample_source))}</td>
               <td><button class="gbm-model-activate-button" type="button" data-gbm-activate="${escapeHtml(model.model_id)}">${model.active ? "Active" : "Activate"}</button></td>
             </tr>
           `).join("")}
@@ -768,10 +859,10 @@ export function createGbmTool({
     });
   }
 
-  function formatSampleMode(value) {
+  function formatSampleMode(value, source = "") {
     const text = String(value || "").trim();
     if (!text) return "All rows";
-    if (text === "__gbm_sample") return "Model-local 80/20";
+    if (String(source || "").trim() === "generated") return "Generated 60/20/20";
     return text;
   }
 
@@ -817,8 +908,9 @@ export function createGbmTool({
       features: currentFeatureRows(),
       parameters: currentParameters(),
       shap_rows: document.querySelector("input[name='gbmShapRows']:checked")?.value || "0",
-      sample_column: config?.sample_column || "",
-      create_sample: Boolean(state.gbmCreateSample),
+      sample_column: config?.sample?.column || config?.sample_column || "",
+      sample_source: config?.sample?.source || "none",
+      create_sample: false,
     };
     try {
       const validation = await api("/api/gbm/validate", { method: "POST", body: JSON.stringify(payload) });
@@ -869,7 +961,6 @@ export function createGbmTool({
         liveProgress = null;
         await reloadSchema(job.result?.sources?.predictions);
         clearToolCaches();
-        state.gbmCreateSample = false;
         const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
         const cache = toolCache(tool);
         cache.requestKey = stableConfigKey();

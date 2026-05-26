@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from py_lucidum.app.context import AppContext
 
 from .jobs import GbmJobManager
+from .sample import SAMPLE_COLUMN, create_generated_sample, sample_metadata
 from .sources import GbmSourceProvider
 from .store import GbmModelStore
 from .training import MissingGbmDependency, gbm_dependencies
@@ -90,7 +91,14 @@ def register(app: FastAPI, context: AppContext) -> None:
     def config_payload() -> dict[str, Any]:
         model_features = active_feature_config()
         with context.dataset.lock:
-            features = feature_rows(context.dataset, active_gains(), model_features=model_features)
+            sample = sample_metadata(context.dataset, store.generated_sample_path)
+            sample_reserved = {SAMPLE_COLUMN} if sample.get("source") == "dataset" else set()
+            features = feature_rows(
+                context.dataset,
+                active_gains(),
+                model_features=model_features,
+                reserved_names=sample_reserved,
+            )
             sample_column = detect_sample_column(context.dataset)
         return {
             "tool": "gbm",
@@ -98,6 +106,7 @@ def register(app: FastAPI, context: AppContext) -> None:
             "response": RESPONSE_COLUMN,
             "offset": OFFSET_COLUMN,
             "sample_column": sample_column,
+            "sample": sample,
             "parameters": parameter_rows(),
             "parameter_options": {
                 "objective": list(GBM_OBJECTIVES),
@@ -136,7 +145,13 @@ def register(app: FastAPI, context: AppContext) -> None:
     async def validate_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
         payload = await request.json()
-        return validate_request(context.dataset, payload).as_payload()
+        return validate_request(context.dataset, payload, generated_sample_path=store.generated_sample_path).as_payload()
+
+    @app.post("/api/gbm/sample")
+    async def sample_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        sample = create_generated_sample(context.dataset, store.generated_sample_path)
+        return {"sample": sample, "config": config_payload()}
 
     @app.post("/api/gbm/train")
     async def train_endpoint(request: Request) -> dict[str, Any]:
@@ -144,7 +159,9 @@ def register(app: FastAPI, context: AppContext) -> None:
         payload = await request.json()
         try:
             gbm_dependencies()
-            validation = validate_request(context.dataset, payload)
+            if payload.get("create_sample"):
+                create_generated_sample(context.dataset, store.generated_sample_path)
+            validation = validate_request(context.dataset, payload, generated_sample_path=store.generated_sample_path)
             if not validation.ok:
                 raise ValueError("; ".join(validation.errors))
             job = jobs.start(context.dataset, store, payload)

@@ -16,6 +16,7 @@ from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.demo import demo_dataset_path
 from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
+from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_progress_payload, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, training_projection_columns, training_select_sql, write_dataframe_parquet
@@ -88,7 +89,7 @@ class GbmToolTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.data_path = self.root / "sample.csv"
         self.data_path.write_text(
-            "actualNumerator,denominator,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,sample\n"
+            "actualNumerator,denominator,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,SAMPLE\n"
             "10,100,30,A,AB,AB10 1,AB10 1AA,57.1,-2.1,training\n"
             "20,200,40,B,AB,AB10 1,AB10 1AB,57.2,-2.2,test\n"
             "30,300,50,C,CD,CD20 2,CD20 2AA,56.1,-1.1,training\n",
@@ -108,6 +109,7 @@ class GbmToolTests(unittest.TestCase):
         self.assertIn("/api/gbm/config", paths)
         self.assertIn("/api/gbm/validate", paths)
         self.assertIn("/api/gbm/train", paths)
+        self.assertIn("/api/gbm/sample", paths)
         self.assertIn("/api/gbm/models", paths)
 
         status, body = asgi_get(app, "/api/gbm/config")
@@ -117,7 +119,12 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["response"], "actualNumerator")
         self.assertEqual(payload["offset"], "denominator")
-        self.assertEqual(payload["sample_column"], "sample")
+        self.assertEqual(payload["sample_column"], "SAMPLE")
+        self.assertEqual(payload["sample"]["source"], "dataset")
+        self.assertEqual(
+            {level["name"]: level["row_count"] for level in payload["sample"]["levels"]},
+            {"training": 2, "test": 1, "validation": 0},
+        )
         self.assertEqual(next(row["value"] for row in payload["parameters"] if row["name"] == "objective"), "poisson")
         self.assertEqual(next(row["value"] for row in payload["parameters"] if row["name"] == "metric"), "poisson")
         self.assertEqual(payload["parameter_options"]["objective"], list(GBM_OBJECTIVES))
@@ -134,13 +141,90 @@ class GbmToolTests(unittest.TestCase):
         self.assertIn("Gain", Path("docs/specs/gbm-tool_plan.md").read_text(encoding="utf-8"))
         age = next(row for row in payload["features"] if row["name"] == "Age")
         self.assertEqual(age["gain"], 0.0)
+        sample = next(row for row in payload["features"] if row["name"] == "SAMPLE")
+        self.assertFalse(sample["include"])
+
+    def test_generated_sample_sidecar_is_reused_for_missing_sample_column(self) -> None:
+        data_path = self.root / "no_sample.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age\n"
+            + "".join(f"{index},{index + 10},{20 + index}\n" for index in range(1, 11)),
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        store = GbmModelStore(data_path)
+
+        missing = sample_metadata(dataset, store.generated_sample_path)
+        self.assertEqual(missing["source"], "none")
+
+        generated = create_generated_sample(dataset, store.generated_sample_path)
+        self.assertEqual(generated["source"], "generated")
+        self.assertEqual(
+            {level["name"]: level["row_count"] for level in generated["levels"]},
+            {"training": 6, "test": 2, "validation": 2},
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            first_rows = con.execute(
+                f"SELECT * FROM read_parquet({sql_literal(str(store.generated_sample_path))}) ORDER BY __lucidum_row_id"
+            ).fetchall()
+        finally:
+            con.close()
+
+        second = create_generated_sample(dataset, store.generated_sample_path)
+        con = duckdb.connect(database=":memory:")
+        try:
+            second_rows = con.execute(
+                f"SELECT * FROM read_parquet({sql_literal(str(store.generated_sample_path))}) ORDER BY __lucidum_row_id"
+            ).fetchall()
+        finally:
+            con.close()
+
+        self.assertEqual(second["source"], "generated")
+        self.assertEqual(first_rows, second_rows)
+
+        result = validate_request(
+            dataset,
+            {
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+                "sample_column": "SAMPLE",
+            },
+            generated_sample_path=store.generated_sample_path,
+        )
+        self.assertTrue(result.ok, result.errors)
+
+    def test_sample_route_creates_generated_sample_and_refreshes_config(self) -> None:
+        data_path = self.root / "route_no_sample.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age\n"
+            "10,100,30\n"
+            "20,200,40\n"
+            "30,300,50\n"
+            "40,400,60\n"
+            "50,500,70\n",
+            encoding="utf-8",
+        )
+        app = create_app(data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_get(app, "/api/gbm/config")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["sample"]["source"], "none")
+
+        status, body = asgi_post_json(app, "/api/gbm/sample", {})
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["sample"]["source"], "generated")
+        self.assertEqual(payload["config"]["sample"]["source"], "generated")
 
     def test_train_endpoint_reports_missing_optional_dependencies(self) -> None:
         app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
         request = {
             "features": self.request_features(),
             "parameters": [{"name": "objective", "value": "poisson"}, {"name": "metric", "value": "poisson"}],
-            "sample_column": "sample",
+            "sample_column": "SAMPLE",
         }
 
         with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=MissingGbmDependency("lightgbm")):
@@ -280,7 +364,7 @@ class GbmToolTests(unittest.TestCase):
             {
                 "features": [{"name": "Segment", "include": True, "monotonicity": "Increasing"}],
                 "parameters": [{"name": "objective", "value": "poisson"}],
-                "sample_column": "sample",
+                "sample_column": "SAMPLE",
             },
         )
 
@@ -298,7 +382,7 @@ class GbmToolTests(unittest.TestCase):
                     {"name": "objective", "value": "not_a_real_objective"},
                     {"name": "metric", "value": "not_a_real_metric"},
                 ],
-                "sample_column": "sample",
+                "sample_column": "SAMPLE",
             },
         )
 
@@ -318,7 +402,7 @@ class GbmToolTests(unittest.TestCase):
                     {"name": "objective", "value": "cross_entropy"},
                     {"name": "metric", "value": "cross_entropy"},
                 ],
-                "sample_column": "sample",
+                "sample_column": "SAMPLE",
             },
         )
 
@@ -334,7 +418,7 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(rows[0]["gain"], 9.25)
         self.assertEqual(rows[1]["name"], "Segment")
         self.assertEqual(rows[1]["gain"], 1.5)
-        self.assertEqual(next(row for row in rows if row["name"] == "sample")["gain"], 0.0)
+        self.assertEqual(next(row for row in rows if row["name"] == "SAMPLE")["gain"], 0.0)
 
     def test_feature_rows_include_invalid_columns_without_counting_them(self) -> None:
         original_probe = Dataset.probe_column_readable
@@ -358,7 +442,7 @@ class GbmToolTests(unittest.TestCase):
                     "offset": "denominator",
                     "features": [{"name": "Segment", "include": True, "monotonicity": ""}],
                     "parameters": default_parameters(),
-                    "sample_column": "sample",
+                    "sample_column": "SAMPLE",
                 },
             )
 
@@ -403,13 +487,13 @@ class GbmToolTests(unittest.TestCase):
         projection = training_projection_columns(
             response_col="actualNumerator",
             offset_col="denominator",
-            sample_column="sample",
+            sample_column="SAMPLE",
             feature_names=["Age"],
             columns=columns,
         )
         sql = training_select_sql(dataset.relation_sql(), projection, "\nWHERE TRY_CAST(denominator AS DOUBLE) > 0")
 
-        self.assertEqual(projection, ["actualNumerator", "denominator", "sample", "Age"])
+        self.assertEqual(projection, ["actualNumerator", "denominator", "SAMPLE", "Age"])
         self.assertNotIn("*", sql)
         self.assertNotIn("Segment", sql)
         self.assertIn('"Age"', sql)
@@ -431,8 +515,8 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(by_name["Age"]["monotonicity"], "Increasing")
         self.assertTrue(by_name["Segment"]["include"])
         self.assertEqual(by_name["Segment"]["monotonicity"], "")
-        self.assertFalse(by_name["sample"]["include"])
-        self.assertEqual(by_name["sample"]["gain"], 0.0)
+        self.assertFalse(by_name["SAMPLE"]["include"])
+        self.assertEqual(by_name["SAMPLE"]["gain"], 0.0)
 
     def test_config_uses_active_model_parameters(self) -> None:
         store = self.write_model_artifacts()
@@ -462,7 +546,7 @@ class GbmToolTests(unittest.TestCase):
         self.assertTrue(features["Age"]["include"])
         self.assertEqual(features["Age"]["monotonicity"], "Increasing")
         self.assertTrue(features["Segment"]["include"])
-        self.assertFalse(features["sample"]["include"])
+        self.assertFalse(features["SAMPLE"]["include"])
 
     def test_activate_model_response_uses_activated_model_parameters(self) -> None:
         store = GbmModelStore(self.data_path)
@@ -531,7 +615,7 @@ class GbmToolTests(unittest.TestCase):
                 "offset": "__none__",
                 "features": [{"name": "Segment", "include": True, "monotonicity": ""}],
                 "parameters": [{"name": "objective", "value": "poisson"}],
-                "sample_column": "sample",
+                "sample_column": "SAMPLE",
             },
         )
 
@@ -618,7 +702,7 @@ COPY (
 
         data_path = self.root / "invalid_unused.csv"
         data_path.write_text(
-            "actualNumerator,denominator,Age,BadText,sample\n"
+            "actualNumerator,denominator,Age,BadText,SAMPLE\n"
             "10,100,30,bad,training\n"
             "20,200,40,bad,test\n"
             "30,300,50,bad,training\n",
@@ -661,7 +745,7 @@ COPY (
                 "offset": "denominator",
                 "features": features,
                 "parameters": parameters,
-                "sample_column": "sample",
+                "sample_column": "SAMPLE",
                 "shap_rows": "0",
             },
         )

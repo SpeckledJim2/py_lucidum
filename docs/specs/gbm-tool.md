@@ -45,9 +45,9 @@ This is made up of two side by side components:
 - include a button to specify whether SHAP values should be created for 0 rows, 10k rows, 100k rows, or all rows.
 - include a green "train GBM" button at the top which starts model training and diagnostic creation
 - while training, show live progress with the current tree/iteration and train/test metric values, and update the evaluation chart as new LightGBM evaluation results arrive.
-- the user specifys a "sample" column which contains "training", "test" and possibly other levels like "out-of-time". The model is trained on the training rows and early stopping takes place on the test rows. But model predictions are calculated for ALL rows (that pass the weight filtering).
-- put in a button to create a sample column if none is present
-- if no sample column is present, train the GBM on all rows, but pop up a message to the user
+- the user specifys a `SAMPLE` column which contains `training`, `test`, and optionally `validation`/other levels. The model is trained on the training rows and early stopping takes place on the test rows. But model predictions are calculated for ALL rows (that pass the weight filtering).
+- put in a button to create a generated reusable 60/20/20 `SAMPLE` sidecar if none is present
+- if no sample column is present, train the GBM on all rows, but show a message to the user
 - bottom right I want to see the "evaluation" chart - this is the value of the selected model metric after each round of training. Show this for training and also test rows if present.
 
 Note that LightGBM accepts both objective (used for training) and metric (used for early stopping) - I need to be able to specify both.

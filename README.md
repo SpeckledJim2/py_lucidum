@@ -155,8 +155,9 @@ Saved filters are CSV files with exactly these columns:
 
 ```csv
 theme,name,expression
-MODEL SPLIT,Training rows,train_test = 0
-MODEL SPLIT,Test rows,train_test = 1
+SAMPLE,Training,SAMPLE = 'training'
+SAMPLE,Test,SAMPLE = 'test'
+SAMPLE,Validation,SAMPLE = 'validation'
 DRIVER AGE,Young drivers,DRIVER_AGE < 30
 DRIVER AGE,Older drivers,DRIVER_AGE > 70
 ```
@@ -184,7 +185,7 @@ The GBM tool is opt-in. Column Profile remains enabled and opens first:
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm
 ```
 
-The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. Models are saved beside the dataset under `.lucidum/models/gbm/`. During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs. Selecting a saved GBM makes it active and refreshes the feature table, parameter table, evaluation plot, tree viewer, and plot-ready model outputs. The tree viewer reads saved LightGBM tree artifacts, shows a searchable tree list, and renders the selected tree with zoom and colour controls. Once a model is active, its predictions and SHAP outputs appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
+The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under `.lucidum/models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved beside the dataset under `.lucidum/models/gbm/`. During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs. Selecting a saved GBM makes it active and refreshes the feature table, parameter table, evaluation plot, tree viewer, and plot-ready model outputs. The tree viewer reads saved LightGBM tree artifacts, shows a searchable tree list, and renders the selected tree with zoom and colour controls. Once a model is active, its predictions and SHAP outputs appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
 
 ## Development
 

@@ -5,6 +5,14 @@ from typing import Any
 
 from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, quote_ident
 
+from .sample import (
+    SAMPLE_COLUMN,
+    dataset_sample_column,
+    dataset_training_sample_counts,
+    generated_sample_is_current,
+    generated_training_sample_counts,
+)
+
 
 RESPONSE_COLUMN = "actualNumerator"
 OFFSET_COLUMN = "denominator"
@@ -165,10 +173,14 @@ def feature_rows(
     dataset: Dataset,
     gains: dict[str, float] | None = None,
     model_features: list[dict[str, Any]] | None = None,
+    reserved_names: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     columns = dataset.all_column_map()
     invalid_columns = dataset.invalid_column_errors()
     distinct_counts = categorical_distinct_counts(dataset)
+    reserved = {RESPONSE_COLUMN, OFFSET_COLUMN, *(reserved_names or set())}
+    if dataset_sample_column(dataset):
+        reserved.add(SAMPLE_COLUMN)
     model_feature_map = {
         str(item.get("name")): item
         for item in model_features or []
@@ -183,9 +195,9 @@ def feature_rows(
         disabled_reason = ""
         if invalid_error:
             disabled_reason = invalid_error
-        elif column.name in {RESPONSE_COLUMN, OFFSET_COLUMN}:
+        elif column.name in reserved:
             usable = False
-            disabled_reason = "reserved response/offset column"
+            disabled_reason = "reserved response, offset, or sample column"
         elif not usable:
             disabled_reason = "LightGBM feature type is not supported"
         distinct_count = distinct_counts.get(column.name)
@@ -284,17 +296,12 @@ def display_monotonicity(raw: Any) -> str:
 
 
 def detect_sample_column(dataset: Dataset, requested: Any = None) -> str | None:
-    columns = dataset.column_map()
-    if requested:
-        name = str(requested).strip()
-        return name if name in columns else None
-    for candidate in ("sample", "Sample", "SAMPLE", "sample_group", "SampleGroup"):
-        if candidate in columns:
-            return candidate
-    return None
+    if requested and str(requested).strip() != SAMPLE_COLUMN:
+        return None
+    return dataset_sample_column(dataset)
 
 
-def validate_request(dataset: Dataset, payload: dict[str, Any]) -> ValidationResult:
+def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample_path: Any = None) -> ValidationResult:
     with dataset.lock:
         errors: list[str] = []
         warnings: list[str] = []
@@ -346,13 +353,30 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> ValidationRes
             warnings.append("No denominator column is selected; GBM offset values will be treated as 1")
 
         sample_column = detect_sample_column(dataset, payload.get("sample_column"))
+        has_generated_sample = bool(generated_sample_path and generated_sample_is_current(dataset, generated_sample_path))
+        reserved_sample_names = {SAMPLE_COLUMN} if sample_column else set()
         if sample_column:
-            sample_errors = sample_split_errors(dataset, sample_column, offset_col)
+            sample_errors, sample_warnings = sample_split_messages(
+                dataset_training_sample_counts(dataset, offset_col),
+                source_label=sample_column,
+            )
             errors.extend(sample_errors)
+            warnings.extend(sample_warnings)
+        elif has_generated_sample:
+            sample_errors, sample_warnings = sample_split_messages(
+                generated_training_sample_counts(dataset, generated_sample_path, offset_col),
+                source_label="generated SAMPLE",
+            )
+            errors.extend(sample_errors)
+            warnings.extend(sample_warnings)
         elif payload.get("create_sample"):
-            warnings.append("A model-local deterministic training/test sample will be created")
+            warnings.append("A generated 60/20/20 SAMPLE split will be created and reused for later GBM training")
         else:
             warnings.append("No sample column was found; the GBM will train on all valid rows without early stopping")
+
+        for feature in selected_features:
+            if feature["name"] in reserved_sample_names:
+                errors.append(f"{feature['name']} is reserved for the GBM sample split")
 
         return ValidationResult(ok=not errors, errors=errors, warnings=warnings)
 
@@ -387,24 +411,22 @@ FROM {relation}
 
 
 def sample_split_errors(dataset: Dataset, sample_column: str, offset_column: str | None = OFFSET_COLUMN) -> list[str]:
-    col = quote_ident(sample_column)
-    relation = dataset.relation_sql()
-    denominator_filter = f"WHERE TRY_CAST({quote_ident(offset_column)} AS DOUBLE) > 0" if offset_column else ""
-    rows = dataset.con.execute(
-        f"""
-SELECT LOWER(TRIM(CAST({col} AS VARCHAR))) AS sample, COUNT(*) AS row_count
-FROM {relation}
-{denominator_filter}
-GROUP BY sample
-"""
-    ).fetchall()
-    counts = {str(sample or ""): int(row_count) for sample, row_count in rows}
-    errors: list[str] = []
-    if counts.get("training", 0) == 0:
-        errors.append(f"Sample column {sample_column} must contain at least one training row")
-    if counts.get("test", 0) == 0:
-        errors.append(f"Sample column {sample_column} must contain at least one test row for early stopping")
+    if sample_column != SAMPLE_COLUMN:
+        return [f"Sample column {sample_column} is not supported; use SAMPLE"]
+    errors, _ = sample_split_messages(dataset_training_sample_counts(dataset, offset_column), source_label=sample_column)
     return errors
+
+
+def sample_split_messages(counts: dict[str, int], *, source_label: str) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    if counts.get("training", 0) == 0:
+        errors.append(f"{source_label} must contain at least one training row")
+    if counts.get("test", 0) == 0:
+        errors.append(f"{source_label} must contain at least one test row for early stopping")
+    if counts.get("validation", 0) == 0:
+        warnings.append(f"{source_label} has no validation rows; validation holdout diagnostics will be skipped")
+    return errors, warnings
 
 
 __all__ = [

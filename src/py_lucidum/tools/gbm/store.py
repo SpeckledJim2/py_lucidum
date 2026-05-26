@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 
+from .sample import GENERATED_SAMPLE_FILENAME
+
 
 ARTIFACT_FILES = {
     "predictions": "predictions.parquet",
@@ -82,6 +84,10 @@ class GbmModelStore:
     @property
     def active_path(self) -> Path:
         return self.root / "active_model.json"
+
+    @property
+    def generated_sample_path(self) -> Path:
+        return self.root / GENERATED_SAMPLE_FILENAME
 
     def ensure_root(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -181,7 +187,7 @@ class GbmModelStore:
             return f"read_parquet({sql_literal(str(source_path))})"
         manifest = self.manifest(ref.model_id)
         offset_col = str(manifest.get("offset_column") or "").strip()
-        where_sql = f"\n  WHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
+        where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
         source_columns = self.source_columns(manifest)
         select_sql = prediction_source_select_sql(source_columns)
         base_projection_sql = row_number_source_projection_sql(source_columns)
@@ -191,8 +197,13 @@ SELECT
   prediction.gbm_prediction
 FROM (
   SELECT
-    {base_projection_sql}
-  FROM {self.dataset_relation_sql()}{where_sql}
+    *
+  FROM (
+    SELECT
+      {base_projection_sql}
+    FROM {self.dataset_relation_sql()}
+  ) dataset_rows
+  {where_sql}
 ) base
 INNER JOIN read_parquet({sql_literal(str(source_path))}) prediction USING (__lucidum_row_id)
 )"""

@@ -1,6 +1,7 @@
 theme,name,expression
-MODEL SPLIT,Training rows,train_test = 0
-MODEL SPLIT,Test rows,train_test = 1
+SAMPLE,Training,SAMPLE = 'training'
+SAMPLE,Test,SAMPLE = 'test'
+SAMPLE,Validation,SAMPLE = 'validation'
 DRIVER AGE,Young drivers,DRIVER_AGE < 30
 DRIVER AGE,Middle aged drivers,DRIVER_AGE >= 30 AND DRIVER_AGE < 60
 DRIVER AGE,Older drivers,DRIVER_AGE > 70
