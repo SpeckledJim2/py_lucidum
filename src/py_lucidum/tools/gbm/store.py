@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import time
@@ -54,6 +55,60 @@ SOURCE_RE = re.compile(r"^gbm:([A-Za-z0-9_.-]+):(predictions|shap_long|shap_summ
 
 class GbmModelNameError(ValueError):
     pass
+
+
+def json_safe_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def metric_value_at_iteration(values: Any, best_iteration: Any) -> float | None:
+    try:
+        index = int(best_iteration) - 1
+    except (TypeError, ValueError):
+        return None
+    if index < 0 or not isinstance(values, list) or index >= len(values):
+        return None
+    return json_safe_number(values[index])
+
+
+def evaluation_metric_for_dataset(
+    evaluation: Any,
+    metric_name: str,
+    best_iteration: Any,
+    dataset_aliases: tuple[str, ...],
+) -> float | None:
+    if not isinstance(evaluation, dict):
+        return None
+    aliases = {alias.lower() for alias in dataset_aliases}
+    metric = str(metric_name or "")
+    for dataset_name, metrics in evaluation.items():
+        if str(dataset_name or "").lower() not in aliases or not isinstance(metrics, dict):
+            continue
+        value = metric_value_at_iteration(metrics.get(metric), best_iteration)
+        if value is not None:
+            return value
+    return None
+
+
+def best_metrics_from_evaluation(evaluation: Any, metric_name: str, best_iteration: Any) -> dict[str, float | None]:
+    return {
+        "training": evaluation_metric_for_dataset(evaluation, metric_name, best_iteration, ("training", "train")),
+        "test": evaluation_metric_for_dataset(evaluation, metric_name, best_iteration, ("test",)),
+    }
+
+
+def normalise_best_metrics(value: Any) -> dict[str, float | None]:
+    metrics = value if isinstance(value, dict) else {}
+    return {
+        "training": json_safe_number(metrics.get("training")),
+        "test": json_safe_number(metrics.get("test")),
+    }
 
 
 def dedupe_columns(columns: list[str]) -> list[str]:
@@ -156,11 +211,34 @@ class GbmModelStore:
                 continue
             manifest = self.read_json(manifest_path, {})
             if isinstance(manifest, dict):
-                item = dict(manifest)
-                item.setdefault("training_mode", DEFAULT_TRAINING_MODE)
-                item["active"] = item.get("model_id") == active
-                models.append(item)
+                models.append(self.model_list_item(path, manifest, active))
         return sorted(models, key=lambda item: str(item.get("created_at", "")), reverse=True)
+
+    def model_list_item(self, path: Path, manifest: dict[str, Any], active_model_id: str | None) -> dict[str, Any]:
+        item = dict(manifest)
+        item.setdefault("training_mode", DEFAULT_TRAINING_MODE)
+        model_id = str(item.get("model_id") or path.name)
+        item["model_id"] = model_id
+        item["parameters"] = self.model_parameters(model_id)
+        item["best_metrics"] = self.model_best_metrics(model_id, item)
+        item["active"] = model_id == active_model_id
+        return item
+
+    def model_parameters(self, model_id: str) -> dict[str, Any]:
+        parameters = self.read_json(self.artifact_path(model_id, "parameters"), {})
+        return dict(parameters) if isinstance(parameters, dict) else {}
+
+    def model_best_metrics(self, model_id: str, manifest: dict[str, Any]) -> dict[str, float | None]:
+        metrics = normalise_best_metrics(manifest.get("best_metrics"))
+        if metrics["training"] is not None and metrics["test"] is not None:
+            return metrics
+        training_log = self.read_json(self.artifact_path(model_id, "training_log"), {})
+        evaluation = training_log.get("evaluation") if isinstance(training_log, dict) else None
+        derived = best_metrics_from_evaluation(evaluation, str(manifest.get("metric") or ""), manifest.get("best_iteration"))
+        return {
+            "training": metrics["training"] if metrics["training"] is not None else derived["training"],
+            "test": metrics["test"] if metrics["test"] is not None else derived["test"],
+        }
 
     def active_model_id(self) -> str | None:
         payload = self.read_json(self.active_path, {})

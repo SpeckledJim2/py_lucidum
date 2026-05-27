@@ -615,6 +615,8 @@ export function createGbmTool({
       metric: String(model?.metric || ""),
       training_mode: normaliseTrainingMode(model?.training_mode),
       best_iteration: Number(model?.best_iteration || 0),
+      best_metrics: model?.best_metrics || {},
+      parameters: model?.parameters || {},
       training_rows: Number(model?.training_rows || 0),
       sample_column: String(model?.sample_column || ""),
       sample_source: String(model?.sample_source || ""),
@@ -692,7 +694,7 @@ export function createGbmTool({
       modelTable = new Tabulator("#gbmModelGrid", {
         data: models,
         height: "100%",
-        layout: "fitColumns",
+        layout: "fitDataStretch",
         placeholder: "No GBMs trained yet",
         initialSort: [{ column: "created_sort", dir: "desc" }],
         columns: [
@@ -705,6 +707,14 @@ export function createGbmTool({
           { title: "Mode", field: "training_mode_display", sorter: "string", width: 70, headerSort: true },
           { title: "Train", field: "training_rows", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 86, headerSort: true },
           { title: "Best iter.", field: "best_iteration", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 92, headerSort: true },
+          { title: "tr@best", field: "best_training_metric", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 72, headerSort: true, headerTooltip: "Training metric at best iteration" },
+          { title: "te@best", field: "best_test_metric", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 72, headerSort: true, headerTooltip: "Test metric at best iteration" },
+          { title: "n_iter", field: "param_num_iterations", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 58, headerSort: true, headerTooltip: "num_iterations" },
+          { title: "lr", field: "param_learning_rate", sorter: "number", formatter: (cell) => escapeHtml(formatModelDecimal(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 50, headerSort: true, headerTooltip: "learning_rate" },
+          { title: "leaves", field: "param_num_leaves", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 58, headerSort: true, headerTooltip: "num_leaves" },
+          { title: "depth", field: "param_max_depth", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 56, headerSort: true, headerTooltip: "max_depth" },
+          { title: "min_leaf", field: "param_min_data_in_leaf", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 64, headerSort: true, headerTooltip: "min_data_in_leaf" },
+          { title: "ES", field: "param_early_stopping_rounds", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 46, headerSort: true, headerTooltip: "early_stopping_rounds" },
           { title: "Run time", field: "runtime_seconds", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().runtime_display), hozAlign: "right", headerHozAlign: "right", width: 84, headerSort: true },
           { title: "Sample", field: "sample_display", sorter: "string", widthGrow: 1.1, headerSort: true },
         ],
@@ -945,6 +955,14 @@ export function createGbmTool({
       created_display: formatModelCreated(model.created_at),
       weight_display: modelWeightLabel(model.offset_column),
       training_mode_display: model.training_mode === "ebm" ? "EBM" : "Normal",
+      best_training_metric: modelBestMetric(model, "training"),
+      best_test_metric: modelBestMetric(model, "test"),
+      param_num_iterations: modelParameterNumber(model, "num_iterations"),
+      param_learning_rate: modelParameterNumber(model, "learning_rate"),
+      param_num_leaves: modelParameterNumber(model, "num_leaves"),
+      param_max_depth: modelParameterNumber(model, "max_depth"),
+      param_min_data_in_leaf: modelParameterNumber(model, "min_data_in_leaf"),
+      param_early_stopping_rounds: modelParameterNumber(model, "early_stopping_rounds"),
       runtime_seconds: modelRuntimeSeconds(model),
       runtime_display: formatModelRuntime(model),
       sample_display: formatSampleMode(model.sample_column, model.sample_source),
@@ -969,9 +987,17 @@ export function createGbmTool({
             <th>Objective</th>
             <th>Metric</th>
             <th>Mode</th>
-            <th>Train</th>
-            <th>Best iter.</th>
-            <th>Run time</th>
+            <th class="numeric">Train</th>
+            <th class="numeric">Best iter.</th>
+            <th class="numeric compact" title="Training metric at best iteration">tr@best</th>
+            <th class="numeric compact" title="Test metric at best iteration">te@best</th>
+            <th class="numeric compact" title="num_iterations">n_iter</th>
+            <th class="numeric compact" title="learning_rate">lr</th>
+            <th class="numeric compact" title="num_leaves">leaves</th>
+            <th class="numeric compact" title="max_depth">depth</th>
+            <th class="numeric compact" title="min_data_in_leaf">min_leaf</th>
+            <th class="numeric compact" title="early_stopping_rounds">ES</th>
+            <th class="numeric">Run time</th>
             <th>Sample</th>
           </tr>
         </thead>
@@ -989,6 +1015,14 @@ export function createGbmTool({
               <td>${escapeHtml(model.training_mode_display)}</td>
               <td class="numeric">${formatModelCount(model.training_rows)}</td>
               <td class="numeric">${formatModelCount(model.best_iteration)}</td>
+              <td class="numeric">${escapeHtml(formatModelMetric(model.best_training_metric))}</td>
+              <td class="numeric">${escapeHtml(formatModelMetric(model.best_test_metric))}</td>
+              <td class="numeric">${escapeHtml(formatModelInteger(model.param_num_iterations))}</td>
+              <td class="numeric">${escapeHtml(formatModelDecimal(model.param_learning_rate))}</td>
+              <td class="numeric">${escapeHtml(formatModelInteger(model.param_num_leaves))}</td>
+              <td class="numeric">${escapeHtml(formatModelInteger(model.param_max_depth))}</td>
+              <td class="numeric">${escapeHtml(formatModelInteger(model.param_min_data_in_leaf))}</td>
+              <td class="numeric">${escapeHtml(formatModelInteger(model.param_early_stopping_rounds))}</td>
               <td class="numeric">${escapeHtml(model.runtime_display)}</td>
               <td>${escapeHtml(model.sample_display)}</td>
             </tr>
@@ -1004,6 +1038,37 @@ export function createGbmTool({
   function formatModelCount(value) {
     const number = Number(value);
     return Number.isFinite(number) && number > 0 ? Math.round(number).toLocaleString() : "0";
+  }
+
+  function modelBestMetric(model, name) {
+    const metrics = model?.best_metrics && typeof model.best_metrics === "object" ? model.best_metrics : {};
+    return modelNumberOrNull(metrics[name]);
+  }
+
+  function modelParameterNumber(model, name) {
+    const parameters = model?.parameters && typeof model.parameters === "object" ? model.parameters : {};
+    return modelNumberOrNull(parameters[name]);
+  }
+
+  function modelNumberOrNull(value) {
+    if (value === null || value === undefined || String(value).trim() === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function formatModelMetric(value) {
+    return formatEvaluationValue(value) || "--";
+  }
+
+  function formatModelInteger(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.round(number).toLocaleString() : "--";
+  }
+
+  function formatModelDecimal(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "--";
+    return number.toLocaleString(undefined, { maximumSignificantDigits: 4 });
   }
 
   function modelRuntimeSeconds(model) {

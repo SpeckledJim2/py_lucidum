@@ -16,7 +16,7 @@ from .sample import (
     generated_sample_is_current,
     generated_sample_relation_sql,
 )
-from .store import GbmModelStore
+from .store import GbmModelStore, best_metrics_from_evaluation
 from .validation import (
     OFFSET_COLUMN,
     RESPONSE_COLUMN,
@@ -545,6 +545,7 @@ def train_model(
 
     elapsed = time.perf_counter() - started
     ebm_metadata = ebm_controller.metadata() if ebm_controller else None
+    best_metrics = best_metrics_from_evaluation(evaluation_result, selected_metric, best_iteration)
     manifest = {
         "model_id": model_id,
         "label": model_label,
@@ -555,6 +556,7 @@ def train_model(
         "response_column": response_col,
         "offset_column": offset_col,
         "best_iteration": best_iteration,
+        "best_metrics": best_metrics,
         "num_iterations": num_boost_round,
         "training_rows": int(train_mask.sum()),
         "test_rows": int(test_mask.sum()),

@@ -3382,6 +3382,12 @@
         min-height: 0;
       }
 
+      #gbmModelFallback {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+      }
+
       .gbm-model-grid .tabulator-row {
         cursor: pointer;
       }
@@ -3395,6 +3401,7 @@
         font-size: 11px;
         line-height: 1.15;
         table-layout: fixed;
+        min-width: 1420px;
       }
 
       .gbm-model-table th,
@@ -3425,36 +3432,35 @@
       }
 
       .gbm-model-table td.numeric,
-      .gbm-model-table th:nth-child(8),
-      .gbm-model-table th:nth-child(9),
-      .gbm-model-table th:nth-child(10) {
+      .gbm-model-table th.numeric {
         text-align: right;
       }
 
       .gbm-model-table th:nth-child(1) {
-        width: 20%;
+        width: 16%;
       }
 
       .gbm-model-table th:nth-child(2) {
-        width: 10%;
+        width: 8%;
       }
 
       .gbm-model-table th:nth-child(3),
       .gbm-model-table th:nth-child(4) {
-        width: 12%;
+        width: 10%;
       }
 
       .gbm-model-table th:nth-child(5),
       .gbm-model-table th:nth-child(6),
       .gbm-model-table th:nth-child(7),
-      .gbm-model-table th:nth-child(11) {
-        width: 8%;
+      .gbm-model-table th:nth-child(18),
+      .gbm-model-table th:nth-child(19) {
+        width: 6%;
       }
 
       .gbm-model-table th:nth-child(8),
       .gbm-model-table th:nth-child(9),
-      .gbm-model-table th:nth-child(10) {
-        width: 6%;
+      .gbm-model-table th.compact {
+        width: 5%;
       }
 
       .gbm-model-table tr.active td {

@@ -669,6 +669,69 @@ class GbmToolTests(unittest.TestCase):
         self.assertTrue(features["Segment"]["include"])
         self.assertFalse(features["SAMPLE"]["include"])
 
+    def test_model_list_enriches_parameters_and_best_metrics(self) -> None:
+        store = GbmModelStore(self.data_path)
+        for model_id, metric, best_iteration, created_at in (
+            ("m1", "gamma", 3, "2026-05-25T00:00:00Z"),
+            ("m2", "poisson", 2, "2026-05-25T00:00:01Z"),
+            ("m3", "gamma", 2, "2026-05-25T00:00:02Z"),
+        ):
+            model_dir = store.create_model_dir(model_id)
+            store.write_json(
+                model_dir / "manifest.json",
+                {
+                    "model_id": model_id,
+                    "label": model_id,
+                    "created_at": created_at,
+                    "objective": metric,
+                    "metric": metric,
+                    "response_column": "actualNumerator",
+                    "offset_column": "denominator",
+                    "best_iteration": best_iteration,
+                    "training_rows": 2,
+                    "test_rows": 1,
+                    "feature_importance": [],
+                    "sources": {},
+                },
+            )
+        store.write_json(
+            store.artifact_path("m1", "parameters"),
+            {
+                "num_iterations": 77,
+                "learning_rate": 0.11,
+                "num_leaves": 31,
+                "max_depth": -1,
+                "min_data_in_leaf": 20,
+                "early_stopping_rounds": 25,
+            },
+        )
+        store.write_json(
+            store.artifact_path("m1", "training_log"),
+            {"evaluation": {"training": {"gamma": [7.4, 7.3, 7.2]}, "test": {"gamma": [7.5, 7.35, 7.25]}}},
+        )
+        store.write_json(
+            store.artifact_path("m2", "training_log"),
+            {"evaluation": {"train": {"poisson": [1.4, 1.2, 1.1]}}},
+        )
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        models_status, models_body = asgi_get(app, "/api/gbm/models")
+        config_status, config_body = asgi_get(app, "/api/gbm/config")
+        models_payload = json.loads(models_body)
+        config_payload = json.loads(config_body)
+        models = {model["model_id"]: model for model in models_payload["models"]}
+        config_models = {model["model_id"]: model for model in config_payload["models"]}
+
+        self.assertEqual(models_status, 200)
+        self.assertEqual(config_status, 200)
+        self.assertEqual(models["m1"]["parameters"]["learning_rate"], 0.11)
+        self.assertEqual(models["m1"]["parameters"]["num_iterations"], 77)
+        self.assertEqual(models["m1"]["best_metrics"], {"training": 7.2, "test": 7.25})
+        self.assertEqual(models["m2"]["best_metrics"], {"training": 1.2, "test": None})
+        self.assertEqual(models["m3"]["parameters"], {})
+        self.assertEqual(models["m3"]["best_metrics"], {"training": None, "test": None})
+        self.assertEqual(config_models["m1"]["best_metrics"], models["m1"]["best_metrics"])
+
     def test_activate_model_response_uses_activated_model_parameters(self) -> None:
         store = GbmModelStore(self.data_path)
         for model_id, label, learning_rate in (
@@ -920,6 +983,10 @@ COPY (
         self.assertEqual(result["objective"], "poisson")
         self.assertIsNone(result["offset_column"])
         self.assertEqual(result["training_rows"], 50000)
+        manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
+        self.assertEqual(manifest["best_metrics"], result["best_metrics"])
+        self.assertIsNotNone(result["best_metrics"]["training"])
+        self.assertIsNone(result["best_metrics"]["test"])
         con = duckdb.connect(database=":memory:")
         try:
             artifact_columns = con.execute(

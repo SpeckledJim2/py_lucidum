@@ -520,7 +520,10 @@ COPY (
                 )
                 self.assertEqual(
                     navigator_state["headers"],
-                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Train", "Best iter.", "Run time", "Sample"],
+                    [
+                        "Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Train", "Best iter.",
+                        "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
+                    ],
                 )
                 self.assertEqual(navigator_state["rows"], 2)
                 self.assertEqual(navigator_state["activeRows"], 1)
@@ -979,7 +982,10 @@ COPY (
                 )
                 self.assertEqual(
                     navigator_state["headers"],
-                    ["Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Train", "Best iter.", "Run time", "Sample"],
+                    [
+                        "Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Train", "Best iter.",
+                        "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
+                    ],
                 )
                 self.assertEqual(navigator_state["rowCount"], 1)
                 self.assertIn("Browser smoke model", navigator_state["activeText"])
@@ -988,6 +994,11 @@ COPY (
                 self.assertIn("denominator", navigator_state["firstCells"])
                 self.assertIn("Normal", navigator_state["firstCells"])
                 self.assertIn("SAMPLE", navigator_state["firstCells"])
+                self.assertIn("7.31", navigator_state["firstCells"])
+                self.assertIn("7.3022", navigator_state["firstCells"])
+                self.assertIn("77", navigator_state["firstCells"])
+                self.assertIn("0.11", navigator_state["firstCells"])
+                self.assertIn("25", navigator_state["firstCells"])
                 self.assertIn("1.2s", navigator_state["firstCells"])
                 self.assertTrue(navigator_state["wrapped"])
                 self.assertFalse(navigator_state["hasDeletedModel"])
