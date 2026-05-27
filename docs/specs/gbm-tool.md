@@ -49,7 +49,7 @@ This is made up of two side by side components:
 - the user specifys a `SAMPLE` column which contains `training`, `test`, and optionally `validation`/other levels. The model is trained on the training rows and early stopping takes place on the test rows. But model predictions are calculated for ALL rows (that pass the weight filtering).
 - put in a button to create a generated reusable 60/20/20 `SAMPLE` sidecar if none is present
 - if no sample column is present, train the GBM on all rows, but show a message to the user
-- bottom right I want to see the "evaluation" chart - this is the value of the selected model metric after each round of training. Show this for training and also test rows if present.
+- bottom right I want to see the "evaluation" chart - this is the value of the selected model metric after each round of training. Show this for training and also test rows if present. While training, keep the x-axis fixed to `num_iterations`; after completion, use the exact number of evaluation-log points and preserve a zoomed y-axis tail view when the initial drop is steep. Include an inline `All` / `Tail` control above the chart; `All` shows the full history and `Tail` focuses the x/y axes on the late training window. Histories longer than 2,000 points are sampled only for browser rendering; the stored evaluation log remains complete.
 
 Note that LightGBM accepts both objective (used for training) and metric (used for early stopping) - I need to be able to specify both.
 

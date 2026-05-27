@@ -2783,10 +2783,33 @@
         margin: 0;
       }
 
-      .gbm-feature-actions {
+      .gbm-feature-actions,
+      .gbm-evaluation-view-mode {
         display: inline-flex;
         flex: 0 0 auto;
         gap: 6px;
+      }
+
+      .gbm-evaluation-view-mode {
+        align-items: center;
+      }
+
+      .gbm-evaluation-view-option {
+        align-items: center;
+        color: var(--text);
+        display: inline-flex;
+        font-size: 11px;
+        font-weight: 700;
+        gap: 4px;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      .gbm-evaluation-view-option input {
+        accent-color: var(--accent);
+        height: 12px;
+        margin: 0;
+        width: 12px;
       }
 
       .gbm-inline-action-button {

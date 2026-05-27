@@ -61,7 +61,7 @@ Chosen defaults:
   - Objective and metric parameter rows are dropdowns containing supported single-response LightGBM options; other parameters remain editable text inputs.
   - Right side contains parameter grid, SHAP row-count selector, green Train GBM button, and ECharts evaluation plot.
   - When EBM is available, a Normal/EBM radio group sits below SHAP rows and includes a tooltip noting the 2-leaf `0.3` learning rate.
-  - During training, a compact toolbar status shows the current iteration and latest metric while the evaluation plot updates from live job progress.
+  - During training, a compact toolbar status shows the current iteration and latest metric while the evaluation plot updates from live job progress. The live x-axis stays fixed to `num_iterations`; completed and saved charts use the exact evaluation-log length and keep a tail-focused y-axis zoom when the initial metric drop is steep. The Evaluation Log header has an inline `All` / `Tail` control for full-history or late-window views. Evaluation histories over 2,000 points use render-only downsampling while persisted logs stay complete.
   - The ECharts evaluation title is a single line containing evaluation metric, test metric, and best iteration with the same font size.
 - **Model navigator** tab lists saved models, key parameters, train/test metrics, timings, and active-model selection.
 - **Tree viewer** tab provides a searchable tree summary table plus a graphical D3 tree from saved `tree_table.parquet` output. The diagram supports zoom, fit/reset, colour palettes, decoded categorical thresholds, edge labels, and default-branch highlighting.

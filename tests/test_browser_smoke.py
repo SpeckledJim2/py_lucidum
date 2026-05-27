@@ -115,14 +115,21 @@ class BrowserSmokeTests(unittest.TestCase):
                         "training_mode": "ebm" if model_id.endswith("-2") else "normal",
                         "learning_rate": learning_rate,
                         "num_iterations": 123 if model_id.endswith("-2") else 77,
+                        "early_stopping_rounds": 25,
                     },
                 )
+                if model_id == "browser-smoke-model":
+                    training_eval = [7.38, 7.33, 7.31, 7.305, 7.301]
+                    test_eval = [7.37, 7.325, 7.3022, 7.303, 7.304]
+                else:
+                    training_eval = [round(0.17 + 0.52 / ((index + 1) ** 0.58), 6) for index in range(3000)]
+                    test_eval = [round(0.18 + 0.5 / ((index + 1) ** 0.55), 6) for index in range(3000)]
                 store.write_json(
                     model_dir / "training_log.json",
                     {
                         "evaluation": {
-                            "training": {"gamma": [7.38, 7.33, 7.31, 7.305, 7.301]},
-                            "test": {"gamma": [7.37, 7.325, 7.3022, 7.303, 7.304]},
+                            "training": {"gamma": training_eval},
+                            "test": {"gamma": test_eval},
                         },
                         "warnings": [],
                     },
@@ -454,7 +461,7 @@ COPY (
                 page.get_by_text("Training mode").wait_for(timeout=10_000)
                 page.get_by_text("Features", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
-                page.get_by_text("Evaluation log", exact=True).wait_for(timeout=10_000)
+                page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)
                 invalid_feature_state = page.evaluate(
@@ -521,6 +528,120 @@ COPY (
                     "0.22",
                 )
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                      const option = chart?.getOption();
+                      return option?.xAxis?.[0]?.max === 3000
+                        && option.xAxis[0].interval === 100
+                        && option.series?.every((series) => series.data.length <= 1503)
+                        && Number.isFinite(option.yAxis?.[0]?.max)
+                        && option.yAxis[0].max < option.series?.[1]?.data?.[0]?.[1];
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                switched_chart_options = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                      const option = chart.getOption();
+                      return {
+                        allChecked: document.querySelector("input[name='gbmEvaluationViewMode'][value='all']")?.checked,
+                        tailChecked: document.querySelector("input[name='gbmEvaluationViewMode'][value='tail']")?.checked,
+                        xMin: option.xAxis[0].min,
+                        xMax: option.xAxis[0].max,
+                        xInterval: option.xAxis[0].interval,
+                        xAxisLabel100: option.xAxis[0].axisLabel.formatter(100),
+                        xAxisLabel500: option.xAxis[0].axisLabel.formatter(500),
+                        xAxisLabel1000: option.xAxis[0].axisLabel.formatter(1000),
+                        seriesLengths: option.series.map((series) => series.data.length),
+                        firstTestIteration: option.series[1].data[0][0],
+                        lastTestIteration: option.series[1].data.at(-1)[0],
+                        hasBestIteration: option.series[1].data.some((point) => point[0] === 3),
+                        yMax: option.yAxis[0].max,
+                        firstTestValue: option.series[1].data[0][1],
+                        tooltip: option.tooltip[0].formatter([
+                          { axisValue: 2.2, seriesName: "train", marker: "", value: [2.2, 0.12345] },
+                          { axisValue: 2.2, seriesName: "test", marker: "", value: [2.2, 0.23456] },
+                        ]),
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(switched_chart_options["allChecked"])
+                self.assertFalse(switched_chart_options["tailChecked"])
+                self.assertEqual(switched_chart_options["xMin"], 0)
+                self.assertEqual(switched_chart_options["xMax"], 3000)
+                self.assertEqual(switched_chart_options["xInterval"], 100)
+                self.assertEqual(switched_chart_options["xAxisLabel100"], "")
+                self.assertEqual(switched_chart_options["xAxisLabel500"], "500")
+                self.assertEqual(switched_chart_options["xAxisLabel1000"], "1,000")
+                self.assertTrue(all(length <= 1503 for length in switched_chart_options["seriesLengths"]))
+                self.assertEqual(switched_chart_options["firstTestIteration"], 1)
+                self.assertEqual(switched_chart_options["lastTestIteration"], 3000)
+                self.assertTrue(switched_chart_options["hasBestIteration"])
+                self.assertLess(switched_chart_options["yMax"], switched_chart_options["firstTestValue"])
+                self.assertIn("<strong>Iteration:</strong> 2", switched_chart_options["tooltip"])
+                page.locator("input[name='gbmEvaluationViewMode'][value='tail']").check()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                      const option = chart?.getOption();
+                      return option?.xAxis?.[0]?.min === 2876
+                        && option.xAxis[0].max === 3000
+                        && option.series?.[1]?.data?.[0]?.[0] === 2876
+                        && option.series[1].data.at(-1)[0] === 3000;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                tail_chart_options = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                      const option = chart.getOption();
+                      const testValues = option.series[1].data.map((point) => point[1]);
+                      return {
+                        tailChecked: document.querySelector("input[name='gbmEvaluationViewMode'][value='tail']")?.checked,
+                        xMin: option.xAxis[0].min,
+                        xMax: option.xAxis[0].max,
+                        xInterval: option.xAxis[0].interval,
+                        seriesLengths: option.series.map((series) => series.data.length),
+                        yMin: option.yAxis[0].min,
+                        yMax: option.yAxis[0].max,
+                        testMin: Math.min(...testValues),
+                        testMax: Math.max(...testValues),
+                        testRange: Math.max(...testValues) - Math.min(...testValues),
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(tail_chart_options["tailChecked"])
+                self.assertEqual(tail_chart_options["xMin"], 2876)
+                self.assertEqual(tail_chart_options["xMax"], 3000)
+                self.assertEqual(tail_chart_options["xMax"] - tail_chart_options["xMin"], 124)
+                self.assertLessEqual(max(tail_chart_options["seriesLengths"]), 125)
+                self.assertLessEqual(tail_chart_options["yMin"], tail_chart_options["testMin"])
+                self.assertGreaterEqual(tail_chart_options["yMax"], tail_chart_options["testMax"])
+                self.assertLess(
+                    tail_chart_options["yMax"] - tail_chart_options["yMin"],
+                    tail_chart_options["testRange"] * 1.5,
+                )
+                page.locator("input[name='gbmEvaluationViewMode'][value='all']").check()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                      const option = chart?.getOption();
+                      return option?.xAxis?.[0]?.min === 0 && option.xAxis[0].max === 3000;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("input[name='gbmEvaluationViewMode'][value='tail']").check()
                 page.get_by_role("button", name="Model navigator").click()
                 page.evaluate("() => { window.prompt = () => 'renamed-smoke-model'; }")
                 page.locator("#gbmRenameModelBtn").click()
@@ -542,6 +663,8 @@ COPY (
                     "0.11",
                 )
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='normal']").is_checked())
+                self.assertTrue(page.locator("input[name='gbmEvaluationViewMode'][value='tail']").is_checked())
+                page.locator("input[name='gbmEvaluationViewMode'][value='all']").check()
                 live_job_succeed = {"value": False}
 
                 def train_route(route: Any) -> None:
@@ -612,6 +735,8 @@ COPY (
                       const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
                       const option = chart?.getOption();
                       return option?.title?.[0]?.text === "evaluation metric: gamma, test metric: 7.2, iteration: 2"
+                        && option.xAxis?.[0]?.max === 10
+                        && document.querySelector("input[name='gbmEvaluationViewMode'][value='all']")?.checked
                         && option.series?.length === 2
                         && option.series[0].data.length === 2;
                     }
@@ -683,10 +808,13 @@ COPY (
                         legendRight: option.legend[0].right,
                         gridTop: option.grid[0].top,
                         gridRight: option.grid[0].right,
+                        gridBottom: option.grid[0].bottom,
                         gridContainLabel: option.grid[0].containLabel,
                         xType: option.xAxis[0].type,
                         xInterval: option.xAxis[0].interval,
                         xMax: option.xAxis[0].max,
+                        xAxisLabelHideOverlap: option.xAxis[0].axisLabel.hideOverlap,
+                        xAxisLabelMargin: option.xAxis[0].axisLabel.margin,
                         yType: option.yAxis[0].type,
                         yScale: option.yAxis[0].scale,
                         seriesNames: option.series.map((series) => series.name),
@@ -702,10 +830,13 @@ COPY (
                 self.assertEqual(chart_options["legendRight"], 8)
                 self.assertEqual(chart_options["gridTop"], 42)
                 self.assertEqual(chart_options["gridRight"], 82)
+                self.assertEqual(chart_options["gridBottom"], 20)
                 self.assertTrue(chart_options["gridContainLabel"])
                 self.assertEqual(chart_options["xType"], "value")
-                self.assertEqual(chart_options["xInterval"], 2)
-                self.assertEqual(chart_options["xMax"], 6)
+                self.assertEqual(chart_options["xInterval"], 1)
+                self.assertEqual(chart_options["xMax"], 5)
+                self.assertFalse(chart_options["xAxisLabelHideOverlap"])
+                self.assertEqual(chart_options["xAxisLabelMargin"], 4)
                 self.assertEqual(chart_options["yType"], "value")
                 self.assertTrue(chart_options["yScale"])
                 self.assertEqual(chart_options["seriesNames"], ["train", "test"])
