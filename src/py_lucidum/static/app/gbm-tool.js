@@ -57,6 +57,38 @@ export function gbmShapSelectionValue(data = {}) {
   return "0";
 }
 
+export function gbmModelDetailLabel(model = {}) {
+  const parts = [];
+  if (model.metric) parts.push(model.metric);
+  const bestIteration = Number(model.best_iteration || 0);
+  if (Number.isFinite(bestIteration) && bestIteration > 0) parts.push(`iter ${bestIteration.toLocaleString()}`);
+  parts.push(`train ${formatModelMetric(modelBestMetric(model, "training"))}`);
+  parts.push(`test ${formatModelMetric(modelBestMetric(model, "test"))}`);
+  return parts.join(" · ");
+}
+
+function modelBestMetric(model, name) {
+  const metrics = model?.best_metrics && typeof model.best_metrics === "object" ? model.best_metrics : {};
+  return modelNumberOrNull(metrics[name]);
+}
+
+function modelNumberOrNull(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatModelMetric(value) {
+  const number = modelNumberOrNull(value);
+  return number === null ? "--" : formatEvaluationValue(number) || "--";
+}
+
+function formatEvaluationValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
 export function createGbmTool({
   api,
   clearToolCaches,
@@ -635,7 +667,7 @@ export function createGbmTool({
       metric: String(model?.metric || ""),
       training_mode: normaliseTrainingMode(model?.training_mode),
       best_iteration: Number(model?.best_iteration || 0),
-      best_metrics: model?.best_metrics || {},
+      best_metrics: model?.best_metrics,
       parameters: model?.parameters || {},
       training_rows: Number(model?.training_rows || 0),
       sample_column: String(model?.sample_column || ""),
@@ -669,10 +701,7 @@ export function createGbmTool({
   }
 
   function modelDetailLabel(model) {
-    const parts = [];
-    if (model.metric) parts.push(model.metric);
-    if (model.best_iteration) parts.push(`iter ${model.best_iteration.toLocaleString()}`);
-    return parts.join(" · ");
+    return gbmModelDetailLabel(model);
   }
 
   function syncSidebarFromSchema() {
@@ -1060,24 +1089,9 @@ export function createGbmTool({
     return Number.isFinite(number) && number > 0 ? Math.round(number).toLocaleString() : "0";
   }
 
-  function modelBestMetric(model, name) {
-    const metrics = model?.best_metrics && typeof model.best_metrics === "object" ? model.best_metrics : {};
-    return modelNumberOrNull(metrics[name]);
-  }
-
   function modelParameterNumber(model, name) {
     const parameters = model?.parameters && typeof model.parameters === "object" ? model.parameters : {};
     return modelNumberOrNull(parameters[name]);
-  }
-
-  function modelNumberOrNull(value) {
-    if (value === null || value === undefined || String(value).trim() === "") return null;
-    const number = Number(value);
-    return Number.isFinite(number) ? number : null;
-  }
-
-  function formatModelMetric(value) {
-    return formatEvaluationValue(value) || "--";
   }
 
   function formatModelInteger(value) {
@@ -1789,12 +1803,6 @@ export function createGbmTool({
     if (Math.abs(number - iteration) > 1e-6) return "";
     const interval = Math.max(1, Math.round(Number(labelInterval || 1)));
     return iteration % interval === 0 ? iteration.toLocaleString() : "";
-  }
-
-  function formatEvaluationValue(value) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return "";
-    return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
   }
 
   function formatEvaluationAxisValue(value) {

@@ -614,7 +614,7 @@
       }
 
       .gbm-model-list .gbm-model-option {
-        grid-template-columns: minmax(0, 1fr) max-content;
+        grid-template-columns: fit-content(72%) minmax(0, 1fr);
       }
 
       .kpi-list .kpi-option:not(.active):hover,
@@ -639,7 +639,8 @@
       }
 
       .gbm-model-detail {
-        justify-self: end;
+        justify-self: stretch;
+        text-align: right;
       }
 
       .tool-selector-section {

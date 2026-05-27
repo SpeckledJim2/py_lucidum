@@ -73,13 +73,11 @@ class StaticAssetTests(unittest.TestCase):
             for path in module_paths
         )
 
-    def test_gbm_shap_selection_helper_maps_active_model_metadata(self) -> None:
-        node = shutil.which("node")
-        if not node:
-            self.skipTest("node is not installed")
-        js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
-        start = js.index("export function gbmShapSelectionValue")
-        brace = js.index("{", js.index(") {", start))
+    def js_function_source(self, js: str, name: str) -> str:
+        starts = [f"export function {name}", f"function {name}"]
+        start = next((js.index(prefix) for prefix in starts if prefix in js), -1)
+        self.assertGreaterEqual(start, 0, name)
+        brace = js.index("{", js.index(")", start))
         depth = 0
         end = None
         for index in range(brace, len(js)):
@@ -91,8 +89,24 @@ class StaticAssetTests(unittest.TestCase):
                     end = index + 1
                     break
         self.assertIsNotNone(end)
-        function_source = js[start:end].replace("export function", "function", 1)
-        script = function_source + """
+        return js[start:end].replace("export function", "function", 1)
+
+    def run_node_script(self, script: str) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_gbm_shap_selection_helper_maps_active_model_metadata(self) -> None:
+        js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
+        script = self.js_function_source(js, "gbmShapSelectionValue") + """
 const cases = [
   ["zero", { active_model_id: "m0", models: [{ model_id: "m0", active: true, shap_rows: 0, scored_rows: 50000 }] }, "0"],
   ["ten-k", { active_model_id: "m10", models: [{ model_id: "m10", active: true, shap_rows: 10000, scored_rows: 50000 }] }, "10k"],
@@ -107,14 +121,32 @@ for (const [name, data, expected] of cases) {
   }
 }
 """
-        result = subprocess.run(
-            [node, "--input-type=module", "-e", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.run_node_script(script)
+
+    def test_gbm_model_detail_label_includes_best_train_and_test_metrics(self) -> None:
+        js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
+        helpers = [
+            "gbmModelDetailLabel",
+            "modelBestMetric",
+            "modelNumberOrNull",
+            "formatModelMetric",
+            "formatEvaluationValue",
+        ]
+        script = "\n".join(self.js_function_source(js, name) for name in helpers) + """
+const cases = [
+  ["full", { metric: "mape", best_iteration: 5189, best_metrics: { training: 0.325612, test: 0.336543 } }, "mape · iter 5,189 · train 0.3256 · test 0.3365"],
+  ["missing-test", { metric: "mape", best_iteration: 10, best_metrics: { training: 0.123456, test: null } }, "mape · iter 10 · train 0.1235 · test --"],
+  ["missing-best-metrics", { metric: "mape", best_iteration: 1516 }, "mape · iter 1,516 · train -- · test --"],
+  ["zero", { metric: "poisson", best_iteration: 1, best_metrics: { training: 0, test: 0 } }, "poisson · iter 1 · train 0 · test 0"],
+];
+for (const [name, model, expected] of cases) {
+  const actual = gbmModelDetailLabel(model);
+  if (actual !== expected) {
+    throw new Error(`${name}: expected ${expected}, got ${actual}`);
+  }
+}
+"""
+        self.run_node_script(script)
 
     def test_index_uses_stable_local_asset_urls_and_disables_cache(self) -> None:
         _, body = self.assert_no_store("/")
@@ -517,6 +549,10 @@ for (const [name, data, expected] of cases) {
         self.assertIn("if (!modelsByGroup.has(group)) modelsByGroup.set(group, []);", js)
         self.assertIn("modelsByGroup.get(group).push(model);", js)
         self.assertIn('return `${model.response_column || "actualNumerator"} / ${modelWeightLabel(model.offset_column)}`;', js)
+        self.assertIn("function modelDetailLabel(model)", js)
+        self.assertIn("return gbmModelDetailLabel(model);", js)
+        self.assertIn('parts.push(`train ${formatModelMetric(modelBestMetric(model, "training"))}`);', js)
+        self.assertIn('parts.push(`test ${formatModelMetric(modelBestMetric(model, "test"))}`);', js)
         self.assertIn('heading.className = "saved-filter-theme gbm-model-theme";', js)
         self.assertIn('button.className = `feature gbm-model-option${active ? " active" : ""}`;', js)
         self.assertIn('id="gbmRenameModelBtn"', js)
@@ -1007,9 +1043,9 @@ for (const [name, data, expected] of cases) {
         self.assertIn("#gbmModelSelect {\n        flex: 1 1 auto;\n        width: 100%;", css)
         self.assertIn(".gbm-model-list .feature {\n        display: grid;\n        grid-template-columns: fit-content(52%) minmax(96px, 1fr);", css)
         self.assertIn(".gbm-model-list .gbm-model-option.active {\n        background: color-mix(in srgb, var(--accent) 20%, var(--panel));", css)
-        self.assertIn(".gbm-model-list .gbm-model-option {\n        grid-template-columns: minmax(0, 1fr) max-content;", css)
+        self.assertIn(".gbm-model-list .gbm-model-option {\n        grid-template-columns: fit-content(72%) minmax(0, 1fr);", css)
         self.assertIn(".kpi-detail,\n      .gbm-model-detail {\n        min-width: 0;\n        overflow: hidden;\n        text-align: right;", css)
-        self.assertIn(".gbm-model-detail {\n        justify-self: end;", css)
+        self.assertIn(".gbm-model-detail {\n        justify-self: stretch;\n        text-align: right;", css)
         self.assertIn("kpiCollapsed: false", js)
         self.assertIn("collapsedKpiGroups: new Set()", js)
         self.assertIn("gbmModelCollapsed: false", js)
