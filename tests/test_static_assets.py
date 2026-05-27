@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -70,6 +72,49 @@ class StaticAssetTests(unittest.TestCase):
             self.assert_no_store(path)[1].decode("utf-8")
             for path in module_paths
         )
+
+    def test_gbm_shap_selection_helper_maps_active_model_metadata(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
+        start = js.index("export function gbmShapSelectionValue")
+        brace = js.index("{", js.index(") {", start))
+        depth = 0
+        end = None
+        for index in range(brace, len(js)):
+            if js[index] == "{":
+                depth += 1
+            elif js[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        self.assertIsNotNone(end)
+        function_source = js[start:end].replace("export function", "function", 1)
+        script = function_source + """
+const cases = [
+  ["zero", { active_model_id: "m0", models: [{ model_id: "m0", active: true, shap_rows: 0, scored_rows: 50000 }] }, "0"],
+  ["ten-k", { active_model_id: "m10", models: [{ model_id: "m10", active: true, shap_rows: 10000, scored_rows: 50000 }] }, "10k"],
+  ["hundred-k", { active_model_id: "m100", models: [{ model_id: "m100", active: true, shap_rows: 100000, scored_rows: 500000 }] }, "100k"],
+  ["all", { active_model_id: "mall", models: [{ model_id: "mall", active: true, shap_rows: 50000, scored_rows: 50000 }] }, "all"],
+  ["missing", { active_model_id: "old", models: [{ model_id: "old", active: true }] }, "0"],
+];
+for (const [name, data, expected] of cases) {
+  const actual = gbmShapSelectionValue(data);
+  if (actual !== expected) {
+    throw new Error(`${name}: expected ${expected}, got ${actual}`);
+  }
+}
+"""
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
     def test_index_uses_stable_local_asset_urls_and_disables_cache(self) -> None:
         _, body = self.assert_no_store("/")

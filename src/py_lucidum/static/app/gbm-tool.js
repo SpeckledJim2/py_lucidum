@@ -43,6 +43,20 @@ const GBM_QUEUED_POLL_MS = 1000;
 const GBM_EVALUATION_DOWNSAMPLE_THRESHOLD = 2000;
 const GBM_EVALUATION_MAX_PLOT_POINTS = 1500;
 
+export function gbmShapSelectionValue(data = {}) {
+  const models = Array.isArray(data?.models) ? data.models : [];
+  const activeModelId = String(data?.active_model_id || "");
+  const model = models.find((item) => String(item?.model_id || "") === activeModelId) || models.find((item) => Boolean(item?.active));
+  if (!model) return "0";
+  const shapRows = Number(model?.shap_rows);
+  const scoredRows = Number(model?.scored_rows);
+  if (!Number.isFinite(shapRows) || shapRows <= 0) return "0";
+  if (Number.isFinite(scoredRows) && scoredRows > 0 && shapRows >= scoredRows) return "all";
+  if (shapRows >= 100000) return "100k";
+  if (shapRows >= 10000) return "10k";
+  return "0";
+}
+
 export function createGbmTool({
   api,
   clearToolCaches,
@@ -184,7 +198,7 @@ export function createGbmTool({
                       <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
                         <span class="gbm-shap-label">SHAP rows</span>
                         <div class="gbm-shap-options">
-                          ${shapOptionsHtml(data.shap_options || [])}
+                          ${shapOptionsHtml(data.shap_options || [], gbmShapSelectionValue(data))}
                         </div>
                       </div>
                       ${data.ebm_available ? trainingModeHtml(data.training_mode) : ""}
@@ -267,19 +281,25 @@ export function createGbmTool({
     saveToolPresentation(tool, { groupMeta, chartMessage: "" });
   }
 
-  function shapOptionsHtml(options) {
+  function shapOptionsHtml(options, selectedValue = "0") {
     const rows = options.length ? options : [
       { value: "0", label: "0" },
       { value: "10k", label: "10k" },
       { value: "100k", label: "100k" },
       { value: "all", label: "All" },
     ];
-    return rows.map((row, index) => `
+    const selected = String(selectedValue || "0").trim().toLowerCase();
+    const selectedRowValue = rows.some((row) => String(row.value || "").trim().toLowerCase() === selected) ? selected : "0";
+    return rows.map((row) => {
+      const value = String(row.value || "");
+      const checked = value.trim().toLowerCase() === selectedRowValue ? "checked" : "";
+      return `
       <label class="gbm-shap-option">
-        <input type="radio" name="gbmShapRows" value="${escapeHtml(row.value)}" ${index === 0 ? "checked" : ""} />
+        <input type="radio" name="gbmShapRows" value="${escapeHtml(value)}" ${checked} />
         <span>${escapeHtml(row.label)}</span>
       </label>
-    `).join("");
+    `;
+    }).join("");
   }
 
   function trainingModeHtml(mode) {
