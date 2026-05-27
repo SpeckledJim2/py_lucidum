@@ -143,6 +143,7 @@ class StaticAssetTests(unittest.TestCase):
 
     def test_gbm_frontend_contains_real_tool_contract(self) -> None:
         js = self.app_js_contract()
+        css = self.assert_no_store("/static/app.css")[1].decode("utf-8")
 
         self.assertIn('import { createGbmTool } from "./gbm-tool.js";', js)
         self.assertIn('import { createGbmTreeViewer } from "./gbm-tree-viewer.js";', js)
@@ -165,6 +166,16 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('append("ellipse")', js)
         self.assertIn('marker-end', js)
         self.assertIn("edge_label", js)
+        self.assertIn("const EDGE_LABEL_WRAP_CHARS = 34;", js)
+        self.assertIn("const CATEGORICAL_EDGE_LABEL_WRAP_CHARS = 20;", js)
+        self.assertIn("const CATEGORICAL_EDGE_LABEL_X_OFFSET = 32;", js)
+        self.assertIn("function edgeLabelPlacement(link)", js)
+        self.assertIn("function edgeLabelLines(label)", js)
+        self.assertIn("function nodePathIds(node)", js)
+        self.assertIn("function updateTreeHighlight(nodeId)", js)
+        self.assertIn("gbm-tree-node-highlighted", css)
+        self.assertIn("gbm-tree-link-highlighted", css)
+        self.assertIn('wrapDelimitedLabel(text, " / ", CATEGORICAL_EDGE_LABEL_WRAP_CHARS)', js)
         self.assertIn("default_branch", js)
         self.assertIn('data-gbm-tree-palette="plain"', js)
         self.assertIn('data-gbm-tree-palette="divergent"', js)

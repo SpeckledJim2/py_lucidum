@@ -3270,6 +3270,11 @@
         stroke-width: 2.8;
       }
 
+      .gbm-tree-link-highlighted {
+        stroke: var(--text);
+        stroke-width: 4.2;
+      }
+
       .gbm-tree-arrow {
         fill: color-mix(in srgb, var(--muted) 76%, transparent);
       }
@@ -3284,16 +3289,40 @@
         stroke-width: 4px;
       }
 
+      .gbm-tree-edge-label-highlighted {
+        fill: var(--text);
+        font-weight: 900;
+      }
+
       .gbm-tree-split-node,
       .gbm-tree-leaf-node {
         stroke: var(--gbm-tree-node-stroke);
         stroke-width: 1.4;
       }
 
+      .gbm-tree-node {
+        cursor: pointer;
+      }
+
+      .gbm-tree-node-highlighted .gbm-tree-split-node,
+      .gbm-tree-node-highlighted .gbm-tree-leaf-node {
+        stroke: var(--text);
+        stroke-width: 3;
+      }
+
+      .gbm-tree-node-selected .gbm-tree-split-node,
+      .gbm-tree-node-selected .gbm-tree-leaf-node {
+        stroke-width: 4;
+      }
+
       .gbm-tree-node-label {
         font-size: 12px;
         font-weight: 400;
         pointer-events: none;
+      }
+
+      .gbm-tree-node-highlighted .gbm-tree-node-label {
+        font-weight: 700;
       }
 
       .gbm-tree-empty {

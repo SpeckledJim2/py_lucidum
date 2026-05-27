@@ -1223,6 +1223,53 @@ COPY (
         store.activate_model("m1")
         return store
 
+    def write_single_split_tree_model(
+        self,
+        model_id: str,
+        *,
+        feature: str,
+        threshold: str,
+        threshold_label: str | None,
+        decision_type: str,
+    ) -> GbmModelStore:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": model_id,
+                "created_at": "2026-05-25T00:00:00Z",
+                "objective": "poisson",
+                "metric": "poisson",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "sources": {},
+            },
+        )
+        threshold_label_sql = "NULL" if threshold_label is None else sql_literal(threshold_label)
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, {sql_literal(feature)} AS split_feature, 6.5 AS split_gain,
+         {sql_literal(threshold)} AS threshold, {threshold_label_sql} AS threshold_label,
+         {sql_literal(decision_type)} AS decision_type, 'left' AS missing_direction, 'None' AS missing_type,
+         1.2 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL
+  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 2.0, 2
+  UNION ALL
+  SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.9, 1.0, 1
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model(model_id)
+        return store
+
     def test_tree_summary_and_detail_read_saved_artifacts(self) -> None:
         store = self.write_model_artifacts()
 
@@ -1236,10 +1283,64 @@ COPY (
         self.assertEqual(detail["root"]["threshold"], "A / C")
         self.assertEqual(detail["root"]["children"][0]["edge_label"], "== A / C")
         self.assertTrue(detail["root"]["children"][0]["default_branch"])
+        self.assertIn("Cover: 3 (100.0%)", detail["root"]["label"])
+        self.assertIn("Cover: 2 (66.7%)", detail["root"]["children"][0]["label"])
         self.assertEqual(detail["root"]["children"][1]["type"], "split")
         self.assertEqual(detail["root"]["children"][1]["feature"], "Age")
         self.assertIn("Tree 0", detail["root"]["label"])
         self.assertIn(1.9, detail["values"])
+
+    def test_tree_detail_formats_numeric_string_thresholds(self) -> None:
+        store = self.write_single_split_tree_model(
+            "numeric-threshold",
+            feature="Age",
+            threshold="7.500000000000001",
+            threshold_label=None,
+            decision_type="<=",
+        )
+
+        detail = tree_detail(store, "numeric-threshold", 0)
+
+        self.assertEqual(detail["root"]["threshold"], "7.5")
+        self.assertEqual(detail["root"]["threshold_full"], "7.5")
+        self.assertEqual(detail["root"]["children"][0]["edge_label"], "<= 7.5")
+        self.assertEqual(detail["root"]["children"][0]["edge_tooltip"], "<= 7.5")
+
+    def test_tree_detail_keeps_decoded_categorical_split_at_12_categories_unsummarised(self) -> None:
+        labels = [f"C{index}" for index in range(12)]
+        full_label = " / ".join(labels)
+        store = self.write_single_split_tree_model(
+            "twelve-categories",
+            feature="Segment",
+            threshold="||".join(str(index) for index in range(12)),
+            threshold_label=full_label,
+            decision_type="==",
+        )
+
+        detail = tree_detail(store, "twelve-categories", 0)
+
+        self.assertEqual(detail["root"]["threshold"], full_label)
+        self.assertEqual(detail["root"]["threshold_full"], full_label)
+        self.assertEqual(detail["root"]["children"][0]["edge_label"], f"== {full_label}")
+
+    def test_tree_detail_summarises_decoded_categorical_split_above_12_categories(self) -> None:
+        labels = ["B", "BB", "C", *[f"CATEGORY_{index:02d}" for index in range(10)]]
+        full_label = " / ".join(labels)
+        store = self.write_single_split_tree_model(
+            "thirteen-categories",
+            feature="Segment",
+            threshold="||".join(str(index) for index in range(13)),
+            threshold_label=full_label,
+            decision_type="==",
+        )
+
+        detail = tree_detail(store, "thirteen-categories", 0)
+
+        expected = "13 categories in split: B / BB / C, ..."
+        self.assertEqual(detail["root"]["threshold"], expected)
+        self.assertEqual(detail["root"]["threshold_full"], full_label)
+        self.assertEqual(detail["root"]["children"][0]["edge_label"], f"== {expected}")
+        self.assertEqual(detail["root"]["children"][0]["edge_tooltip"], f"== {full_label}")
 
     def test_tree_detail_falls_back_to_raw_categorical_codes_without_threshold_label(self) -> None:
         store = GbmModelStore(self.data_path)

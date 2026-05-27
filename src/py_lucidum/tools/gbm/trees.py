@@ -11,6 +11,8 @@ from .store import GbmModelStore
 
 
 MAX_SPLIT_LABEL_LENGTH = 160
+MAX_CATEGORICAL_SPLIT_LABEL_CATEGORIES = 12
+MAX_CATEGORICAL_SPLIT_LABEL_PREVIEW = 3
 TREE_DETAIL_COLUMNS = [
     "tree_index",
     "node_depth",
@@ -129,7 +131,16 @@ def normalise_tree_rows(rows: list[dict[str, Any]], *, tree_index: int, values: 
     root = next((row for row in rows if not clean_node_ref(row.get("parent_index"))), None)
     if root is None:
         root = min(rows, key=lambda row: (finite_float(row.get("node_depth")) or 0.0, clean_node_ref(row.get("node_index"))))
-    return normalise_table_node(root, rows_by_id=rows_by_id, tree_index=tree_index, values=values, is_root=True, seen=set())
+    total_cover = count_int(root.get("count"))
+    return normalise_table_node(
+        root,
+        rows_by_id=rows_by_id,
+        tree_index=tree_index,
+        values=values,
+        total_cover=total_cover,
+        is_root=True,
+        seen=set(),
+    )
 
 
 def normalise_table_node(
@@ -138,6 +149,7 @@ def normalise_table_node(
     rows_by_id: dict[str, dict[str, Any]],
     tree_index: int,
     values: list[float],
+    total_cover: int,
     seen: set[str],
     is_root: bool = False,
 ) -> dict[str, Any] | None:
@@ -159,8 +171,23 @@ def normalise_table_node(
             "leaf_index": leaf_index,
             "cover": cover,
             "value": value,
-            "label": node_label("Leaf", cover, None, value, is_root=is_root, tree_index=tree_index if is_root else None),
-            "tooltip": node_tooltip("Leaf", cover, None, value, tree_index=tree_index if is_root else None),
+            "label": node_label(
+                "Leaf",
+                cover,
+                None,
+                value,
+                total_cover=total_cover,
+                is_root=is_root,
+                tree_index=tree_index if is_root else None,
+            ),
+            "tooltip": node_tooltip(
+                "Leaf",
+                cover,
+                None,
+                value,
+                total_cover=total_cover,
+                tree_index=tree_index if is_root else None,
+            ),
             "children": [],
         }
 
@@ -177,6 +204,7 @@ def normalise_table_node(
             rows_by_id=rows_by_id,
             tree_index=tree_index,
             values=values,
+            total_cover=total_cover,
             seen=seen,
         )
         if child:
@@ -190,6 +218,7 @@ def normalise_table_node(
             rows_by_id=rows_by_id,
             tree_index=tree_index,
             values=values,
+            total_cover=total_cover,
             seen=seen,
         )
         if child:
@@ -198,7 +227,7 @@ def normalise_table_node(
             child["default_branch"] = not default_left
             children.append(child)
 
-    label = node_label(feature, cover, gain, value, is_root=is_root, tree_index=tree_index)
+    label = node_label(feature, cover, gain, value, total_cover=total_cover, is_root=is_root, tree_index=tree_index)
     return {
         "id": node_id,
         "type": "split",
@@ -212,15 +241,18 @@ def normalise_table_node(
         "threshold_full": threshold["full"],
         "default_child": "left" if default_left else "right",
         "label": label,
-        "tooltip": node_tooltip(feature, cover, gain, value, tree_index=tree_index if is_root else None),
+        "tooltip": node_tooltip(feature, cover, gain, value, total_cover=total_cover, tree_index=tree_index if is_root else None),
         "children": children,
     }
 
 
 def split_threshold_label(raw_threshold: Any, decision_type: str, decoded_label: Any = None) -> dict[str, str]:
-    text = clean_label(decoded_label) or threshold_text(raw_threshold)
-    if decision_type == "==" and not clean_label(decoded_label):
-        text = text.replace("||", " / ")
+    decoded_text = clean_label(decoded_label)
+    text = decoded_text or threshold_text(raw_threshold)
+    if decision_type == "==":
+        if not decoded_text:
+            text = text.replace("||", " / ")
+        return categorical_threshold_label(text)
     compact = compact_label(text)
     return {"label": compact, "full": text}
 
@@ -242,7 +274,23 @@ def threshold_text(value: Any) -> str:
             return "0"
         return format_number(number)
     text = str(value)
-    return "0" if "e-35" in text else text
+    if "e-35" in text:
+        return "0"
+    number = finite_float(text)
+    return format_number(number) if number is not None else text
+
+
+def categorical_threshold_label(text: str) -> dict[str, str]:
+    full = " ".join(str(text or "").split())
+    categories = split_categorical_label(full)
+    if len(categories) > MAX_CATEGORICAL_SPLIT_LABEL_CATEGORIES:
+        preview = " / ".join(categories[:MAX_CATEGORICAL_SPLIT_LABEL_PREVIEW])
+        return {"label": f"{len(categories)} categories in split: {preview}, ...", "full": full}
+    return {"label": full, "full": full}
+
+
+def split_categorical_label(text: str) -> list[str]:
+    return [part.strip() for part in str(text or "").split(" / ") if part.strip()]
 
 
 def compact_label(text: str, max_length: int = MAX_SPLIT_LABEL_LENGTH) -> str:
@@ -252,19 +300,38 @@ def compact_label(text: str, max_length: int = MAX_SPLIT_LABEL_LENGTH) -> str:
     return f"{clean[:max_length - 3]}..."
 
 
-def node_label(title: str, cover: Any, gain: float | None, value: float | None, *, is_root: bool = False, tree_index: int | None = None) -> list[str]:
+def node_label(
+    title: str,
+    cover: Any,
+    gain: float | None,
+    value: float | None,
+    *,
+    total_cover: Any = None,
+    is_root: bool = False,
+    tree_index: int | None = None,
+) -> list[str]:
     lines = [str(title or "Feature")]
     if is_root and tree_index is not None:
         lines.insert(0, f"Tree {tree_index}")
-    lines.append(f"Cover: {format_count(cover)}")
+    lines.append(f"Cover: {format_cover(cover, total_cover)}")
     if gain is not None:
         lines.append(f"Gain: {format_number(gain)}")
     lines.append(f"Value: {format_number(value)}")
     return lines
 
 
-def node_tooltip(title: str, cover: Any, gain: float | None, value: float | None, *, tree_index: int | None = None) -> str:
-    return "\n".join(node_label(title, cover, gain, value, is_root=tree_index is not None, tree_index=tree_index))
+def node_tooltip(
+    title: str,
+    cover: Any,
+    gain: float | None,
+    value: float | None,
+    *,
+    total_cover: Any = None,
+    tree_index: int | None = None,
+) -> str:
+    return "\n".join(
+        node_label(title, cover, gain, value, total_cover=total_cover, is_root=tree_index is not None, tree_index=tree_index)
+    )
 
 
 def clean_feature_name(value: Any) -> str:
@@ -320,6 +387,20 @@ def format_count(value: Any) -> str:
     if number is None:
         return "0"
     return f"{int(round(number)):,}"
+
+
+def format_cover(value: Any, total: Any) -> str:
+    count = format_count(value)
+    percentage = cover_percentage(value, total)
+    return f"{count} ({percentage})" if percentage else count
+
+
+def cover_percentage(value: Any, total: Any) -> str:
+    cover = finite_float(value)
+    total_cover = finite_float(total)
+    if cover is None or total_cover is None or total_cover <= 0:
+        return ""
+    return f"{cover / total_cover * 100:.1f}%"
 
 
 def format_number(value: Any) -> str:

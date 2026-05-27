@@ -10,6 +10,10 @@ const NODE_MAX_WIDTH = 220;
 const NODE_LINE_HEIGHT = 18;
 const NODE_VERTICAL_PADDING = 14;
 const NODE_HORIZONTAL_PADDING = 18;
+const EDGE_LABEL_WRAP_CHARS = 34;
+const CATEGORICAL_EDGE_LABEL_WRAP_CHARS = 20;
+const CATEGORICAL_EDGE_LABEL_POSITION = 0.36;
+const CATEGORICAL_EDGE_LABEL_X_OFFSET = 32;
 const DEFAULT_SUMMARY_WIDTH = 560;
 const MIN_SUMMARY_WIDTH = 420;
 const MIN_DIAGRAM_WIDTH = 360;
@@ -31,6 +35,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
   let resizeFrame = null;
   let summaryWidth = DEFAULT_SUMMARY_WIDTH;
   let resizePointerId = null;
+  let highlightedNodeId = "";
   let renderToken = 0;
 
   async function render(modelId) {
@@ -38,6 +43,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     if (nextModelId !== currentModelId) {
       selectedTree = null;
       selectedDetail = null;
+      highlightedNodeId = "";
     }
     currentModelId = nextModelId;
     const root = document.getElementById("gbmTreeViewer");
@@ -51,6 +57,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       selectedTree = null;
       summaryRows = [];
       selectedDetail = null;
+      highlightedNodeId = "";
       clearSummaryTable();
       updateTreeDetailSummary(null);
       renderEmpty("Select a saved GBM model to inspect its trees.");
@@ -70,6 +77,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       } else {
         selectedTree = null;
         selectedDetail = null;
+        highlightedNodeId = "";
         updateTreeDetailSummary(null);
         renderEmpty("No tree artifacts are available for this GBM.");
       }
@@ -91,6 +99,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     zoomSvg = null;
     resetTransform = null;
     treeBounds = null;
+    highlightedNodeId = "";
     clearSummaryTable();
     selectedDetail = null;
     updateTreeDetailSummary(null);
@@ -162,6 +171,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
 
   async function selectTree(treeIndex, options = {}) {
     if (!currentModelId || !Number.isFinite(Number(treeIndex))) return;
+    if (Number(selectedTree) !== Number(treeIndex)) highlightedNodeId = "";
     selectedTree = Number(treeIndex);
     selectSummaryRow(selectedTree);
     updateTreeDetailSummary(selectedSummaryRow(selectedTree));
@@ -271,16 +281,32 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       .data(links)
       .join("text")
       .attr("class", "gbm-tree-edge-label")
-      .attr("x", (link) => (link.source.y + link.target.y) / 2)
-      .attr("y", (link) => (link.source.x + link.target.x) / 2 - 6)
+      .attr("x", (link) => edgeLabelPlacement(link).x)
+      .attr("y", (link) => edgeLabelPlacement(link).y)
+      .attr("text-anchor", "middle")
+      .attr("dominant-baseline", "middle")
       .attr("data-tooltip", (link) => link.target.data.edge_tooltip || link.target.data.edge_label || "")
-      .text((link) => link.target.data.edge_label || "");
+      .each(function renderEdgeLabel(link) {
+        const placement = edgeLabelPlacement(link);
+        const lines = edgeLabelLines(link.target.data.edge_label || "");
+        d3.select(this).selectAll("tspan")
+          .data(lines.map((line, index) => ({ line, index, total: lines.length, x: placement.x })))
+          .join("tspan")
+          .attr("x", (line) => line.x)
+          .attr("dy", (line) => line.index === 0 ? `${-(line.total - 1) * 0.62}em` : "1.24em")
+          .text((line) => line.line);
+      });
 
     const node = nodeLayer.selectAll("g")
       .data(nodes)
       .join("g")
       .attr("class", (item) => `gbm-tree-node gbm-tree-node-${item.data.type || "split"}`)
-      .attr("transform", (item) => `translate(${item.y},${item.x})`);
+      .attr("transform", (item) => `translate(${item.y},${item.x})`)
+      .on("click", (event, item) => {
+        event.stopPropagation();
+        highlightedNodeId = highlightedNodeId === item.data.id ? "" : item.data.id;
+        updateTreeHighlight(highlightedNodeId);
+      });
 
     node.each(function appendShape(item) {
       const selection = d3.select(this);
@@ -323,6 +349,8 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       .attr("font-weight", (line) => line.emphasis ? 700 : 400)
       .text((line) => line.line);
 
+    updateTreeHighlight(highlightedNodeId);
+
     if (window.ResizeObserver) {
       resizeObserver = new ResizeObserver(scheduleSvgResize);
       resizeObserver.observe(target);
@@ -353,6 +381,26 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       selection.select("rect.gbm-tree-split-node, ellipse.gbm-tree-leaf-node").attr("fill", fill);
       selection.select("text.gbm-tree-node-label").attr("fill", textFill);
     });
+  }
+
+  function updateTreeHighlight(nodeId) {
+    if (!zoomSvg || !window.d3) return;
+    let targetNode = null;
+    zoomSvg.selectAll(".gbm-tree-node").each((item) => {
+      if (item.data.id === nodeId) targetNode = item;
+    });
+    const pathIds = targetNode ? nodePathIds(targetNode) : new Set();
+    if (!targetNode) highlightedNodeId = "";
+
+    zoomSvg.selectAll(".gbm-tree-node")
+      .classed("gbm-tree-node-highlighted", (item) => pathIds.has(item.data.id))
+      .classed("gbm-tree-node-selected", (item) => item.data.id === nodeId);
+
+    zoomSvg.selectAll(".gbm-tree-link")
+      .classed("gbm-tree-link-highlighted", (link) => pathIds.has(link.source.data.id) && pathIds.has(link.target.data.id));
+
+    zoomSvg.selectAll(".gbm-tree-edge-label")
+      .classed("gbm-tree-edge-label-highlighted", (link) => pathIds.has(link.source.data.id) && pathIds.has(link.target.data.id));
   }
 
   function bindZoomControls() {
@@ -590,6 +638,10 @@ function isEmphasisLabelLine(node, index) {
   return node?.type !== "leaf" && index === 1 && /^Tree \d+$/u.test(String(node?._labelLines?.[0] || ""));
 }
 
+function nodePathIds(node) {
+  return new Set((node?.ancestors?.() || []).map((item) => item.data.id));
+}
+
 function waitForTableBuilt(table) {
   return new Promise((resolve) => {
     let settled = false;
@@ -637,6 +689,61 @@ function normaliseLabelLines(label) {
 function measureNodeWidth(lines) {
   const maxChars = Math.max(6, ...lines.map((line) => String(line || "").length));
   return Math.max(NODE_MIN_WIDTH, Math.min(NODE_MAX_WIDTH, maxChars * 7 + NODE_HORIZONTAL_PADDING * 2));
+}
+
+function edgeLabelLines(label) {
+  const text = String(label || "").replace(/\s+/g, " ").trim();
+  if (!text) return [];
+  if (isCategoricalEdgeLabel(text)) return wrapDelimitedLabel(text, " / ", CATEGORICAL_EDGE_LABEL_WRAP_CHARS);
+  return wrapWordLabel(text, EDGE_LABEL_WRAP_CHARS);
+}
+
+function edgeLabelPlacement(link) {
+  const label = String(link.target.data.edge_label || "");
+  const lines = edgeLabelLines(label);
+  const categorical = isCategoricalEdgeLabel(label);
+  const position = categorical ? CATEGORICAL_EDGE_LABEL_POSITION : 0.5;
+  const x = link.source.y + (link.target.y - link.source.y) * position + (categorical ? CATEGORICAL_EDGE_LABEL_X_OFFSET : 0);
+  const y = link.source.x + (link.target.x - link.source.x) * 0.5 - (lines.length > 1 ? 14 : 6);
+  return { x, y };
+}
+
+function isCategoricalEdgeLabel(label) {
+  return String(label || "").includes(" / ");
+}
+
+function wrapDelimitedLabel(text, delimiter, maxChars) {
+  const parts = String(text || "").split(delimiter).map((part) => part.trim()).filter(Boolean);
+  const lines = [];
+  let current = "";
+  for (const part of parts) {
+    const candidate = current ? `${current}${delimiter}${part}` : part;
+    if (candidate.length <= maxChars || !current) {
+      current = candidate;
+    } else {
+      lines.push(current);
+      current = part;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.flatMap((line) => line.length > maxChars ? wrapWordLabel(line, maxChars) : [line]);
+}
+
+function wrapWordLabel(text, maxChars) {
+  const words = String(text || "").split(/\s+/u).filter(Boolean);
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= maxChars || !current) {
+      current = candidate;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
 }
 
 function elbowPath(source, target) {
