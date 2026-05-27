@@ -55,9 +55,10 @@ Chosen defaults:
 - Sidebar while GBM is active keeps the KPI/response controls visible, hides filter controls, and includes an active-model selector.
 - **Features and parameters** tab:
   - Left feature grid columns: feature name, include checkbox, monotonicity, and `Gain`.
-  - If a Feature Specification is loaded, show its `Grouping` column between feature name and include checkbox, and show a scenario dropdown immediately before `Clear all`.
+  - If a Feature Specification is loaded, show its `Grouping` column between feature name and include checkbox, then show an interaction-constraint multi-select followed by a scenario dropdown immediately before `Clear all`.
   - Selecting a feature scenario selects only usable, non-reserved features whose scenario cell contains `feature`, case-insensitive; manual checkbox edits, `Clear all`, and `Select all` clear the scenario dropdown.
   - Feature type is displayed as muted right-aligned text inside the Feature cell, with categorical counts shown as `categorical (n)`.
+  - Feature Specification groupings drive the interaction-constraint multi-select; constrained selected features show a lock marker in the Grouping column.
   - `Gain` displays `0.000` before any active model exists.
   - After training or active-model switching, the feature grid must mirror the active model's persisted feature config: `Use`, `Monotonicity`, `Gain`, and sort order.
   - Objective and metric parameter rows are dropdowns containing supported single-response LightGBM options; other parameters remain editable text inputs.
@@ -65,7 +66,7 @@ Chosen defaults:
   - When EBM is available, a Normal/EBM radio group sits below SHAP rows and includes a tooltip noting the 2-leaf `0.3` learning rate.
   - During training, a compact toolbar status shows the current iteration and latest metric while the evaluation plot updates from live job progress. The live x-axis stays fixed to `num_iterations`; completed and saved charts use the exact evaluation-log length and keep a tail-focused y-axis zoom when the initial metric drop is steep. The Evaluation Log header has an inline `All` / `Tail` control for full-history or late-window views. Evaluation histories over 2,000 points use render-only downsampling while persisted logs stay complete.
   - The ECharts evaluation title is a single line containing evaluation metric, test metric, and best iteration with the same font size.
-- **Model navigator** tab lists saved models, key parameters, train/test metrics, timings, and active-model selection.
+- **Model navigator** tab lists saved models, feature interaction constraints, key parameters, train/test metrics, timings, and active-model selection.
 - **Tree viewer** tab provides a searchable tree summary table plus a graphical D3 tree from saved `tree_table.parquet` output. The diagram supports zoom, fit/reset, colour palettes, decoded categorical thresholds, edge labels, and default-branch highlighting.
 - Keep the existing dense, utilitarian app visual style.
 

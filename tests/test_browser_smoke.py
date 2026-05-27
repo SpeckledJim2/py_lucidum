@@ -108,6 +108,11 @@ class BrowserSmokeTests(unittest.TestCase):
                             if model_id.endswith("-2")
                             else {"name": "old_scenario", "features": ["Age"]}
                         ),
+                        "feature_interaction_constraints": (
+                            {"groupings": ["DRIVER"], "groups": [{"grouping": "DRIVER", "features": ["Age"]}]}
+                            if model_id.endswith("-2")
+                            else {"groupings": ["OLD"], "groups": [{"grouping": "OLD", "features": ["Age"]}]}
+                        ),
                         "sources": {},
                     },
                 )
@@ -659,6 +664,35 @@ COPY (
                 )
                 self.assertIn("old_scenario", initial_scenario["value"])
                 self.assertEqual(initial_scenario["text"], "old_scenario (trained; missing from spec)")
+                initial_constraints = page.evaluate(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll(".gbm-interaction-constraint-row")].map((row) => row.textContent.trim());
+                      const ageRow = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((row) => row.textContent.includes("Age"));
+                      return {
+                        button: document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() || "",
+                        rows,
+                        ageGrouping: ageRow?.querySelector(".tabulator-cell[tabulator-field='grouping']")?.textContent.trim() || "",
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(initial_constraints["button"], "Trained constraints (1)")
+                self.assertIn("OLD (trained; missing from spec)", initial_constraints["rows"])
+                self.assertIn("\U0001f512", initial_constraints["ageGrouping"])
+                page.locator("#gbmFeatureInteractionConstraintButton").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll(".gbm-interaction-constraint-row")]
+                        .map((row) => row.textContent.trim());
+                      return rows.includes("DRIVER (1)") && rows.includes("VEHICLE (0)");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureInteractionConstraintButton").click()
                 page.locator("#gbmFeatureScenarioSelect").select_option("scenario1")
                 assert_feature_heading_matches_checked(2)
                 self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "scenario1")
@@ -715,7 +749,7 @@ COPY (
                 self.assertEqual(
                     navigator_state["headers"],
                     [
-                        "Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Train", "Best iter.",
+                        "Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Constraints", "Train", "Best iter.",
                         "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
                     ],
                 )
@@ -736,6 +770,7 @@ COPY (
                     "0.22",
                 )
                 self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "scenario1")
+                self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraints (1)")
                 assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
                 page.wait_for_function(
@@ -954,12 +989,26 @@ COPY (
                 page.route("**/api/gbm/train", train_route)
                 page.route("**/api/gbm/jobs/live-job", job_route)
                 page.locator("#gbmFeatureScenarioSelect").select_option("scenario1")
+                page.locator("#gbmFeatureInteractionConstraintButton").click()
+                page.locator('[data-gbm-interaction-grouping="VEHICLE"]').check()
+                self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraints (1)")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((item) => item.textContent.includes("Segment"));
+                      return (row?.querySelector(".tabulator-cell[tabulator-field='grouping']")?.textContent || "").includes("\\uD83D\\uDD12");
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmTrainingStatus").get_by_text("training, tree 2/10, test gamma 7.2").wait_for(timeout=10_000)
                 self.assertEqual(
                     train_payload["value"]["feature_scenario"],
                     {"name": "scenario1", "features": ["Age", "Segment"]},
                 )
+                self.assertEqual(train_payload["value"]["feature_interaction_groupings"], ["VEHICLE"])
                 page.wait_for_function(
                     """
                     () => {
@@ -1198,7 +1247,7 @@ COPY (
                 self.assertEqual(
                     navigator_state["headers"],
                     [
-                        "Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Train", "Best iter.",
+                        "Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Constraints", "Train", "Best iter.",
                         "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
                     ],
                 )

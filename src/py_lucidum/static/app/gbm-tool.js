@@ -207,6 +207,7 @@ export function createGbmTool({
               <div class="gbm-section-header gbm-feature-section-header">
                 <h3 id="gbmFeatureSectionTitle" class="gbm-section-title">${escapeHtml(featureSectionTitle(data.features || []))}</h3>
                 <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
+                  ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
                   ${featureScenarioSelectHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
                   <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button" type="button">Clear all</button>
                   <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button" type="button">Select all</button>
@@ -444,6 +445,7 @@ export function createGbmTool({
   }
 
   function bindFeatureActions() {
+    bindFeatureInteractionActions();
     const scenarioSelect = el("gbmFeatureScenarioSelect");
     scenarioSelect?.addEventListener("change", () => applyFeatureScenario(scenarioSelect.value));
     el("gbmClearFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(false));
@@ -451,6 +453,222 @@ export function createGbmTool({
     el("gbmCreateSampleBtn")?.addEventListener("click", createSampleColumn);
     el("gbmTrainBtn")?.addEventListener("click", train);
     syncTrainingButton();
+  }
+
+  function featureInteractionConstraintDropdownHtml(groupings, activeConstraints = null, features = []) {
+    const rows = featureInteractionGroupingRows(groupings);
+    const active = normaliseActiveFeatureInteractionConstraints(activeConstraints);
+    const currentNames = new Set(rows.map((row) => row.name));
+    const selectedCurrent = new Set(
+      active.groups
+        .filter((group) => group.status === "current" && currentNames.has(group.grouping))
+        .map((group) => group.grouping)
+    );
+    const synthetic = active.groups.filter((group) => group.status !== "current" || !currentNames.has(group.grouping));
+    const counts = selectedFeatureCountsByGrouping(features);
+    const hasOptions = rows.length || synthetic.length;
+    const hidden = hasOptions ? "" : " hidden";
+    const disabled = hasOptions ? "" : " disabled";
+    return `
+      <div id="gbmFeatureInteractionConstraintSelect" class="gbm-interaction-constraint-select${hidden}">
+        <button id="gbmFeatureInteractionConstraintButton" class="gbm-interaction-constraint-button" type="button" aria-haspopup="true" aria-expanded="false"${disabled}>${escapeHtml(featureInteractionButtonLabel(selectedCurrent.size, synthetic.length))}</button>
+        <div id="gbmFeatureInteractionConstraintMenu" class="gbm-interaction-constraint-menu hidden" role="menu">
+          ${synthetic.map((group) => `
+            <label class="gbm-interaction-constraint-row gbm-interaction-constraint-row-trained" data-gbm-trained-interaction-row="${escapeHtml(group.grouping)}">
+              <input type="checkbox" checked disabled />
+              <span>${escapeHtml(trainedFeatureInteractionLabel(group))}</span>
+            </label>
+          `).join("")}
+          ${rows.map((row) => `
+            <label class="gbm-interaction-constraint-row">
+              <input type="checkbox" value="${escapeHtml(row.name)}" data-gbm-interaction-grouping="${escapeHtml(row.name)}" ${selectedCurrent.has(row.name) ? "checked" : ""} />
+              <span data-gbm-interaction-count-label="${escapeHtml(row.name)}">${escapeHtml(featureInteractionGroupingLabel(row.name, counts))}</span>
+            </label>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function bindFeatureInteractionActions() {
+    const root = el("gbmFeatureInteractionConstraintSelect");
+    if (!root) return;
+    const button = el("gbmFeatureInteractionConstraintButton");
+    const menu = el("gbmFeatureInteractionConstraintMenu");
+    button?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (!menu || button.disabled) return;
+      if (menu.classList.contains("hidden")) syncFeatureInteractionCounts(currentFeatureRows());
+      const hidden = menu.classList.toggle("hidden");
+      button.setAttribute("aria-expanded", hidden ? "false" : "true");
+    });
+    root.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !menu) return;
+      menu.classList.add("hidden");
+      button?.setAttribute("aria-expanded", "false");
+      button?.focus();
+    });
+    menu?.addEventListener("click", (event) => event.stopPropagation());
+    for (const checkbox of root.querySelectorAll("[data-gbm-interaction-grouping]")) {
+      checkbox.addEventListener("change", () => {
+        clearTrainedInteractionConstraintRows();
+        syncFeatureInteractionControls();
+      });
+    }
+  }
+
+  function featureInteractionGroupingRows(groupings) {
+    if (!Array.isArray(groupings)) return [];
+    const seen = new Set();
+    const rows = [];
+    for (const item of groupings) {
+      const name = String(item || "").trim();
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) continue;
+      rows.push({ name });
+      seen.add(key);
+    }
+    return rows.sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  function normaliseActiveFeatureInteractionConstraints(activeConstraints) {
+    if (!activeConstraints || typeof activeConstraints !== "object") return { groups: [] };
+    const groups = Array.isArray(activeConstraints.groups) ? activeConstraints.groups : [];
+    return {
+      groups: groups
+        .map((group) => {
+          const grouping = String(group?.grouping || "").trim();
+          const status = String(group?.status || "current").trim().toLowerCase();
+          const features = Array.isArray(group?.features) ? group.features.map((feature) => String(feature || "").trim()).filter(Boolean) : [];
+          return {
+            grouping,
+            status: ["current", "stale", "missing"].includes(status) ? status : "current",
+            features,
+          };
+        })
+        .filter((group) => group.grouping && group.features.length),
+    };
+  }
+
+  function trainedFeatureInteractionLabel(group) {
+    if (group.status === "stale") return `${group.grouping} (trained; spec changed)`;
+    if (group.status === "missing") return `${group.grouping} (trained; missing from spec)`;
+    return group.grouping;
+  }
+
+  function featureInteractionButtonLabel(selectedCurrentCount, syntheticCount = 0) {
+    if (selectedCurrentCount > 0) return `Constraints (${selectedCurrentCount})`;
+    if (syntheticCount > 0) return `Trained constraints (${syntheticCount})`;
+    return "Constraints";
+  }
+
+  function featureInteractionGroupingLabel(grouping, counts) {
+    return `${grouping} (${Number(counts.get(grouping) || 0).toLocaleString()})`;
+  }
+
+  function selectedFeatureCountsByGrouping(features) {
+    const counts = new Map();
+    for (const feature of features || []) {
+      const grouping = String(feature?.grouping || "").trim();
+      if (!grouping || !feature?.include || !isFeatureSelectable(feature)) continue;
+      counts.set(grouping, (counts.get(grouping) || 0) + 1);
+    }
+    return counts;
+  }
+
+  function currentFeatureInteractionGroupings() {
+    return [...document.querySelectorAll("[data-gbm-interaction-grouping]:checked")]
+      .map((checkbox) => String(checkbox.value || "").trim())
+      .filter(Boolean);
+  }
+
+  function currentFeatureInteractionGroupingsPayload() {
+    const valid = new Set(featureInteractionGroupingRows(config?.feature_interaction_groupings || []).map((row) => row.name));
+    const groupings = currentFeatureInteractionGroupings().filter((grouping) => valid.has(grouping));
+    return groupings.length ? groupings : null;
+  }
+
+  function clearTrainedInteractionConstraintRows() {
+    for (const row of document.querySelectorAll("[data-gbm-trained-interaction-row]")) {
+      row.remove();
+    }
+  }
+
+  function syncFeatureInteractionControls() {
+    const root = el("gbmFeatureInteractionConstraintSelect");
+    if (!root) return;
+    const features = currentFeatureRows();
+    syncFeatureInteractionCounts(features);
+    syncFeatureInteractionLocks(features);
+  }
+
+  function syncFeatureInteractionCounts(features = currentFeatureRows()) {
+    const root = el("gbmFeatureInteractionConstraintSelect");
+    if (!root) return;
+    const counts = selectedFeatureCountsByGrouping(features);
+    for (const label of root.querySelectorAll("[data-gbm-interaction-count-label]")) {
+      const grouping = label.getAttribute("data-gbm-interaction-count-label") || "";
+      label.textContent = featureInteractionGroupingLabel(grouping, counts);
+    }
+    const selectedCurrentCount = currentFeatureInteractionGroupings().length;
+    const syntheticCount = root.querySelectorAll("[data-gbm-trained-interaction-row]").length;
+    const button = el("gbmFeatureInteractionConstraintButton");
+    if (button) button.textContent = featureInteractionButtonLabel(selectedCurrentCount, syntheticCount);
+  }
+
+  function selectedInteractionFeatureNames(features) {
+    const selectedGroupings = new Set(currentFeatureInteractionGroupings());
+    const trainedFeatures = trainedInteractionFeatureNames();
+    const locked = new Set();
+    for (const feature of features || []) {
+      if (!feature?.include || !isFeatureSelectable(feature)) continue;
+      const grouping = String(feature.grouping || "").trim();
+      if ((grouping && selectedGroupings.has(grouping)) || trainedFeatures.has(feature.name)) {
+        locked.add(feature.name);
+      }
+    }
+    return locked;
+  }
+
+  function trainedInteractionFeatureNames() {
+    if (!document.querySelector("[data-gbm-trained-interaction-row]")) return new Set();
+    const active = normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints);
+    const names = new Set();
+    for (const group of active.groups) {
+      for (const feature of group.features) names.add(feature);
+    }
+    return names;
+  }
+
+  function applyInteractionLocksToFeatures(features) {
+    const locked = selectedInteractionFeatureNames(features);
+    return (features || []).map((feature) => ({ ...feature, interaction_locked: locked.has(feature.name) }));
+  }
+
+  function syncFeatureInteractionLocks(features = currentFeatureRows()) {
+    const locked = selectedInteractionFeatureNames(features);
+    if (featureTable) {
+      for (const row of featureTable.getRows()) {
+        const data = row.getData();
+        const interactionLocked = locked.has(data.name);
+        row.update({ interaction_locked: interactionLocked });
+        const groupingCell = typeof row.getCell === "function" ? row.getCell("grouping") : null;
+        if (groupingCell) groupingCell.getElement().innerHTML = groupingHtml({ ...data, interaction_locked: interactionLocked });
+      }
+      return;
+    }
+    if (el("gbmFeatureFallback")) {
+      renderFeatureFallback(applyInteractionLocksToFeatures(features));
+    }
+  }
+
+  function syncFeatureInteractionControlsAfter(updates) {
+    const pending = (updates || []).filter((update) => update && typeof update.then === "function");
+    if (!pending.length) {
+      syncFeatureInteractionControls();
+      return;
+    }
+    Promise.all(pending).then(syncFeatureInteractionControls, syncFeatureInteractionControls);
   }
 
   function featureScenarioSelectHtml(scenarios, activeScenario = null) {
@@ -562,6 +780,7 @@ export function createGbmTool({
         if (isFeatureSelectable(data)) updates.push(row.update({ include }));
       }
       syncFeatureSectionTitleAfter(updates);
+      syncFeatureInteractionControlsAfter(updates);
       return;
     }
     for (const checkbox of document.querySelectorAll("[data-gbm-feature]")) {
@@ -572,6 +791,7 @@ export function createGbmTool({
       checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     }
     syncFeatureSectionTitle();
+    syncFeatureInteractionControls();
   }
 
   function applyFeatureScenario(name) {
@@ -585,6 +805,7 @@ export function createGbmTool({
         updates.push(row.update({ include: isFeatureSelectable(data) && selected.has(data.name) }));
       }
       syncFeatureSectionTitleAfter(updates);
+      syncFeatureInteractionControlsAfter(updates);
       return;
     }
     for (const checkbox of document.querySelectorAll("[data-gbm-feature]")) {
@@ -593,6 +814,7 @@ export function createGbmTool({
       checkbox.checked = Boolean(feature && isFeatureSelectable(feature) && selected.has(name));
     }
     syncFeatureSectionTitle();
+    syncFeatureInteractionControls();
   }
 
   function featureSectionTitle(features) {
@@ -821,7 +1043,7 @@ export function createGbmTool({
     featureTable = null;
     parameterTable = null;
     modelTable = null;
-    const features = data.features || [];
+    const features = applyInteractionLocksToFeatures(data.features || []);
     const parameters = data.parameters || [];
     const models = modelRows(data.models || []);
     try {
@@ -843,6 +1065,7 @@ export function createGbmTool({
           { title: "Objective", field: "objective", sorter: "string", widthGrow: 1.1, headerSort: true },
           { title: "Metric", field: "metric", sorter: "string", widthGrow: 1.1, headerSort: true },
           { title: "Mode", field: "training_mode_display", sorter: "string", width: 70, headerSort: true },
+          { title: "Constraints", field: "constraint_display", sorter: "string", widthGrow: 1.2, headerSort: true },
           { title: "Train", field: "training_rows", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 86, headerSort: true },
           { title: "Best iter.", field: "best_iteration", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 92, headerSort: true },
           { title: "tr@best", field: "best_training_metric", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 72, headerSort: true, headerTooltip: "Training metric at best iteration" },
@@ -869,7 +1092,7 @@ export function createGbmTool({
         initialSort: [{ column: "gain", dir: "desc" }],
         columns: [
           { title: "Feature", field: "name", formatter: featureNameFormatter, cssClass: "gbm-feature-name-cell", widthGrow: 3, headerSort: true },
-          { title: "Grouping", field: "grouping", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.1, headerSort: true },
+          { title: "Grouping", field: "grouping", formatter: groupingFormatter, widthGrow: 1.1, headerSort: true },
           {
             title: "Use",
             field: "include",
@@ -906,6 +1129,7 @@ export function createGbmTool({
       renderFeatureFallback(features);
       renderParameterFallback(parameters);
     }
+    syncFeatureInteractionControls();
   }
 
   function modelNameFormatter(cell) {
@@ -929,6 +1153,19 @@ export function createGbmTool({
     `;
   }
 
+  function groupingFormatter(cell) {
+    return groupingHtml(cell.getRow().getData());
+  }
+
+  function groupingHtml(feature) {
+    const grouping = String(feature?.grouping || "");
+    if (!grouping) return "";
+    const lock = feature?.interaction_locked
+      ? `<span class="gbm-interaction-lock" title="Feature interaction constrained" aria-label="Feature interaction constrained">&#128274;</span>`
+      : "";
+    return `<span class="gbm-grouping-value">${escapeHtml(grouping)}${lock}</span>`;
+  }
+
   function featureTypeLabel(feature) {
     const kind = String(feature?.kind || "");
     if (isInvalidFeature(feature) || kind === "invalid") return "invalid";
@@ -950,7 +1187,9 @@ export function createGbmTool({
     checkbox.addEventListener("click", (event) => event.stopPropagation());
     checkbox.addEventListener("change", () => {
       resetFeatureScenarioSelect();
-      syncFeatureSectionTitleAfter([cell.getRow().update({ include: checkbox.checked })]);
+      const updates = [cell.getRow().update({ include: checkbox.checked })];
+      syncFeatureSectionTitleAfter(updates);
+      syncFeatureInteractionControlsAfter(updates);
     });
     return checkbox;
   }
@@ -990,7 +1229,7 @@ export function createGbmTool({
           ${features.map((feature) => `
             <tr class="${featureRowClasses(feature)}">
               <td>${featureNameHtml(feature)}</td>
-              <td>${escapeHtml(feature.grouping || "")}</td>
+              <td>${groupingHtml(feature)}</td>
               <td class="gbm-use-cell">${isFeatureSelectable(feature) ? `<input type="checkbox" data-gbm-feature="${escapeHtml(feature.name)}" ${feature.include ? "checked" : ""} />` : ""}</td>
               <td><input data-gbm-monotonicity="${escapeHtml(feature.name)}" value="${escapeHtml(feature.monotonicity || "")}" ${isFeatureSelectable(feature) ? "" : "disabled"} /></td>
               <td class="numeric gbm-gain-cell">${formatGain(feature.gain)}</td>
@@ -1003,6 +1242,7 @@ export function createGbmTool({
       checkbox.addEventListener("change", () => {
         resetFeatureScenarioSelect();
         syncFeatureSectionTitle();
+        syncFeatureInteractionControls();
       });
     }
     syncFeatureSectionTitle();
@@ -1099,6 +1339,7 @@ export function createGbmTool({
       created_display: formatModelCreated(model.created_at),
       weight_display: modelWeightLabel(model.offset_column),
       training_mode_display: model.training_mode === "ebm" ? "EBM" : "Normal",
+      constraint_display: modelInteractionConstraintLabel(model.feature_interaction_constraints),
       best_training_metric: modelBestMetric(model, "training"),
       best_test_metric: modelBestMetric(model, "test"),
       param_num_iterations: modelParameterNumber(model, "num_iterations"),
@@ -1111,6 +1352,12 @@ export function createGbmTool({
       runtime_display: formatModelRuntime(model),
       sample_display: formatSampleMode(model.sample_column, model.sample_source),
     }));
+  }
+
+  function modelInteractionConstraintLabel(rawConstraints) {
+    const active = normaliseActiveFeatureInteractionConstraints(rawConstraints);
+    const groupings = active.groups.map((group) => group.grouping);
+    return groupings.length ? groupings.join(", ") : "No";
   }
 
   function renderModelFallback(models) {
@@ -1131,6 +1378,7 @@ export function createGbmTool({
             <th>Objective</th>
             <th>Metric</th>
             <th>Mode</th>
+            <th>Constraints</th>
             <th class="numeric">Train</th>
             <th class="numeric">Best iter.</th>
             <th class="numeric compact" title="Training metric at best iteration">tr@best</th>
@@ -1157,6 +1405,7 @@ export function createGbmTool({
               <td>${escapeHtml(model.objective || "")}</td>
               <td>${escapeHtml(model.metric || "")}</td>
               <td>${escapeHtml(model.training_mode_display)}</td>
+              <td>${escapeHtml(model.constraint_display)}</td>
               <td class="numeric">${formatModelCount(model.training_rows)}</td>
               <td class="numeric">${formatModelCount(model.best_iteration)}</td>
               <td class="numeric">${escapeHtml(formatModelMetric(model.best_training_metric))}</td>
@@ -1295,6 +1544,7 @@ export function createGbmTool({
     setStatus("");
     setChartMessage("");
     const featureScenario = currentFeatureScenarioPayload();
+    const featureInteractionGroupings = currentFeatureInteractionGroupingsPayload();
     const payload = {
       label: `GBM ${new Date().toISOString().slice(0, 19).replace("T", " ")}`,
       response: el("actualNumerator")?.value || "actualNumerator",
@@ -1308,6 +1558,7 @@ export function createGbmTool({
       create_sample: false,
     };
     if (featureScenario) payload.feature_scenario = featureScenario;
+    if (featureInteractionGroupings) payload.feature_interaction_groupings = featureInteractionGroupings;
     try {
       const validation = await api("/api/gbm/validate", { method: "POST", body: JSON.stringify(payload) });
       if (!validation.ok) {

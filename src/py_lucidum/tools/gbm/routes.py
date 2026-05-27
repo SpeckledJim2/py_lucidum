@@ -117,6 +117,10 @@ def register(app: FastAPI, context: AppContext) -> None:
             if isinstance(row, dict) and row.get("feature")
         }
 
+    def feature_interaction_groupings(current_groupings: dict[str, str] | None = None) -> list[str]:
+        values = (current_groupings if current_groupings is not None else feature_groupings()).values()
+        return sorted({str(grouping).strip() for grouping in values if str(grouping).strip()}, key=str.lower)
+
     def feature_scenarios() -> list[dict[str, Any]]:
         scenarios = feature_spec_payload().get("scenarios", [])
         if not isinstance(scenarios, list):
@@ -177,9 +181,61 @@ def register(app: FastAPI, context: AppContext) -> None:
     def scenario_feature_set(features: list[str]) -> set[str]:
         return {feature for feature in features if feature}
 
+    def active_feature_interaction_constraints(current_groupings: dict[str, str], valid_groupings: list[str]) -> dict[str, Any] | None:
+        model_id = store.active_model_id()
+        if not model_id:
+            return None
+        try:
+            manifest = store.manifest(model_id)
+        except ValueError:
+            return None
+        stored = manifest.get("feature_interaction_constraints")
+        if not isinstance(stored, dict):
+            return None
+        groups = normalise_interaction_constraint_groups(stored.get("groups"))
+        if not groups:
+            return None
+        current_grouping_set = set(valid_groupings)
+        payload_groups: list[dict[str, Any]] = []
+        for group in groups:
+            grouping = group["grouping"]
+            features = group["features"]
+            payload: dict[str, Any] = {"grouping": grouping, "features": features}
+            if grouping not in current_grouping_set:
+                payload["status"] = "missing"
+            elif any(current_groupings.get(feature, "") != grouping for feature in features):
+                payload["status"] = "stale"
+            else:
+                payload["status"] = "current"
+            payload_groups.append(payload)
+        return {
+            "groupings": [group["grouping"] for group in payload_groups],
+            "groups": payload_groups,
+        }
+
+    def normalise_interaction_constraint_groups(raw_groups: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_groups, list):
+            return []
+        groups: list[dict[str, Any]] = []
+        seen_groupings: set[str] = set()
+        for raw_group in raw_groups:
+            if not isinstance(raw_group, dict):
+                continue
+            grouping = str(raw_group.get("grouping") or "").strip()
+            if not grouping or grouping in seen_groupings:
+                continue
+            features = scenario_feature_list(raw_group.get("features"))
+            if not features:
+                continue
+            groups.append({"grouping": grouping, "features": features})
+            seen_groupings.add(grouping)
+        return groups
+
     def config_payload() -> dict[str, Any]:
         model_features = active_feature_config()
         scenarios = feature_scenarios()
+        current_feature_groupings = feature_groupings()
+        interaction_groupings = feature_interaction_groupings(current_feature_groupings)
         with context.dataset.lock:
             sample = sample_metadata(context.dataset, store.generated_sample_path)
             sample_reserved = {SAMPLE_COLUMN} if sample.get("source") == "dataset" else set()
@@ -188,7 +244,7 @@ def register(app: FastAPI, context: AppContext) -> None:
                 active_gains(),
                 model_features=model_features,
                 reserved_names=sample_reserved,
-                feature_groupings=feature_groupings(),
+                feature_groupings=current_feature_groupings,
             )
             sample_column = detect_sample_column(context.dataset)
             can_use_ebm = ebm_available(context.dataset)
@@ -209,6 +265,8 @@ def register(app: FastAPI, context: AppContext) -> None:
             "features": features,
             "feature_scenarios": scenarios,
             "active_feature_scenario": active_feature_scenario(scenarios),
+            "feature_interaction_groupings": interaction_groupings,
+            "active_feature_interaction_constraints": active_feature_interaction_constraints(current_feature_groupings, interaction_groupings),
             "models": store.list_models(),
             "active_model_id": store.active_model_id(),
             "shap_options": [
@@ -240,7 +298,8 @@ def register(app: FastAPI, context: AppContext) -> None:
     @app.post("/api/gbm/validate")
     async def validate_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
-        payload = await request.json()
+        payload = dict(await request.json())
+        payload["feature_groupings"] = feature_groupings()
         return validate_request(context.dataset, payload, generated_sample_path=store.generated_sample_path).as_payload()
 
     @app.post("/api/gbm/sample")
@@ -252,7 +311,8 @@ def register(app: FastAPI, context: AppContext) -> None:
     @app.post("/api/gbm/train")
     async def train_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
-        payload = await request.json()
+        payload = dict(await request.json())
+        payload["feature_groupings"] = feature_groupings()
         try:
             gbm_dependencies()
             if payload.get("create_sample"):

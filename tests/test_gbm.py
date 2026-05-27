@@ -19,8 +19,8 @@ from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
-from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, categorical_distinct_counts, default_parameters, ebm_available, feature_rows, normalise_parameters, validate_request
+from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_groupings, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
 
@@ -215,6 +215,7 @@ class GbmToolTests(unittest.TestCase):
                 {"name": "scenario2", "features": ["Segment"]},
             ],
         )
+        self.assertEqual(payload["feature_interaction_groupings"], ["DRIVER", "POSTCODE"])
 
     def test_active_feature_scenario_status_compares_against_current_spec(self) -> None:
         store = self.write_model_artifacts()
@@ -270,6 +271,89 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(payload["active_feature_scenario"])
 
+    def test_active_feature_interaction_constraints_report_current_stale_and_missing(self) -> None:
+        store = self.write_model_artifacts()
+        stored_constraints = {
+            "groupings": ["DRIVER", "POSTCODE", "OLD"],
+            "groups": [
+                {"grouping": "DRIVER", "features": ["Age"]},
+                {"grouping": "POSTCODE", "features": ["Segment"]},
+                {"grouping": "OLD", "features": ["Age"]},
+            ],
+        }
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = stored_constraints
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+        features_path = self.root / "interaction_feature_spec.csv"
+        features_path.write_text(
+            "Feature,Grouping,scenario1\n"
+            "Age,DRIVER,feature\n"
+            "Segment,VEHICLE,feature\n",
+            encoding="utf-8",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm"],
+            use_saved_filters=False,
+            use_kpis=False,
+            features_path=features_path,
+        )
+
+        status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["feature_interaction_groupings"], ["DRIVER", "VEHICLE"])
+        self.assertEqual(
+            payload["active_feature_interaction_constraints"],
+            {
+                "groupings": ["DRIVER", "POSTCODE", "OLD"],
+                "groups": [
+                    {"grouping": "DRIVER", "features": ["Age"], "status": "current"},
+                    {"grouping": "POSTCODE", "features": ["Segment"], "status": "missing"},
+                    {"grouping": "OLD", "features": ["Age"], "status": "missing"},
+                ],
+            },
+        )
+
+    def test_active_feature_interaction_constraints_report_stale_feature_grouping(self) -> None:
+        store = self.write_model_artifacts()
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = {
+            "groupings": ["POSTCODE"],
+            "groups": [{"grouping": "POSTCODE", "features": ["Segment"]}],
+        }
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+        features_path = self.root / "interaction_stale_feature_spec.csv"
+        features_path.write_text(
+            "Feature,Grouping,scenario1\n"
+            "Age,DRIVER,feature\n"
+            "Segment,VEHICLE,feature\n"
+            "PostcodeArea,POSTCODE,feature\n",
+            encoding="utf-8",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm"],
+            use_saved_filters=False,
+            use_kpis=False,
+            features_path=features_path,
+        )
+
+        status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            payload["active_feature_interaction_constraints"],
+            {
+                "groupings": ["POSTCODE"],
+                "groups": [{"grouping": "POSTCODE", "features": ["Segment"], "status": "stale"}],
+            },
+        )
+
     def test_normalise_feature_scenario_dedupes_and_rejects_missing_name(self) -> None:
         self.assertEqual(
             normalise_feature_scenario({"name": "scenario1", "features": ["Age", "Age", "", "Segment"]}),
@@ -277,6 +361,53 @@ class GbmToolTests(unittest.TestCase):
         )
         self.assertIsNone(normalise_feature_scenario({"name": "", "features": ["Age"]}))
         self.assertIsNone(normalise_feature_scenario(None))
+
+    def test_feature_interaction_groupings_are_unique_sorted_and_nonblank(self) -> None:
+        grouping_map = normalise_feature_grouping_map(
+            {"Age": "DRIVER", "Segment": "POSTCODE", "VehicleAge": "VEHICLE", "Blank": "", "Duplicate": "DRIVER"}
+        )
+
+        self.assertEqual(available_feature_interaction_groupings(grouping_map), ["DRIVER", "POSTCODE", "VEHICLE"])
+        self.assertEqual(normalise_feature_interaction_groupings(["POSTCODE", "POSTCODE", "", "VEHICLE"]), ["POSTCODE", "VEHICLE"])
+
+    def test_feature_interaction_constraint_groups_use_selected_features_only(self) -> None:
+        features = [{"name": "Age"}, {"name": "Segment"}, {"name": "VehicleAge"}]
+        grouping_map = {"Age": "DRIVER", "Segment": "POSTCODE", "VehicleAge": "VEHICLE", "Unused": "POSTCODE"}
+
+        groups = feature_interaction_constraint_groups(features, ["POSTCODE", "VEHICLE"], grouping_map)
+
+        self.assertEqual(
+            groups,
+            [
+                {"grouping": "POSTCODE", "features": ["Segment"]},
+                {"grouping": "VEHICLE", "features": ["VehicleAge"]},
+            ],
+        )
+
+    def test_lightgbm_interaction_constraints_add_remainder_group(self) -> None:
+        groups = [{"grouping": "POSTCODE", "features": ["Segment"]}, {"grouping": "VEHICLE", "features": ["VehicleAge"]}]
+
+        constraints = lightgbm_interaction_constraints(["Age", "Segment", "VehicleAge", "Ncd"], groups)
+
+        self.assertEqual(constraints, [[1], [2], [0, 3]])
+        self.assertEqual(lightgbm_interaction_constraints(["Age"], [{"grouping": "DRIVER", "features": []}]), [])
+
+    def test_validate_rejects_unknown_feature_interaction_grouping(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": [{"name": "Age", "include": True}],
+            "parameters": default_parameters(),
+            "sample_column": "SAMPLE",
+            "feature_groupings": {"Age": "DRIVER"},
+            "feature_interaction_groupings": ["POSTCODE"],
+        }
+
+        result = validate_request(dataset, payload)
+
+        self.assertFalse(result.ok)
+        self.assertIn("Choose a valid GBM feature interaction grouping: POSTCODE", result.errors)
 
     def test_generated_sample_sidecar_is_reused_for_missing_sample_column(self) -> None:
         data_path = self.root / "no_sample.csv"
@@ -370,6 +501,44 @@ class GbmToolTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("py-lucidum[gbm]", json.loads(body)["detail"])
+
+    def test_train_endpoint_injects_feature_grouping_snapshot_for_constraints(self) -> None:
+        features_path = self.root / "feature_spec.csv"
+        features_path.write_text(
+            "Feature,Grouping,scenario1\n"
+            "Age,DRIVER,feature\n"
+            "Segment,POSTCODE,feature\n",
+            encoding="utf-8",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm"],
+            use_saved_filters=False,
+            use_kpis=False,
+            features_path=features_path,
+        )
+        captured: dict[str, Any] = {}
+
+        def fake_start(dataset: Dataset, store: GbmModelStore, payload: dict[str, Any]) -> GbmJob:
+            captured.update(payload)
+            return GbmJob(id="j1")
+
+        app.state.gbm_jobs.start = fake_start
+        request = {
+            "features": self.request_features(),
+            "parameters": [{"name": "objective", "value": "poisson"}, {"name": "metric", "value": "poisson"}],
+            "sample_column": "SAMPLE",
+            "feature_interaction_groupings": ["POSTCODE"],
+        }
+
+        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", return_value=(object(), object(), object())):
+            status, body = asgi_post_json(app, "/api/gbm/train", request)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["job_id"], "j1")
+        self.assertEqual(captured["feature_groupings"], {"Age": "DRIVER", "Segment": "POSTCODE"})
+        self.assertEqual(captured["feature_interaction_groupings"], ["POSTCODE"])
 
     def test_gbm_dependencies_reports_missing_lightgbm_runtime(self) -> None:
         real_import = builtins.__import__
@@ -1073,6 +1242,8 @@ COPY (
                 "sample_column": "",
                 "shap_rows": "0",
                 "feature_scenario": {"name": "scenario1", "features": ["DRIVER_AGE", "LATITUDE"]},
+                "feature_groupings": {"DRIVER_AGE": "DRIVER", "LATITUDE": "POSTCODE"},
+                "feature_interaction_groupings": ["POSTCODE"],
             },
             progress_callback=progress.append,
         )
@@ -1083,6 +1254,10 @@ COPY (
         manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
         self.assertEqual(manifest["best_metrics"], result["best_metrics"])
         self.assertEqual(manifest["feature_scenario"], {"name": "scenario1", "features": ["DRIVER_AGE", "LATITUDE"]})
+        self.assertEqual(
+            manifest["feature_interaction_constraints"],
+            {"groupings": ["POSTCODE"], "groups": [{"grouping": "POSTCODE", "features": ["LATITUDE"]}]},
+        )
         self.assertIsNotNone(result["best_metrics"]["training"])
         self.assertIsNone(result["best_metrics"]["test"])
         con = duckdb.connect(database=":memory:")
@@ -1090,9 +1265,32 @@ COPY (
             artifact_columns = con.execute(
                 f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'predictions')))})"
             ).fetchall()
+            tree_rows = con.execute(
+                f"""
+SELECT tree_index, node_index, left_child, right_child, parent_index, split_feature
+FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree_table')))})
+"""
+            ).fetchall()
         finally:
             con.close()
         self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "gbm_prediction"])
+        parents = {(tree, node): parent for tree, node, _left, _right, parent, _feature in tree_rows}
+        split_features = {(tree, node): feature for tree, node, _left, _right, _parent, feature in tree_rows}
+        nodes = {(tree, node) for tree, node, _left, _right, _parent, _feature in tree_rows}
+        branch_nodes = {(tree, node) for tree, node, left, right, _parent, _feature in tree_rows if left or right}
+        for node in nodes - branch_nodes:
+            path_features: set[str] = set()
+            current = node
+            while current in parents:
+                feature = split_features.get(current)
+                if feature:
+                    path_features.add(str(feature))
+                parent = parents[current]
+                if not parent:
+                    break
+                current = (current[0], parent)
+            if "LATITUDE" in path_features:
+                self.assertNotIn("DRIVER_AGE", path_features)
         self.assertFalse((store.model_dir(result["model_id"]) / "tree_dump.json").exists())
         self.assertTrue(any(item.get("phase") == "training" for item in progress))
         self.assertTrue(any(item.get("phase") == "scoring" for item in progress))

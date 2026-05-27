@@ -22,7 +22,10 @@ from .validation import (
     RESPONSE_COLUMN,
     detect_sample_column,
     display_monotonicity,
+    feature_interaction_constraint_groups,
     metric,
+    normalise_feature_grouping_map,
+    normalise_feature_interaction_groupings,
     normalise_training_mode,
     objective,
     normalise_features,
@@ -309,6 +312,8 @@ def train_model(
         offset_col = selected_offset_column(payload, columns)
         features = normalise_features(payload.get("features"), columns)
         feature_names = [feature["name"] for feature in features]
+        feature_grouping_map = normalise_feature_grouping_map(payload.get("feature_groupings"))
+        selected_interaction_groupings = normalise_feature_interaction_groupings(payload.get("feature_interaction_groupings"))
         dataset_sample = dataset_sample_column(dataset)
         if not dataset_sample and payload.get("create_sample"):
             create_generated_sample(dataset, store.generated_sample_path)
@@ -345,6 +350,18 @@ def train_model(
     monotone_constraints = [int(feature["monotonicity"]) for feature in features]
     if any(monotone_constraints):
         params["monotone_constraints"] = monotone_constraints
+    interaction_groups = feature_interaction_constraint_groups(features, selected_interaction_groupings, feature_grouping_map)
+    interaction_constraints = lightgbm_interaction_constraints(feature_names, interaction_groups)
+    feature_interaction_constraints = (
+        {
+            "groupings": [str(group["grouping"]) for group in interaction_groups],
+            "groups": interaction_groups,
+        }
+        if interaction_constraints
+        else None
+    )
+    if interaction_constraints:
+        params["interaction_constraints"] = interaction_constraints
 
     work_frame = score_frame.copy()
     work_frame[response_col] = pd.to_numeric(work_frame[response_col], errors="coerce")
@@ -577,6 +594,8 @@ def train_model(
     }
     if feature_scenario:
         manifest["feature_scenario"] = feature_scenario
+    if feature_interaction_constraints:
+        manifest["feature_interaction_constraints"] = feature_interaction_constraints
     if ebm_metadata:
         manifest["ebm"] = ebm_metadata
     store.write_json(store.artifact_path(model_id, "feature_config"), feature_config)
@@ -619,6 +638,31 @@ def normalise_feature_scenario(raw: Any) -> dict[str, Any] | None:
                 features.append(feature)
                 seen.add(feature)
     return {"name": name, "features": features}
+
+
+def lightgbm_interaction_constraints(feature_names: list[str], groups: list[dict[str, Any]]) -> list[list[int]]:
+    if not feature_names or not groups:
+        return []
+    feature_indexes = {name: index for index, name in enumerate(feature_names)}
+    constrained_indexes: set[int] = set()
+    constraints: list[list[int]] = []
+    for group in groups:
+        indexes: list[int] = []
+        seen: set[int] = set()
+        for feature in group.get("features", []):
+            index = feature_indexes.get(str(feature))
+            if index is not None and index not in seen:
+                indexes.append(index)
+                seen.add(index)
+        if indexes:
+            constraints.append(indexes)
+            constrained_indexes.update(indexes)
+    if not constraints:
+        return []
+    remainder = [index for index in range(len(feature_names)) if index not in constrained_indexes]
+    if remainder:
+        constraints.append(remainder)
+    return constraints
 
 
 def emit_progress(progress_callback: ProgressCallback | None, progress: dict[str, Any]) -> None:
@@ -984,6 +1028,7 @@ __all__ = [
     "MissingGbmDependency",
     "gbm_dependencies",
     "lightgbm_progress_payload",
+    "lightgbm_interaction_constraints",
     "normalise_feature_scenario",
     "should_use_offset_init_score",
     "train_model",

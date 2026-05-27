@@ -290,6 +290,56 @@ def normalise_features(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[st
     return features
 
 
+def normalise_feature_grouping_map(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    groupings: dict[str, str] = {}
+    for feature, grouping in raw.items():
+        name = str(feature or "").strip()
+        group = str(grouping or "").strip()
+        if name and group:
+            groupings[name] = group
+    return groupings
+
+
+def normalise_feature_interaction_groupings(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    groupings: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        grouping = str(item or "").strip()
+        if grouping and grouping not in seen:
+            groupings.append(grouping)
+            seen.add(grouping)
+    return groupings
+
+
+def available_feature_interaction_groupings(feature_groupings: dict[str, str]) -> list[str]:
+    return sorted({grouping for grouping in feature_groupings.values() if grouping}, key=str.lower)
+
+
+def feature_interaction_constraint_groups(
+    features: list[dict[str, Any]],
+    selected_groupings: list[str],
+    feature_groupings: dict[str, str],
+) -> list[dict[str, Any]]:
+    if not features or not selected_groupings:
+        return []
+    selected = set(selected_groupings)
+    grouped: dict[str, list[str]] = {grouping: [] for grouping in selected_groupings}
+    for feature in features:
+        name = str(feature.get("name") or "").strip()
+        grouping = feature_groupings.get(name, "")
+        if name and grouping in selected:
+            grouped.setdefault(grouping, []).append(name)
+    return [
+        {"grouping": grouping, "features": names}
+        for grouping, names in grouped.items()
+        if names
+    ]
+
+
 def normalise_monotonicity(raw: Any) -> int:
     text = str(raw or "").strip().lower()
     if text in {"", "0", "none", "no"}:
@@ -399,6 +449,12 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
             if feature["name"] in reserved_sample_names:
                 errors.append(f"{feature['name']} is reserved for the GBM sample split")
 
+        feature_grouping_map = normalise_feature_grouping_map(payload.get("feature_groupings"))
+        valid_interaction_groupings = set(available_feature_interaction_groupings(feature_grouping_map))
+        for grouping in normalise_feature_interaction_groupings(payload.get("feature_interaction_groupings")):
+            if grouping not in valid_interaction_groupings:
+                errors.append(f"Choose a valid GBM feature interaction grouping: {grouping}")
+
         if selected_training_mode == "ebm":
             early_stopping_rounds = integer_parameter(params, "early_stopping_rounds", 0)
             num_leaves = integer_parameter(params, "num_leaves", 0)
@@ -480,11 +536,15 @@ __all__ = [
     "RESPONSE_COLUMN",
     "TRAINING_MODES",
     "ValidationResult",
+    "available_feature_interaction_groupings",
     "default_parameters",
     "detect_sample_column",
     "ebm_available",
     "display_monotonicity",
+    "feature_interaction_constraint_groups",
     "feature_rows",
+    "normalise_feature_grouping_map",
+    "normalise_feature_interaction_groupings",
     "normalise_features",
     "normalise_parameters",
     "normalise_training_mode",
