@@ -1263,7 +1263,7 @@ export function createGbmTool({
         liveProgress = null;
         liveEvaluationParameters = null;
         await reloadSchema(job.result?.sources?.predictions);
-        clearToolCaches();
+        const preserveProfile = clearCachesAfterGbmModelSourceChange();
         const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
         const cache = toolCache(tool);
         cache.requestKey = stableConfigKey();
@@ -1271,7 +1271,7 @@ export function createGbmTool({
         setTrainingState(false);
         setTrainingStatus("");
         measureToolRender(tool, () => render(data));
-        refreshActiveTool({ force: true });
+        if (!preserveProfile) refreshActiveTool({ force: true });
       } catch (error) {
         setTrainingState(false);
         liveEvaluationParameters = null;
@@ -1348,16 +1348,26 @@ export function createGbmTool({
   async function applyModelMutationResult(result) {
     const nextConfig = result.config || config || {};
     await reloadSchema(preferredModelSource(result, nextConfig));
-    clearToolCaches();
+    const preserveProfile = clearCachesAfterGbmModelSourceChange();
     config = nextConfig;
     activeDetail = null;
     setGbmNotice("");
     if (state.tool === tool) {
       measureToolRender(tool, () => render(nextConfig));
+    } else if (preserveProfile) {
+      syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
     } else {
       syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
       await refreshActiveTool({ force: true });
     }
+  }
+
+  function clearCachesAfterGbmModelSourceChange() {
+    const preserveProfile = state.tool === "column_profile";
+    // GBM model changes update model-output sources. Source-scoped tools must refresh,
+    // but Column Profile is raw-dataset + filter only, so its cache can survive.
+    clearToolCaches(preserveProfile ? { preserve: ["column_profile"] } : {});
+    return preserveProfile;
   }
 
   function preferredModelSource(result, data) {

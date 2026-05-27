@@ -178,6 +178,41 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_sidebar_switch_preserves_profile_but_refreshes_model_chart(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,SAMPLE\n"
+                "10,100,30,A,training\n"
+                "20,200,40,B,test\n"
+                "30,300,50,C,training\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                store,
+                "browser-smoke-model",
+                "Browser smoke model",
+                "2026-05-25T00:00:00Z",
+                [0.11, 0.21, 0.31],
+            )
+            self.write_gbm_prediction_model(
+                store,
+                "browser-smoke-model-2",
+                "Second smoke model",
+                "2026-05-25T00:00:01Z",
+                [0.41, 0.51, 0.61],
+            )
+            store.activate_model("browser-smoke-model")
+            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "gbm"])
+            try:
+                self.exercise_gbm_profile_cache_and_model_chart_refresh(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_saved_filter_theme_headings_collapse_their_rows(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -318,10 +353,134 @@ COPY (
         return f"http://127.0.0.1:{port}", server, thread
 
     @staticmethod
+    def write_gbm_prediction_model(
+        store: GbmModelStore,
+        model_id: str,
+        label: str,
+        created_at: str,
+        predictions: list[float],
+    ) -> None:
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": label,
+                "created_at": created_at,
+                "objective": "gamma",
+                "metric": "gamma",
+                "training_mode": "normal",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "best_iteration": len(predictions),
+                "training_rows": 2,
+                "test_rows": 1,
+                "scored_rows": len(predictions),
+                "sample_column": "SAMPLE",
+                "sample_source": "dataset",
+                "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
+                "sources": {"predictions": store.source_id(model_id, "predictions")},
+            },
+        )
+        store.write_json(model_dir / "feature_config.json", [{"name": "Age", "kind": "integer", "include": True, "gain": 1.0}])
+        store.write_json(model_dir / "parameters.json", {"objective": "gamma", "metric": "gamma", "num_iterations": len(predictions)})
+        store.write_json(
+            model_dir / "training_log.json",
+            {"evaluation": {"training": {"gamma": predictions}, "test": {"gamma": predictions}}, "warnings": []},
+        )
+        prediction_rows = "\n  UNION ALL\n  ".join(
+            f"SELECT {index + 1} AS __lucidum_row_id, {float(value)} AS gbm_prediction"
+            for index, value in enumerate(predictions)
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  {prediction_rows}
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+
+    @staticmethod
     def assert_static_asset(base_url: str, path: str, expected_content_type: str) -> None:
         with urlopen(f"{base_url}{path}", timeout=5) as response:
             assert response.status == 200
             assert expected_content_type in response.headers.get("content-type", "")
+
+    def exercise_gbm_profile_cache_and_model_chart_refresh(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            profile_requests = 0
+            profile_detail_requests = 0
+            chart_requests = 0
+
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+            def count_request(request: object) -> None:
+                nonlocal profile_requests, profile_detail_requests, chart_requests
+                url = request.url
+                if url.endswith("/api/column-profile/summary"):
+                    profile_requests += 1
+                elif url.endswith("/api/column-profile/detail"):
+                    profile_detail_requests += 1
+                elif url.endswith("/api/chart"):
+                    chart_requests += 1
+
+            page.on("request", count_request)
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                page.locator("#profileDetailTitle").wait_for(timeout=10_000)
+                page.locator("#gbmModelSelect").wait_for(timeout=10_000)
+
+                profile_requests_before = profile_requests
+                profile_detail_requests_before = profile_detail_requests
+                page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
+                page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]')
+                      ?.classList.contains("active")
+                    """,
+                    timeout=10_000,
+                )
+                page.wait_for_timeout(250)
+                self.assertEqual(profile_requests, profile_requests_before)
+                self.assertEqual(profile_detail_requests, profile_detail_requests_before)
+                page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
+                page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
+                page.wait_for_timeout(250)
+                self.assertEqual(profile_requests, profile_requests_before)
+                self.assertEqual(profile_detail_requests, profile_detail_requests_before)
+
+                chart_url = (
+                    f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model%3Apredictions"
+                    "&x=Age&actual=gbm_prediction&denominator=denominator"
+                )
+                page.goto(chart_url, wait_until="domcontentloaded")
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    timeout=10_000,
+                )
+                chart_requests_before = chart_requests
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as chart_request_info:
+                    page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
+                request_body = json.loads(chart_request_info.value.post_data or "{}")
+                page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
+                self.assertGreater(chart_requests, chart_requests_before)
+                self.assertEqual(request_body["source"], "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(request_body["responses"][0]["numerator"], "gbm_prediction")
+                self.assertEqual(request_body["denominator"], "denominator")
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
 
     def exercise_browser(self, base_url: str) -> None:
         assert sync_playwright is not None

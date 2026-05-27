@@ -493,12 +493,21 @@
         };
       }
 
-      function clearToolCaches() {
+      function clearToolCaches(options = {}) {
+        const preserve = new Set(Array.isArray(options.preserve) ? options.preserve : []);
+        const previousToolCache = state.toolCache || {};
+        const previousActionTimings = state.actionTimings || {};
         state.toolCache = freshToolCache();
         state.actionTimings = freshActionTimings();
-        state.lastProfileData = null;
-        state.lastProfileDetailData = null;
-        state.profileDetailRequestSeq += 1;
+        preserve.forEach((tool) => {
+          if (previousToolCache[tool]) state.toolCache[tool] = previousToolCache[tool];
+          if (previousActionTimings[tool]) state.actionTimings[tool] = previousActionTimings[tool];
+        });
+        if (!preserve.has("column_profile")) {
+          state.lastProfileData = null;
+          state.lastProfileDetailData = null;
+          state.profileDetailRequestSeq += 1;
+        }
         state.lastData = null;
         state.lastMapData = null;
         state.mapStartupFitDone = false;
