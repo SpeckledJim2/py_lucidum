@@ -209,8 +209,8 @@ export function createGbmTool({
                 <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
                   ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
                   ${featureScenarioSelectHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
-                  <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button" type="button">Clear all</button>
-                  <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button" type="button">Select all</button>
+                  <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Clear all features" title="Clear all">×</button>
+                  <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Select all features" title="Select all">✓</button>
                 </div>
               </div>
               <div id="gbmFeatureGrid" class="gbm-grid"></div>
@@ -469,9 +469,10 @@ export function createGbmTool({
     const hasOptions = rows.length || synthetic.length;
     const hidden = hasOptions ? "" : " hidden";
     const disabled = hasOptions ? "" : " disabled";
+    const constraintClass = selectedCurrent.size + synthetic.length > 0 ? " has-constraints" : "";
     return `
       <div id="gbmFeatureInteractionConstraintSelect" class="gbm-interaction-constraint-select${hidden}">
-        <button id="gbmFeatureInteractionConstraintButton" class="gbm-interaction-constraint-button" type="button" aria-haspopup="true" aria-expanded="false"${disabled}>${escapeHtml(featureInteractionButtonLabel(selectedCurrent.size, synthetic.length))}</button>
+        <button id="gbmFeatureInteractionConstraintButton" class="gbm-interaction-constraint-button${constraintClass}" type="button" aria-haspopup="true" aria-expanded="false"${disabled}>${escapeHtml(featureInteractionButtonLabel(selectedCurrent.size, synthetic.length))}</button>
         <div id="gbmFeatureInteractionConstraintMenu" class="gbm-interaction-constraint-menu hidden" role="menu">
           ${synthetic.map((group) => `
             <label class="gbm-interaction-constraint-row gbm-interaction-constraint-row-trained" data-gbm-trained-interaction-row="${escapeHtml(group.grouping)}">
@@ -613,7 +614,10 @@ export function createGbmTool({
     const selectedCurrentCount = currentFeatureInteractionGroupings().length;
     const syntheticCount = root.querySelectorAll("[data-gbm-trained-interaction-row]").length;
     const button = el("gbmFeatureInteractionConstraintButton");
-    if (button) button.textContent = featureInteractionButtonLabel(selectedCurrentCount, syntheticCount);
+    if (button) {
+      button.textContent = featureInteractionButtonLabel(selectedCurrentCount, syntheticCount);
+      button.classList.toggle("has-constraints", selectedCurrentCount + syntheticCount > 0);
+    }
   }
 
   function selectedInteractionFeatureNames(features) {

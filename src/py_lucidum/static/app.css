@@ -2578,6 +2578,7 @@
       }
 
       .gbm-tool {
+        --gbm-table-border: #999;
         display: flex;
         flex-direction: column;
         min-height: 0;
@@ -2618,6 +2619,11 @@
 
       .gbm-tabs {
         position: static;
+      }
+
+      .gbm-tabs .tab {
+        font-size: 12px;
+        font-weight: 700;
       }
 
       .gbm-training-status {
@@ -2765,7 +2771,7 @@
         color: var(--text);
         flex: 0 0 auto;
         font-size: 13px;
-        font-weight: 800;
+        font-weight: 700;
         line-height: 1.2;
         margin: 0 0 5px;
       }
@@ -2822,6 +2828,16 @@
         white-space: nowrap;
       }
 
+      .gbm-icon-action-button {
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 20px;
+        min-width: 28px;
+        padding: 0;
+        text-align: center;
+        width: 28px;
+      }
+
       .gbm-interaction-constraint-select {
         flex: 0 0 auto;
         position: relative;
@@ -2844,6 +2860,13 @@
         text-align: left;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .gbm-interaction-constraint-button.has-constraints {
+        background: color-mix(in srgb, #f59e0b 22%, var(--panel));
+        border-color: #f59e0b;
+        color: color-mix(in srgb, #92400e 82%, var(--text));
+        font-weight: 700;
       }
 
       .gbm-interaction-constraint-button:disabled {
@@ -2974,11 +2997,15 @@
 
       .gbm-grid {
         background: var(--panel);
-        border: 1px solid var(--line);
+        border: 1px solid var(--gbm-table-border);
         border-radius: 6px;
         color: var(--text);
         min-height: 220px;
         overflow: hidden;
+      }
+
+      .gbm-grid.tabulator {
+        border-color: var(--gbm-table-border);
       }
 
       #gbmFeatureGrid {
@@ -3124,7 +3151,7 @@
         color: var(--text);
         display: block;
         font-size: 13px;
-        font-weight: 800;
+        font-weight: 700;
         line-height: 1.2;
         margin: 0 0 6px;
       }
@@ -3173,7 +3200,7 @@
 
       .gbm-evaluation-chart {
         min-height: 220px;
-        border: 1px solid var(--line);
+        border: 1px solid var(--gbm-table-border);
         border-radius: 6px;
       }
 
