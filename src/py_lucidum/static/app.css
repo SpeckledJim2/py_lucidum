@@ -2770,12 +2770,13 @@
       }
 
       .gbm-section-header {
-        align-items: center;
+        align-items: flex-start;
         display: flex;
         flex: 0 0 auto;
         gap: 8px;
         justify-content: space-between;
         margin: 0 0 5px;
+        min-height: 22px;
         min-width: 0;
       }
 
@@ -2855,6 +2856,14 @@
 
       .gbm-parameter-table-column > .gbm-grid {
         flex: 1 1 auto;
+      }
+
+      .gbm-parameter-table-column > .gbm-section-title,
+      .gbm-parameter-controls-column > .gbm-section-title {
+        align-items: flex-start;
+        display: flex;
+        margin: 0 0 5px;
+        min-height: 22px;
       }
 
       .gbm-parameter-controls-column {
@@ -3014,8 +3023,8 @@
       .gbm-shap-label {
         color: var(--text);
         display: block;
-        font-size: 12px;
-        font-weight: 700;
+        font-size: 13px;
+        font-weight: 800;
         line-height: 1.2;
         margin: 0 0 6px;
       }

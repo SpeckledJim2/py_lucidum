@@ -159,7 +159,7 @@ export function createGbmTool({
           <div class="gbm-feature-layout">
             <section class="gbm-panel-section gbm-grid-panel">
               <div class="gbm-section-header gbm-feature-section-header">
-                <h3 class="gbm-section-title">Features</h3>
+                <h3 id="gbmFeatureSectionTitle" class="gbm-section-title">${escapeHtml(featureSectionTitle(data.features || []))}</h3>
                 <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
                   <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button" type="button">Clear all</button>
                   <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button" type="button">Select all</button>
@@ -436,10 +436,12 @@ export function createGbmTool({
 
   function setFeatureIncludes(include) {
     if (featureTable) {
+      const updates = [];
       for (const row of featureTable.getRows()) {
         const data = row.getData();
-        if (isFeatureSelectable(data)) row.update({ include });
+        if (isFeatureSelectable(data)) updates.push(row.update({ include }));
       }
+      syncFeatureSectionTitleAfter(updates);
       return;
     }
     for (const checkbox of document.querySelectorAll("[data-gbm-feature]")) {
@@ -449,6 +451,30 @@ export function createGbmTool({
       checkbox.checked = include;
       checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     }
+    syncFeatureSectionTitle();
+  }
+
+  function featureSectionTitle(features) {
+    return `Features (${selectedFeatureCount(features)})`;
+  }
+
+  function selectedFeatureCount(features) {
+    return (features || []).filter((feature) => feature?.include && isFeatureSelectable(feature)).length;
+  }
+
+  function syncFeatureSectionTitle() {
+    const title = el("gbmFeatureSectionTitle");
+    if (!title) return;
+    title.textContent = featureSectionTitle(currentFeatureRows());
+  }
+
+  function syncFeatureSectionTitleAfter(updates) {
+    const pending = (updates || []).filter((update) => update && typeof update.then === "function");
+    if (!pending.length) {
+      syncFeatureSectionTitle();
+      return;
+    }
+    Promise.all(pending).then(syncFeatureSectionTitle, syncFeatureSectionTitle);
   }
 
   function setTrainingState(active) {
@@ -774,7 +800,7 @@ export function createGbmTool({
     checkbox.setAttribute("aria-label", `Use ${rowData.name}`);
     checkbox.addEventListener("click", (event) => event.stopPropagation());
     checkbox.addEventListener("change", () => {
-      cell.getRow().update({ include: checkbox.checked });
+      syncFeatureSectionTitleAfter([cell.getRow().update({ include: checkbox.checked })]);
     });
     return checkbox;
   }
@@ -822,6 +848,10 @@ export function createGbmTool({
         </tbody>
       </table>
     `;
+    for (const checkbox of target.querySelectorAll("[data-gbm-feature]")) {
+      checkbox.addEventListener("change", syncFeatureSectionTitle);
+    }
+    syncFeatureSectionTitle();
   }
 
   function renderParameterFallback(parameters) {

@@ -99,14 +99,10 @@ class BrowserSmokeTests(unittest.TestCase):
                         "sources": {},
                     },
                 )
-                store.write_json(
-                    model_dir / "feature_config.json",
-                    [
-                        {"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 5.0}
-                        if model_id == "browser-smoke-model"
-                        else {"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 6.0}
-                    ],
-                )
+                feature_config = [{"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 5.0}]
+                if model_id.endswith("-2"):
+                    feature_config.append({"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 6.0})
+                store.write_json(model_dir / "feature_config.json", feature_config)
                 store.write_json(
                     model_dir / "parameters.json",
                     {
@@ -451,6 +447,21 @@ COPY (
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+            def assert_feature_heading_matches_checked(expected_count: int | None = None) -> None:
+                page.wait_for_function(
+                    """
+                    (expectedCount) => {
+                      const title = document.querySelector("#gbmFeatureSectionTitle");
+                      const checked = document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox:checked").length;
+                      const count = expectedCount === null ? checked : expectedCount;
+                      return title?.textContent.trim() === `Features (${count})`;
+                    }
+                    """,
+                    arg=expected_count,
+                    timeout=10_000,
+                )
+
             try:
                 page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
                 page.get_by_text("Features and parameters").wait_for(timeout=10_000)
@@ -459,7 +470,7 @@ COPY (
                 page.get_by_text("Gain").first.wait_for(timeout=10_000)
                 page.get_by_text("SHAP rows").wait_for(timeout=10_000)
                 page.get_by_text("Training mode").wait_for(timeout=10_000)
-                page.get_by_text("Features", exact=True).wait_for(timeout=10_000)
+                assert_feature_heading_matches_checked(1)
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
@@ -527,6 +538,7 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.22",
                 )
+                assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
                 page.wait_for_function(
                     """
@@ -662,6 +674,7 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.11",
                 )
+                assert_feature_heading_matches_checked(1)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='normal']").is_checked())
                 self.assertTrue(page.locator("input[name='gbmEvaluationViewMode'][value='tail']").is_checked())
                 page.locator("input[name='gbmEvaluationViewMode'][value='all']").check()
@@ -755,11 +768,13 @@ COPY (
                     "() => document.querySelectorAll('#gbmFeatureGrid .gbm-use-checkbox:checked').length === 0",
                     timeout=10_000,
                 )
+                assert_feature_heading_matches_checked(0)
                 page.locator("#gbmSelectFeaturesBtn").click()
                 page.wait_for_function(
                     "() => document.querySelectorAll('#gbmFeatureGrid .gbm-use-checkbox:checked').length > 0",
                     timeout=10_000,
                 )
+                assert_feature_heading_matches_checked()
                 self.assertFalse(page.locator("#gbmNotice").is_visible())
                 self.assertTrue(page.locator("#status").evaluate("node => node.classList.contains('hidden')"))
                 gbm_top_after_sample = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
@@ -774,6 +789,7 @@ COPY (
                     }
                     """
                 )
+                assert_feature_heading_matches_checked(0)
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmNotice").get_by_text("Choose at least one usable GBM feature").wait_for(timeout=10_000)
                 self.assertTrue(page.locator("#status").evaluate("node => node.classList.contains('hidden')"))
@@ -1030,13 +1046,16 @@ COPY (
                         const tableHolder = document.querySelector("#gbmFeatureGrid .tabulator-tableholder");
                         const tab = document.querySelector(".gbm-tabs .tab");
                         const shap = document.querySelector("#gbmShapRows");
+                        const shapLabel = document.querySelector("#gbmShapRows .gbm-shap-label");
                         const shapOptions = document.querySelector(".gbm-shap-options");
                         const firstShapInput = document.querySelector("input[name='gbmShapRows']");
                         const checkedShapOption = document.querySelector(".gbm-shap-option:has(input:checked)");
                         const mode = document.querySelector("#gbmTrainingMode");
+                        const modeLabel = document.querySelector("#gbmTrainingMode .gbm-shap-label");
                         const checkedModeOption = document.querySelector(".gbm-mode-option:has(input:checked)");
                         const sampleStatus = document.querySelector("#gbmSampleStatus");
                         const train = document.querySelector("#gbmTrainBtn");
+                        const featureTitle = document.querySelector("#gbmFeatureSectionTitle");
                         const controlTitle = document.querySelector(".gbm-parameter-controls-column .gbm-section-title");
                         const parameterTitle = document.querySelector(".gbm-parameter-table-column .gbm-section-title");
                         const parameterLayout = document.querySelector(".gbm-parameter-layout");
@@ -1088,9 +1107,13 @@ COPY (
                             sampleStatusText: sampleStatus ? sampleStatus.textContent.trim() : "",
                             sampleTop: sampleStatus ? Math.round(sampleStatus.getBoundingClientRect().top) : 0,
                             trainTop: train ? Math.round(train.getBoundingClientRect().top) : 0,
+                            featureTitleTop: featureTitle ? Math.round(featureTitle.getBoundingClientRect().top) : 0,
+                            featureTitleFontSize: featureTitle ? getComputedStyle(featureTitle).fontSize : "",
+                            featureTitleFontWeight: featureTitle ? getComputedStyle(featureTitle).fontWeight : "",
                             controlTitleTop: controlTitle ? Math.round(controlTitle.getBoundingClientRect().top) : 0,
                             controlTitleText: controlTitle ? controlTitle.textContent.trim() : "",
                             parameterTitleTop: parameterTitle ? Math.round(parameterTitle.getBoundingClientRect().top) : 0,
+                            featureGridTop: grid ? Math.round(grid.top) : 0,
                             parameterGridTop: parameterGrid ? Math.round(parameterGrid.getBoundingClientRect().top) : 0,
                             parameterLayoutWidth: parameterLayout ? Math.round(parameterLayout.getBoundingClientRect().width) : 0,
                             parameterTableColumnWidth: parameterTableColumn ? Math.round(parameterTableColumn.getBoundingClientRect().width) : 0,
@@ -1123,6 +1146,10 @@ COPY (
                             featureKindFontSize: featureKind ? getComputedStyle(featureKind).fontSize : "",
                             segmentKindText: segmentKind ? segmentKind.textContent.trim() : "",
                             featureHeaders: headerTitles,
+                            shapLabelFontSize: shapLabel ? getComputedStyle(shapLabel).fontSize : "",
+                            shapLabelFontWeight: shapLabel ? getComputedStyle(shapLabel).fontWeight : "",
+                            modeLabelFontSize: modeLabel ? getComputedStyle(modeLabel).fontSize : "",
+                            modeLabelFontWeight: modeLabel ? getComputedStyle(modeLabel).fontWeight : "",
                         };
                     }
                     """
@@ -1152,7 +1179,10 @@ COPY (
                 self.assertTrue(layout["trainParentInControls"])
                 self.assertIn("SAMPLE column found", layout["sampleStatusText"])
                 self.assertEqual(layout["controlTitleText"], "Control")
+                self.assertLessEqual(abs(layout["featureTitleTop"] - layout["parameterTitleTop"]), 2)
+                self.assertLessEqual(abs(layout["featureTitleTop"] - layout["controlTitleTop"]), 2)
                 self.assertLessEqual(abs(layout["controlTitleTop"] - layout["parameterTitleTop"]), 2)
+                self.assertLessEqual(abs(layout["featureGridTop"] - layout["parameterGridTop"]), 2)
                 self.assertEqual(layout["parameterActionsDirection"], "column")
                 self.assertGreater(layout["parameterLayoutWidth"], 0)
                 self.assertAlmostEqual(
@@ -1185,6 +1215,10 @@ COPY (
                 self.assertEqual(layout["featureNameJustifyContent"], "space-between")
                 self.assertEqual(layout["featureKindFontSize"], "9px")
                 self.assertEqual(layout["segmentKindText"], "categorical (3)")
+                self.assertEqual(layout["shapLabelFontSize"], layout["featureTitleFontSize"])
+                self.assertEqual(layout["modeLabelFontSize"], layout["featureTitleFontSize"])
+                self.assertEqual(layout["shapLabelFontWeight"], layout["featureTitleFontWeight"])
+                self.assertEqual(layout["modeLabelFontWeight"], layout["featureTitleFontWeight"])
                 self.assertIn("Feature", layout["featureHeaders"])
                 self.assertIn("Use", layout["featureHeaders"])
                 self.assertIn("Monotonicity", layout["featureHeaders"])
