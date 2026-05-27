@@ -10,7 +10,15 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 
-from py_lucidum.core import Dataset, load_kpis, load_saved_filters, resolve_filters_path, resolve_kpis_path
+from py_lucidum.core import (
+    Dataset,
+    load_features,
+    load_kpis,
+    load_saved_filters,
+    resolve_features_path,
+    resolve_filters_path,
+    resolve_kpis_path,
+)
 from py_lucidum.tools.registry import normalise_tools, register_tools, tool_payload
 
 from .assets import NoStoreStaticFiles, no_store_file_response, no_store_html_response
@@ -68,12 +76,20 @@ def create_app(
     kpis_path: str | Path | None = None,
     use_kpis: bool = True,
     no_kpis: bool = False,
+    features: str | Path | None = None,
+    features_path: str | Path | None = None,
+    use_features: bool = True,
+    no_features: bool = False,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
     if kpis and kpis_path and Path(kpis).expanduser() != Path(kpis_path).expanduser():
         raise ValueError("Specify either kpis or kpis_path, not both")
+    if features and features_path and Path(features).expanduser() != Path(features_path).expanduser():
+        raise ValueError("Specify either features or features_path, not both")
     selected_kpis_path = kpis_path or kpis
     kpis_enabled = use_kpis and not no_kpis
+    selected_features_path = features_path or features
+    features_enabled = use_features and not no_features
     dataset = Dataset(dataset_path)
     app = FastAPI(title="py_lucidum")
     app.state.dataset = dataset
@@ -92,6 +108,10 @@ def create_app(
     app.state.use_kpis = kpis_enabled
     app.state.resolved_kpis_path = resolve_kpis_path(selected_kpis_path, use_kpis=kpis_enabled)
     app.state.kpis = load_kpis(selected_kpis_path, use_kpis=kpis_enabled)
+    app.state.features_path = selected_features_path
+    app.state.use_features = features_enabled
+    app.state.resolved_features_path = resolve_features_path(selected_features_path, use_features=features_enabled)
+    app.state.feature_spec = load_features(selected_features_path, use_features=features_enabled)
     app.state.enabled_tools = enabled_tools
     app.state.defaults = {
         key: value
@@ -186,6 +206,14 @@ def create_app(
         app.state.kpis = load_kpis(
             app.state.kpis_path,
             use_kpis=app.state.use_kpis,
+        )
+        app.state.resolved_features_path = resolve_features_path(
+            app.state.features_path,
+            use_features=app.state.use_features,
+        )
+        app.state.feature_spec = load_features(
+            app.state.features_path,
+            use_features=app.state.use_features,
         )
         return schema_payload()
 

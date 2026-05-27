@@ -190,6 +190,7 @@ def feature_rows(
     gains: dict[str, float] | None = None,
     model_features: list[dict[str, Any]] | None = None,
     reserved_names: set[str] | None = None,
+    feature_groupings: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     columns = dataset.all_column_map()
     invalid_columns = dataset.invalid_column_errors()
@@ -228,6 +229,7 @@ def feature_rows(
         rows.append(
             {
                 "name": column.name,
+                "grouping": (feature_groupings or {}).get(column.name, ""),
                 "duckdb_type": column.duckdb_type,
                 "kind": row_kind,
                 "include": include,

@@ -31,7 +31,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
   - `lucidum --demo`
   - `lucidum path/to/data.parquet`
   - `lucidum path/to/data.csv`
-  - common options include `--open`, `--host`, `--port`, `--no-token`, `--x`, `--actual`, `--expected`, `--denominator`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--tools`, and UK map column overrides.
+  - common options include `--open`, `--host`, `--port`, `--no-token`, `--x`, `--actual`, `--expected`, `--denominator`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
 - Python:
   - `py_lucidum.serve(...)`
   - `py_lucidum.serve_line_bar(...)`
@@ -78,7 +78,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - `GET /api/schema` excludes unreadable columns from `columns` and reports them as `invalid_columns` with sanitized errors. Normal tools should use the safe column maps; only diagnostics or choosers that explicitly report invalid columns should use the all-column map.
 - Line/Bar accepts a `source` request field and defaults it to `dataset`. Unknown sources are rejected before query execution.
 
-**Defaults, saved filters, and KPIs**
+**Defaults, saved filters, KPIs, and feature specs**
 
 - Without explicit defaults, the x-axis starts with the first dataset column, Actual starts with the first numeric column, and Expected starts as none.
 - CLI options, programmatic defaults, and URL parameters can override initial selections.
@@ -88,9 +88,13 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - KPI spec CSV files must have exactly `group,name,actual,denominator,decimals,format` columns. `denominator` aliases `N`, `Average row value`, empty, and `__none__` all mean average row value; `format` is `number`, `currency`, or `percent`. Percent formatting displays proportions as percentages, so `0.1` displays as `10%`.
 - KPI rows are a single-selection convenience layer over Actual and Weight. Manual Actual/Weight changes keep the KPI row active only when both selects exactly match a spec row.
 - KPI decimals and format apply to Actual and Expected response values in metric titles, line/bar labels and response axes, table response cells, map labels/tooltips/popups, and map legend values. Weight and row-count formatting is unchanged.
+- Feature specs load from an explicit `--features` path, otherwise `./feature_spec.csv`, otherwise `./specs/feature_spec.csv`.
+- Feature spec CSV files must start with exactly `Feature,Grouping`; all remaining columns are ordered GBM scenario names. Scenario cells include the feature when they contain the word `feature`, case-insensitive.
+- `Grouping` is displayed in the GBM Feature table between `Feature` and `Use`. Selecting a loaded scenario updates `Use` only for usable, non-reserved dataset features.
 - The free-form DuckDB filter expression lives in the collapsible footer; hiding the footer does not clear the active filter.
 - Saved-filter rows support `Single`, `Multi`, and `Grouped` modes. `Single` keeps one selected row, `Multi` toggles rows and combines them with the active All/Any/Not all/None operator, and `Grouped` toggles rows while combining rows within a theme with `OR` and selected themes with `AND`.
 - `--no-filters` disables saved-filter discovery.
+- `--no-features` disables feature spec discovery.
 - Filters are DuckDB `WHERE` expressions and apply before column profiling, chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 
 **Column profile**
@@ -132,6 +136,8 @@ Tool code should depend on `core` and the app registration context, but tools sh
 - GBM uses a canonical uppercase `SAMPLE` column when present: `training` rows fit the model, `test` rows drive early stopping, and `validation` rows are scored as holdout diagnostics. If `SAMPLE` is absent, users can create a reusable generated 60/20/20 split stored as `.lucidum/models/gbm/generated_sample.parquet`; generated splits do not mutate the source dataset.
 - GBM training mode is persisted as `training_mode`, defaulting to `normal` for older models. `ebm` mode is available only with a physical dataset `SAMPLE` column containing `training` and `test` rows after denominator filtering; generated sample sidecars do not enable it. EBM uses `num_iterations` as the global cap across all leaf stages, requires `early_stopping_rounds > 0`, starts with `num_leaves=2` and `learning_rate=0.3`, then advances leaf counts through the configured `num_leaves` after stage-local test-metric plateaus.
 - GBM uses the sidebar Actual and denominator/KPI controls as the model response and offset/exposure inputs. The filter controls remain hidden while GBM is active because training ignores the global filter.
+- GBM config includes loaded feature spec groupings and ordered feature scenarios. The frontend applies scenarios as a table selection convenience only; backend validation remains the source of truth for usable features, reserved response/offset/sample columns, and monotonicity.
+- GBM manifests record `feature_scenario` only when training starts from an explicit scenario selection. The saved scenario name and feature snapshot are compared with the current spec when the model is active; stale or missing scenarios are shown as provenance only and do not override `feature_config.json`.
 - GBM artifacts are stored beside the source dataset under `.lucidum/models/gbm/`, with one directory per model.
 - GBM `feature_config.json` is the persisted source of truth for the trained model's selected features, monotonicity settings, and Gain values.
 - GBM config, activation, rename, and delete responses must drive the UI's `Use`, `Monotonicity`, `Gain`, model navigator, sidebar model list, and parameter tables from the active model, so switching models mirrors exactly what was trained.

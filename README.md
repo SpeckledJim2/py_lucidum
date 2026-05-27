@@ -10,7 +10,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 - **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, banding, date buckets, tables, transforms, and sigma bars.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, or postcode units when unit and coordinate columns are available.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions that can be plotted as chart/map data sources, evaluation plots, model navigation, and tree viewing.
-- **Filters and KPIs**: apply free-form DuckDB `WHERE` filters, saved filter rows, and KPI specs that set Actual/Weight choices and formatting.
+- **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios.
 
 Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skipped by the shared schema used by normal selectors. Column Profile reports them as skipped, and the GBM feature chooser shows them as disabled invalid rows.
 
@@ -84,6 +84,8 @@ Parquet is recommended for normal use because DuckDB can read it efficiently.
 .venv/bin/lucidum --demo --no-filters
 .venv/bin/lucidum --demo --kpis specs/kpi_spec.csv
 .venv/bin/lucidum --demo --no-kpis
+.venv/bin/lucidum --demo --features specs/feature_spec.csv
+.venv/bin/lucidum --demo --no-features
 .venv/bin/lucidum --demo --tools line-bar
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm
 ```
@@ -94,6 +96,7 @@ Parquet is recommended for normal use because DuckDB can read it efficiently.
 - `--x`, `--actual`, `--expected`, and `--denominator` set initial Line/Bar selections.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
+- `--features` points to a Feature Specification CSV for GBM feature scenarios. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
 - `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `gbm` after installing the `gbm` extra to train LightGBM models.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
@@ -134,6 +137,7 @@ app = create_app(
     },
     filters_path="specs/filter_spec.csv",
     kpis_path="specs/kpi_spec.csv",
+    features_path="specs/feature_spec.csv",
     tools=["column_profile", "line_bar", "uk_map"],
 )
 
@@ -177,15 +181,31 @@ FINANCIAL,Premium,PREMIUM,N,2,currency
 
 `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`.
 
+## Feature Specs
+
+Feature Specification CSV files drive GBM feature scenarios. They must start with these columns, followed by any number of scenario columns:
+
+```csv
+Feature,Grouping,scenario1,scenario2,scenario3
+DRIVER_AGE,DRIVER,feature,feature,feature
+NCD_YEARS,DRIVER,feature,,feature
+POSTCODE_AREA,POSTCODE,,feature,feature
+```
+
+`Feature` must match a dataset column name exactly. `Grouping` is optional metadata shown in the GBM Feature table. Each additional column becomes a scenario in the GBM scenario dropdown; if a scenario cell contains the word `feature`, case-insensitive, that row is selected when the scenario is chosen.
+
 ## GBM Models
 
 The GBM tool is opt-in. Column Profile remains enabled and opens first:
 
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm
+.venv/bin/lucidum path/to/my_data.parquet --tools gbm --features specs/feature_spec.csv
 ```
 
-The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under `.lucidum/models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved beside the dataset under `.lucidum/models/gbm/`. During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Use the inline `All` / `Tail` control to switch between the full history and a focused tail view. Long evaluation histories are sampled only for browser rendering; saved training logs and artifacts remain complete.
+The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training. If a Feature Specification is loaded, the Feature table shows its `Grouping` values and a scenario dropdown next to `Clear all`; choosing a scenario selects only that scenario's usable features. If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under `.lucidum/models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved beside the dataset under `.lucidum/models/gbm/`. During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Use the inline `All` / `Tail` control to switch between the full history and a focused tail view. Long evaluation histories are sampled only for browser rendering; saved training logs and artifacts remain complete.
+
+When a GBM is trained directly from a feature scenario, the model records that scenario name and the training-time feature list. Selecting a saved GBM shows the recorded scenario in the dropdown. If `feature_spec.csv` has changed since training, the dropdown marks the recorded scenario as changed or missing while the Feature table still reflects the model's saved feature configuration.
 
 When a physical dataset `SAMPLE` column has both `training` and `test` rows, the tool also shows an EBM mode. EBM starts with 2-leaf trees, uses learning rate `0.3` for that 2-leaf stage, then moves through 3, 4, and higher leaf counts up to `num_leaves` whenever the test metric has not improved for `early_stopping_rounds`. `num_iterations` remains the total cap across all EBM stages. Generated sample sidecars do not enable EBM mode.
 

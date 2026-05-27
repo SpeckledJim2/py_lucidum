@@ -207,6 +207,7 @@ export function createGbmTool({
               <div class="gbm-section-header gbm-feature-section-header">
                 <h3 id="gbmFeatureSectionTitle" class="gbm-section-title">${escapeHtml(featureSectionTitle(data.features || []))}</h3>
                 <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
+                  ${featureScenarioSelectHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
                   <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button" type="button">Clear all</button>
                   <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button" type="button">Select all</button>
                 </div>
@@ -443,11 +444,77 @@ export function createGbmTool({
   }
 
   function bindFeatureActions() {
+    const scenarioSelect = el("gbmFeatureScenarioSelect");
+    scenarioSelect?.addEventListener("change", () => applyFeatureScenario(scenarioSelect.value));
     el("gbmClearFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(false));
     el("gbmSelectFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(true));
     el("gbmCreateSampleBtn")?.addEventListener("click", createSampleColumn);
     el("gbmTrainBtn")?.addEventListener("click", train);
     syncTrainingButton();
+  }
+
+  function featureScenarioSelectHtml(scenarios, activeScenario = null) {
+    const rows = featureScenarioRows(scenarios);
+    const active = normaliseActiveFeatureScenario(activeScenario);
+    const selectedCurrent = active?.status === "current" && rows.some((scenario) => scenario.name === active.name);
+    const synthetic = active && !selectedCurrent
+      ? { value: trainedFeatureScenarioOptionValue(active), label: trainedFeatureScenarioLabel(active) }
+      : null;
+    const hasOptions = rows.length || synthetic;
+    const hidden = hasOptions ? "" : " hidden";
+    const disabled = hasOptions ? "" : " disabled";
+    return `
+      <select id="gbmFeatureScenarioSelect" class="gbm-feature-scenario-select${hidden}" aria-label="Feature scenario"${disabled}>
+        <option value="">Feature scenario</option>
+        ${synthetic ? `<option value="${escapeHtml(synthetic.value)}" selected>${escapeHtml(synthetic.label)}</option>` : ""}
+        ${rows.map((scenario) => `<option value="${escapeHtml(scenario.name)}" ${selectedCurrent && scenario.name === active.name ? "selected" : ""}>${escapeHtml(scenario.name)}</option>`).join("")}
+      </select>
+    `;
+  }
+
+  function featureScenarioRows(scenarios) {
+    if (!Array.isArray(scenarios)) return [];
+    return scenarios
+      .map((scenario) => ({
+        name: String(scenario?.name || "").trim(),
+        features: Array.isArray(scenario?.features) ? scenario.features.map((feature) => String(feature)) : [],
+      }))
+      .filter((scenario) => scenario.name);
+  }
+
+  function normaliseActiveFeatureScenario(activeScenario) {
+    if (!activeScenario || typeof activeScenario !== "object") return null;
+    const name = String(activeScenario.name || "").trim();
+    if (!name) return null;
+    const status = String(activeScenario.status || "").trim().toLowerCase();
+    if (!["current", "stale", "missing"].includes(status)) return null;
+    return { name, status };
+  }
+
+  function trainedFeatureScenarioOptionValue(activeScenario) {
+    return `__trained_feature_scenario__:${activeScenario.status}:${activeScenario.name}`;
+  }
+
+  function trainedFeatureScenarioLabel(activeScenario) {
+    if (activeScenario.status === "stale") return `${activeScenario.name} (trained; spec changed)`;
+    if (activeScenario.status === "missing") return `${activeScenario.name} (trained; missing from spec)`;
+    return activeScenario.name;
+  }
+
+  function featureScenarioByName(name) {
+    const target = String(name || "");
+    return featureScenarioRows(config?.feature_scenarios || []).find((scenario) => scenario.name === target) || null;
+  }
+
+  function currentFeatureScenarioPayload() {
+    const selected = el("gbmFeatureScenarioSelect")?.value || "";
+    const scenario = featureScenarioByName(selected);
+    return scenario ? { name: scenario.name, features: scenario.features } : null;
+  }
+
+  function resetFeatureScenarioSelect() {
+    const select = el("gbmFeatureScenarioSelect");
+    if (select) select.value = "";
   }
 
   function bindEvaluationViewModeActions() {
@@ -487,6 +554,7 @@ export function createGbmTool({
   }
 
   function setFeatureIncludes(include) {
+    resetFeatureScenarioSelect();
     if (featureTable) {
       const updates = [];
       for (const row of featureTable.getRows()) {
@@ -502,6 +570,27 @@ export function createGbmTool({
       if (!feature || !isFeatureSelectable(feature)) continue;
       checkbox.checked = include;
       checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    syncFeatureSectionTitle();
+  }
+
+  function applyFeatureScenario(name) {
+    const scenario = featureScenarioByName(name);
+    if (!scenario) return;
+    const selected = new Set(scenario.features);
+    if (featureTable) {
+      const updates = [];
+      for (const row of featureTable.getRows()) {
+        const data = row.getData();
+        updates.push(row.update({ include: isFeatureSelectable(data) && selected.has(data.name) }));
+      }
+      syncFeatureSectionTitleAfter(updates);
+      return;
+    }
+    for (const checkbox of document.querySelectorAll("[data-gbm-feature]")) {
+      const name = checkbox.getAttribute("data-gbm-feature") || "";
+      const feature = (config?.features || []).find((item) => item.name === name);
+      checkbox.checked = Boolean(feature && isFeatureSelectable(feature) && selected.has(name));
     }
     syncFeatureSectionTitle();
   }
@@ -780,6 +869,7 @@ export function createGbmTool({
         initialSort: [{ column: "gain", dir: "desc" }],
         columns: [
           { title: "Feature", field: "name", formatter: featureNameFormatter, cssClass: "gbm-feature-name-cell", widthGrow: 3, headerSort: true },
+          { title: "Grouping", field: "grouping", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.1, headerSort: true },
           {
             title: "Use",
             field: "include",
@@ -859,6 +949,7 @@ export function createGbmTool({
     checkbox.setAttribute("aria-label", `Use ${rowData.name}`);
     checkbox.addEventListener("click", (event) => event.stopPropagation());
     checkbox.addEventListener("change", () => {
+      resetFeatureScenarioSelect();
       syncFeatureSectionTitleAfter([cell.getRow().update({ include: checkbox.checked })]);
     });
     return checkbox;
@@ -894,11 +985,12 @@ export function createGbmTool({
     if (!target) return;
     target.innerHTML = `
       <table>
-        <thead><tr><th>Feature</th><th>Use</th><th>Monotonicity</th><th>Gain</th></tr></thead>
+        <thead><tr><th>Feature</th><th>Grouping</th><th>Use</th><th>Monotonicity</th><th>Gain</th></tr></thead>
         <tbody>
           ${features.map((feature) => `
             <tr class="${featureRowClasses(feature)}">
               <td>${featureNameHtml(feature)}</td>
+              <td>${escapeHtml(feature.grouping || "")}</td>
               <td class="gbm-use-cell">${isFeatureSelectable(feature) ? `<input type="checkbox" data-gbm-feature="${escapeHtml(feature.name)}" ${feature.include ? "checked" : ""} />` : ""}</td>
               <td><input data-gbm-monotonicity="${escapeHtml(feature.name)}" value="${escapeHtml(feature.monotonicity || "")}" ${isFeatureSelectable(feature) ? "" : "disabled"} /></td>
               <td class="numeric gbm-gain-cell">${formatGain(feature.gain)}</td>
@@ -908,7 +1000,10 @@ export function createGbmTool({
       </table>
     `;
     for (const checkbox of target.querySelectorAll("[data-gbm-feature]")) {
-      checkbox.addEventListener("change", syncFeatureSectionTitle);
+      checkbox.addEventListener("change", () => {
+        resetFeatureScenarioSelect();
+        syncFeatureSectionTitle();
+      });
     }
     syncFeatureSectionTitle();
   }
@@ -1199,6 +1294,7 @@ export function createGbmTool({
     if (isTraining) return;
     setStatus("");
     setChartMessage("");
+    const featureScenario = currentFeatureScenarioPayload();
     const payload = {
       label: `GBM ${new Date().toISOString().slice(0, 19).replace("T", " ")}`,
       response: el("actualNumerator")?.value || "actualNumerator",
@@ -1211,6 +1307,7 @@ export function createGbmTool({
       sample_source: config?.sample?.source || "none",
       create_sample: false,
     };
+    if (featureScenario) payload.feature_scenario = featureScenario;
     try {
       const validation = await api("/api/gbm/validate", { method: "POST", body: JSON.stringify(payload) });
       if (!validation.ok) {

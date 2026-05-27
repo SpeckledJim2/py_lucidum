@@ -546,6 +546,7 @@ def train_model(
     elapsed = time.perf_counter() - started
     ebm_metadata = ebm_controller.metadata() if ebm_controller else None
     best_metrics = best_metrics_from_evaluation(evaluation_result, selected_metric, best_iteration)
+    feature_scenario = normalise_feature_scenario(payload.get("feature_scenario"))
     manifest = {
         "model_id": model_id,
         "label": model_label,
@@ -574,6 +575,8 @@ def train_model(
             **({"shap_long": store.source_id(model_id, "shap_long"), "shap_summary": store.source_id(model_id, "shap_summary")} if shap_summary_rows else {}),
         },
     }
+    if feature_scenario:
+        manifest["feature_scenario"] = feature_scenario
     if ebm_metadata:
         manifest["ebm"] = ebm_metadata
     store.write_json(store.artifact_path(model_id, "feature_config"), feature_config)
@@ -598,6 +601,24 @@ def train_model(
         ),
     )
     return manifest
+
+
+def normalise_feature_scenario(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        return None
+    features: list[str] = []
+    seen: set[str] = set()
+    raw_features = raw.get("features")
+    if isinstance(raw_features, list):
+        for item in raw_features:
+            feature = str(item or "").strip()
+            if feature and feature not in seen:
+                features.append(feature)
+                seen.add(feature)
+    return {"name": name, "features": features}
 
 
 def emit_progress(progress_callback: ProgressCallback | None, progress: dict[str, Any]) -> None:
@@ -963,6 +984,7 @@ __all__ = [
     "MissingGbmDependency",
     "gbm_dependencies",
     "lightgbm_progress_payload",
+    "normalise_feature_scenario",
     "should_use_offset_init_score",
     "train_model",
     "training_projection_columns",

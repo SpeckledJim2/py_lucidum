@@ -104,6 +104,12 @@ class LineBarToolTests(unittest.TestCase):
             "Pricing,Actual average,Actual,N,2,number\n",
             encoding="utf-8",
         )
+        self.features_path = self.root / "feature_spec.csv"
+        self.features_path.write_text(
+            "Feature,Grouping,scenario1\n"
+            "YoungestDriverAge,DRIVER,feature\n",
+            encoding="utf-8",
+        )
 
     def request(self, filter_expression: str = "") -> dict:
         return {
@@ -130,6 +136,7 @@ class LineBarToolTests(unittest.TestCase):
             defaults={"denominator": "Weight"},
             filters_path=self.filters_path,
             kpis_path=self.kpis_path,
+            features_path=self.features_path,
             tools=["line_bar"],
         )
         paths = {route.path for route in app.routes}
@@ -149,6 +156,10 @@ class LineBarToolTests(unittest.TestCase):
         self.assertEqual(
             app.state.kpis,
             [{"group": "Pricing", "name": "Actual average", "actual": "Actual", "denominator": "__none__", "decimals": 2, "format": "number"}],
+        )
+        self.assertEqual(
+            app.state.feature_spec["scenarios"],
+            [{"name": "scenario1", "features": ["YoungestDriverAge"]}],
         )
 
     def test_chart_endpoint_includes_duckdb_timing(self) -> None:
@@ -337,6 +348,38 @@ class LineBarToolTests(unittest.TestCase):
         self.assertEqual(app.state.kpis, [])
         self.assertIsNone(app.state.resolved_kpis_path)
         self.assertFalse(app.state.use_kpis)
+
+    def test_app_loads_with_feature_specs_disabled(self) -> None:
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            app = create_app(self.data_path, token="dev-token", tools=["line_bar"], use_features=False)
+        finally:
+            os.chdir(previous_cwd)
+
+        self.assertEqual(app.state.feature_spec, {"rows": [], "scenarios": []})
+        self.assertIsNone(app.state.resolved_features_path)
+        self.assertFalse(app.state.use_features)
+
+    def test_reload_refreshes_feature_specs(self) -> None:
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+            features_path=self.features_path,
+        )
+        self.features_path.write_text(
+            "Feature,Grouping,scenario1\n"
+            "UseofVan,VEHICLE,feature\n",
+            encoding="utf-8",
+        )
+
+        status, _, _ = asgi_post_json(app, "/api/reload", {})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(app.state.feature_spec["scenarios"], [{"name": "scenario1", "features": ["UseofVan"]}])
 
     def test_dataset_schema_includes_file_size(self) -> None:
         dataset = Dataset(self.data_path)

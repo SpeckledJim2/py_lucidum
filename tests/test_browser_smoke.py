@@ -71,6 +71,13 @@ class BrowserSmokeTests(unittest.TestCase):
                 "MODEL,Actual numerator,actualNumerator,denominator,2,number\n",
                 encoding="utf-8",
             )
+            features_path = tmp_path / "feature_spec.csv"
+            features_path.write_text(
+                "Feature,Grouping,scenario1\n"
+                "Age,DRIVER,feature\n"
+                "Segment,VEHICLE,feature\n",
+                encoding="utf-8",
+            )
             store = GbmModelStore(data_path)
             for model_id, label, learning_rate, created_at in (
                 ("browser-smoke-model", "Browser smoke model", 0.11, "2026-05-25T00:00:00Z"),
@@ -96,6 +103,11 @@ class BrowserSmokeTests(unittest.TestCase):
                         "sample_source": "dataset",
                         "timings": {"training_seconds": 1.234 if model_id == "browser-smoke-model" else 62.0},
                         "feature_importance": [],
+                        "feature_scenario": (
+                            {"name": "scenario1", "features": ["Age", "Segment"]}
+                            if model_id.endswith("-2")
+                            else {"name": "old_scenario", "features": ["Age"]}
+                        ),
                         "sources": {},
                     },
                 )
@@ -169,6 +181,7 @@ COPY (
                     tools=["line_bar", "gbm"],
                     kpis_path=kpis_path,
                     use_kpis=True,
+                    features_path=features_path,
                 )
                 try:
                     self.exercise_gbm_tool(base_url)
@@ -316,6 +329,7 @@ COPY (
         use_saved_filters: bool = False,
         kpis_path: Path | None = None,
         use_kpis: bool = False,
+        features_path: Path | None = None,
         token: str | None = None,
         defaults: dict[str, str] | None = None,
         tools: list[str] | None = None,
@@ -334,6 +348,7 @@ COPY (
             use_saved_filters=use_saved_filters,
             kpis_path=kpis_path,
             use_kpis=use_kpis,
+            features_path=features_path,
             token=token,
             tools=tools,
         )
@@ -627,9 +642,29 @@ COPY (
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
                 page.get_by_text("Train GBM").wait_for(timeout=10_000)
                 page.get_by_text("Gain").first.wait_for(timeout=10_000)
+                page.get_by_text("Grouping").first.wait_for(timeout=10_000)
                 page.get_by_text("SHAP rows").wait_for(timeout=10_000)
                 page.get_by_text("Training mode").wait_for(timeout=10_000)
                 assert_feature_heading_matches_checked(1)
+                initial_scenario = page.evaluate(
+                    """
+                    () => {
+                      const select = document.querySelector("#gbmFeatureScenarioSelect");
+                      return {
+                        value: select?.value || "",
+                        text: select?.selectedOptions?.[0]?.textContent?.trim() || "",
+                      };
+                    }
+                    """
+                )
+                self.assertIn("old_scenario", initial_scenario["value"])
+                self.assertEqual(initial_scenario["text"], "old_scenario (trained; missing from spec)")
+                page.locator("#gbmFeatureScenarioSelect").select_option("scenario1")
+                assert_feature_heading_matches_checked(2)
+                self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "scenario1")
+                page.locator("#gbmClearFeaturesBtn").click()
+                assert_feature_heading_matches_checked(0)
+                self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "")
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
@@ -700,6 +735,7 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.22",
                 )
+                self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "scenario1")
                 assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
                 page.wait_for_function(
@@ -836,13 +872,28 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.11",
                 )
+                restored_scenario = page.evaluate(
+                    """
+                    () => {
+                      const select = document.querySelector("#gbmFeatureScenarioSelect");
+                      return {
+                        value: select?.value || "",
+                        text: select?.selectedOptions?.[0]?.textContent?.trim() || "",
+                      };
+                    }
+                    """
+                )
+                self.assertIn("old_scenario", restored_scenario["value"])
+                self.assertEqual(restored_scenario["text"], "old_scenario (trained; missing from spec)")
                 assert_feature_heading_matches_checked(1)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='normal']").is_checked())
                 self.assertTrue(page.locator("input[name='gbmEvaluationViewMode'][value='tail']").is_checked())
                 page.locator("input[name='gbmEvaluationViewMode'][value='all']").check()
                 live_job_succeed = {"value": False}
+                train_payload = {"value": None}
 
                 def train_route(route: Any) -> None:
+                    train_payload["value"] = json.loads(route.request.post_data or "{}")
                     route.fulfill(
                         status=200,
                         content_type="application/json",
@@ -902,8 +953,13 @@ COPY (
 
                 page.route("**/api/gbm/train", train_route)
                 page.route("**/api/gbm/jobs/live-job", job_route)
+                page.locator("#gbmFeatureScenarioSelect").select_option("scenario1")
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmTrainingStatus").get_by_text("training, tree 2/10, test gamma 7.2").wait_for(timeout=10_000)
+                self.assertEqual(
+                    train_payload["value"]["feature_scenario"],
+                    {"name": "scenario1", "features": ["Age", "Segment"]},
+                )
                 page.wait_for_function(
                     """
                     () => {

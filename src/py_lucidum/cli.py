@@ -240,14 +240,22 @@ def serve(
     kpis_path: str | Path | None = None,
     no_kpis: bool = False,
     use_kpis: bool = True,
+    features: str | Path | None = None,
+    features_path: str | Path | None = None,
+    no_features: bool = False,
+    use_features: bool = True,
     tools: str | Sequence[str] | None = None,
 ) -> str:
     selected_port = port or find_free_port()
     ensure_port_available(host, selected_port)
     if kpis and kpis_path and Path(kpis).expanduser() != Path(kpis_path).expanduser():
         raise ValueError("Specify either kpis or kpis_path, not both")
+    if features and features_path and Path(features).expanduser() != Path(features_path).expanduser():
+        raise ValueError("Specify either features or features_path, not both")
     selected_kpis_path = kpis_path or kpis
     kpis_enabled = use_kpis and not no_kpis
+    selected_features_path = features_path or features
+    features_enabled = use_features and not no_features
     selected_token = token if token is not None else secrets.token_urlsafe(18)
     defaults = {
         "x": x,
@@ -269,6 +277,8 @@ def serve(
         tools=tools,
         kpis_path=selected_kpis_path,
         use_kpis=kpis_enabled,
+        features_path=selected_features_path,
+        use_features=features_enabled,
     )
     url = _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
@@ -276,6 +286,7 @@ def serve(
     _print_open_urls(app, host, selected_port, url)
     print(f"Saved filters: {saved_filters_status(app)}", flush=True)
     print(f"KPIs: {kpis_status(app)}", flush=True)
+    print(f"Feature specs: {features_status(app)}", flush=True)
     _print_stop_status(run_in_background)
     _start_app_server(app, host, selected_port, url, open_browser, run_in_background)
     return url
@@ -302,6 +313,10 @@ def serve_line_bar(
     kpis_path: str | Path | None = None,
     no_kpis: bool = False,
     use_kpis: bool = True,
+    features: str | Path | None = None,
+    features_path: str | Path | None = None,
+    no_features: bool = False,
+    use_features: bool = True,
 ) -> str:
     return serve(
         path=path,
@@ -324,6 +339,10 @@ def serve_line_bar(
         kpis_path=kpis_path,
         no_kpis=no_kpis,
         use_kpis=use_kpis,
+        features=features,
+        features_path=features_path,
+        no_features=no_features,
+        use_features=use_features,
         tools=["line_bar"],
     )
 
@@ -347,6 +366,20 @@ def kpis_status(app: object) -> str:
     if not getattr(state, "use_kpis", True):
         return "disabled"
     path = getattr(state, "resolved_kpis_path", None)
+    if not path or not Path(path).exists():
+        return "none"
+    resolved = Path(path)
+    try:
+        return str(resolved.relative_to(Path.cwd()))
+    except ValueError:
+        return str(resolved)
+
+
+def features_status(app: object) -> str:
+    state = getattr(app, "state")
+    if not getattr(state, "use_features", True):
+        return "disabled"
+    path = getattr(state, "resolved_features_path", None)
     if not path or not Path(path).exists():
         return "none"
     resolved = Path(path)
@@ -395,6 +428,17 @@ def main() -> int:
         action="store_true",
         help="Disable KPI specs and skip default kpi_spec.csv discovery.",
     )
+    feature_group = parser.add_mutually_exclusive_group()
+    feature_group.add_argument(
+        "--features",
+        default=None,
+        help="Path to feature_spec.csv. Defaults to ./feature_spec.csv, then ./specs/feature_spec.csv when present.",
+    )
+    feature_group.add_argument(
+        "--no-features",
+        action="store_true",
+        help="Disable feature specs and skip default feature_spec.csv discovery.",
+    )
     parser.add_argument("--tools", default=None, help="Comma-separated tools to enable alongside mandatory Column Profile. Supports column-profile, line-bar, uk-map, glm, and gbm.")
     args = parser.parse_args()
     if args.demo and args.path:
@@ -422,6 +466,8 @@ def main() -> int:
             no_filters=args.no_filters,
             kpis=args.kpis,
             no_kpis=args.no_kpis,
+            features=args.features,
+            no_features=args.no_features,
             tools=args.tools,
         )
     except (RuntimeError, ValueError, OSError) as error:

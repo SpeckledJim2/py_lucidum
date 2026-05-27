@@ -103,8 +103,83 @@ def register(app: FastAPI, context: AppContext) -> None:
                 rows.append({"name": text_name, "value": value, "important": False})
         return rows
 
+    def feature_spec_payload() -> dict[str, Any]:
+        spec = getattr(app.state, "feature_spec", None)
+        return spec if isinstance(spec, dict) else {"rows": [], "scenarios": []}
+
+    def feature_groupings() -> dict[str, str]:
+        rows = feature_spec_payload().get("rows", [])
+        if not isinstance(rows, list):
+            return {}
+        return {
+            str(row.get("feature")): str(row.get("grouping") or "")
+            for row in rows
+            if isinstance(row, dict) and row.get("feature")
+        }
+
+    def feature_scenarios() -> list[dict[str, Any]]:
+        scenarios = feature_spec_payload().get("scenarios", [])
+        if not isinstance(scenarios, list):
+            return []
+        return [
+            {
+                "name": str(scenario.get("name") or ""),
+                "features": [
+                    str(feature)
+                    for feature in scenario.get("features", [])
+                    if str(feature).strip()
+                ],
+            }
+            for scenario in scenarios
+            if isinstance(scenario, dict) and scenario.get("name")
+        ]
+
+    def active_feature_scenario(current_scenarios: list[dict[str, Any]]) -> dict[str, Any] | None:
+        model_id = store.active_model_id()
+        if not model_id:
+            return None
+        try:
+            manifest = store.manifest(model_id)
+        except ValueError:
+            return None
+        stored = manifest.get("feature_scenario")
+        if not isinstance(stored, dict):
+            return None
+        name = str(stored.get("name") or "").strip()
+        if not name:
+            return None
+        stored_features = scenario_feature_list(stored.get("features"))
+        current = {scenario["name"]: scenario for scenario in current_scenarios}.get(name)
+        payload: dict[str, Any] = {"name": name, "features": stored_features}
+        if not current:
+            payload["status"] = "missing"
+            return payload
+        current_features = scenario_feature_list(current.get("features"))
+        if scenario_feature_set(stored_features) == scenario_feature_set(current_features):
+            payload["status"] = "current"
+        else:
+            payload["status"] = "stale"
+            payload["current_features"] = current_features
+        return payload
+
+    def scenario_feature_list(raw_features: Any) -> list[str]:
+        if not isinstance(raw_features, list):
+            return []
+        features: list[str] = []
+        seen: set[str] = set()
+        for item in raw_features:
+            feature = str(item or "").strip()
+            if feature and feature not in seen:
+                features.append(feature)
+                seen.add(feature)
+        return features
+
+    def scenario_feature_set(features: list[str]) -> set[str]:
+        return {feature for feature in features if feature}
+
     def config_payload() -> dict[str, Any]:
         model_features = active_feature_config()
+        scenarios = feature_scenarios()
         with context.dataset.lock:
             sample = sample_metadata(context.dataset, store.generated_sample_path)
             sample_reserved = {SAMPLE_COLUMN} if sample.get("source") == "dataset" else set()
@@ -113,6 +188,7 @@ def register(app: FastAPI, context: AppContext) -> None:
                 active_gains(),
                 model_features=model_features,
                 reserved_names=sample_reserved,
+                feature_groupings=feature_groupings(),
             )
             sample_column = detect_sample_column(context.dataset)
             can_use_ebm = ebm_available(context.dataset)
@@ -131,6 +207,8 @@ def register(app: FastAPI, context: AppContext) -> None:
                 "metric": list(GBM_METRICS),
             },
             "features": features,
+            "feature_scenarios": scenarios,
+            "active_feature_scenario": active_feature_scenario(scenarios),
             "models": store.list_models(),
             "active_model_id": store.active_model_id(),
             "shap_options": [

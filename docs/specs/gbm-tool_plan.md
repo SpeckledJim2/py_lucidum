@@ -55,6 +55,8 @@ Chosen defaults:
 - Sidebar while GBM is active keeps the KPI/response controls visible, hides filter controls, and includes an active-model selector.
 - **Features and parameters** tab:
   - Left feature grid columns: feature name, include checkbox, monotonicity, and `Gain`.
+  - If a Feature Specification is loaded, show its `Grouping` column between feature name and include checkbox, and show a scenario dropdown immediately before `Clear all`.
+  - Selecting a feature scenario selects only usable, non-reserved features whose scenario cell contains `feature`, case-insensitive; manual checkbox edits, `Clear all`, and `Select all` clear the scenario dropdown.
   - Feature type is displayed as muted right-aligned text inside the Feature cell, with categorical counts shown as `categorical (n)`.
   - `Gain` displays `0.000` before any active model exists.
   - After training or active-model switching, the feature grid must mirror the active model's persisted feature config: `Use`, `Monotonicity`, `Gain`, and sort order.

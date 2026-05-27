@@ -294,6 +294,8 @@ class CliRuntimeTests(unittest.TestCase):
                     resolved_filters_path=None,
                     use_kpis=True,
                     resolved_kpis_path=kpis_path,
+                    use_features=True,
+                    resolved_features_path=None,
                 )
             )
             stdout = io.StringIO()
@@ -308,6 +310,39 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(create_app_mock.call_args.kwargs["kpis_path"], kpis_path)
         self.assertTrue(create_app_mock.call_args.kwargs["use_kpis"])
         self.assertIn(f"KPIs: {kpis_path}", stdout.getvalue())
+        start_server_mock.assert_called_once()
+
+    def test_serve_passes_feature_options_and_reports_status(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            features_path = root / "feature_spec.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+            features_path.write_text("Feature,Grouping,scenario\nx,X,feature\n", encoding="utf-8")
+            app = SimpleNamespace(
+                state=SimpleNamespace(
+                    token="",
+                    defaults={},
+                    use_saved_filters=False,
+                    resolved_filters_path=None,
+                    use_kpis=False,
+                    resolved_kpis_path=None,
+                    use_features=True,
+                    resolved_features_path=features_path,
+                )
+            )
+            stdout = io.StringIO()
+
+            with (
+                patch("py_lucidum.cli.create_app", return_value=app) as create_app_mock,
+                patch("py_lucidum.cli._start_app_server") as start_server_mock,
+                redirect_stdout(stdout),
+            ):
+                serve(data_path, token="", features=features_path, no_filters=True, no_kpis=True)
+
+        self.assertEqual(create_app_mock.call_args.kwargs["features_path"], features_path)
+        self.assertTrue(create_app_mock.call_args.kwargs["use_features"])
+        self.assertIn(f"Feature specs: {features_path}", stdout.getvalue())
         start_server_mock.assert_called_once()
 
     def test_serve_prints_lan_hint_for_wildcard_bind(self) -> None:
@@ -555,6 +590,18 @@ class CliRuntimeTests(unittest.TestCase):
                 True,
             ),
             (
+                "features",
+                ["lucidum", "--demo", "--features", "specs/feature_spec.csv"],
+                {"path": demo_path, "features": "specs/feature_spec.csv"},
+                True,
+            ),
+            (
+                "no_features",
+                ["lucidum", "--demo", "--no-features"],
+                {"path": demo_path, "no_features": True},
+                True,
+            ),
+            (
                 "line_bar_tool",
                 ["lucidum", "--demo", "--tools", "line-bar"],
                 {"path": demo_path, "tools": "line-bar"},
@@ -655,6 +702,28 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(exit_context.exception.code, 1)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("lucidum: error: KPI specification file does not exist:", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_main_reports_missing_feature_spec_without_traceback_or_startup_output(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            missing_features_path = root / "missing_feature_spec.csv"
+            data_path.write_text("x,y\n1,2\n", encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with (
+                patch("sys.argv", ["lucidum", str(data_path), "--features", str(missing_features_path)]),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_context,
+            ):
+                main()
+
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("lucidum: error: Feature specification file does not exist:", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
 

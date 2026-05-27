@@ -19,7 +19,7 @@ from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_progress_payload, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, categorical_distinct_counts, default_parameters, ebm_available, feature_rows, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
@@ -181,6 +181,102 @@ class GbmToolTests(unittest.TestCase):
         self.assertEqual(age["gain"], 0.0)
         sample = next(row for row in payload["features"] if row["name"] == "SAMPLE")
         self.assertFalse(sample["include"])
+
+    def test_gbm_config_includes_feature_groupings_and_scenarios(self) -> None:
+        features_path = self.root / "feature_spec.csv"
+        features_path.write_text(
+            "Feature,Grouping,scenario1,scenario2\n"
+            "Age,DRIVER,FEATURE,\n"
+            "Segment,POSTCODE,,selected feature\n",
+            encoding="utf-8",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm"],
+            use_saved_filters=False,
+            use_kpis=False,
+            features_path=features_path,
+        )
+
+        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+            status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
+        features = {row["name"]: row for row in payload["features"]}
+
+        self.assertEqual(status, 200)
+        self.assertEqual(features["Age"]["grouping"], "DRIVER")
+        self.assertEqual(features["Segment"]["grouping"], "POSTCODE")
+        self.assertEqual(features["PostcodeArea"]["grouping"], "")
+        self.assertEqual(
+            payload["feature_scenarios"],
+            [
+                {"name": "scenario1", "features": ["Age"]},
+                {"name": "scenario2", "features": ["Segment"]},
+            ],
+        )
+
+    def test_active_feature_scenario_status_compares_against_current_spec(self) -> None:
+        store = self.write_model_artifacts()
+        cases = [
+            (
+                "current",
+                {"name": "scenario1", "features": ["Segment", "Age"]},
+                "Feature,Grouping,scenario1\nAge,DRIVER,feature\nSegment,POSTCODE,feature\n",
+                {"name": "scenario1", "features": ["Segment", "Age"], "status": "current"},
+            ),
+            (
+                "stale",
+                {"name": "scenario1", "features": ["Age", "Segment"]},
+                "Feature,Grouping,scenario1\nAge,DRIVER,feature\n",
+                {"name": "scenario1", "features": ["Age", "Segment"], "status": "stale", "current_features": ["Age"]},
+            ),
+            (
+                "missing",
+                {"name": "old_scenario", "features": ["Age"]},
+                "Feature,Grouping,scenario1\nAge,DRIVER,feature\n",
+                {"name": "old_scenario", "features": ["Age"], "status": "missing"},
+            ),
+        ]
+        for name, stored_scenario, spec_text, expected in cases:
+            with self.subTest(name=name):
+                manifest = store.manifest("m1")
+                manifest["feature_scenario"] = stored_scenario
+                store.write_json(store.artifact_path("m1", "manifest"), manifest)
+                features_path = self.root / f"{name}_feature_spec.csv"
+                features_path.write_text(spec_text, encoding="utf-8")
+                app = create_app(
+                    self.data_path,
+                    token="",
+                    tools=["gbm"],
+                    use_saved_filters=False,
+                    use_kpis=False,
+                    features_path=features_path,
+                )
+
+                status, body = asgi_get(app, "/api/gbm/config")
+                payload = json.loads(body)
+
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["active_feature_scenario"], expected)
+
+    def test_active_feature_scenario_is_null_for_models_without_recorded_scenario(self) -> None:
+        self.write_model_artifacts()
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertIsNone(payload["active_feature_scenario"])
+
+    def test_normalise_feature_scenario_dedupes_and_rejects_missing_name(self) -> None:
+        self.assertEqual(
+            normalise_feature_scenario({"name": "scenario1", "features": ["Age", "Age", "", "Segment"]}),
+            {"name": "scenario1", "features": ["Age", "Segment"]},
+        )
+        self.assertIsNone(normalise_feature_scenario({"name": "", "features": ["Age"]}))
+        self.assertIsNone(normalise_feature_scenario(None))
 
     def test_generated_sample_sidecar_is_reused_for_missing_sample_column(self) -> None:
         data_path = self.root / "no_sample.csv"
@@ -976,6 +1072,7 @@ COPY (
                 "parameters": parameters,
                 "sample_column": "",
                 "shap_rows": "0",
+                "feature_scenario": {"name": "scenario1", "features": ["DRIVER_AGE", "LATITUDE"]},
             },
             progress_callback=progress.append,
         )
@@ -985,6 +1082,7 @@ COPY (
         self.assertEqual(result["training_rows"], 50000)
         manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
         self.assertEqual(manifest["best_metrics"], result["best_metrics"])
+        self.assertEqual(manifest["feature_scenario"], {"name": "scenario1", "features": ["DRIVER_AGE", "LATITUDE"]})
         self.assertIsNotNone(result["best_metrics"]["training"])
         self.assertIsNone(result["best_metrics"]["test"])
         con = duckdb.connect(database=":memory:")

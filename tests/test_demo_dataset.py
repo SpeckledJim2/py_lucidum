@@ -95,6 +95,33 @@ class DemoDatasetTests(unittest.TestCase):
                 self.assertGreaterEqual(int(row["decimals"]), 0)
                 self.assertIn(row["format"], {"number", "currency", "percent"})
 
+    def test_default_feature_spec_columns_validate_against_demo_dataset(self) -> None:
+        dataset = Dataset(py_lucidum.demo_dataset_path())
+        schema = dataset.schema()
+        dataset_columns = {column["name"] for column in schema["columns"]}
+        features_path = Path(__file__).parents[1] / "specs" / "feature_spec.csv"
+
+        with features_path.open(newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+
+        self.assertGreater(len(rows), 0)
+        self.assertEqual(reader.fieldnames, ["Feature", "Grouping", "scenario1", "scenario2", "scenario3"])
+        scenario_sets = {
+            scenario: {
+                row["Feature"]
+                for row in rows
+                if "feature" in row[scenario].strip().lower()
+            }
+            for scenario in ["scenario1", "scenario2", "scenario3"]
+        }
+        self.assertEqual(set(scenario_sets), {"scenario1", "scenario2", "scenario3"})
+        self.assertEqual(len({frozenset(features) for features in scenario_sets.values()}), 3)
+        self.assertGreaterEqual(len({row["Grouping"] for row in rows if row["Grouping"]}), 3)
+        for row in rows:
+            with self.subTest(feature=row["Feature"]):
+                self.assertIn(row["Feature"], dataset_columns)
+
 
 if __name__ == "__main__":
     unittest.main()

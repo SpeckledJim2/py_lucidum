@@ -2787,6 +2787,7 @@
 
       .gbm-feature-actions,
       .gbm-evaluation-view-mode {
+        align-items: center;
         display: inline-flex;
         flex: 0 0 auto;
         gap: 6px;
@@ -2819,6 +2820,20 @@
         min-height: 22px;
         padding: 3px 8px;
         white-space: nowrap;
+      }
+
+      .gbm-feature-scenario-select {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        color: var(--text);
+        font: inherit;
+        font-size: 11px;
+        height: 22px;
+        line-height: 20px;
+        max-width: 150px;
+        min-width: 124px;
+        padding: 1px 6px;
       }
 
       .gbm-panel-section > .gbm-grid,

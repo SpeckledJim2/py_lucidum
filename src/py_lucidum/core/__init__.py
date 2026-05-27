@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .dataset import Dataset
+from .features import load_features, resolve_features_path
 from .filters import load_saved_filters, resolve_filters_path
 from .kpis import load_kpis, resolve_kpis_path
 from .metrics import (
@@ -32,6 +33,7 @@ __all__ = [
     "infer_kind",
     "is_numeric_kind",
     "json_number",
+    "load_features",
     "load_kpis",
     "load_saved_filters",
     "missing_response_condition",
@@ -41,6 +43,7 @@ __all__ = [
     "response_parts",
     "response_summary",
     "response_value_sql",
+    "resolve_features_path",
     "resolve_filters_path",
     "resolve_kpis_path",
     "sql_literal",
