@@ -1061,7 +1061,9 @@ export function createGbmTool({
         layout: "fitDataStretch",
         placeholder: "No GBMs trained yet",
         initialSort: [{ column: "created_sort", dir: "desc" }],
+        selectableRows: true,
         columns: [
+          { title: "", field: "active", formatter: activeModelDotFormatter, hozAlign: "center", headerHozAlign: "center", width: 28, minWidth: 28, headerSort: false, resizable: false },
           { title: "Model", field: "model_label", sorter: "string", formatter: modelNameFormatter, widthGrow: 3, headerSort: true },
           { title: "Created", field: "created_sort", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().created_display), width: 105, headerSort: true },
           { title: "Response", field: "response_column", sorter: "string", widthGrow: 1.6, headerSort: true },
@@ -1072,8 +1074,8 @@ export function createGbmTool({
           { title: "Constraints", field: "constraint_display", sorter: "string", widthGrow: 1.2, headerSort: true },
           { title: "Train", field: "training_rows", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 86, headerSort: true },
           { title: "Best iter.", field: "best_iteration", sorter: "number", formatter: (cell) => formatModelCount(cell.getValue()), hozAlign: "right", headerHozAlign: "right", width: 92, headerSort: true },
-          { title: "tr@best", field: "best_training_metric", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 72, headerSort: true, headerTooltip: "Training metric at best iteration" },
-          { title: "te@best", field: "best_test_metric", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 72, headerSort: true, headerTooltip: "Test metric at best iteration" },
+          { title: "tr@best", field: "best_training_metric", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true, headerTooltip: "Training metric at best iteration" },
+          { title: "te@best", field: "best_test_metric", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true, headerTooltip: "Test metric at best iteration" },
           { title: "n_iter", field: "param_num_iterations", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 58, headerSort: true, headerTooltip: "num_iterations" },
           { title: "lr", field: "param_learning_rate", sorter: "number", formatter: (cell) => escapeHtml(formatModelDecimal(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 50, headerSort: true, headerTooltip: "learning_rate" },
           { title: "leaves", field: "param_num_leaves", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 58, headerSort: true, headerTooltip: "num_leaves" },
@@ -1083,12 +1085,8 @@ export function createGbmTool({
           { title: "Run time", field: "runtime_seconds", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().runtime_display), hozAlign: "right", headerHozAlign: "right", width: 84, headerSort: true },
           { title: "Sample", field: "sample_display", sorter: "string", widthGrow: 1.1, headerSort: true },
         ],
-        rowFormatter: (row) => {
-          const item = row.getData();
-          row.getElement().classList.toggle("gbm-model-active-row", Boolean(item.active));
-        },
       });
-      modelTable.on("rowClick", (_event, row) => activateModel(row.getData().model_id));
+      modelTable.on("rowSelectionChanged", syncModelActionButtons);
       featureTable = new Tabulator("#gbmFeatureGrid", {
         data: features,
         height: "100%",
@@ -1134,6 +1132,10 @@ export function createGbmTool({
       renderParameterFallback(parameters);
     }
     syncFeatureInteractionControls();
+  }
+
+  function activeModelDotFormatter(cell) {
+    return cell.getValue() ? '<span class="gbm-model-active-dot" title="Active model" aria-label="Active model"></span>' : "";
   }
 
   function modelNameFormatter(cell) {
@@ -1375,6 +1377,7 @@ export function createGbmTool({
       <table class="gbm-model-table">
         <thead>
           <tr>
+            <th class="gbm-model-active-heading" aria-label="Active model"></th>
             <th>Model</th>
             <th>Created</th>
             <th>Response</th>
@@ -1399,7 +1402,10 @@ export function createGbmTool({
         </thead>
         <tbody>
           ${models.map((model) => `
-            <tr class="${model.active ? "active" : ""}" data-gbm-model-row="${escapeHtml(model.model_id)}">
+            <tr data-gbm-model-row="${escapeHtml(model.model_id)}" aria-selected="false">
+              <td class="gbm-model-active-cell">
+                ${model.active ? '<span class="gbm-model-active-dot" title="Active model" aria-label="Active model"></span>' : ""}
+              </td>
               <td class="gbm-model-name-cell">
                 <span class="gbm-model-name-main">${escapeHtml(model.model_label)}</span>
               </td>
@@ -1428,8 +1434,14 @@ export function createGbmTool({
       </table>
     `;
     for (const row of target.querySelectorAll("[data-gbm-model-row]")) {
-      row.addEventListener("click", () => activateModel(row.dataset.gbmModelRow));
+      row.addEventListener("click", () => {
+        const selected = row.getAttribute("aria-selected") === "true";
+        row.classList.toggle("selected", !selected);
+        row.setAttribute("aria-selected", String(!selected));
+        syncModelActionButtons();
+      });
     }
+    syncModelActionButtons();
   }
 
   function formatModelCount(value) {
@@ -1502,11 +1514,19 @@ export function createGbmTool({
   }
 
   function syncModelActionButtons() {
-    const disabled = !currentActiveModelId();
+    const selectedCount = selectedModelIds().length;
     const rename = el("gbmRenameModelBtn");
     const del = el("gbmDeleteModelBtn");
-    if (rename) rename.disabled = disabled;
-    if (del) del.disabled = disabled;
+    if (rename) rename.disabled = selectedCount !== 1;
+    if (del) del.disabled = selectedCount < 1;
+  }
+
+  function selectedModelIds() {
+    const ids = modelTable && typeof modelTable.getSelectedData === "function"
+      ? modelTable.getSelectedData().map((row) => row?.model_id)
+      : Array.from(document.querySelectorAll('#gbmModelFallback [data-gbm-model-row][aria-selected="true"]'))
+        .map((row) => row.dataset.gbmModelRow);
+    return [...new Set(ids.map((id) => String(id || "")).filter(Boolean))];
   }
 
   function currentActiveModelId() {
@@ -1667,7 +1687,7 @@ export function createGbmTool({
   }
 
   async function renameActiveModel() {
-    const modelId = currentActiveModelId();
+    const [modelId] = selectedModelIds();
     if (!modelId) return;
     const newModelId = window.prompt("Rename GBM model", modelId);
     if (newModelId === null) return;
@@ -1685,15 +1705,28 @@ export function createGbmTool({
   }
 
   async function deleteActiveModel() {
-    const modelId = currentActiveModelId();
-    if (!modelId) return;
-    const confirmed = confirm(`Delete GBM model "${modelId}"? This deletes its .lucidum model folder.`);
+    const modelIds = selectedModelIds();
+    if (!modelIds.length) return;
+    const label = modelIds.length === 1 ? `GBM model "${modelIds[0]}"` : `${modelIds.length} GBM models`;
+    const confirmed = confirm(`Delete ${label}? This deletes the selected .lucidum model folder${modelIds.length === 1 ? "" : "s"}.`);
     if (!confirmed) return;
+    let result = null;
+    let deletedCount = 0;
     try {
-      const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: "{}" });
+      for (const modelId of modelIds) {
+        result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: "{}" });
+        deletedCount += 1;
+      }
       await applyModelMutationResult(result);
     } catch (error) {
-      setGbmNotice(error.message);
+      try {
+        const latest = await api("/api/gbm/config", { method: "GET", clientTiming: true });
+        await applyModelMutationResult({ config: latest });
+      } catch (_) {
+        // Keep the original delete error visible when the refresh also fails.
+      }
+      const prefix = deletedCount > 0 ? `${deletedCount} deleted. ` : "";
+      setGbmNotice(`${prefix}${error.message}`);
     }
   }
 

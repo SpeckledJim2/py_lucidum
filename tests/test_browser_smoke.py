@@ -82,6 +82,8 @@ class BrowserSmokeTests(unittest.TestCase):
             for model_id, label, learning_rate, created_at in (
                 ("browser-smoke-model", "Browser smoke model", 0.11, "2026-05-25T00:00:00Z"),
                 ("browser-smoke-model-2", "Second smoke model", 0.22, "2026-05-25T00:00:01Z"),
+                ("browser-smoke-delete-a", "Disposable smoke model A", 0.09, "2026-05-24T00:00:00Z"),
+                ("browser-smoke-delete-b", "Disposable smoke model B", 0.08, "2026-05-24T00:00:01Z"),
             ):
                 model_dir = store.create_model_dir(model_id)
                 store.write_json(
@@ -741,7 +743,11 @@ COPY (
                       headers: [...document.querySelectorAll("#gbmModelGrid .tabulator-col-title")]
                         .map((node) => node.textContent.trim()).filter(Boolean),
                       rows: document.querySelectorAll("#gbmModelGrid .tabulator-row").length,
-                      activeRows: document.querySelectorAll("#gbmModelGrid .tabulator-row.gbm-model-active-row").length,
+                      activeDots: document.querySelectorAll("#gbmModelGrid .gbm-model-active-dot").length,
+                      activeDotRowText: document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent || "",
+                      selectedRows: document.querySelectorAll("#gbmModelGrid .tabulator-row.tabulator-selected").length,
+                      renameDisabled: document.querySelector("#gbmRenameModelBtn")?.disabled,
+                      deleteDisabled: document.querySelector("#gbmDeleteModelBtn")?.disabled,
                       hasActivateButton: Boolean(document.querySelector(".gbm-model-activate-button, [data-gbm-activate]")),
                     })
                     """
@@ -753,18 +759,69 @@ COPY (
                         "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
                     ],
                 )
-                self.assertEqual(navigator_state["rows"], 2)
-                self.assertEqual(navigator_state["activeRows"], 1)
+                self.assertEqual(navigator_state["rows"], 4)
+                self.assertEqual(navigator_state["activeDots"], 1)
+                self.assertIn("Browser smoke model", navigator_state["activeDotRowText"])
+                self.assertEqual(navigator_state["selectedRows"], 0)
+                self.assertTrue(navigator_state["renameDisabled"])
+                self.assertTrue(navigator_state["deleteDisabled"])
                 self.assertFalse(navigator_state["hasActivateButton"])
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Disposable smoke model A").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Disposable smoke model B").click()
+                multi_selected_state = page.evaluate(
+                    """
+                    () => ({
+                      selectedRows: document.querySelectorAll("#gbmModelGrid .tabulator-row.tabulator-selected").length,
+                      renameDisabled: document.querySelector("#gbmRenameModelBtn")?.disabled,
+                      deleteDisabled: document.querySelector("#gbmDeleteModelBtn")?.disabled,
+                    })
+                    """
+                )
+                self.assertEqual(multi_selected_state["selectedRows"], 2)
+                self.assertTrue(multi_selected_state["renameDisabled"])
+                self.assertFalse(multi_selected_state["deleteDisabled"])
+                page.evaluate("() => { window.confirm = () => true; }")
+                page.locator("#gbmDeleteModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll("#gbmModelGrid .tabulator-row").length === 2
+                      && !document.body.textContent.includes("Disposable smoke model A")
+                      && !document.body.textContent.includes("Disposable smoke model B")
+                      && document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
                 page.wait_for_function(
                     """
-                    () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row.gbm-model-active-row")]
+                    () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row.tabulator-selected")]
                       .some((row) => row.textContent.includes("Second smoke model"))
                     """,
                     timeout=10_000,
                 )
+                selected_navigator_state = page.evaluate(
+                    """
+                    () => ({
+                      activeDotRowText: document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent || "",
+                      selectedRows: document.querySelectorAll("#gbmModelGrid .tabulator-row.tabulator-selected").length,
+                      renameDisabled: document.querySelector("#gbmRenameModelBtn")?.disabled,
+                      deleteDisabled: document.querySelector("#gbmDeleteModelBtn")?.disabled,
+                      sidebarMeta: document.querySelector("#gbmModelSelectedMeta")?.textContent || "",
+                    })
+                    """
+                )
+                self.assertIn("Browser smoke model", selected_navigator_state["activeDotRowText"])
+                self.assertEqual(selected_navigator_state["selectedRows"], 1)
+                self.assertFalse(selected_navigator_state["renameDisabled"])
+                self.assertFalse(selected_navigator_state["deleteDisabled"])
+                self.assertIn("Browser smoke model", selected_navigator_state["sidebarMeta"])
                 page.get_by_role("button", name="Features and parameters").click()
+                self.assertEqual(
+                    page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
+                    "0.11",
+                )
+                page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
+                page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.22",
@@ -888,11 +945,13 @@ COPY (
                 )
                 page.locator("input[name='gbmEvaluationViewMode'][value='tail']").check()
                 page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
                 page.evaluate("() => { window.prompt = () => 'renamed-smoke-model'; }")
                 page.locator("#gbmRenameModelBtn").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelectedMeta", has_text="renamed-smoke-model").wait_for(timeout=10_000)
                 page.evaluate("() => { window.confirm = () => true; }")
+                page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model").click()
                 page.locator("#gbmDeleteModelBtn").click()
                 page.wait_for_function(
                     """
@@ -1227,13 +1286,14 @@ COPY (
                       const headers = [...document.querySelectorAll("#gbmModelGrid .tabulator-col-title")]
                         .map((node) => node.textContent.trim()).filter(Boolean);
                       const rows = [...document.querySelectorAll("#gbmModelGrid .tabulator-row")];
-                      const activeRow = document.querySelector("#gbmModelGrid .tabulator-row.gbm-model-active-row");
+                      const activeRow = document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row");
                       const firstRow = rows.find((row) => row.textContent.includes("Browser smoke model"));
                       const firstCells = [...(firstRow?.querySelectorAll(".tabulator-cell") || [])].map((node) => node.textContent.trim());
                       const cell = document.querySelector("#gbmModelGrid .tabulator-cell");
                       return {
                         headers,
                         rowCount: rows.length,
+                        activeDots: document.querySelectorAll("#gbmModelGrid .gbm-model-active-dot").length,
                         activeText: activeRow?.textContent || "",
                         firstCells,
                         fontSize: cell ? getComputedStyle(cell).fontSize : "",
@@ -1252,6 +1312,7 @@ COPY (
                     ],
                 )
                 self.assertEqual(navigator_state["rowCount"], 1)
+                self.assertEqual(navigator_state["activeDots"], 1)
                 self.assertIn("Browser smoke model", navigator_state["activeText"])
                 self.assertEqual(navigator_state["fontSize"], "11px")
                 self.assertIn("actualNumerator", navigator_state["firstCells"])
@@ -1269,7 +1330,7 @@ COPY (
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
                 page.wait_for_function(
                     """
-                    () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row.gbm-model-active-row")]
+                    () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row.tabulator-selected")]
                       .some((row) => row.textContent.includes("Browser smoke model"))
                     """,
                     timeout=10_000,
