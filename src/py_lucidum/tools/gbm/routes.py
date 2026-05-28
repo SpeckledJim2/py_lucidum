@@ -10,7 +10,7 @@ from py_lucidum.core import json_number, sql_literal
 
 from .jobs import GbmJobManager
 from .sample import SAMPLE_COLUMN, create_generated_sample, sample_metadata
-from .shap import shap_config, shap_plot
+from .shap import shap_config, shap_plot, stacked_shap_plot
 from .sources import GbmSourceProvider
 from .store import GbmModelNameError, GbmModelStore
 from .training import MissingGbmDependency, gbm_dependencies
@@ -412,6 +412,15 @@ WHERE feature IS NOT NULL
         payload = dict(await request.json())
         try:
             return shap_plot(context.dataset, store, model_id, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/gbm/models/{model_id}/shap/stacked")
+    async def model_stacked_shap_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        try:
+            return stacked_shap_plot(context.dataset, store, model_id, payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

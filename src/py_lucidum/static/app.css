@@ -2750,6 +2750,10 @@
         height: 100%;
       }
 
+      .gbm-tab-panel[data-gbm-panel="stacked-shap"] {
+        height: 100%;
+      }
+
       .gbm-shap-view {
         display: grid;
         grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
@@ -2901,6 +2905,84 @@
       }
 
       .gbm-shap-chart {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .gbm-stacked-shap-view {
+        display: grid;
+        grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+        gap: 12px;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-stacked-shap-side,
+      .gbm-stacked-shap-feature-section {
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-stacked-shap-feature-list {
+        min-height: 0;
+      }
+
+      .gbm-stacked-shap-main {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-stacked-shap-controls {
+        align-items: flex-start;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        min-width: 0;
+      }
+
+      .gbm-stacked-shap-controls .control {
+        align-items: flex-start;
+        max-width: 100%;
+        min-width: 0;
+        width: max-content;
+      }
+
+      .gbm-stacked-shap-controls .control h3 {
+        font-size: 12px;
+        line-height: 1.2;
+        margin-bottom: 4px;
+      }
+
+      .gbm-stacked-shap-controls .segmented {
+        flex-wrap: wrap;
+      }
+
+      .gbm-stacked-shap-banding-control {
+        align-items: flex-start;
+        text-align: left;
+      }
+
+      .gbm-stacked-shap-banding-control.disabled {
+        opacity: 0.68;
+      }
+
+      .gbm-stacked-shap-chart-shell {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        position: relative;
+      }
+
+      .gbm-stacked-shap-chart {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 8px;

@@ -1,5 +1,6 @@
 import { createGbmTreeViewer } from "./gbm-tree-viewer.js";
 import { createGbmShapTool } from "./gbm-shap-tool.js";
+import { createGbmStackedShapTool } from "./gbm-stacked-shap-tool.js";
 
 const GBM_PARAMETER_OPTIONS = {
   objective: [
@@ -134,6 +135,7 @@ export function createGbmTool({
   let featureMetricModelId = "";
   const treeViewer = createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNotice });
   const shapTool = createGbmShapTool({ api, escapeHtml, setNotice: setGbmNotice });
+  const stackedShapTool = createGbmStackedShapTool({ api, escapeHtml, setNotice: setGbmNotice });
 
   function buildRequest() {
     if (!state.schema) return null;
@@ -196,6 +198,7 @@ export function createGbmTool({
     disposeEvaluationChart();
     treeViewer.dispose();
     shapTool.dispose();
+    stackedShapTool.dispose();
     mount.innerHTML = `
       <div class="gbm-tool">
         <div id="gbmNotice" class="gbm-notice hidden" role="alert" aria-live="polite"></div>
@@ -205,6 +208,7 @@ export function createGbmTool({
             <button class="tab ${activeTab === "models" ? "active" : ""}" type="button" data-gbm-tab="models">Model navigator</button>
             <button class="tab ${activeTab === "trees" ? "active" : ""}" type="button" data-gbm-tab="trees">Tree viewer</button>
             <button class="tab ${activeTab === "shap" ? "active" : ""}" type="button" data-gbm-tab="shap">SHAP</button>
+            <button class="tab ${activeTab === "stacked-shap" ? "active" : ""}" type="button" data-gbm-tab="stacked-shap">Stacked SHAP</button>
           </div>
           <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${escapeHtml(liveProgress?.message || "")}</div>
         </div>
@@ -310,6 +314,9 @@ export function createGbmTool({
         <div class="gbm-tab-panel ${activeTab === "shap" ? "" : "hidden"}" data-gbm-panel="shap">
           ${shapTool.shellHtml()}
         </div>
+        <div class="gbm-tab-panel ${activeTab === "stacked-shap" ? "" : "hidden"}" data-gbm-panel="stacked-shap">
+          ${stackedShapTool.shellHtml()}
+        </div>
       </div>
     `;
     bindTabs(mount);
@@ -321,6 +328,7 @@ export function createGbmTool({
     if (data.active_model_id) loadModelDetail(data.active_model_id);
     if (activeTab === "trees") treeViewer.render(data.active_model_id || "");
     if (activeTab === "shap") shapTool.render(data.active_model_id || "");
+    if (activeTab === "stacked-shap") stackedShapTool.render(data.active_model_id || "");
     if (liveProgress) renderLiveProgress(liveProgress);
     setDuckDbTiming(tool, data.timings || {});
     setClientTiming(tool, data.client_timings || {});
@@ -2478,6 +2486,7 @@ export function createGbmTool({
       }
       treeViewer.refreshTheme();
       shapTool.refreshTheme();
+      stackedShapTool.refreshTheme();
     },
     syncSidebarFromSchema,
     useCached,

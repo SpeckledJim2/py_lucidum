@@ -17,7 +17,7 @@ from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.demo import demo_dataset_path
 from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
-from py_lucidum.tools.gbm.shap import shap_config, shap_plot
+from py_lucidum.tools.gbm.shap import shap_config, shap_plot, stacked_shap_plot
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
@@ -209,6 +209,7 @@ COPY (
         self.assertIn("/api/gbm/models/{model_id}/rename", paths)
         self.assertIn("/api/gbm/models/{model_id}/shap/config", paths)
         self.assertIn("/api/gbm/models/{model_id}/shap/plot", paths)
+        self.assertIn("/api/gbm/models/{model_id}/shap/stacked", paths)
         model_route_methods: set[str] = set()
         for route in app.routes:
             if route.path == "/api/gbm/models/{model_id}":
@@ -313,6 +314,66 @@ COPY (
         with self.assertRaisesRegex(ValueError, "Feature 1"):
             shap_plot(dataset, store, "shap-model", {"feature_1": "denominator"})
 
+    def test_stacked_shap_rejects_missing_rows_and_invalid_features(self) -> None:
+        store = self.write_shap_plot_model("no-shap", with_shap=False)
+        dataset = Dataset(self.data_path)
+
+        with self.assertRaisesRegex(ValueError, "without saved SHAP rows"):
+            stacked_shap_plot(dataset, store, "no-shap", {"model_feature": "Age"})
+
+        store = self.write_shap_plot_model()
+        with self.assertRaisesRegex(ValueError, "model feature"):
+            stacked_shap_plot(dataset, store, "shap-model", {"model_feature": "denominator"})
+
+    def test_stacked_shap_groups_numeric_feature_with_numeric_labels(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = stacked_shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {"model_feature": "Age", "banding": 10, "tail_percent": 0, "num_features": "all", "x_sort": "alpha"},
+        )
+
+        self.assertEqual(payload["plot_type"], "stacked_shap")
+        self.assertEqual(payload["display_features"], ["lat", "Age", "Segment"])
+        self.assertEqual([row["x"] for row in payload["rows"]], [30, 40, 50])
+        first = payload["rows"][0]
+        self.assertAlmostEqual(first["contributions"]["lat"], 1.0)
+        self.assertAlmostEqual(first["contributions"]["Age"], 0.2)
+        self.assertAlmostEqual(first["contributions"]["Segment"], 0.1)
+        self.assertAlmostEqual(sum(first["contributions"].values()), first["total_shap"])
+        self.assertAlmostEqual(first["total_shap"], 1.3)
+
+    def test_stacked_shap_descending_top_n_adds_other_to_reconcile_total(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = stacked_shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {"model_feature": "Age", "banding": 10, "tail_percent": 0, "num_features": 1, "x_sort": "descending"},
+        )
+
+        self.assertEqual(payload["display_features"], ["lat", "Other"])
+        self.assertEqual([row["x"] for row in payload["rows"]], [40, 30, 50])
+        top = payload["rows"][0]
+        self.assertAlmostEqual(top["contributions"]["lat"], 2.0)
+        self.assertAlmostEqual(top["contributions"]["Other"], -0.6)
+        self.assertAlmostEqual(sum(top["contributions"].values()), top["total_shap"])
+        self.assertAlmostEqual(top["total_shap"], 1.4)
+
+    def test_stacked_shap_groups_categorical_feature_alpha_order(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = stacked_shap_plot(dataset, store, "shap-model", {"model_feature": "Segment", "num_features": "all"})
+
+        self.assertEqual([row["x"] for row in payload["rows"]], ["A", "B", "C"])
+        self.assertAlmostEqual(payload["rows"][2]["total_shap"], -0.85)
+
     def test_shap_plot_builds_flame_percentiles_for_numeric_feature(self) -> None:
         store = self.write_shap_plot_model()
         dataset = Dataset(self.data_path)
@@ -406,12 +467,21 @@ COPY (
         with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
             status, body = asgi_get(app, "/api/gbm/models/shap-model/shap/config")
             plot_status, plot_body = asgi_post_json(app, "/api/gbm/models/shap-model/shap/plot", {"feature_1": "Age", "banding_1": 10})
+            stacked_status, stacked_body = asgi_post_json(
+                app,
+                "/api/gbm/models/shap-model/shap/stacked",
+                {"model_feature": "Age", "banding": 10, "num_features": 1},
+            )
             invalid_status, invalid_body = asgi_post_json(app, "/api/gbm/models/shap-model/shap/plot", {"feature_1": "denominator"})
 
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)["has_shap"])
         self.assertEqual(plot_status, 200)
         self.assertEqual(json.loads(plot_body)["plot_type"], "flame")
+        self.assertEqual(stacked_status, 200)
+        stacked_payload = json.loads(stacked_body)
+        self.assertEqual(stacked_payload["plot_type"], "stacked_shap")
+        self.assertEqual(stacked_payload["display_features"], ["lat", "Other"])
         self.assertEqual(invalid_status, 400)
         self.assertIn("Feature 1", json.loads(invalid_body)["detail"])
 

@@ -16,6 +16,7 @@ BOX_PERCENTILES = (0, 5, 25, 50, 75, 95, 100)
 MAX_FACTOR_LEVELS = 500
 MAX_LINE_SERIES = 80
 MAX_HEATMAP_CELLS = 40000
+STACKED_OTHER_LABEL = "Other"
 
 
 def shap_config(dataset: Dataset, store: GbmModelStore, model_id: str) -> dict[str, Any]:
@@ -92,6 +93,263 @@ def shap_plot(dataset: Dataset, store: GbmModelStore, model_id: str, request: di
         }
     )
     return payload
+
+
+def stacked_shap_plot(dataset: Dataset, store: GbmModelStore, model_id: str, request: dict[str, Any]) -> dict[str, Any]:
+    config = shap_config(dataset, store, model_id)
+    if not config["has_shap"]:
+        raise ValueError("This GBM was trained without saved SHAP rows")
+    features = {feature["name"]: feature for feature in config["features"]}
+    model_feature = normalise_feature_name(request.get("model_feature"))
+    if not model_feature or model_feature not in features:
+        raise ValueError("Choose a valid Stacked SHAP model feature")
+
+    all_feature_names = [feature["name"] for feature in config["features"]]
+    banding = normalise_banding(request.get("banding"), features[model_feature].get("band_suggestion"))
+    tail_fraction = normalise_tail_fraction(request.get("tail_percent"))
+    x_sort = normalise_stacked_x_sort(request.get("x_sort"))
+    feature_limit = normalise_num_features(request.get("num_features"))
+
+    with dataset.lock:
+        cte = stacked_joined_cte(dataset, store, model_id, model_feature, all_feature_names)
+        if feature_is_numeric(features[model_feature]):
+            payload = numeric_stacked_shap_plot(
+                dataset,
+                cte,
+                model_feature,
+                banding,
+                tail_fraction,
+                x_sort,
+                all_feature_names,
+                feature_limit,
+            )
+        else:
+            payload = categorical_stacked_shap_plot(
+                dataset,
+                cte,
+                model_feature,
+                x_sort,
+                all_feature_names,
+                feature_limit,
+            )
+    payload.update(
+        {
+            "plot_type": "stacked_shap",
+            "model_id": model_id,
+            "title": f"SHAP Values by {model_feature}",
+            "model_feature": feature_payload(features[model_feature], banding, False),
+            "x_sort": x_sort,
+            "tail_percent": tail_fraction * 100,
+            "num_features": "all" if feature_limit is None else feature_limit,
+            "banding": banding,
+        }
+    )
+    return payload
+
+
+def numeric_stacked_shap_plot(
+    dataset: Dataset,
+    cte: str,
+    model_feature: str,
+    banding: float,
+    tail_fraction: float,
+    x_sort: str,
+    feature_names: list[str],
+    feature_limit: int | None,
+) -> dict[str, Any]:
+    bounds = numeric_bounds(dataset.con, cte, "raw_model", tail_fraction)
+    banded = band_expr("TRY_CAST(raw_model AS DOUBLE)", banding, bounds)
+    select_sql = stacked_feature_select_sql(feature_names)
+    sql = f"""
+{cte}
+SELECT
+    {banded} AS x_sort,
+    COUNT(*) AS row_count,
+    {select_sql},
+    {stacked_total_select_sql(feature_names)}
+FROM joined
+WHERE TRY_CAST(raw_model AS DOUBLE) IS NOT NULL
+GROUP BY x_sort
+"""
+    rows = clean_numeric_rows(query_dicts(dataset.con, sql), ["x_sort", "total_shap", *feature_names])
+    for row in rows:
+        row["x"] = json_number(row.get("x_sort"))
+    sorted_rows = sort_stacked_rows(rows, x_sort, numeric=True)
+    return stacked_payload(
+        dataset,
+        cte,
+        sorted_rows,
+        feature_names,
+        feature_limit,
+        warnings=numeric_missing_warnings(dataset.con, cte, [(model_feature, "raw_model")]),
+    )
+
+
+def categorical_stacked_shap_plot(
+    dataset: Dataset,
+    cte: str,
+    model_feature: str,
+    x_sort: str,
+    feature_names: list[str],
+    feature_limit: int | None,
+) -> dict[str, Any]:
+    select_sql = stacked_feature_select_sql(feature_names)
+    sql = f"""
+{cte}
+SELECT
+    COALESCE(CAST(raw_model AS VARCHAR), '(missing)') AS x,
+    COALESCE(CAST(raw_model AS VARCHAR), '(missing)') AS x_sort,
+    COUNT(*) AS row_count,
+    {select_sql},
+    {stacked_total_select_sql(feature_names)}
+FROM joined
+GROUP BY x, x_sort
+"""
+    rows = clean_numeric_rows(query_dicts(dataset.con, sql), ["total_shap", *feature_names])
+    sorted_rows = sort_stacked_rows(rows, x_sort, numeric=False)
+    return stacked_payload(dataset, cte, sorted_rows, feature_names, feature_limit, warnings=[])
+
+
+def stacked_payload(
+    dataset: Dataset,
+    cte: str,
+    rows: list[dict[str, Any]],
+    feature_names: list[str],
+    feature_limit: int | None,
+    *,
+    warnings: list[str],
+) -> dict[str, Any]:
+    display_features = stacked_display_features(rows, feature_names, feature_limit)
+    hidden_features = [name for name in feature_names if name not in display_features]
+    if hidden_features:
+        display_features = [*display_features, STACKED_OTHER_LABEL]
+    payload_rows = []
+    for row in rows:
+        contributions = {name: json_number(row.get(name)) or 0.0 for name in display_features if name != STACKED_OTHER_LABEL}
+        if hidden_features:
+            contributions[STACKED_OTHER_LABEL] = sum(json_number(row.get(name)) or 0.0 for name in hidden_features)
+        payload_rows.append(
+            {
+                "x": row.get("x"),
+                "x_sort": json_number(row.get("x_sort")) if json_number(row.get("x_sort")) is not None else row.get("x_sort"),
+                "row_count": int(row.get("row_count") or 0),
+                "total_shap": json_number(row.get("total_shap")) or 0.0,
+                "contributions": contributions,
+            }
+        )
+    return {
+        "row_count": sum(row["row_count"] for row in payload_rows),
+        "total_shap_rows": joined_count(dataset.con, cte),
+        "display_features": display_features,
+        "all_feature_count": len(feature_names),
+        "rows": payload_rows,
+        "y_domain": stacked_y_domain(payload_rows, display_features),
+        "warnings": warnings,
+    }
+
+
+def stacked_display_features(rows: list[dict[str, Any]], feature_names: list[str], feature_limit: int | None) -> list[str]:
+    if feature_limit is None or feature_limit >= len(feature_names):
+        return list(feature_names)
+    total_weight = sum(int(row.get("row_count") or 0) for row in rows)
+    if total_weight <= 0:
+        total_weight = len(rows) or 1
+    scores = []
+    for feature_name in feature_names:
+        score = sum(int(row.get("row_count") or 0) * abs(json_number(row.get(feature_name)) or 0.0) for row in rows) / total_weight
+        scores.append((feature_name, score))
+    scores.sort(key=lambda item: (-item[1], item[0].lower()))
+    return [name for name, _score in scores[: max(0, feature_limit)]]
+
+
+def stacked_y_domain(rows: list[dict[str, Any]], display_features: list[str]) -> list[float | int] | None:
+    values: list[float] = []
+    for row in rows:
+        positives = 0.0
+        negatives = 0.0
+        contributions = row.get("contributions") if isinstance(row.get("contributions"), dict) else {}
+        for feature_name in display_features:
+            value = json_number(contributions.get(feature_name))
+            if value is None:
+                continue
+            if value >= 0:
+                positives += value
+            else:
+                negatives += value
+        values.extend([positives, negatives])
+        total = json_number(row.get("total_shap"))
+        if total is not None:
+            values.append(total)
+    return numeric_domain_from_values(values)
+
+
+def sort_stacked_rows(rows: list[dict[str, Any]], x_sort: str, *, numeric: bool) -> list[dict[str, Any]]:
+    def natural_key(row: dict[str, Any]) -> tuple[int, float | str, str]:
+        if numeric:
+            number = json_number(row.get("x_sort"))
+            return (0 if number is not None else 1, number if number is not None else 0.0, str(row.get("x") or ""))
+        label = str(row.get("x") or "")
+        return (1 if label == "(missing)" else 0, str(row.get("x_sort") or label).lower(), label.lower())
+
+    if x_sort == "descending":
+        return sorted(rows, key=lambda row: (-(json_number(row.get("total_shap")) or 0.0), natural_key(row)))
+    return sorted(rows, key=natural_key)
+
+
+def stacked_feature_select_sql(feature_names: list[str]) -> str:
+    return ",\n    ".join(f"AVG({quote_ident(name)}) AS {quote_ident(name)}" for name in feature_names)
+
+
+def stacked_total_select_sql(feature_names: list[str]) -> str:
+    expression = " + ".join(quote_ident(name) for name in feature_names) or "0.0"
+    return f"AVG({expression}) AS total_shap"
+
+
+def stacked_joined_cte(dataset: Dataset, store: GbmModelStore, model_id: str, model_feature: str, feature_names: list[str]) -> str:
+    shap_path = store.artifact_path(model_id, "shap_long")
+    shap_columns = [
+        "__lucidum_row_id",
+        *[
+            f"COALESCE(TRY_CAST({quote_ident(feature_name)} AS DOUBLE), 0.0) AS {quote_ident(feature_name)}"
+            for feature_name in feature_names
+        ],
+    ]
+    shap_sql = ",\n      ".join(shap_columns)
+    joined_shap_sql = ",\n    ".join(f"shap.{quote_ident(feature_name)}" for feature_name in feature_names)
+    return f"""
+WITH joined AS (
+  SELECT
+    base.raw_model,
+    {joined_shap_sql}
+  FROM (
+    SELECT
+      ROW_NUMBER() OVER () AS __lucidum_row_id,
+      {quote_ident(model_feature)} AS raw_model
+    FROM {dataset.relation_sql()}
+  ) base
+  INNER JOIN (
+    SELECT
+      {shap_sql}
+    FROM read_parquet({sql_literal(str(shap_path))})
+  ) shap USING (__lucidum_row_id)
+)
+"""
+
+
+def normalise_stacked_x_sort(value: Any) -> str:
+    text = str(value or "alpha").strip().lower()
+    return "descending" if text in {"descending", "desc"} else "alpha"
+
+
+def normalise_num_features(value: Any) -> int | None:
+    text = str(value if value is not None else "all").strip().lower()
+    if text in {"", "all", "none"}:
+        return None
+    try:
+        number = int(float(text))
+    except ValueError:
+        return None
+    return number if number > 0 else None
 
 
 def model_features(dataset: Dataset, store: GbmModelStore, model_id: str) -> list[dict[str, Any]]:
@@ -670,4 +928,4 @@ def sql_float(value: float) -> str:
     return repr(float(value))
 
 
-__all__ = ["shap_config", "shap_plot"]
+__all__ = ["shap_config", "shap_plot", "stacked_shap_plot"]

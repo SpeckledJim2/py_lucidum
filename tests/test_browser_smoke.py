@@ -773,7 +773,7 @@ COPY (
                 self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "")
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
-                page.get_by_role("button", name="SHAP").click()
+                page.get_by_role("button", name="SHAP", exact=True).click()
                 page.locator("#gbmShapChart").wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
@@ -1029,6 +1029,53 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.get_by_role("button", name="Stacked SHAP").click()
+                page.locator("#gbmStackedShapChart").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmStackedShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP Values by lat")
+                        && option.series?.some((series) => series.name === "Sum of SHAP values" && series.type === "scatter")
+                        && option.series?.some((series) => series.type === "bar")
+                        && option.xAxis?.[0]?.data?.some((label) => !String(label).includes("[") && !String(label).includes(")"))
+                        && option.xAxis?.[0]?.axisLabel?.rotate === 0
+                        && option.xAxis?.[0]?.axisLabel?.fontSize === 10
+                        && document.querySelector('[data-gbm-stacked-shap-feature-sort="importance"]')?.classList.contains("active")
+                        && document.querySelector('[data-gbm-stacked-shap-feature-sort="alpha"]')
+                        && document.querySelector("#gbmStackedShapFeatureList .feature.active")?.textContent.includes("lat");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                stacked_feature_label = page.locator("#gbmStackedShapFeatureList .feature.active .kind").text_content()
+                self.assertEqual(stacked_feature_label, "Rank 1 · 0.2330")
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST"):
+                    page.locator('[data-gbm-stacked-shap-feature-count="1"]').click()
+                stacked_state = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmStackedShapChart"));
+                      const option = chart?.getOption();
+                      const bars = (option?.series || []).filter((series) => series.type === "bar");
+                      const scatter = (option?.series || []).find((series) => series.name === "Sum of SHAP values");
+                      const index = 0;
+                      const barSum = bars.reduce((sum, series) => sum + Number(series.data?.[index] || 0), 0);
+                      const dot = Number(scatter?.data?.[index]);
+                      return {
+                        title: option?.title?.[0]?.text || "",
+                        hasOther: bars.some((series) => series.name === "Other"),
+                        barSum,
+                        dot,
+                        reconciles: Math.abs(barSum - dot) < 1e-9,
+                      };
+                    }
+                    """
+                )
+                self.assertIn("SHAP Values by lat", stacked_state["title"])
+                self.assertTrue(stacked_state["hasOther"])
+                self.assertTrue(stacked_state["reconciles"])
                 page.get_by_role("button", name="Features and parameters").click()
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)
@@ -1245,7 +1292,7 @@ COPY (
                 self.assertTrue(activated_navigator_state["activateDisabled"])
                 self.assertTrue(activated_navigator_state["deleteDisabled"])
                 self.assertIn("Second smoke model", activated_navigator_state["sidebarMeta"])
-                page.get_by_role("button", name="SHAP").click()
+                page.get_by_role("button", name="SHAP", exact=True).click()
                 page.wait_for_function(
                     """
                     () => {
@@ -1281,7 +1328,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="SHAP").click()
+                page.get_by_role("button", name="SHAP", exact=True).click()
                 page.wait_for_function(
                     """
                     () => {
@@ -1317,7 +1364,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="SHAP").click()
+                page.get_by_role("button", name="SHAP", exact=True).click()
                 page.wait_for_function(
                     """
                     () => {
