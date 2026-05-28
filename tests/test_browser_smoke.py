@@ -556,6 +556,35 @@ COPY (
                     map_requests += 1
 
             page.on("request", count_request)
+
+            def map_view() -> dict[str, float]:
+                return page.evaluate(
+                    """
+                    () => {
+                        const map = document.querySelector("#ukMap")?._lucidumMap;
+                        if (!map) return null;
+                        const center = map.getCenter();
+                        return { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+                    }
+                    """
+                )
+
+            def wait_for_map_view(expected: dict[str, float]) -> None:
+                page.wait_for_function(
+                    """
+                    expected => {
+                        const map = document.querySelector("#ukMap")?._lucidumMap;
+                        if (!map) return false;
+                        const center = map.getCenter();
+                        return Math.abs(center.lat - expected.lat) < 0.01
+                            && Math.abs(center.lng - expected.lng) < 0.01
+                            && Math.abs(map.getZoom() - expected.zoom) < 0.01;
+                    }
+                    """,
+                    arg=expected,
+                    timeout=10_000,
+                )
+
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
@@ -609,8 +638,21 @@ COPY (
                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                 page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-pane')")
                 page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')")
+                page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
+                page.evaluate(
+                    """
+                    () => {
+                        const map = document.querySelector("#ukMap")?._lucidumMap;
+                        map.setView([51.5074, -0.1278], 9, { animate: false });
+                    }
+                    """
+                )
+                stable_map_view = map_view()
+                page.set_viewport_size({"width": 1000, "height": 720})
+                wait_for_map_view(stable_map_view)
                 page.locator("#themeBtn").click()
                 page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-dark')")
+                wait_for_map_view(stable_map_view)
                 page.wait_for_function(
                     """
                     () => {
@@ -638,12 +680,48 @@ COPY (
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                wait_for_map_view(stable_map_view)
+
+                with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                    page.locator("#reloadBtn").click()
+                page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                wait_for_map_view(stable_map_view)
+
+                with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                    page.evaluate(
+                        """
+                        () => {
+                            const select = document.querySelector("#actualNumerator");
+                            const next = [...select.options].find((option) => option.value && option.value !== select.value);
+                            if (!next) throw new Error("No alternate Actual option available");
+                            select.value = next.value;
+                            select.dispatchEvent(new Event("change", { bubbles: true }));
+                        }
+                        """
+                    )
+                wait_for_map_view(stable_map_view)
+
+                with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                    page.evaluate(
+                        """
+                        () => {
+                            document.querySelector("#filterInput").value = "vehicle_age >= 0";
+                            document.querySelector("#filterApplyBtn").click();
+                        }
+                        """
+                    )
+                wait_for_map_view(stable_map_view)
+
+                with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                    page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').check()
+                page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
+                wait_for_map_view(stable_map_view)
 
                 self.assertEqual(page_errors, [])
                 self.assertEqual(profile_requests, 2)
                 self.assertEqual(profile_detail_requests, 3)
                 self.assertEqual(chart_requests, 1)
-                self.assertEqual(map_requests, 1)
+                self.assertEqual(map_requests, 5)
             finally:
                 browser.close()
 

@@ -80,10 +80,11 @@
         mapGeoJsonCache: {},
         mapPolygonLayerCache: {},
         mapPolygonRenderContext: null,
-        mapFitLevel: null,
         mapStartupFitDone: false,
         renderedMapLevel: null,
-        preserveMapView: false,
+        mapView: null,
+        mapViewportSyncFrame: null,
+        restoringMapView: false,
         pendingMapZoom: null,
         mapControlPosition: null,
         mapControlMoved: false,
@@ -196,6 +197,7 @@
       let mapLayerControl = null;
       let mapZoomControl = null;
       let mapHomeControl = null;
+      let mapResizeObserver = null;
       let serverHeartbeatTimer = null;
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
@@ -829,6 +831,8 @@
 
       function setTool(tool, refresh = true) {
         if (!toolEnabled(tool)) return;
+        const previousTool = state.tool;
+        if (previousTool === "uk_map" && tool !== "uk_map") captureMapView("tool-switch");
         state.tool = tool;
         el("profileTool").classList.toggle("active", tool === "column_profile");
         el("lineBarTool").classList.toggle("active", tool === "line_bar");
@@ -882,7 +886,7 @@
           syncMapControls();
           requestAnimationFrame(() => {
             clampMapFloatingControl();
-            resizeMap();
+            scheduleMapViewportSync({ mode: "preserve" });
           });
         } else {
           el("chart").classList.add("hidden");
@@ -918,7 +922,7 @@
             chart.resize();
           } else if (state.tool === "uk_map") {
             clampMapFloatingControl();
-            resizeMap();
+            scheduleMapViewportSync({ mode: "preserve" });
           }
         });
       }
@@ -941,7 +945,7 @@
             chart.resize();
           } else if (state.tool === "uk_map") {
             clampMapFloatingControl();
-            resizeMap();
+            scheduleMapViewportSync({ mode: "preserve" });
           }
         });
       }
@@ -2500,21 +2504,18 @@
         const activeLayer = cache.data.level === "unit" ? ukMapPointLayer : ukMapLayer;
         if (!activeLayer || state.renderedMapLevel !== cache.data.level || state.pendingMapZoom) {
           if (cache.data.level === "unit") {
-            state.preserveMapView = !state.pendingMapZoom;
             renderMap(cache.data, null);
             return;
           }
           if (geoJson) {
-            state.preserveMapView = !state.pendingMapZoom;
             renderMap(cache.data, geoJson);
           } else {
             const loadedGeoJson = await loadMapGeoJson(cache.data.level);
-            state.preserveMapView = !state.pendingMapZoom;
             renderMap(cache.data, loadedGeoJson);
           }
           return;
         }
-        measureToolRender("uk_map", () => requestAnimationFrame(() => resizeMap()));
+        measureToolRender("uk_map", () => scheduleMapViewportSync({ mode: "preserve" }));
       }
 
       function postcodeColumn(level) {
@@ -2581,6 +2582,8 @@
           zoomDelta: 0.5,
           zoomSnap: 0.25,
         }).setView([54.5, -3.2], 6);
+        ukMap.getContainer()._lucidumMap = ukMap;
+        ukMap.on("moveend zoomend", () => captureMapView("leaflet"));
         ukMap.on("zoomend", () => {
           if (state.lastMapData?.level === "sector") restyleActiveMapPolygonLayer();
         });
@@ -2588,25 +2591,89 @@
         addMapLayerControl();
         addMapZoomControl();
         addMapHomeControl();
+        observeMapResize();
+      }
+
+      function mapContainerVisible() {
+        const container = ukMap?.getContainer?.() || el("ukMap");
+        if (!container || container.classList.contains("hidden")) return false;
+        const rect = container.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      }
+
+      function normaliseMapView(view) {
+        const center = view?.center || {};
+        const lat = Number(Array.isArray(center) ? center[0] : center.lat);
+        const lng = Number(Array.isArray(center) ? center[1] : center.lng);
+        const zoom = Number(view?.zoom);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return null;
+        return { center: { lat, lng }, zoom };
+      }
+
+      function currentMapView() {
+        if (!ukMap || !mapContainerVisible()) return null;
+        const center = ukMap.getCenter();
+        return normaliseMapView({ center, zoom: ukMap.getZoom() });
+      }
+
+      function captureMapView(reason = "") {
+        if (!ukMap || state.restoringMapView) return null;
+        const view = currentMapView();
+        if (!view) return null;
+        if (!state.mapStartupFitDone && !state.mapView && reason !== "startup-fit" && reason !== "explicit") {
+          return null;
+        }
+        state.mapView = view;
+        return view;
+      }
+
+      function restoreMapView(view) {
+        const nextView = normaliseMapView(view);
+        if (!ukMap || !nextView || !mapContainerVisible()) return false;
+        state.restoringMapView = true;
+        state.mapView = nextView;
+        try {
+          ukMap.setView([nextView.center.lat, nextView.center.lng], nextView.zoom, { animate: false });
+          return true;
+        } finally {
+          requestAnimationFrame(() => {
+            state.restoringMapView = false;
+          });
+        }
       }
 
       function resizeMap() {
-        if (!ukMap) return;
+        if (!ukMap || !mapContainerVisible()) return;
         ukMap.invalidateSize({ pan: false });
       }
 
-      function scheduleMapResize({ refit = false } = {}) {
+      function scheduleMapViewportSync({ mode = "preserve" } = {}) {
         if (!ukMap) return;
-        requestAnimationFrame(() => {
+        const shouldPreserve = mode === "preserve";
+        let view = shouldPreserve ? state.mapView : null;
+        if (shouldPreserve && (state.mapStartupFitDone || state.mapView)) {
+          view = captureMapView("viewport-sync") || view;
+        }
+        if (state.mapViewportSyncFrame) cancelAnimationFrame(state.mapViewportSyncFrame);
+        state.mapViewportSyncFrame = requestAnimationFrame(() => {
+          state.mapViewportSyncFrame = null;
+          if (!ukMap || !mapContainerVisible()) return;
           resizeMap();
-          if (!refit) return;
-          requestAnimationFrame(() => {
-            if (state.tool === "uk_map") {
-              resizeMap();
-              fitMapToLayer({ animate: false });
-            }
-          });
+          if (shouldPreserve && view) restoreMapView(view);
         });
+      }
+
+      function observeMapResize() {
+        if (mapResizeObserver || !window.ResizeObserver) return;
+        const mapElement = el("ukMap");
+        const target = mapElement?.closest(".workspace") || mapElement;
+        if (!target) return;
+        mapResizeObserver = new ResizeObserver(() => {
+          if (state.tool !== "uk_map") return;
+          clampMapFloatingControl();
+          scheduleMapViewportSync({ mode: "preserve" });
+        });
+        mapResizeObserver.observe(target);
       }
 
       function setBaseMap(baseMap) {
@@ -2687,11 +2754,12 @@
         if (!target || target.tagName !== "INPUT") return;
         if (target.name === "baseMap") {
           setBaseMap(target.value);
+          scheduleMapViewportSync({ mode: "preserve" });
           return;
         }
         if (target.name === "mapLevel" && target.checked && mapLevelSelectable(target.value) && target.value !== state.mapLevel) {
+          captureMapView("map-level-change");
           state.mapLevel = target.value;
-          state.preserveMapView = true;
           syncMapControls();
           refreshMap();
         }
@@ -2738,7 +2806,10 @@
             });
             londonButton.addEventListener("click", (event) => {
               event.preventDefault();
-              ukMap?.setView([51.5074, -0.1278], 10);
+              if (!ukMap) return;
+              ukMap.setView([51.5074, -0.1278], 10, { animate: false });
+              state.mapStartupFitDone = true;
+              captureMapView("explicit");
             });
             return container;
           },
@@ -2750,7 +2821,10 @@
       function fitMapToLayer(options = {}) {
         const bounds = activeMapBounds();
         if (!bounds) {
-          ukMap?.setView([54.5, -3.2], 6);
+          if (!ukMap) return;
+          ukMap.setView([54.5, -3.2], 6, { animate: false });
+          state.mapStartupFitDone = true;
+          captureMapView("explicit");
           return;
         }
         fitMapBounds(bounds, state.renderedMapLevel, options);
@@ -2759,6 +2833,8 @@
       function fitMapBounds(bounds, level = state.renderedMapLevel, options = {}) {
         if (!ukMap || !bounds?.isValid?.()) return false;
         ukMap.fitBounds(bounds, mapFitOptions(level, options));
+        state.mapStartupFitDone = true;
+        captureMapView("startup-fit");
         return true;
       }
 
@@ -2766,7 +2842,7 @@
         const fitOptions = level === "unit"
           ? { padding: MAP_UNIT_FIT_PADDING, maxZoom: 13 }
           : { padding: MAP_FIT_PADDING };
-        return { ...fitOptions, ...options };
+        return { animate: false, ...fitOptions, ...options };
       }
 
       function activeMapBounds() {
@@ -3254,6 +3330,27 @@
         return measureToolRender("uk_map", () => renderMapContents(data, geoJson));
       }
 
+      function applyRenderedMapCamera(level, bounds) {
+        let searchWarning = "";
+        let explicitMove = false;
+        if (state.pendingMapZoom && state.pendingMapZoom.level === level) {
+          const zoomed = zoomToMapKey(state.pendingMapZoom.level, state.pendingMapZoom.key);
+          if (!zoomed) {
+            searchWarning = `Postcode ${state.pendingMapZoom.label} was not found.`;
+          }
+          explicitMove = zoomed;
+          state.pendingMapZoom = null;
+        }
+        if (!explicitMove) {
+          if (state.mapView) {
+            restoreMapView(state.mapView);
+          } else if (!state.mapStartupFitDone) {
+            fitMapBounds(bounds, level, MAP_INITIAL_FIT_OPTIONS);
+          }
+        }
+        return searchWarning;
+      }
+
       function renderMapContents(data, geoJson) {
         if (data.level === "unit") {
           renderUnitMap(data);
@@ -3293,30 +3390,7 @@
         if (!ukMap.hasLayer(ukMapLayer)) ukMapLayer.addTo(ukMap);
         renderMapLabels(data, summaries, hotspotKeys);
 
-        let searchWarning = "";
-        let didFitLayer = false;
-        if (state.pendingMapZoom && state.pendingMapZoom.level === data.level) {
-          const zoomed = zoomToMapKey(state.pendingMapZoom.level, state.pendingMapZoom.key);
-          if (!zoomed) {
-            searchWarning = `Postcode ${state.pendingMapZoom.label} was not found.`;
-          }
-          state.pendingMapZoom = null;
-          state.mapFitLevel = data.level;
-          state.mapStartupFitDone = true;
-          state.preserveMapView = false;
-        } else if (state.preserveMapView) {
-          state.mapFitLevel = data.level;
-          state.preserveMapView = false;
-        } else if (state.mapFitLevel !== data.level) {
-          if (!state.mapStartupFitDone) {
-            const bounds = ukMapLayer.getBounds();
-            if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
-              didFitLayer = true;
-              state.mapStartupFitDone = true;
-            }
-          }
-          state.mapFitLevel = data.level;
-        }
+        const searchWarning = applyRenderedMapCamera(data.level, ukMapLayer.getBounds());
         renderMapLegend(scale, data.response?.label || "Actual");
         const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
         const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`;
@@ -3332,7 +3406,7 @@
         const chartMessage = warnings.filter(Boolean).join(" ");
         setChartMessage(chartMessage);
         saveToolPresentation("uk_map", { groupMeta, chartMessage });
-        scheduleMapResize({ refit: didFitLayer });
+        scheduleMapViewportSync({ mode: "preserve" });
       }
 
       function renderUnitMap(data) {
@@ -3357,20 +3431,7 @@
         }
         ukMapPointLayer = makeUnitPointLayer(data, scale, hotspotKeys).addTo(ukMap);
 
-        let didFitLayer = false;
-        if (state.preserveMapView) {
-          state.mapFitLevel = data.level;
-          state.preserveMapView = false;
-        } else if (state.mapFitLevel !== data.level) {
-          if (!state.mapStartupFitDone) {
-            const bounds = ukMapPointLayer.getBounds();
-            if (fitMapBounds(bounds, data.level, MAP_INITIAL_FIT_OPTIONS)) {
-              didFitLayer = true;
-              state.mapStartupFitDone = true;
-            }
-          }
-          state.mapFitLevel = data.level;
-        }
+        applyRenderedMapCamera(data.level, ukMapPointLayer.getBounds());
         renderMapLegend(scale, data.response?.label || "Actual");
         const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
         const pointSummary = data.point_summary || {};
@@ -3391,7 +3452,7 @@
         const chartMessage = warnings.filter(Boolean).join(" ");
         setChartMessage(chartMessage);
         saveToolPresentation("uk_map", { groupMeta, chartMessage });
-        scheduleMapResize({ refit: didFitLayer });
+        scheduleMapViewportSync({ mode: "preserve" });
       }
 
       function updateMapMetricTitles(data) {
@@ -3436,8 +3497,7 @@
         if (!targetLayer) return false;
         const bounds = targetLayer.getBounds?.();
         if (bounds?.isValid()) {
-          ukMap.fitBounds(bounds, { padding: [30, 30], maxZoom: level === "sector" ? 13 : 9 });
-          return true;
+          return fitMapBounds(bounds, level, { padding: [30, 30], maxZoom: level === "sector" ? 13 : 9 });
         }
         return false;
       }
@@ -3447,7 +3507,7 @@
         if (state.tool !== "uk_map" || !state.lastMapData) return;
         if (state.lastMapData.level === "unit") {
           if (!ukMapPointLayer?.setRenderContext) {
-            state.preserveMapView = true;
+            captureMapView("redraw");
             renderMap(state.lastMapData, null);
             return;
           }
@@ -3461,7 +3521,7 @@
         }
         const geoJson = state.mapGeoJsonCache[state.lastMapData.level];
         if (!geoJson) return;
-        state.preserveMapView = true;
+        captureMapView("redraw");
         renderMap(state.lastMapData, geoJson);
       }
 
@@ -4063,7 +4123,11 @@
             } catch (_) {
             }
           }
-          chart.resize();
+          if (state.tool === "uk_map") {
+            scheduleMapViewportSync({ mode: "preserve" });
+          } else {
+            chart.resize();
+          }
         }
         resizer.addEventListener("pointerup", finishDrag);
         resizer.addEventListener("pointercancel", finishDrag);
@@ -4073,7 +4137,13 @@
         const viewportLimit = Math.max(260, window.innerWidth - 520);
         const width = Math.min(Math.max(rawWidth, 220), Math.min(560, viewportLimit));
         document.documentElement.style.setProperty("--sidebar-width", `${Math.round(width)}px`);
-        requestAnimationFrame(() => chart.resize());
+        requestAnimationFrame(() => {
+          if (state.tool === "uk_map") {
+            scheduleMapViewportSync({ mode: "preserve" });
+          } else {
+            chart.resize();
+          }
+        });
       }
 
       function setupSidebarFilterResize() {
@@ -4463,7 +4533,7 @@
           syncCartoBaseMapForTheme();
           applyMapBackground();
           if (state.tool === "line_bar" && state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
-          if (state.tool === "uk_map") measureToolRender("uk_map", () => resizeMap());
+          if (state.tool === "uk_map") measureToolRender("uk_map", () => scheduleMapViewportSync({ mode: "preserve" }));
           if (state.tool === "gbm") measureToolRender("gbm", () => gbmTool.refreshTheme());
         });
         el("reloadBtn").addEventListener("click", async () => {
@@ -4474,13 +4544,11 @@
           const previousCollapsedSavedFilterThemes = new Set(state.collapsedSavedFilterThemes);
           const previousSavedFilterThemesInitialised = state.savedFilterThemesInitialised;
           const previousSidebarVisible = state.sidebarVisible;
-          const preserveMapViewOnReload = state.tool === "uk_map" && Boolean(ukMap);
+          if (state.tool === "uk_map") captureMapView("reload");
           state.schema = await api("/api/reload", { method: "POST" });
           const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
           state.bandFeature = null;
-          state.mapFitLevel = null;
           clearToolCaches();
-          if (preserveMapViewOnReload) state.preserveMapView = true;
           setFilterRowMeta(state.schema.row_count);
           if (filtersUnchanged) {
             state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
@@ -4514,7 +4582,7 @@
             chart.resize();
           } else if (state.tool === "uk_map") {
             clampMapFloatingControl();
-            resizeMap();
+            scheduleMapViewportSync({ mode: "preserve" });
           }
         });
       }
