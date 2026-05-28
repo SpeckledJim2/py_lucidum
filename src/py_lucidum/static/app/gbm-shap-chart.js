@@ -218,10 +218,10 @@ function linesOption(payload, common, theme) {
 
 function heatmapOption(payload, common, theme) {
   const rows = payload.rows || [];
-  const xLabels = unique(rows.map((row) => String(row.x)));
-  const yLabels = unique(rows.map((row) => String(row.y)));
   const xFeature = featureInfoForName(payload, payload.x_feature);
   const yFeature = featureInfoForName(payload, payload.y_feature);
+  const xLabels = sortedCategoryLabels(rows, "x", "x_sort", xFeature);
+  const yLabels = sortedCategoryLabels(rows, "y", "y_sort", yFeature);
   const values = rows.map((row) => numberOrNull(row.z)).filter((value) => value !== null);
   const extent = numericExtent(values);
   const xIndex = new Map(xLabels.map((label, index) => [label, index]));
@@ -535,6 +535,41 @@ function numericCategoryTickPolicy(labels, feature = null) {
     interval: (index) => selected.has(index),
     step: roundAxisValue(step, step),
   };
+}
+
+function sortedCategoryLabels(rows, valueKey, sortKey, feature = null) {
+  const categories = new Map();
+  for (const row of rows || []) {
+    const label = String(row?.[valueKey] ?? "");
+    const rawSort = row?.[sortKey];
+    const sortValue = isNumericFeature(feature) ? numberOrNull(rawSort) : rawSort;
+    const current = categories.get(label);
+    if (!current || compareCategorySort(sortValue, label, current.sortValue, current.label, feature) < 0) {
+      categories.set(label, { label, sortValue });
+    }
+  }
+  return [...categories.values()]
+    .sort((a, b) => compareCategorySort(a.sortValue, a.label, b.sortValue, b.label, feature))
+    .map((item) => item.label);
+}
+
+function compareCategorySort(leftSort, leftLabel, rightSort, rightLabel, feature = null) {
+  const leftMissing = leftLabel === "(missing)";
+  const rightMissing = rightLabel === "(missing)";
+  if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+  if (isNumericFeature(feature)) {
+    const leftNumber = numberOrNull(leftSort ?? leftLabel);
+    const rightNumber = numberOrNull(rightSort ?? rightLabel);
+    if (leftNumber !== null && rightNumber !== null && leftNumber !== rightNumber) return leftNumber - rightNumber;
+    if (leftNumber !== null && rightNumber === null) return -1;
+    if (leftNumber === null && rightNumber !== null) return 1;
+  } else {
+    const leftText = String(leftSort ?? leftLabel);
+    const rightText = String(rightSort ?? rightLabel);
+    const sortCompare = leftText.localeCompare(rightText, undefined, { numeric: true, sensitivity: "base" });
+    if (sortCompare) return sortCompare;
+  }
+  return String(leftLabel).localeCompare(String(rightLabel), undefined, { numeric: true, sensitivity: "base" });
 }
 
 function unique(values) {

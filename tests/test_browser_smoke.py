@@ -845,11 +845,17 @@ COPY (
                           return [1, 2, 5, 10].some((candidate) => Math.abs(normalised - candidate) < 1e-9);
                         });
                       }
+                      function isMonotoneNumeric(labels) {
+                        const numbers = labels.map(Number).filter(Number.isFinite);
+                        return numbers.length > 1 && numbers.every((value, index) => index === 0 || value >= numbers[index - 1]);
+                      }
                       const xLabels = visibleLabels(option?.xAxis?.[0]);
                       const yLabels = visibleLabels(option?.yAxis?.[0]);
                       return {
                         x: option?.xAxis?.[0]?.axisLabel?.formatter?.("56.800000000000004") || "",
                         y: option?.yAxis?.[0]?.axisLabel?.formatter?.("49.00000000000001") || "",
+                        xMonotone: isMonotoneNumeric(option?.xAxis?.[0]?.data || []),
+                        yMonotone: isMonotoneNumeric(option?.yAxis?.[0]?.data || []),
                         xIntervalType: typeof option?.xAxis?.[0]?.axisLabel?.interval,
                         yIntervalType: typeof option?.yAxis?.[0]?.axisLabel?.interval,
                         xNiceSpacing: hasNiceSpacing(xLabels),
@@ -861,6 +867,8 @@ COPY (
                 )
                 self.assertEqual(shap_axis_formatting["x"], "56.8")
                 self.assertEqual(shap_axis_formatting["y"], "49")
+                self.assertTrue(shap_axis_formatting["xMonotone"])
+                self.assertTrue(shap_axis_formatting["yMonotone"])
                 self.assertEqual(shap_axis_formatting["xIntervalType"], "function")
                 self.assertEqual(shap_axis_formatting["yIntervalType"], "function")
                 self.assertTrue(shap_axis_formatting["xNiceSpacing"])
