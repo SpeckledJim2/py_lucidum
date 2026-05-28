@@ -568,7 +568,8 @@ function makeBandSteps() {
     const multiplier = 10 ** exponent;
     steps.push(1 * multiplier, 2 * multiplier, 5 * multiplier);
   }
-  return steps.sort((a, b) => a - b);
+  steps.push(4, 7, 12);
+  return [...new Set(steps)].sort((a, b) => a - b);
 }
 
 function nextAnimationFrame() {

@@ -169,6 +169,24 @@ for (const [value, expected] of cases) {
 """
         self.run_node_script(script)
 
+    def test_gbm_shap_banding_steps_match_line_bar_steps(self) -> None:
+        line_bar_js = self.assert_no_store("/static/app/main.js")[1].decode("utf-8")
+        shap_js = self.assert_no_store("/static/app/gbm-shap-tool.js")[1].decode("utf-8")
+        script = "\n".join([
+            self.js_function_source(line_bar_js, "makeBandSteps").replace("function makeBandSteps", "function makeLineBarBandSteps", 1),
+            self.js_function_source(shap_js, "makeBandSteps").replace("function makeBandSteps", "function makeShapBandSteps", 1),
+        ]) + """
+const lineBarSteps = makeLineBarBandSteps();
+const shapSteps = makeShapBandSteps();
+if (JSON.stringify(shapSteps) !== JSON.stringify(lineBarSteps)) {
+  throw new Error("SHAP band steps diverged from Line/Bar band steps");
+}
+for (const value of [4, 7, 12]) {
+  if (!shapSteps.includes(value)) throw new Error(`missing special band step ${value}`);
+}
+"""
+        self.run_node_script(script)
+
     def test_index_uses_stable_local_asset_urls_and_disables_cache(self) -> None:
         _, body = self.assert_no_store("/")
         html = body.decode("utf-8")
