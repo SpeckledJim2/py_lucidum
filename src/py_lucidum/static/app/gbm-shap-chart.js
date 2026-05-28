@@ -9,6 +9,7 @@ const SHAP_RED_RIBBONS = [
   "rgba(209, 63, 63, 0.38)",
 ];
 const LINE_COLORS = ["#4fb99f", "#ff7f50", "#8aa1d6", "#b779d6", "#e7b84b", "#5aa2d6", "#d96a8a", "#84b547"];
+const AXIS_TARGET_INTERVALS = 6;
 let echartsGlPromise = null;
 
 export async function ensureShapChartLibraries(plotType) {
@@ -119,10 +120,11 @@ function flameOption(payload, common, theme) {
 function boxOption(payload, common, theme) {
   const rows = payload.rows || [];
   const labels = rows.map((row) => String(row.level));
+  const feature = featureInfoForName(payload, payload.x_feature);
   return {
     ...common,
-    tooltip: { trigger: "item", confine: true, formatter: (params) => boxTooltip(params, rows) },
-    xAxis: categoryAxis(labels, payload.x_feature, theme),
+    tooltip: { trigger: "item", confine: true, formatter: (params) => boxTooltip(params, rows, feature) },
+    xAxis: categoryAxis(labels, payload.x_feature, theme, feature),
     yAxis: valueAxis(payload.y_label || "SHAP", theme),
     dataZoom: labels.length > 60 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
     series: [
@@ -218,6 +220,8 @@ function heatmapOption(payload, common, theme) {
   const rows = payload.rows || [];
   const xLabels = unique(rows.map((row) => String(row.x)));
   const yLabels = unique(rows.map((row) => String(row.y)));
+  const xFeature = featureInfoForName(payload, payload.x_feature);
+  const yFeature = featureInfoForName(payload, payload.y_feature);
   const values = rows.map((row) => numberOrNull(row.z)).filter((value) => value !== null);
   const extent = numericExtent(values);
   const xIndex = new Map(xLabels.map((label, index) => [label, index]));
@@ -227,10 +231,10 @@ function heatmapOption(payload, common, theme) {
     tooltip: {
       trigger: "item",
       confine: true,
-      formatter: (params) => heatmapTooltip(params, payload, xLabels, yLabels),
+      formatter: (params) => heatmapTooltip(params, payload, xLabels, yLabels, xFeature, yFeature),
     },
-    xAxis: categoryAxis(xLabels, payload.x_feature, theme),
-    yAxis: categoryAxis(yLabels, payload.y_feature, theme),
+    xAxis: categoryAxis(xLabels, payload.x_feature, theme, xFeature),
+    yAxis: categoryAxis(yLabels, payload.y_feature, theme, yFeature),
     visualMap: {
       min: extent.min,
       max: extent.max,
@@ -264,15 +268,17 @@ function valueAxis(name, theme, domain = null) {
     splitLine: { lineStyle: { color: theme.grid || "#e5e7eb" } },
     nameTextStyle: { color: theme.text || "#334155", fontWeight: 700 },
   };
-  const bounds = normaliseDomain(domain);
+  const bounds = niceAxisBounds(domain);
   if (bounds) {
-    axis.min = bounds[0];
-    axis.max = bounds[1];
+    axis.min = bounds.min;
+    axis.max = bounds.max;
+    axis.interval = bounds.interval;
   }
   return axis;
 }
 
-function categoryAxis(labels, name, theme) {
+function categoryAxis(labels, name, theme, feature = null) {
+  const numericTickPolicy = numericCategoryTickPolicy(labels, feature);
   return {
     type: "category",
     data: labels,
@@ -280,7 +286,12 @@ function categoryAxis(labels, name, theme) {
     nameLocation: "middle",
     nameGap: 34,
     axisLine: { lineStyle: { color: theme.line || "#cbd5e1" } },
-    axisLabel: { color: theme.text || "#334155", interval: labels.length > 80 ? "auto" : 0, rotate: labels.length > 25 ? 60 : 0 },
+    axisLabel: {
+      color: theme.text || "#334155",
+      interval: numericTickPolicy?.interval || (labels.length > 80 ? "auto" : 0),
+      rotate: labels.length > 25 ? 60 : 0,
+      formatter: (value) => formatCategoryLabel(value, feature),
+    },
     splitLine: { show: true, lineStyle: { color: theme.grid || "#e5e7eb" } },
     nameTextStyle: { color: theme.text || "#334155", fontWeight: 700 },
   };
@@ -295,10 +306,11 @@ function axis3D(name, theme, domain = null) {
     axisLine: { lineStyle: { color: theme.line || "#cbd5e1" } },
     splitLine: { lineStyle: { color: theme.grid || "#e5e7eb" } },
   };
-  const bounds = normaliseDomain(domain);
+  const bounds = niceAxisBounds(domain);
   if (bounds) {
-    axis.min = bounds[0];
-    axis.max = bounds[1];
+    axis.min = bounds.min;
+    axis.max = bounds.max;
+    axis.interval = bounds.interval;
   }
   return axis;
 }
@@ -363,14 +375,15 @@ function flameTooltipFormatter(rows, payload) {
   };
 }
 
-function boxTooltip(params, rows) {
+function boxTooltip(params, rows, feature = null) {
   const row = rows?.[params?.dataIndex];
   if (!row) return "";
+  const label = formatCategoryLabel(row.level, feature);
   if (params?.seriesName === "Mean") {
-    return `${row.level}<br>Mean: ${formatTooltipNumber(row.mean)}`;
+    return `${label}<br>Mean: ${formatTooltipNumber(row.mean)}`;
   }
   return [
-    `${row.level}`,
+    `${label}`,
     `min: ${formatTooltipNumber(row.p0)}`,
     `Q1: ${formatTooltipNumber(row.p25)}`,
     `median: ${formatTooltipNumber(row.p50)}`,
@@ -380,10 +393,10 @@ function boxTooltip(params, rows) {
   ].join("<br>");
 }
 
-function heatmapTooltip(params, payload, xLabels, yLabels) {
+function heatmapTooltip(params, payload, xLabels, yLabels, xFeature = null, yFeature = null) {
   const value = Array.isArray(params?.value) ? params.value : [];
-  const xLabel = xLabels[value[0]] ?? "";
-  const yLabel = yLabels[value[1]] ?? "";
+  const xLabel = formatCategoryLabel(xLabels[value[0]] ?? "", xFeature);
+  const yLabel = formatCategoryLabel(yLabels[value[1]] ?? "", yFeature);
   return `${payload.x_feature}: ${xLabel}<br>${payload.y_feature}: ${yLabel}<br>SHAP: ${formatTooltipNumber(value[2])}`;
 }
 
@@ -455,16 +468,73 @@ function numericExtent(values) {
   return { min, max };
 }
 
-function normaliseDomain(domain) {
+function niceAxisBounds(domain) {
   if (!Array.isArray(domain) || domain.length < 2) return null;
   const min = numberOrNull(domain[0]);
   const max = numberOrNull(domain[1]);
   if (min === null || max === null) return null;
+  let lower = min;
+  let upper = max;
   if (min === max) {
     const pad = Math.max(0.5, Math.abs(min) * 0.02);
-    return [min - pad, max + pad];
+    lower = min - pad;
+    upper = max + pad;
   }
-  return [min, max];
+  const step = niceAxisStep(upper - lower);
+  let axisMin = Math.floor(lower / step) * step;
+  let axisMax = Math.ceil(upper / step) * step;
+  if (min >= 0) axisMin = Math.max(0, axisMin);
+  if (axisMax <= axisMin) axisMax = axisMin + step;
+  return {
+    min: roundAxisValue(axisMin, step),
+    max: roundAxisValue(axisMax, step),
+    interval: roundAxisValue(step, step),
+  };
+}
+
+function niceAxisStep(span, targetIntervals = AXIS_TARGET_INTERVALS) {
+  if (!Number.isFinite(span) || span <= 0) return 1;
+  const roughStep = span / Math.max(1, targetIntervals);
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalized = roughStep / magnitude;
+  const multiplier = [1, 2, 5, 10].find((candidate) => normalized <= candidate) || 10;
+  return multiplier * magnitude;
+}
+
+function roundAxisValue(value, step) {
+  if (!Number.isFinite(value)) return value;
+  const precision = Math.min(12, Math.max(0, Math.ceil(-Math.log10(Math.abs(step))) + 3));
+  return Number(value.toFixed(precision));
+}
+
+function numericCategoryTickPolicy(labels, feature = null) {
+  if (!isNumericFeature(feature)) return null;
+  const numericLabels = labels
+    .map((label, index) => ({ index, value: numberOrNull(label) }))
+    .filter((row) => row.value !== null)
+    .sort((a, b) => a.value - b.value);
+  if (!numericLabels.length) return null;
+  const min = numericLabels[0].value;
+  const max = numericLabels[numericLabels.length - 1].value;
+  const step = niceAxisStep(max - min);
+  const selected = new Set();
+  const tolerance = Math.max(Math.abs(step) * 1e-7, 1e-12);
+  let tick = Math.ceil(min / step) * step;
+  const maxTick = max + tolerance;
+  while (tick <= maxTick) {
+    const roundedTick = roundAxisValue(tick, step);
+    const match = numericLabels.find((row) => Math.abs(row.value - roundedTick) <= tolerance);
+    if (match) selected.add(match.index);
+    tick += step;
+  }
+  if (!selected.size) {
+    selected.add(numericLabels[0].index);
+    selected.add(numericLabels[numericLabels.length - 1].index);
+  }
+  return {
+    interval: (index) => selected.has(index),
+    step: roundAxisValue(step, step),
+  };
 }
 
 function unique(values) {
@@ -476,6 +546,22 @@ function unique(values) {
     result.push(value);
   }
   return result;
+}
+
+function featureInfoForName(payload, name) {
+  return [payload?.feature_1, payload?.feature_2].find((feature) => feature?.name === name) || null;
+}
+
+function formatCategoryLabel(value, feature = null) {
+  if (!isNumericFeature(feature)) return String(value);
+  const text = String(value);
+  const number = Number(text);
+  if (!Number.isFinite(number)) return text;
+  return number.toLocaleString(undefined, { maximumFractionDigits: 12 });
+}
+
+function isNumericFeature(feature) {
+  return feature?.kind === "numeric" || feature?.kind === "integer";
 }
 
 function compactNumber(value) {

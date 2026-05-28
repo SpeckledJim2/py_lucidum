@@ -295,18 +295,20 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const nextFeatures = features();
     const names = new Set(nextFeatures.map((feature) => feature.name));
     if (modelId !== lastModelId) {
-      state.feature1 = config.default_feature_1 || nextFeatures[0]?.name || "";
-      state.feature2 = "";
       state.factor1 = false;
       state.factor2 = false;
       state.search1 = "";
       state.search2 = "";
       lastModelId = modelId;
     }
-    if (!names.has(state.feature1)) state.feature1 = config.default_feature_1 || nextFeatures[0]?.name || "";
+    if (!names.has(state.feature1)) state.feature1 = firstFeatureNameForChooser(1);
     if (state.feature2 && !names.has(state.feature2)) state.feature2 = "";
     state.banding1 = normaliseBanding(state.banding1, selectedFeature(1));
     state.banding2 = normaliseBanding(state.banding2, selectedFeature(2));
+  }
+
+  function firstFeatureNameForChooser(index) {
+    return sortedFeatures(state[`sort${index}`])[0]?.name || "";
   }
 
   function renderLoading(message) {

@@ -755,6 +755,7 @@ COPY (
                       return {
                         xMin: option.xAxis?.[0]?.min,
                         xMax: option.xAxis?.[0]?.max,
+                        xInterval: option.xAxis?.[0]?.interval,
                         legendLeft: option.legend?.[0]?.left || "",
                         hasRibbon: option.series?.some((series) => series.type === "custom"),
                         ribbonColors: option.series
@@ -768,8 +769,9 @@ COPY (
                     }
                     """
                 )
-                self.assertAlmostEqual(initial_shap_state["xMin"], 30.2)
-                self.assertAlmostEqual(initial_shap_state["xMax"], 49.8)
+                self.assertAlmostEqual(initial_shap_state["xMin"], 30)
+                self.assertAlmostEqual(initial_shap_state["xMax"], 50)
+                self.assertAlmostEqual(initial_shap_state["xInterval"], 5)
                 self.assertTrue(initial_shap_state["hasRibbon"])
                 self.assertEqual(initial_shap_state["legendLeft"], "center")
                 self.assertTrue(all(color.startswith("rgba(209, 63, 63,") for color in initial_shap_state["ribbonColors"]))
@@ -808,6 +810,62 @@ COPY (
                 self.assertTrue(surface_state["invalidZ"])
                 self.assertTrue(surface_state["noticeHidden"])
                 self.assertNotIn("undefined is not an object", surface_state["noticeText"])
+                page.locator('[data-gbm-shap-factor="1"]').check()
+                page.locator('[data-gbm-shap-factor="2"]').check()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP heatmap: Age x lat")
+                        && option.series?.some((series) => series.type === "heatmap");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                shap_axis_formatting = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      function visibleLabels(axis) {
+                        const interval = axis?.axisLabel?.interval;
+                        const formatter = axis?.axisLabel?.formatter;
+                        return (axis?.data || [])
+                          .filter((label, index) => typeof interval === "function" ? interval(index, label) : true)
+                          .map((label) => typeof formatter === "function" ? formatter(label) : String(label));
+                      }
+                      function hasNiceSpacing(labels) {
+                        const numbers = labels.map(Number).filter(Number.isFinite);
+                        if (numbers.length < 2) return true;
+                        const diffs = numbers.slice(1).map((value, index) => Math.abs(value - numbers[index])).filter((value) => value > 0);
+                        return diffs.every((diff) => {
+                          const magnitude = 10 ** Math.floor(Math.log10(diff));
+                          const normalised = Number((diff / magnitude).toPrecision(12));
+                          return [1, 2, 5, 10].some((candidate) => Math.abs(normalised - candidate) < 1e-9);
+                        });
+                      }
+                      const xLabels = visibleLabels(option?.xAxis?.[0]);
+                      const yLabels = visibleLabels(option?.yAxis?.[0]);
+                      return {
+                        x: option?.xAxis?.[0]?.axisLabel?.formatter?.("56.800000000000004") || "",
+                        y: option?.yAxis?.[0]?.axisLabel?.formatter?.("49.00000000000001") || "",
+                        xIntervalType: typeof option?.xAxis?.[0]?.axisLabel?.interval,
+                        yIntervalType: typeof option?.yAxis?.[0]?.axisLabel?.interval,
+                        xNiceSpacing: hasNiceSpacing(xLabels),
+                        yNiceSpacing: hasNiceSpacing(yLabels),
+                        tooltip: option?.tooltip?.[0]?.formatter?.({ value: [0, 0, -0.123456] }) || "",
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(shap_axis_formatting["x"], "56.8")
+                self.assertEqual(shap_axis_formatting["y"], "49")
+                self.assertEqual(shap_axis_formatting["xIntervalType"], "function")
+                self.assertEqual(shap_axis_formatting["yIntervalType"], "function")
+                self.assertTrue(shap_axis_formatting["xNiceSpacing"])
+                self.assertTrue(shap_axis_formatting["yNiceSpacing"])
+                self.assertIsNone(re.search(r"\d+\.\d{5,}", shap_axis_formatting["tooltip"]))
                 page.get_by_role("button", name="Features and parameters").click()
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)
@@ -1030,14 +1088,14 @@ COPY (
                     () => {
                       const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
                       const option = chart?.getOption();
-                      return option?.title?.[0]?.text?.includes("SHAP box plot: Segment")
-                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Segment")
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
                         && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None");
                     }
                     """,
                     timeout=10_000,
                 )
-                page.locator("#gbmShapFeatureList2 .feature", has_text="Age").click()
+                page.locator("#gbmShapFeatureList2 .feature", has_text="Segment").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -1050,6 +1108,66 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertFalse(page.locator("#gbmShapMessage", has_text="undefined is not an object").is_visible())
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
+                page.locator("#gbmActivateModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
+                      && document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Browser smoke model")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="SHAP").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
+                        && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('[data-gbm-shap-feature="1"][data-gbm-shap-sort="alpha"]').click()
+                page.locator("#gbmShapFeatureList1 .feature", has_text="lat").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: lat")
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("lat");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
+                page.locator("#gbmActivateModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Second smoke model")
+                      && document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Second smoke model")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="SHAP").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
+                        && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None")
+                        && document.querySelector('[data-gbm-shap-feature="1"][data-gbm-shap-sort="alpha"]')?.classList.contains("active");
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.get_by_role("button", name="Features and parameters").click()
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
