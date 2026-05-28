@@ -63,7 +63,7 @@ EBM mode requires a physical dataset `SAMPLE` column with `training` and `test` 
 
 ## Model navigator tab
 
-This is a sortable table showing every fitted model, any feature interaction constraints, and its key parameters and train objective/metric context. The first column shows a green dot for the active model, i.e. the one displayed in the Line and Bar charts and tree tool. Clicking model rows selects them for actions rather than activating them. The tab lets users rename one selected model to a valid folder name or delete all selected `.lucidum/models/gbm/` folders; deleting the active model selects the newest remaining model when one exists. Active model switching is handled by the sidebar model list.
+This is a sortable table showing every fitted model, any feature interaction constraints, and its key parameters and train objective/metric context. The first column shows a green dot for the active model, i.e. the one displayed in the Line and Bar charts and tree tool. Clicking model rows selects them for actions rather than activating them. The tab lets users rename one selected model to a valid folder name, activate one selected model, or delete all selected `.lucidum/models/gbm/` folders; deleting the active model selects the newest remaining model when one exists. Active model switching is handled by the sidebar model list or the Model navigator Activate button.
 
 ## Tree viewer tab
 

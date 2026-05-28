@@ -255,6 +255,7 @@ export function createGbmTool({
           <div class="gbm-model-navigator">
             <div class="gbm-model-actions" role="group" aria-label="GBM model actions">
               <button id="gbmRenameModelBtn" class="tab gbm-inline-action-button" type="button">Rename</button>
+              <button id="gbmActivateModelBtn" class="tab gbm-inline-action-button" type="button">Activate</button>
               <button id="gbmDeleteModelBtn" class="danger-action gbm-model-delete-button" type="button">Delete</button>
             </div>
             <div id="gbmModelGrid" class="gbm-grid gbm-model-grid"></div>
@@ -1062,6 +1063,7 @@ export function createGbmTool({
         placeholder: "No GBMs trained yet",
         initialSort: [{ column: "created_sort", dir: "desc" }],
         selectableRows: true,
+        selectableRowsRangeMode: "click",
         columns: [
           { title: "", field: "active", formatter: activeModelDotFormatter, hozAlign: "center", headerHozAlign: "center", width: 28, minWidth: 28, headerSort: false, resizable: false },
           { title: "Model", field: "model_label", sorter: "string", formatter: modelNameFormatter, widthGrow: 3, headerSort: true },
@@ -1087,6 +1089,7 @@ export function createGbmTool({
         ],
       });
       modelTable.on("rowSelectionChanged", syncModelActionButtons);
+      syncModelActionButtons();
       featureTable = new Tabulator("#gbmFeatureGrid", {
         data: features,
         height: "100%",
@@ -1433,11 +1436,37 @@ export function createGbmTool({
         </tbody>
       </table>
     `;
-    for (const row of target.querySelectorAll("[data-gbm-model-row]")) {
-      row.addEventListener("click", () => {
-        const selected = row.getAttribute("aria-selected") === "true";
-        row.classList.toggle("selected", !selected);
-        row.setAttribute("aria-selected", String(!selected));
+    const rows = Array.from(target.querySelectorAll("[data-gbm-model-row]"));
+    let anchorRow = null;
+    const setSelected = (row, selected) => {
+      row.classList.toggle("selected", selected);
+      row.setAttribute("aria-selected", String(selected));
+    };
+    for (const row of rows) {
+      row.addEventListener("click", (event) => {
+        const commandSelection = event.metaKey || event.ctrlKey;
+        if (event.shiftKey) {
+          event.preventDefault();
+          const anchor = anchorRow && rows.includes(anchorRow) ? anchorRow : row;
+          const start = rows.indexOf(anchor);
+          const end = rows.indexOf(row);
+          const min = Math.min(start, end);
+          const max = Math.max(start, end);
+          if (!commandSelection) rows.forEach((candidate) => setSelected(candidate, false));
+          for (let index = min; index <= max; index += 1) {
+            const candidate = rows[index];
+            if (commandSelection && candidate !== anchor) {
+              setSelected(candidate, candidate.getAttribute("aria-selected") !== "true");
+            } else {
+              setSelected(candidate, true);
+            }
+          }
+        } else if (commandSelection) {
+          setSelected(row, row.getAttribute("aria-selected") !== "true");
+        } else {
+          rows.forEach((candidate) => setSelected(candidate, candidate === row));
+        }
+        anchorRow = row;
         syncModelActionButtons();
       });
     }
@@ -1509,6 +1538,7 @@ export function createGbmTool({
 
   function bindModelActions() {
     el("gbmRenameModelBtn")?.addEventListener("click", renameActiveModel);
+    el("gbmActivateModelBtn")?.addEventListener("click", activateSelectedModel);
     el("gbmDeleteModelBtn")?.addEventListener("click", deleteActiveModel);
     syncModelActionButtons();
   }
@@ -1516,8 +1546,10 @@ export function createGbmTool({
   function syncModelActionButtons() {
     const selectedCount = selectedModelIds().length;
     const rename = el("gbmRenameModelBtn");
+    const activate = el("gbmActivateModelBtn");
     const del = el("gbmDeleteModelBtn");
     if (rename) rename.disabled = selectedCount !== 1;
+    if (activate) activate.disabled = selectedCount !== 1;
     if (del) del.disabled = selectedCount < 1;
   }
 
@@ -1684,6 +1716,12 @@ export function createGbmTool({
     } catch (error) {
       setGbmNotice(error.message);
     }
+  }
+
+  async function activateSelectedModel() {
+    const modelIds = selectedModelIds();
+    if (modelIds.length !== 1) return;
+    await activateModel(modelIds[0]);
   }
 
   async function renameActiveModel() {
