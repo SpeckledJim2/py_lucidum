@@ -98,6 +98,7 @@ def model_features(dataset: Dataset, store: GbmModelStore, model_id: str) -> lis
     raw_features = store.read_json(store.artifact_path(model_id, "feature_config"), [])
     if not isinstance(raw_features, list):
         raw_features = []
+    shap_importance = shap_summary_importance(dataset, store, model_id)
     try:
         dataset_columns = dataset.column_map()
     except duckdb.Error:
@@ -113,17 +114,61 @@ def model_features(dataset: Dataset, store: GbmModelStore, model_id: str) -> lis
         column = dataset_columns.get(name)
         kind = str(item.get("kind") or (column.kind if column else "categorical"))
         gain = finite_float(item.get("gain")) or 0.0
-        rows.append(
-            {
-                "name": name,
-                "kind": kind,
-                "duckdb_type": column.duckdb_type if column else str(item.get("duckdb_type") or ""),
-                "gain": round(gain, 3),
-                "band_suggestion": column.band_suggestion if column else None,
-            }
-        )
+        mean_abs_shap = finite_float(item.get("mean_abs_shap"))
+        if mean_abs_shap is None:
+            mean_abs_shap = shap_importance.get(name)
+        row = {
+            "name": name,
+            "kind": kind,
+            "duckdb_type": column.duckdb_type if column else str(item.get("duckdb_type") or ""),
+            "gain": round(gain, 3),
+            "band_suggestion": column.band_suggestion if column else None,
+        }
+        if mean_abs_shap is not None:
+            row["mean_abs_shap"] = mean_abs_shap
+        rows.append(row)
         seen.add(name)
-    return sorted(rows, key=lambda row: (-float(row["gain"]), str(row["name"]).lower()))
+    use_shap = any(finite_float(row.get("mean_abs_shap")) is not None for row in rows)
+    return sorted(
+        rows,
+        key=lambda row: (
+            -feature_importance_value(row, use_shap=use_shap),
+            str(row["name"]).lower(),
+        ),
+    )
+
+
+def shap_summary_importance(dataset: Dataset, store: GbmModelStore, model_id: str) -> dict[str, float]:
+    path = store.artifact_path(model_id, "shap_summary")
+    if not path.exists():
+        return {}
+    try:
+        with dataset.lock:
+            columns = parquet_columns(dataset.con, path)
+            if not {"feature", "mean_abs_shap"}.issubset(columns):
+                return {}
+            records = dataset.con.execute(
+                f"""
+SELECT feature, mean_abs_shap
+FROM read_parquet({sql_literal(str(path))})
+WHERE feature IS NOT NULL
+"""
+            ).fetchall()
+    except duckdb.Error:
+        return {}
+    values: dict[str, float] = {}
+    for feature, value in records:
+        name = str(feature or "").strip()
+        number = json_number(value)
+        if name and number is not None:
+            values[name] = float(number)
+    return values
+
+
+def feature_importance_value(feature: dict[str, Any], *, use_shap: bool) -> float:
+    key = "mean_abs_shap" if use_shap else "gain"
+    value = finite_float(feature.get(key))
+    return value if value is not None else 0.0
 
 
 def flame_plot(
@@ -564,13 +609,17 @@ def dense_surface_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
 
 
 def feature_payload(feature: dict[str, Any], banding: float, factor: bool) -> dict[str, Any]:
-    return {
+    payload = {
         "name": feature["name"],
         "kind": feature["kind"],
         "gain": feature.get("gain", 0.0),
         "banding": banding,
         "factor": bool(factor),
     }
+    mean_abs_shap = finite_float(feature.get("mean_abs_shap"))
+    if mean_abs_shap is not None:
+        payload["mean_abs_shap"] = mean_abs_shap
+    return payload
 
 
 def normalise_feature_name(value: Any, *, allow_none: bool = False) -> str:

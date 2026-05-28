@@ -2954,8 +2954,61 @@
         gap: 6px;
       }
 
+      .gbm-feature-section-header {
+        flex-wrap: wrap;
+      }
+
+      .gbm-feature-actions {
+        flex: 1 1 260px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        min-width: 0;
+      }
+
       .gbm-evaluation-view-mode {
         align-items: center;
+      }
+
+      .gbm-feature-metric-toggle {
+        align-items: stretch;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        display: inline-flex;
+        flex: 0 0 auto;
+        min-height: 22px;
+        overflow: hidden;
+      }
+
+      .gbm-feature-metric-option {
+        align-items: center;
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+        display: inline-flex;
+        font-size: 11px;
+        font-weight: 700;
+        justify-content: center;
+        min-width: 42px;
+        padding: 2px 7px;
+        white-space: nowrap;
+      }
+
+      .gbm-feature-metric-option + .gbm-feature-metric-option {
+        border-left: 1px solid var(--line);
+      }
+
+      .gbm-feature-metric-option.active {
+        background: var(--accent);
+        color: white;
+      }
+
+      .gbm-feature-metric-option input {
+        block-size: 1px;
+        inline-size: 1px;
+        margin: 0;
+        opacity: 0;
+        pointer-events: none;
+        position: absolute;
       }
 
       .gbm-evaluation-view-option {
@@ -3243,7 +3296,9 @@
       }
 
       #gbmFeatureGrid .tabulator-cell[tabulator-field="gain"],
-      #gbmFeatureGrid .tabulator-col[tabulator-field="gain"] {
+      #gbmFeatureGrid .tabulator-col[tabulator-field="gain"],
+      #gbmFeatureGrid .tabulator-cell[tabulator-field="mean_abs_shap"],
+      #gbmFeatureGrid .tabulator-col[tabulator-field="mean_abs_shap"] {
         justify-content: center;
         text-align: center;
         font-variant-numeric: tabular-nums;
@@ -3868,6 +3923,7 @@
       }
 
       .gbm-use-cell,
+      .gbm-feature-metric-cell,
       .gbm-gain-cell {
         text-align: center;
       }
@@ -3894,6 +3950,7 @@
         font-variant-numeric: tabular-nums;
       }
 
+      .gbm-fallback-table td.gbm-feature-metric-cell,
       .gbm-fallback-table td.gbm-gain-cell {
         text-align: center;
       }

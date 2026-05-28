@@ -20,7 +20,7 @@ from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.shap import shap_config, shap_plot
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_groupings, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
@@ -292,8 +292,9 @@ COPY (
 
         self.assertTrue(payload["has_shap"])
         self.assertEqual(payload["row_count"], 3)
-        self.assertEqual([feature["name"] for feature in payload["features"]], ["Age", "lat", "Segment"])
-        self.assertEqual(payload["default_feature_1"], "Age")
+        self.assertEqual([feature["name"] for feature in payload["features"]], ["lat", "Age", "Segment"])
+        self.assertEqual(payload["default_feature_1"], "lat")
+        self.assertEqual([feature.get("mean_abs_shap") for feature in payload["features"]], [1.333, 0.233, 0.117])
 
     def test_shap_config_handles_models_without_saved_shap_rows(self) -> None:
         store = self.write_shap_plot_model("no-shap", with_shap=False)
@@ -1088,7 +1089,7 @@ COPY (
             dataset,
             {"Age": 9.25, "Segment": 1.5},
             model_features=[
-                {"name": "Age", "include": True, "monotonicity": 1, "gain": 9.25},
+                {"name": "Age", "include": True, "monotonicity": 1, "gain": 9.25, "mean_abs_shap": 0.4567},
                 {"name": "Segment", "include": True, "monotonicity": "", "gain": 1.5},
             ],
         )
@@ -1100,6 +1101,35 @@ COPY (
         self.assertEqual(by_name["Segment"]["monotonicity"], "")
         self.assertFalse(by_name["SAMPLE"]["include"])
         self.assertEqual(by_name["SAMPLE"]["gain"], 0.0)
+        self.assertEqual(by_name["Age"]["mean_abs_shap"], 0.4567)
+        self.assertNotIn("mean_abs_shap", by_name["Segment"])
+
+    def test_gbm_config_overlays_shap_importance_from_saved_summary(self) -> None:
+        self.write_shap_plot_model()
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+            status, body = asgi_get(app, "/api/gbm/config")
+
+        payload = json.loads(body)
+        features = {row["name"]: row for row in payload["features"]}
+
+        self.assertEqual(status, 200)
+        self.assertEqual(features["Age"]["mean_abs_shap"], 0.233)
+        self.assertEqual(features["lat"]["mean_abs_shap"], 1.333)
+        self.assertEqual(features["Segment"]["mean_abs_shap"], 0.117)
+        self.assertNotIn("mean_abs_shap", features["SAMPLE"])
+
+    def test_gbm_config_omits_shap_importance_without_saved_summary(self) -> None:
+        self.write_shap_plot_model("no-shap", with_shap=False)
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
+        features = {row["name"]: row for row in payload["features"]}
+
+        self.assertEqual(status, 200)
+        self.assertNotIn("mean_abs_shap", features["Age"])
 
     def test_config_uses_active_model_parameters(self) -> None:
         store = self.write_model_artifacts()
@@ -1659,6 +1689,9 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         self.assertEqual(shap_frame["Age"].tolist(), [0.2, 0.5])
         self.assertNotIn("feature_value", shap_frame.columns)
         self.assertEqual(set(summary["feature"]), {"Age", "Segment"})
+        summary_by_feature = {row["feature"]: row for row in summary.to_dict("records")}
+        self.assertAlmostEqual(summary_by_feature["Age"]["mean_abs_shap"], 0.35)
+        self.assertAlmostEqual(summary_by_feature["Segment"]["mean_abs_shap"], 0.2)
 
         shap_path = self.root / "shap_values.parquet"
         write_dataframe_parquet(shap_frame, shap_path)
@@ -1670,6 +1703,25 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "Age", "Segment"])
         self.assertTrue(str(artifact_columns[0][1]).startswith("BIGINT"))
         self.assertTrue(str(artifact_columns[1][1]).startswith("DOUBLE"))
+
+    def test_feature_config_with_mean_abs_shap_persists_training_summary_metric(self) -> None:
+        features = [
+            {"name": "Age", "gain": 9.0},
+            {"name": "Segment", "gain": 2.0},
+            {"name": "lat", "gain": 1.0},
+        ]
+        rows = [
+            {"feature": "Segment", "mean_abs_shap": 0.167},
+            {"feature": "Age", "mean_abs_shap": 0.183},
+            {"feature": "bad", "mean_abs_shap": None},
+        ]
+
+        enriched = feature_config_with_mean_abs_shap(features, rows)
+
+        self.assertEqual(enriched[0]["mean_abs_shap"], 0.183)
+        self.assertEqual(enriched[1]["mean_abs_shap"], 0.167)
+        self.assertNotIn("mean_abs_shap", enriched[2])
+        self.assertNotIn("mean_abs_shap", features[0])
 
     def test_tree_dataframe_adds_decoded_categorical_threshold_labels(self) -> None:
         try:

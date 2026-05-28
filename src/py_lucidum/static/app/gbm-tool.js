@@ -130,6 +130,8 @@ export function createGbmTool({
   let evaluationChart = null;
   let evaluationResizeObserver = null;
   let evaluationViewMode = "all";
+  let featureMetricMode = "gain";
+  let featureMetricModelId = "";
   const treeViewer = createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNotice });
   const shapTool = createGbmShapTool({ api, escapeHtml, setNotice: setGbmNotice });
 
@@ -184,6 +186,7 @@ export function createGbmTool({
 
   function render(data = {}) {
     config = data;
+    syncFeatureMetricMode(data);
     const groupMeta = "";
     setGroupMeta(tool, groupMeta);
     setStatus("");
@@ -211,6 +214,7 @@ export function createGbmTool({
               <div class="gbm-section-header gbm-feature-section-header">
                 <h3 id="gbmFeatureSectionTitle" class="gbm-section-title">${escapeHtml(featureSectionTitle(data.features || []))}</h3>
                 <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
+                  ${featureMetricToggleHtml(data.features || [])}
                   ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
                   ${featureScenarioSelectHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
                   <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Clear all features" title="Clear all">×</button>
@@ -454,6 +458,7 @@ export function createGbmTool({
   }
 
   function bindFeatureActions() {
+    bindFeatureMetricActions();
     bindFeatureInteractionActions();
     const scenarioSelect = el("gbmFeatureScenarioSelect");
     scenarioSelect?.addEventListener("change", () => applyFeatureScenario(scenarioSelect.value));
@@ -462,6 +467,84 @@ export function createGbmTool({
     el("gbmCreateSampleBtn")?.addEventListener("click", createSampleColumn);
     el("gbmTrainBtn")?.addEventListener("click", train);
     syncTrainingButton();
+  }
+
+  function syncFeatureMetricMode(data = {}) {
+    const features = data.features || [];
+    const modelId = featureMetricModelIdFromData(data);
+    if (modelId !== featureMetricModelId) {
+      featureMetricModelId = modelId;
+      featureMetricMode = featureMetricToggleAvailable(features) ? "shap" : "gain";
+      return;
+    }
+    featureMetricMode = normaliseFeatureMetricMode(featureMetricMode, features);
+  }
+
+  function featureMetricModelIdFromData(data = {}) {
+    const activeModelId = String(data.active_model_id || "");
+    if (activeModelId) return activeModelId;
+    const activeModel = (data.models || []).find((model) => model.active);
+    return String(activeModel?.model_id || "");
+  }
+
+  function featureMetricToggleAvailable(features = []) {
+    const rows = Array.isArray(features) ? features : [];
+    const hasGain = rows.some((feature) => featureNumber(feature?.gain) !== null);
+    const hasShap = rows.some((feature) => featureMeanAbsShap(feature) !== null);
+    return hasGain && hasShap;
+  }
+
+  function normaliseFeatureMetricMode(value, features = config?.features || []) {
+    return String(value || "").toLowerCase() === "shap" && featureMetricToggleAvailable(features) ? "shap" : "gain";
+  }
+
+  function featureMetricToggleHtml(features = []) {
+    if (!featureMetricToggleAvailable(features)) return "";
+    const selected = normaliseFeatureMetricMode(featureMetricMode, features);
+    return `
+      <div id="gbmFeatureMetricToggle" class="gbm-feature-metric-toggle" role="radiogroup" aria-label="Feature table metric">
+        <label class="gbm-feature-metric-option${selected === "gain" ? " active" : ""}">
+          <input type="radio" name="gbmFeatureMetric" value="gain" ${selected === "gain" ? "checked" : ""} />
+          <span>Gain</span>
+        </label>
+        <label class="gbm-feature-metric-option${selected === "shap" ? " active" : ""}">
+          <input type="radio" name="gbmFeatureMetric" value="shap" ${selected === "shap" ? "checked" : ""} />
+          <span>SHAP</span>
+        </label>
+      </div>
+    `;
+  }
+
+  function bindFeatureMetricActions() {
+    for (const input of document.querySelectorAll("input[name='gbmFeatureMetric']")) {
+      input.addEventListener("change", () => {
+        if (!input.checked) return;
+        setFeatureMetricMode(input.value);
+      });
+    }
+  }
+
+  function setFeatureMetricMode(mode) {
+    const features = currentFeatureRows();
+    featureMetricMode = normaliseFeatureMetricMode(mode, features);
+    syncFeatureMetricToggle();
+    updateFeatureMetricColumn(features);
+  }
+
+  function syncFeatureMetricToggle() {
+    for (const input of document.querySelectorAll("input[name='gbmFeatureMetric']")) {
+      input.checked = input.value === featureMetricMode;
+      input.closest(".gbm-feature-metric-option")?.classList.toggle("active", input.checked);
+    }
+  }
+
+  function updateFeatureMetricColumn(features = currentFeatureRows()) {
+    if (featureTable && typeof featureTable.setColumns === "function") {
+      featureTable.setColumns(featureTableColumns());
+      featureTable.setSort(featureTableInitialSort());
+      return;
+    }
+    renderFeatureFallback(features);
   }
 
   function featureInteractionConstraintDropdownHtml(groupings, activeConstraints = null, features = []) {
@@ -1102,23 +1185,8 @@ export function createGbmTool({
         data: features,
         height: "100%",
         layout: "fitColumns",
-        initialSort: [{ column: "gain", dir: "desc" }],
-        columns: [
-          { title: "Feature", field: "name", formatter: featureNameFormatter, cssClass: "gbm-feature-name-cell", widthGrow: 3, headerSort: true },
-          { title: "Grouping", field: "grouping", formatter: groupingFormatter, widthGrow: 1.1, headerSort: true },
-          {
-            title: "Use",
-            field: "include",
-            formatter: useCheckboxFormatter,
-            hozAlign: "center",
-            headerHozAlign: "center",
-            width: 58,
-            headerSort: false,
-            cellClick: (event) => event.stopPropagation(),
-          },
-          { title: "Monotonicity", field: "monotonicity", editor: "list", editable: (cell) => isFeatureSelectable(cell.getRow().getData()), editorParams: { values: ["", "Increasing", "Decreasing", "1", "-1"] }, width: 120 },
-          { title: "Gain", field: "gain", formatter: (cell) => formatGain(cell.getValue()), sorter: "number", hozAlign: "center", headerHozAlign: "center", width: 125 },
-        ],
+        initialSort: featureTableInitialSort(),
+        columns: featureTableColumns(),
         rowFormatter: (row) => {
           const data = row.getData();
           const element = row.getElement();
@@ -1143,6 +1211,66 @@ export function createGbmTool({
       renderParameterFallback(parameters);
     }
     syncFeatureInteractionControls();
+  }
+
+  function featureTableColumns() {
+    return [
+      { title: "Feature", field: "name", formatter: featureNameFormatter, cssClass: "gbm-feature-name-cell", widthGrow: 3, headerSort: true },
+      { title: "Grouping", field: "grouping", formatter: groupingFormatter, widthGrow: 1.1, headerSort: true },
+      {
+        title: "Use",
+        field: "include",
+        formatter: useCheckboxFormatter,
+        hozAlign: "center",
+        headerHozAlign: "center",
+        width: 58,
+        headerSort: false,
+        cellClick: (event) => event.stopPropagation(),
+      },
+      { title: "Monotonicity", field: "monotonicity", editor: "list", editable: (cell) => isFeatureSelectable(cell.getRow().getData()), editorParams: { values: ["", "Increasing", "Decreasing", "1", "-1"] }, width: 120 },
+      featureMetricColumn(),
+    ];
+  }
+
+  function featureMetricColumn() {
+    const shapMode = featureMetricMode === "shap";
+    return {
+      title: shapMode ? "SHAP" : "Gain",
+      field: featureMetricField(),
+      formatter: (cell) => shapMode ? formatMeanAbsShap(cell.getValue()) : formatGain(cell.getValue()),
+      sorter: shapMode ? featureMetricSorter : "number",
+      hozAlign: "center",
+      headerHozAlign: "center",
+      cssClass: "gbm-feature-metric-cell",
+      width: 125,
+    };
+  }
+
+  function featureTableInitialSort() {
+    return [{ column: featureMetricField(), dir: "desc" }];
+  }
+
+  function featureMetricField() {
+    return featureMetricMode === "shap" ? "mean_abs_shap" : "gain";
+  }
+
+  function featureMetricSorter(a, b) {
+    const left = featureNumber(a);
+    const right = featureNumber(b);
+    if (left === null && right === null) return 0;
+    if (left === null) return -1;
+    if (right === null) return 1;
+    return left - right;
+  }
+
+  function featureNumber(value) {
+    if (value === null || value === undefined || String(value).trim() === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function featureMeanAbsShap(feature) {
+    return featureNumber(feature?.mean_abs_shap);
   }
 
   function activeModelDotFormatter(cell) {
@@ -1239,17 +1367,18 @@ export function createGbmTool({
   function renderFeatureFallback(features) {
     const target = el("gbmFeatureFallback");
     if (!target) return;
+    const metricTitle = featureMetricMode === "shap" ? "SHAP" : "Gain";
     target.innerHTML = `
       <table>
-        <thead><tr><th>Feature</th><th>Grouping</th><th>Use</th><th>Monotonicity</th><th>Gain</th></tr></thead>
+        <thead><tr><th>Feature</th><th>Grouping</th><th>Use</th><th>Monotonicity</th><th>${metricTitle}</th></tr></thead>
         <tbody>
-          ${features.map((feature) => `
+          ${sortedFeatureRowsForMetric(features).map((feature) => `
             <tr class="${featureRowClasses(feature)}">
               <td>${featureNameHtml(feature)}</td>
               <td>${groupingHtml(feature)}</td>
               <td class="gbm-use-cell">${isFeatureSelectable(feature) ? `<input type="checkbox" data-gbm-feature="${escapeHtml(feature.name)}" ${feature.include ? "checked" : ""} />` : ""}</td>
               <td><input data-gbm-monotonicity="${escapeHtml(feature.name)}" value="${escapeHtml(feature.monotonicity || "")}" ${isFeatureSelectable(feature) ? "" : "disabled"} /></td>
-              <td class="numeric gbm-gain-cell">${formatGain(feature.gain)}</td>
+              <td class="numeric gbm-feature-metric-cell">${featureMetricDisplay(feature)}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -1263,6 +1392,22 @@ export function createGbmTool({
       });
     }
     syncFeatureSectionTitle();
+  }
+
+  function sortedFeatureRowsForMetric(features = []) {
+    const field = featureMetricField();
+    return [...(features || [])].sort((left, right) => {
+      const leftValue = featureNumber(left?.[field]);
+      const rightValue = featureNumber(right?.[field]);
+      if (leftValue === null && rightValue === null) return String(left?.name || "").localeCompare(String(right?.name || ""), undefined, { sensitivity: "base" });
+      if (leftValue === null) return 1;
+      if (rightValue === null) return -1;
+      return (rightValue - leftValue) || String(left?.name || "").localeCompare(String(right?.name || ""), undefined, { sensitivity: "base" });
+    });
+  }
+
+  function featureMetricDisplay(feature) {
+    return featureMetricMode === "shap" ? formatMeanAbsShap(feature?.mean_abs_shap) : formatGain(feature?.gain);
   }
 
   function renderParameterFallback(parameters) {
@@ -2282,6 +2427,11 @@ export function createGbmTool({
     if (magnitude >= 1000) return Math.round(number).toLocaleString();
     if (magnitude >= 10) return number.toFixed(1);
     return number.toFixed(3);
+  }
+
+  function formatMeanAbsShap(value) {
+    const number = featureNumber(value);
+    return number === null ? "" : number.toFixed(4);
   }
 
   function stableConfigKey() {

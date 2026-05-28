@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import duckdb
 from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
+from py_lucidum.core import json_number, sql_literal
 
 from .jobs import GbmJobManager
 from .sample import SAMPLE_COLUMN, create_generated_sample, sample_metadata
@@ -49,6 +51,50 @@ def register(app: FastAPI, context: AppContext) -> None:
             if isinstance(item, dict) and item.get("name")
         }
 
+    def active_shap_importance(model_id: str) -> dict[str, float]:
+        path = store.artifact_path(model_id, "shap_summary")
+        if not path.exists():
+            return {}
+        try:
+            with context.dataset.lock:
+                columns = {
+                    str(row[0])
+                    for row in context.dataset.con.execute(
+                        f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(path))})"
+                    ).fetchall()
+                }
+                if not {"feature", "mean_abs_shap"}.issubset(columns):
+                    return {}
+                records = context.dataset.con.execute(
+                    f"""
+SELECT feature, mean_abs_shap
+FROM read_parquet({sql_literal(str(path))})
+WHERE feature IS NOT NULL
+"""
+                ).fetchall()
+        except duckdb.Error:
+            return {}
+        values: dict[str, float] = {}
+        for feature, value in records:
+            name = str(feature or "").strip()
+            number = json_number(value)
+            if name and number is not None:
+                values[name] = float(number)
+        return values
+
+    def feature_config_with_shap(features: list[dict[str, Any]], model_id: str) -> list[dict[str, Any]]:
+        shap_importance = active_shap_importance(model_id)
+        if not shap_importance:
+            return features
+        enriched: list[dict[str, Any]] = []
+        for item in features:
+            row = dict(item)
+            name = str(row.get("name") or "").strip()
+            if name in shap_importance and json_number(row.get("mean_abs_shap")) is None:
+                row["mean_abs_shap"] = shap_importance[name]
+            enriched.append(row)
+        return enriched
+
     def active_feature_config() -> list[dict[str, Any]] | None:
         model_id = store.active_model_id()
         if not model_id:
@@ -56,13 +102,13 @@ def register(app: FastAPI, context: AppContext) -> None:
         try:
             features = store.read_json(store.artifact_path(model_id, "feature_config"), None)
             if isinstance(features, list) and features:
-                return [item for item in features if isinstance(item, dict)]
+                return feature_config_with_shap([item for item in features if isinstance(item, dict)], model_id)
             manifest = store.manifest(model_id)
         except ValueError:
             return None
         importance = manifest.get("feature_importance", [])
         if isinstance(importance, list) and importance:
-            return [item for item in importance if isinstance(item, dict)]
+            return feature_config_with_shap([item for item in importance if isinstance(item, dict)], model_id)
         return None
 
     def active_training_mode() -> str:

@@ -150,6 +150,25 @@ for (const [name, model, expected] of cases) {
 """
         self.run_node_script(script)
 
+    def test_gbm_mean_abs_shap_formatter_uses_four_decimal_places(self) -> None:
+        js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
+        script = "\n".join(self.js_function_source(js, name) for name in ["featureNumber", "formatMeanAbsShap"]) + """
+const cases = [
+  [0.183, "0.1830"],
+  ["1.2", "1.2000"],
+  [0, "0.0000"],
+  [null, ""],
+  ["", ""],
+];
+for (const [value, expected] of cases) {
+  const actual = formatMeanAbsShap(value);
+  if (actual !== expected) {
+    throw new Error(`${value}: expected ${expected}, got ${actual}`);
+  }
+}
+"""
+        self.run_node_script(script)
+
     def test_index_uses_stable_local_asset_urls_and_disables_cache(self) -> None:
         _, body = self.assert_no_store("/")
         html = body.decode("utf-8")
@@ -258,6 +277,12 @@ for (const [name, model, expected] of cases) {
         self.assertIn("itemStyle: { color: SHAP_RED }", js)
         self.assertIn("formatter: flameTooltipFormatter(rows, payload)", js)
         self.assertIn('class="gbm-shap-chart-shell"', js)
+        self.assertIn("function featureImportanceLabel(feature, rank)", js)
+        self.assertIn("formatMeanAbsShap(feature.mean_abs_shap)", js)
+        self.assertIn("return features().some((feature) => featureNumber(feature.mean_abs_shap) !== null)", js)
+        self.assertIn('? "shap"', js)
+        self.assertIn("`Rank ${rank}`", js)
+        self.assertNotIn("function featureKindLabel", js)
         self.assertIn(".gbm-shap-chart-shell", css)
         self.assertIn(".gbm-shap-message {\n        background:", css)
         self.assertIn("position: absolute;\n        right: 12px;\n        top: 12px;", css)
@@ -338,7 +363,7 @@ for (const [name, model, expected] of cases) {
         self.assertIn('.attr("font-weight", (line) => line.emphasis ? 700 : 400)', js)
         self.assertNotIn('type: "tree"', js)
         self.assertNotIn("function treeNode(node)", js)
-        self.assertIn('title: "Gain"', js)
+        self.assertIn('title: shapMode ? "SHAP" : "Gain"', js)
         self.assertNotIn('{ title: "Type", field: "kind"', js)
         self.assertNotIn("<th>Type</th>", js)
         self.assertIn("formatter: featureNameFormatter", js)
@@ -352,6 +377,13 @@ for (const [name, model, expected] of cases) {
         self.assertIn('class="gbm-feature-kind kind"', js)
         self.assertIn('id="gbmFeatureScenarioSelect"', js)
         self.assertIn('id="gbmFeatureInteractionConstraintSelect"', js)
+        self.assertIn('id="gbmFeatureMetricToggle" class="gbm-feature-metric-toggle"', js)
+        self.assertIn('type="radio" name="gbmFeatureMetric" value="gain"', js)
+        self.assertIn('type="radio" name="gbmFeatureMetric" value="shap"', js)
+        self.assertLess(js.index('featureMetricToggleHtml(data.features || [])'), js.index("featureInteractionConstraintDropdownHtml"))
+        self.assertIn("function featureMetricToggleAvailable(features = [])", js)
+        self.assertIn("function featureMetricColumn()", js)
+        self.assertIn("function formatMeanAbsShap(value)", js)
         self.assertIn("function featureInteractionConstraintDropdownHtml(groupings, activeConstraints = null, features = [])", js)
         self.assertIn("function currentFeatureInteractionGroupingsPayload()", js)
         self.assertIn("function normaliseActiveFeatureInteractionConstraints(activeConstraints)", js)
@@ -372,13 +404,13 @@ for (const [name, model, expected] of cases) {
         self.assertIn("<th>Grouping</th>", js)
         self.assertIn('width: 120', js)
         self.assertIn('width: 125', js)
-        self.assertIn('formatGain(feature.gain)', js)
+        self.assertIn("featureMetricDisplay(feature)", js)
         self.assertIn("formatter: useCheckboxFormatter", js)
         self.assertIn("function useCheckboxFormatter(cell)", js)
         self.assertIn("if (!isFeatureSelectable(rowData)) return \"\";", js)
         self.assertIn('className = "gbm-use-checkbox"', js)
         self.assertNotIn('formatter: "tickCross"', js)
-        self.assertIn('initialSort: [{ column: "gain", dir: "desc" }]', js)
+        self.assertIn("initialSort: featureTableInitialSort()", js)
         self.assertIn('Features and parameters', js)
         self.assertIn('Model navigator', js)
         self.assertIn('Tree viewer', js)
@@ -521,6 +553,7 @@ for (const [name, model, expected] of cases) {
         self.assertIn(".gbm-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content {\n        align-items: center;\n        display: flex;\n        min-height: 20px;\n        padding: 1px 6px;", css)
         self.assertIn(".gbm-grid .tabulator-row .tabulator-cell {\n        align-items: center;\n        background: transparent !important;\n        border-right-color: color-mix(in srgb, var(--line) 80%, transparent);\n        color: var(--text) !important;\n        display: inline-flex;\n        min-height: 20px;\n        padding: 1px 6px;\n        font-size: 11px;\n        line-height: 1.15;", css)
         self.assertIn('#gbmFeatureGrid .tabulator-cell[tabulator-field="include"] {\n        justify-content: center;', css)
+        self.assertIn('#gbmFeatureGrid .tabulator-cell[tabulator-field="mean_abs_shap"]', css)
         self.assertIn("#gbmFeatureGrid .tabulator-row .gbm-feature-name-cell,\n      .gbm-feature-name-line {\n        align-items: center;\n        gap: 8px;\n        justify-content: space-between;", css)
         self.assertIn(".gbm-feature-kind {\n        color: var(--muted);\n        flex: 0 0 auto;\n        margin-left: auto;\n        text-align: right;", css)
         self.assertIn("#gbmFeatureGrid .tabulator-row.gbm-feature-disabled", css)
@@ -541,6 +574,9 @@ for (const [name, model, expected] of cases) {
         self.assertIn("position: absolute;", css)
         self.assertIn(".gbm-sample-status", css)
         self.assertIn(".gbm-feature-actions", css)
+        self.assertIn(".gbm-feature-metric-toggle", css)
+        self.assertIn(".gbm-feature-metric-option.active", css)
+        self.assertIn(".gbm-feature-metric-cell", css)
         self.assertIn(".gbm-interaction-constraint-select", css)
         self.assertIn(".gbm-interaction-constraint-menu", css)
         self.assertIn(".gbm-interaction-lock", css)

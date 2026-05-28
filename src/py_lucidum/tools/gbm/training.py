@@ -542,6 +542,7 @@ def train_model(
         write_dataframe_parquet(shap_frame, store.artifact_path(model_id, "shap_long"))
         write_dataframe_parquet(shap_summary, store.artifact_path(model_id, "shap_summary"))
         shap_summary_rows = shap_summary.to_dict("records")
+        feature_config = feature_config_with_mean_abs_shap(feature_config, shap_summary_rows)
 
     emit_progress(
         progress_callback,
@@ -1024,11 +1025,31 @@ def shap_dataframes(
     return shap_frame, summary
 
 
+def feature_config_with_mean_abs_shap(
+    feature_config: list[dict[str, Any]],
+    shap_summary_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    mean_abs_shap = {
+        str(row.get("feature")): number
+        for row in shap_summary_rows
+        if row.get("feature") and (number := json_safe_number(row.get("mean_abs_shap"))) is not None
+    }
+    if not mean_abs_shap:
+        return feature_config
+    return [
+        {**feature, "mean_abs_shap": mean_abs_shap[feature["name"]]}
+        if feature.get("name") in mean_abs_shap
+        else feature
+        for feature in feature_config
+    ]
+
+
 __all__ = [
     "MissingGbmDependency",
     "gbm_dependencies",
     "lightgbm_progress_payload",
     "lightgbm_interaction_constraints",
+    "feature_config_with_mean_abs_shap",
     "normalise_feature_scenario",
     "should_use_offset_init_score",
     "train_model",

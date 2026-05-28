@@ -57,13 +57,13 @@ Chosen defaults:
 - The frontend must not contain LightGBM-specific training logic, artifact layout rules, validation rules, or parameter interpretation beyond rendering controls and sending structured requests.
 - Sidebar while GBM is active keeps the KPI/response controls visible, hides filter controls, and includes an active-model selector.
 - **Features and parameters** tab:
-  - Left feature grid columns: feature name, include checkbox, monotonicity, and `Gain`.
+  - Left feature grid columns: feature name, include checkbox, monotonicity, and one importance metric column: `Gain`, or `SHAP` when the active model has saved mean absolute SHAP values.
   - If a Feature Specification is loaded, show its `Grouping` column between feature name and include checkbox, then show an interaction-constraint multi-select followed by a scenario dropdown immediately before `Clear all`.
   - Selecting a feature scenario selects only usable, non-reserved features whose scenario cell contains `feature`, case-insensitive; manual checkbox edits, `Clear all`, and `Select all` clear the scenario dropdown.
   - Feature type is displayed as muted right-aligned text inside the Feature cell, with categorical counts shown as `categorical (n)`.
   - Feature Specification groupings drive the interaction-constraint multi-select; constrained selected features show a lock marker in the Grouping column.
-  - `Gain` displays `0.000` before any active model exists.
-  - After training or active-model switching, the feature grid must mirror the active model's persisted feature config: `Use`, `Monotonicity`, `Gain`, and sort order.
+  - `Gain` displays `0.000` before any active model exists. `SHAP` displays mean absolute SHAP value to four decimals and is available only for features with saved SHAP rows.
+  - After training or active-model switching, the feature grid must mirror the active model's persisted feature config: `Use`, `Monotonicity`, importance metric, and sort order.
   - Objective and metric parameter rows are dropdowns containing supported single-response LightGBM options; other parameters remain editable text inputs.
   - Right side contains parameter grid, SHAP row-count selector, green Train GBM button, and ECharts evaluation plot.
   - When EBM is available, a Normal/EBM radio group sits below SHAP rows and includes a tooltip noting the 2-leaf `0.3` learning rate.
@@ -85,20 +85,20 @@ Chosen defaults:
   - Model store creates, lists, loads, activates, and validates sidecar artifacts.
   - Data-source registry exposes GBM prediction and SHAP sources.
   - Line/Bar and UK Map can query model prediction sources.
-  - Feature importance gain is persisted, returned in model detail/config responses, defaults to `0.000`, and sorts descending after training.
+  - Feature importance Gain is persisted, returned in model detail/config responses, defaults to `0.000`, and sorts descending after training. Mean absolute SHAP is also persisted when SHAP rows are saved.
   - Tree summary/detail routes read saved artifacts and do not import LightGBM.
   - SHAP config/plot routes read saved artifacts and do not import LightGBM, pandas, or numpy.
 - Backend modelling tests should target `training.py`, `validation.py`, `store.py`, and `sources.py` directly without browser/UI involvement.
 - Frontend/static tests:
-  - GBM tabs, hidden filter controls, active-model selector, train button, feature `Gain` column, active-model feature/parameter refresh, SHAP controls, tree viewer controls, and source switching are present.
+  - GBM tabs, hidden filter controls, active-model selector, train button, feature importance column, active-model feature/parameter refresh, SHAP controls, tree viewer controls, and source switching are present.
   - Tabulator, D3, and ECharts GL assets are lazy-loaded only for the GBM views that need them.
-- Optional integration test behind `PY_LUCIDUM_RUN_GBM_TESTS=1`: train a small LightGBM, write artifacts, reload app, activate model, verify Gain ordering, and plot predictions in Line/Bar.
+- Optional integration test behind `PY_LUCIDUM_RUN_GBM_TESTS=1`: train a small LightGBM, write artifacts, reload app, activate model, verify importance ordering, and plot predictions in Line/Bar.
 - Standard checks: `unittest`, `compileall`, JS `node --check`, `git diff --check`, and browser smoke tests.
 
 ## Assumptions
 
 - The first implementation targets LightGBM Python 4.x APIs.
 - Gain means LightGBM feature importance with `importance_type="gain"`.
-- Active-model switching mirrors the persisted model feature config, including selected features, monotonicity, parameters, and Gain.
+- Active-model switching mirrors the persisted model feature config, including selected features, monotonicity, parameters, Gain, and optional mean absolute SHAP.
 - Tabulator is selected as the editable grid because it is plain JavaScript, feature-rich, and MIT licensed.
 - A copy of this plan should be saved at `docs/specs/gbm-tool_plan.md` before implementation starts.

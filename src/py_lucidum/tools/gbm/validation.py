@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, quote_ident
+from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, quote_ident
 
 from .sample import (
     SAMPLE_COLUMN,
@@ -226,22 +226,24 @@ def feature_rows(
             else bool(model_feature) and usable and row_kind in {"integer", "numeric", "categorical"}
         )
         gain = model_feature.get("gain") if model_feature else (gains or {}).get(column.name, 0.0)
-        rows.append(
-            {
-                "name": column.name,
-                "grouping": (feature_groupings or {}).get(column.name, ""),
-                "duckdb_type": column.duckdb_type,
-                "kind": row_kind,
-                "include": include,
-                "usable": usable,
-                "disabled_reason": disabled_reason,
-                "invalid": bool(invalid_error),
-                "high_cardinality": high_cardinality,
-                "distinct_count": distinct_count,
-                "monotonicity": display_monotonicity(model_feature.get("monotonicity")) if include else "",
-                "gain": round(float(gain or 0.0), 3),
-            }
-        )
+        row = {
+            "name": column.name,
+            "grouping": (feature_groupings or {}).get(column.name, ""),
+            "duckdb_type": column.duckdb_type,
+            "kind": row_kind,
+            "include": include,
+            "usable": usable,
+            "disabled_reason": disabled_reason,
+            "invalid": bool(invalid_error),
+            "high_cardinality": high_cardinality,
+            "distinct_count": distinct_count,
+            "monotonicity": display_monotonicity(model_feature.get("monotonicity")) if include else "",
+            "gain": round(float(gain or 0.0), 3),
+        }
+        mean_abs_shap = json_number(model_feature.get("mean_abs_shap"))
+        if mean_abs_shap is not None:
+            row["mean_abs_shap"] = float(mean_abs_shap)
+        rows.append(row)
     return sorted(rows, key=lambda row: (-float(row["gain"]), str(row["name"]).lower()))
 
 

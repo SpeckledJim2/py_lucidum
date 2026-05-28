@@ -272,13 +272,23 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const selected = state[`feature${index}`];
     const query = String(state[`search${index}`] || "").trim().toLowerCase();
     const rows = sortedFeatures(state[`sort${index}`]);
+    const ranks = featureRankMap();
     const buttons = [];
     if (index === 2 && (!query || "none".includes(query) || "no second feature".includes(query) || "off".includes(query))) {
       buttons.push(featureButtonHtml(index, "None", "", "off", "expected-none-option", !selected));
     }
     for (const feature of rows) {
       if (query && !feature.name.toLowerCase().includes(query)) continue;
-      buttons.push(featureButtonHtml(index, feature.name, feature.name, featureKindLabel(feature), "", selected === feature.name));
+      buttons.push(
+        featureButtonHtml(
+          index,
+          feature.name,
+          feature.name,
+          featureImportanceLabel(feature, ranks.get(feature.name)),
+          "",
+          selected === feature.name,
+        )
+      );
     }
     list.innerHTML = buttons.join("");
   }
@@ -379,10 +389,10 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     `;
   }
 
-  function featureButtonHtml(index, label, value, kind, extraClass, active) {
+  function featureButtonHtml(index, label, value, detail, extraClass, active) {
     return `
       <button class="feature ${extraClass || ""} ${active ? "active" : ""}" type="button" data-gbm-shap-feature="${index}" data-gbm-shap-feature-value="${escapeHtml(value)}">
-        <span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>
+        <span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(detail)}</span>
       </button>
     `;
   }
@@ -447,8 +457,24 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     if (sortMode === "alpha") {
       rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     } else {
-      rows.sort((a, b) => (Number(b.gain || 0) - Number(a.gain || 0)) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+      const metric = featureImportanceMetric();
+      rows.sort((a, b) => (
+        featureImportanceValue(b, metric) - featureImportanceValue(a, metric)
+      ) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     }
+    return rows;
+  }
+
+  function featureRankMap() {
+    const metric = featureImportanceMetric();
+    return new Map(sortedFeaturesByImportance(metric).map((feature, index) => [feature.name, index + 1]));
+  }
+
+  function sortedFeaturesByImportance(metric) {
+    const rows = [...features()];
+    rows.sort((a, b) => (
+      featureImportanceValue(b, metric) - featureImportanceValue(a, metric)
+    ) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     return rows;
   }
 
@@ -464,11 +490,30 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     return 1;
   }
 
-  function featureKindLabel(feature) {
+  function featureImportanceLabel(feature, rank) {
     if (!feature) return "";
-    const gain = Number(feature.gain || 0);
-    const suffix = gain > 0 ? ` · ${formatGain(gain)}` : "";
-    return `${feature.kind || "feature"}${suffix}`;
+    const metric = featureImportanceMetric();
+    const value = metric === "shap" ? formatMeanAbsShap(feature.mean_abs_shap) : formatGain(feature.gain);
+    const prefix = Number.isFinite(Number(rank)) ? `Rank ${rank}` : "";
+    return value ? `${prefix} · ${value}` : prefix;
+  }
+
+  function featureImportanceMetric() {
+    return features().some((feature) => featureNumber(feature.mean_abs_shap) !== null)
+      ? "shap"
+      : "gain";
+  }
+
+  function featureImportanceValue(feature, metric) {
+    const value = metric === "shap"
+      ? featureNumber(feature?.mean_abs_shap)
+      : featureNumber(feature?.gain);
+    return value ?? 0;
+  }
+
+  function featureNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
   }
 
   function isNumericKind(kind) {
@@ -489,6 +534,11 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     if (magnitude >= 1000) return Math.round(number).toLocaleString();
     if (magnitude >= 10) return number.toFixed(1);
     return number.toFixed(3);
+  }
+
+  function formatMeanAbsShap(value) {
+    const number = featureNumber(value);
+    return number === null ? "" : number.toFixed(4);
   }
 
   function chartTheme() {

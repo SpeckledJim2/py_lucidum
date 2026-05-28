@@ -674,10 +674,54 @@ COPY (
                 page.get_by_text("Features and parameters").wait_for(timeout=10_000)
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
                 page.get_by_text("Train GBM").wait_for(timeout=10_000)
-                page.get_by_text("Gain").first.wait_for(timeout=10_000)
+                page.locator("#gbmFeatureMetricToggle").wait_for(timeout=10_000)
                 page.get_by_text("Grouping").first.wait_for(timeout=10_000)
                 page.get_by_text("SHAP rows").wait_for(timeout=10_000)
                 page.get_by_text("Training mode").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmFeatureGrid .tabulator-cell[tabulator-field='mean_abs_shap']")
+                      ?.textContent.trim() === "0.2330"
+                    """,
+                    timeout=10_000,
+                )
+                default_metric_state = page.evaluate(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-col-title")]
+                        .map((node) => node.textContent.trim()).filter(Boolean);
+                      const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
+                      const firstRow = rows[0];
+                      const ageRow = rows.find((row) => row.textContent.includes("Age"));
+                      return {
+                        headers,
+                        checkedMetric: document.querySelector("input[name='gbmFeatureMetric']:checked")?.value || "",
+                        metricLabels: [...document.querySelectorAll("#gbmFeatureMetricToggle .gbm-feature-metric-option span")].map((node) => node.textContent.trim()),
+                        firstRowText: firstRow?.textContent || "",
+                        ageShap: ageRow?.querySelector(".tabulator-cell[tabulator-field='mean_abs_shap']")?.textContent.trim() || "",
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(default_metric_state["checkedMetric"], "shap")
+                self.assertEqual(default_metric_state["metricLabels"], ["Gain", "SHAP"])
+                self.assertIn("SHAP", default_metric_state["headers"])
+                self.assertNotIn("Gain", default_metric_state["headers"])
+                self.assertIn("lat", default_metric_state["firstRowText"])
+                self.assertEqual(default_metric_state["ageShap"], "0.1830")
+                page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option", has_text="Gain").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-col-title")]
+                        .map((node) => node.textContent.trim()).filter(Boolean);
+                      return document.querySelector("input[name='gbmFeatureMetric']:checked")?.value === "gain"
+                        && headers.includes("Gain")
+                        && !headers.includes("SHAP");
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 assert_feature_heading_matches_checked(2)
                 initial_scenario = page.evaluate(
                     """
@@ -736,10 +780,25 @@ COPY (
                     () => {
                       const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
                       const option = chart?.getOption();
-                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: lat")
                         && option.series?.length > 0
-                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("lat")
                         && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                default_shap_feature_label = page.locator("#gbmShapFeatureList1 .feature.active .kind").text_content()
+                self.assertEqual(default_shap_feature_label, "Rank 1 · 0.2330")
+                self.assertNotIn("numeric", default_shap_feature_label)
+                page.locator("#gbmShapFeatureList1 .feature", has_text="Age").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Rank 2 · 0.1830");
                     }
                     """,
                     timeout=10_000,
@@ -1707,23 +1766,26 @@ COPY (
                 feature_state = page.evaluate(
                     """
                     () => {
+                      const metricField = document.querySelector("#gbmFeatureGrid .tabulator-cell[tabulator-field='gain']")
+                        ? "gain"
+                        : "mean_abs_shap";
                       function rowState(name) {
                         const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
                           .find((item) => item.textContent.includes(name));
                         return {
                           checked: Boolean(row?.querySelector(".gbm-use-checkbox")?.checked),
                           monotonicity: row?.querySelector(".tabulator-cell[tabulator-field='monotonicity']")?.textContent.trim() || "",
-                          gain: row?.querySelector(".tabulator-cell[tabulator-field='gain']")?.textContent.trim() || "",
+                          metric: row?.querySelector(`.tabulator-cell[tabulator-field='${metricField}']`)?.textContent.trim() || "",
                         };
                       }
-                      return { age: rowState("Age"), segment: rowState("Segment") };
+                      return { metricField, age: rowState("Age"), segment: rowState("Segment") };
                     }
                     """
                 )
                 self.assertTrue(feature_state["age"]["checked"])
                 self.assertFalse(feature_state["segment"]["checked"])
                 self.assertEqual(feature_state["age"]["monotonicity"], "Increasing")
-                self.assertEqual(feature_state["age"]["gain"], "5.000")
+                self.assertEqual(feature_state["age"]["metric"], "5.000" if feature_state["metricField"] == "gain" else "0.1830")
                 layout = page.evaluate(
                     """
                     () => {
@@ -1733,7 +1795,7 @@ COPY (
                         const right = document.querySelector(".gbm-right-panel").getBoundingClientRect();
                         const firstRow = document.querySelector("#gbmFeatureGrid .tabulator-row");
                         const normalRow = document.querySelector("#gbmFeatureGrid .tabulator-row:not(.gbm-feature-disabled):not(.gbm-feature-warning)");
-                        const firstGain = document.querySelector("#gbmFeatureGrid .tabulator-cell[tabulator-field='gain']");
+                        const firstMetric = document.querySelector("#gbmFeatureGrid .tabulator-cell[tabulator-field='gain'], #gbmFeatureGrid .tabulator-cell[tabulator-field='mean_abs_shap']");
                         const tableHolder = document.querySelector("#gbmFeatureGrid .tabulator-tableholder");
                         const tab = document.querySelector(".gbm-tabs .tab");
                         const shap = document.querySelector("#gbmShapRows");
@@ -1789,7 +1851,8 @@ COPY (
                             featureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox").length,
                             disabledFeatureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-feature-disabled .gbm-use-checkbox").length,
                             rowHeight: firstRow ? firstRow.getBoundingClientRect().height : 0,
-                            gainAlign: firstGain ? getComputedStyle(firstGain).textAlign : "",
+                            metricAlign: firstMetric ? getComputedStyle(firstMetric).textAlign : "",
+                            metricJustifyContent: firstMetric ? getComputedStyle(firstMetric).justifyContent : "",
                             rowBackground: normalRow ? getComputedStyle(normalRow).backgroundColor : "",
                             holderBackground: tableHolder ? getComputedStyle(tableHolder).backgroundColor : "",
                             tabTop: tab ? Math.round(tab.getBoundingClientRect().top) : 0,
@@ -1862,7 +1925,8 @@ COPY (
                 self.assertGreater(layout["featureCheckboxes"], 0)
                 self.assertEqual(layout["disabledFeatureCheckboxes"], 0)
                 self.assertLess(layout["rowHeight"], 28)
-                self.assertEqual(layout["gainAlign"], "center")
+                self.assertEqual(layout["metricAlign"], "center")
+                self.assertEqual(layout["metricJustifyContent"], "center")
                 self.assertEqual(layout["rowBackground"], layout["holderBackground"])
                 self.assertTrue(layout["shapParentInControls"])
                 self.assertTrue(layout["modeParentInControls"])
@@ -1873,7 +1937,8 @@ COPY (
                 self.assertLessEqual(abs(layout["featureTitleTop"] - layout["parameterTitleTop"]), 2)
                 self.assertLessEqual(abs(layout["featureTitleTop"] - layout["controlTitleTop"]), 2)
                 self.assertLessEqual(abs(layout["controlTitleTop"] - layout["parameterTitleTop"]), 2)
-                self.assertLessEqual(abs(layout["featureGridTop"] - layout["parameterGridTop"]), 2)
+                self.assertGreaterEqual(layout["featureGridTop"], layout["parameterGridTop"])
+                self.assertLessEqual(layout["featureGridTop"] - layout["parameterGridTop"], 32)
                 self.assertEqual(layout["parameterActionsDirection"], "column")
                 self.assertGreater(layout["parameterLayoutWidth"], 0)
                 self.assertAlmostEqual(
@@ -1913,7 +1978,7 @@ COPY (
                 self.assertIn("Feature", layout["featureHeaders"])
                 self.assertIn("Use", layout["featureHeaders"])
                 self.assertIn("Monotonicity", layout["featureHeaders"])
-                self.assertIn("Gain", layout["featureHeaders"])
+                self.assertEqual(sum(header in layout["featureHeaders"] for header in ("Gain", "SHAP")), 1)
                 self.assertNotIn("Type", layout["featureHeaders"])
                 self.assertEqual(page_errors, [])
             finally:
