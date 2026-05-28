@@ -123,6 +123,8 @@ function boxOption(payload, common, theme) {
   const feature = featureInfoForName(payload, payload.x_feature);
   return {
     ...common,
+    legend: { show: false },
+    grid: { ...common.grid, top: 56 },
     tooltip: { trigger: "item", confine: true, formatter: (params) => boxTooltip(params, rows, feature) },
     xAxis: categoryAxis(labels, payload.x_feature, theme, feature),
     yAxis: valueAxis(payload.y_label || "SHAP", theme),
@@ -162,6 +164,7 @@ function surfaceOption(payload, common, theme) {
       min: extent.min,
       max: extent.max,
       calculable: true,
+      formatter: formatVisualMapNumber,
       right: 10,
       top: 80,
       inRange: { color: ["#1d4ed8", "#f8fafc", "#b91c1c"] },
@@ -239,6 +242,7 @@ function heatmapOption(payload, common, theme) {
       min: extent.min,
       max: extent.max,
       calculable: true,
+      formatter: formatVisualMapNumber,
       orient: "vertical",
       right: 8,
       top: 90,
@@ -614,6 +618,13 @@ function formatTooltipNumber(value) {
   if (!Number.isFinite(number)) return "-";
   const rounded = Math.abs(number) < 0.00005 ? 0 : Number(number.toFixed(4));
   return rounded.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function formatVisualMapNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  const rounded = Math.abs(number) < 0.00005 ? 0 : number;
+  return rounded.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 }
 
 function surfaceTooltip(params, payload) {

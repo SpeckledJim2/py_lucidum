@@ -2761,7 +2761,7 @@
 
       .gbm-shap-side {
         display: grid;
-        grid-template-rows: minmax(0, 1fr) 6px minmax(0, 1fr);
+        grid-template-rows: var(--gbm-shap-feature1-height, minmax(0, 1fr)) 6px minmax(0, 1fr);
         gap: 8px;
         min-height: 0;
         min-width: 0;
@@ -2769,7 +2769,16 @@
 
       .gbm-shap-chooser-divider {
         background: linear-gradient(to bottom, var(--line), transparent);
+        cursor: row-resize;
         min-height: 6px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .gbm-shap-chooser-divider:hover,
+      .gbm-shap-chooser-divider.dragging {
+        background: var(--accent);
       }
 
       .gbm-shap-feature-section {

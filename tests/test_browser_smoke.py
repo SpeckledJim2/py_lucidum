@@ -791,6 +791,36 @@ COPY (
                 default_shap_feature_label = page.locator("#gbmShapFeatureList1 .feature.active .kind").text_content()
                 self.assertEqual(default_shap_feature_label, "Rank 1 · 0.2330")
                 self.assertNotIn("numeric", default_shap_feature_label)
+                shap_banding_buttons = page.evaluate(
+                    """
+                    () => ({
+                      feature1: [...document.querySelectorAll(".gbm-shap-feature1-control [data-gbm-shap-band-value]")]
+                        .map((button) => button.textContent.trim()),
+                      feature2: [...document.querySelectorAll(".gbm-shap-feature2-control [data-gbm-shap-band-value]")]
+                        .map((button) => button.textContent.trim()),
+                    })
+                    """
+                )
+                self.assertEqual(shap_banding_buttons["feature1"], ["0.01", "0.1", "1", "5", "10"])
+                self.assertEqual(shap_banding_buttons["feature2"], ["0.01", "0.1", "1", "5", "10"])
+                divider_height_before = page.evaluate(
+                    """() => document.querySelector("#gbmShapFeatureList1")?.closest(".gbm-shap-feature-section")?.getBoundingClientRect().height || 0"""
+                )
+                divider_box = page.locator("#gbmShapChooserDivider").bounding_box()
+                self.assertIsNotNone(divider_box)
+                assert divider_box is not None
+                page.mouse.move(divider_box["x"] + divider_box["width"] / 2, divider_box["y"] + divider_box["height"] / 2)
+                page.mouse.down()
+                page.mouse.move(divider_box["x"] + divider_box["width"] / 2, divider_box["y"] + divider_box["height"] / 2 + 36, steps=4)
+                page.mouse.up()
+                page.wait_for_function(
+                    """
+                    (height) => Number(localStorage.getItem("py_lucidum_gbm_shap_feature1_height")) > 0
+                      && Math.abs((document.querySelector("#gbmShapFeatureList1")?.closest(".gbm-shap-feature-section")?.getBoundingClientRect().height || 0) - height) > 8
+                    """,
+                    arg=divider_height_before,
+                    timeout=10_000,
+                )
                 page.locator("#gbmShapFeatureList1 .feature", has_text="Age").click()
                 page.wait_for_function(
                     """
@@ -838,7 +868,53 @@ COPY (
                 tooltip_text = initial_shap_state["tooltipText"]
                 self.assertIn("Median", tooltip_text)
                 self.assertIsNone(re.search(r"\d+\.\d{5,}", tooltip_text))
-                page.locator("#gbmShapFeatureList2 .feature", has_text="lat").click()
+                page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      chart?.dispatchAction({ type: "legendUnSelect", name: "5-95" });
+                    }
+                    """
+                )
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
+                    page.locator('.gbm-shap-feature1-control [data-gbm-shap-band-value="5"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      return chart?.getOption()?.legend?.[0]?.selected?.["5-95"] === false;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
+                    page.locator("#gbmShapFeatureList2 .feature", has_text="lat").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP surface plot: Age x lat")
+                        && option.series?.some((series) => series.type === "surface");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
+                    page.locator("#gbmShapFeatureList2 .feature", has_text="None").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && option.legend?.[0]?.selected?.["5-95"] !== false;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
+                    page.locator("#gbmShapFeatureList2 .feature", has_text="lat").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -859,6 +935,7 @@ COPY (
                       return {
                         title: option?.title?.[0]?.text || "",
                         invalidZ: Boolean(surface?.data?.some((point) => Number.isNaN(point?.[2]) || point?.[2] == null)),
+                        visualMapHover: option?.visualMap?.[0]?.formatter?.(0.123456) || "",
                         noticeHidden: Boolean(document.querySelector("#gbmNotice")?.classList.contains("hidden")),
                         noticeText: document.querySelector("#gbmNotice")?.textContent || "",
                       };
@@ -867,6 +944,7 @@ COPY (
                 )
                 self.assertIn("SHAP surface plot: Age x lat", surface_state["title"])
                 self.assertTrue(surface_state["invalidZ"])
+                self.assertEqual(surface_state["visualMapHover"], "0.1235")
                 self.assertTrue(surface_state["noticeHidden"])
                 self.assertNotIn("undefined is not an object", surface_state["noticeText"])
                 page.locator('[data-gbm-shap-factor="1"]').check()
@@ -919,6 +997,7 @@ COPY (
                         yIntervalType: typeof option?.yAxis?.[0]?.axisLabel?.interval,
                         xNiceSpacing: hasNiceSpacing(xLabels),
                         yNiceSpacing: hasNiceSpacing(yLabels),
+                        visualMapHover: option?.visualMap?.[0]?.formatter?.(-0.123456) || "",
                         tooltip: option?.tooltip?.[0]?.formatter?.({ value: [0, 0, -0.123456] }) || "",
                       };
                     }
@@ -932,7 +1011,24 @@ COPY (
                 self.assertEqual(shap_axis_formatting["yIntervalType"], "function")
                 self.assertTrue(shap_axis_formatting["xNiceSpacing"])
                 self.assertTrue(shap_axis_formatting["yNiceSpacing"])
+                self.assertEqual(shap_axis_formatting["visualMapHover"], "-0.1235")
                 self.assertIsNone(re.search(r"\d+\.\d{5,}", shap_axis_formatting["tooltip"]))
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
+                    page.locator("#gbmShapFeatureList2 .feature", has_text="None").click()
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
+                    page.locator("#gbmShapFeatureList1 .feature", has_text="lat").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP box plot: lat")
+                        && option?.legend?.[0]?.show === false
+                        && document.querySelector('[data-gbm-shap-factor="1"]')?.checked;
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.get_by_role("button", name="Features and parameters").click()
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)

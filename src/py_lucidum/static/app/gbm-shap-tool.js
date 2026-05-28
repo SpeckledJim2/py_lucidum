@@ -1,6 +1,8 @@
 import { emptyOption, ensureShapChartLibraries, shapChartOption } from "./gbm-shap-chart.js";
 
 const BAND_STEPS = makeBandSteps();
+const BAND_BUTTONS = [0.01, 0.1, 1, 5, 10];
+const SHAP_CHOOSER_HEIGHT_KEY = "py_lucidum_gbm_shap_feature1_height";
 const TAIL_OPTIONS = [
   { value: 0, label: "-" },
   { value: 0.1, label: "0.1%" },
@@ -38,7 +40,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       <div id="gbmShapRoot" class="gbm-shap-view">
         <aside class="gbm-shap-side">
           ${featureChooserHtml(1, "Feature 1")}
-          <div id="gbmShapChooserDivider" class="gbm-shap-chooser-divider"></div>
+          <div id="gbmShapChooserDivider" class="gbm-shap-chooser-divider" role="separator" aria-orientation="horizontal" aria-label="Resize SHAP feature choosers" tabindex="0"></div>
           ${featureChooserHtml(2, "Feature 2")}
         </aside>
         <section class="gbm-shap-main">
@@ -89,6 +91,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     root.addEventListener("click", handleClick);
     root.addEventListener("input", handleInput);
     root.addEventListener("change", handleChange);
+    setupChooserDividerResize(root);
   }
 
   function handleClick(event) {
@@ -153,7 +156,6 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     }
     if (previous !== state[key]) {
       state[`banding${index}`] = defaultBanding(selectedFeature(index));
-      state[`factor${index}`] = false;
     }
     renderControlsAndLists();
     refreshPlot();
@@ -208,6 +210,9 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     if (!target) return;
     const isSurface = payload.plot_type === "surface";
     const previousPlotType = lastPayload?.plot_type || "";
+    const previousOption = chart?.getOption?.();
+    const previousLegendEntries = legendEntryNames(previousOption);
+    const previousLegendSelection = legendSelection(previousOption, previousLegendEntries);
     const loadedSurfaceLibrary = await ensureShapChartLibraries(payload.plot_type);
     if (seq !== plotSeq) return;
     if (isSurface && (loadedSurfaceLibrary || previousPlotType !== "surface")) {
@@ -217,6 +222,10 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     }
     ensureChart(target);
     const option = shapChartOption(payload, chartTheme());
+    const nextLegendEntries = legendEntryNames(option);
+    if (previousPlotType === payload.plot_type && sameEntries(previousLegendEntries, nextLegendEntries)) {
+      applyLegendSelection(option, previousLegendSelection, nextLegendEntries);
+    }
     try {
       chart.setOption(option, true);
     } catch (error) {
@@ -365,7 +374,14 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
 
   function refreshTheme() {
     if (chart && lastPayload) {
-      chart.setOption(shapChartOption(lastPayload, chartTheme()), true);
+      const previousOption = chart.getOption?.();
+      const previousLegendEntries = legendEntryNames(previousOption);
+      const option = shapChartOption(lastPayload, chartTheme());
+      const nextLegendEntries = legendEntryNames(option);
+      if (sameEntries(previousLegendEntries, nextLegendEntries)) {
+        applyLegendSelection(option, legendSelection(previousOption, previousLegendEntries), nextLegendEntries);
+      }
+      chart.setOption(option, true);
       chart.resize();
     }
   }
@@ -407,7 +423,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
         <h3>${escapeHtml(label)} ${numeric ? `<span>(${escapeHtml(current)})</span>` : ""}</h3>
         <div class="segmented" role="group" aria-label="Feature ${index} banding">
           <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-band-action="down"${disabled}>&lt;</button>
-          ${[0.01, 0.1, 1, 5, 10, 100].map((value) => `
+          ${BAND_BUTTONS.map((value) => `
             <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-band-value="${value}" class="${Number(state[`banding${index}`]) === value ? "active" : ""}"${disabled}>${value}</button>
           `).join("")}
           <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-band-action="up"${disabled}>&gt;</button>
@@ -552,6 +568,95 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       grid: body.classList.contains("dark") ? "#243044" : "#e5e7eb",
       zero: body.classList.contains("dark") ? "#cbd5e1" : "#334155",
     };
+  }
+
+  function setupChooserDividerResize(root) {
+    const side = root.querySelector(".gbm-shap-side");
+    const firstPanel = side?.querySelector(".gbm-shap-feature-section");
+    const resizer = root.querySelector("#gbmShapChooserDivider");
+    if (!side || !firstPanel || !resizer) return;
+    const savedHeight = Number(localStorage.getItem(SHAP_CHOOSER_HEIGHT_KEY));
+    if (Number.isFinite(savedHeight) && savedHeight > 0) {
+      setChooserFeatureHeight(root, savedHeight);
+    }
+
+    let dragging = false;
+    let startY = 0;
+    let startHeight = 0;
+    resizer.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      dragging = true;
+      startY = event.clientY;
+      startHeight = firstPanel.getBoundingClientRect().height || 0;
+      resizer.classList.add("dragging");
+      document.body.classList.add("resizing-chart-control-heights");
+      resizer.setPointerCapture(event.pointerId);
+      window.getSelection()?.removeAllRanges();
+    });
+    resizer.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      event.preventDefault();
+      setChooserFeatureHeight(root, startHeight + event.clientY - startY);
+    });
+    function finishDrag(event) {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove("dragging");
+      document.body.classList.remove("resizing-chart-control-heights");
+      window.getSelection()?.removeAllRanges();
+      const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--gbm-shap-feature1-height"));
+      if (Number.isFinite(height)) {
+        localStorage.setItem(SHAP_CHOOSER_HEIGHT_KEY, String(Math.round(height)));
+      }
+      if (event.pointerId !== undefined) {
+        try {
+          resizer.releasePointerCapture(event.pointerId);
+        } catch (_) {
+        }
+      }
+    }
+    resizer.addEventListener("pointerup", finishDrag);
+    resizer.addEventListener("pointercancel", finishDrag);
+  }
+
+  function setChooserFeatureHeight(root, rawHeight) {
+    const side = root?.querySelector(".gbm-shap-side");
+    const resizer = root?.querySelector("#gbmShapChooserDivider");
+    const availableHeight = side?.getBoundingClientRect().height || window.innerHeight;
+    const splitterSpace = 22;
+    const minPanelHeight = 96;
+    const maxHeight = Math.max(minPanelHeight, availableHeight - splitterSpace - minPanelHeight);
+    const height = Math.min(Math.max(rawHeight, minPanelHeight), maxHeight);
+    document.documentElement.style.setProperty("--gbm-shap-feature1-height", `${Math.round(height)}px`);
+    resizer?.setAttribute("aria-valuemin", String(minPanelHeight));
+    resizer?.setAttribute("aria-valuemax", String(Math.round(maxHeight)));
+    resizer?.setAttribute("aria-valuenow", String(Math.round(height)));
+  }
+
+  function legendEntryNames(option) {
+    const series = Array.isArray(option?.series) ? option.series : [];
+    return series.map((item) => String(item?.name || "")).filter(Boolean);
+  }
+
+  function legendSelection(option, entries) {
+    const selected = Array.isArray(option?.legend)
+      ? option.legend[0]?.selected
+      : option?.legend?.selected;
+    return Object.fromEntries(entries.map((entry) => [entry, selected?.[entry] !== false]));
+  }
+
+  function applyLegendSelection(option, selection, entries) {
+    const legend = Array.isArray(option?.legend) ? option.legend[0] : option?.legend;
+    if (!legend || !entries.length) return;
+    legend.selected = {
+      ...(legend.selected || {}),
+      ...Object.fromEntries(entries.map((entry) => [entry, selection?.[entry] !== false])),
+    };
+  }
+
+  function sameEntries(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((entry, index) => entry === right[index]);
   }
 
   return {
