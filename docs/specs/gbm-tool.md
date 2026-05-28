@@ -16,11 +16,12 @@ It should be possible to load up the app, point at a pre-built GBM and diagnosti
 
 ## Tool tabs
 
-The tool screen should have three tabs across the top called
+The tool screen should have four tabs across the top called
 
 - Features and parameters
 - Model navigator
 - Tree viewer
+- SHAP
 
 The functionality of each tab is described in sections below.
 
@@ -69,6 +70,12 @@ This is a sortable table showing every fitted model, any feature interaction con
 
 This tab lets the user select a single tree in the model from a searchable list and graphically plots that tree with zoom and colour controls.
 
+## SHAP tab
+
+This tab is available when the active GBM has saved SHAP rows. It has two feature chooser controls on the left, both restricted to the active model's trained features. Feature 1 defaults to the highest-Gain feature. Feature 2 has a highlighted `None` row by default. Both choosers can sort by `Importance` or `A-Z`.
+
+The chart controls above the plot set Feature 1 banding, tail percent grouping, Feature 2 banding, and `Treat as factor` for each feature. One-feature plots render numeric percentile ribbons around the median or factor box plots. Numeric features forced to factor style keep their natural band order; true categorical box plots sort by descending median SHAP. Two-feature plots use `SHAP(feature_1) + SHAP(feature_2)` and render a dense-grid 3D surface for two continuous features, line plots for continuous-by-factor selections, or heatmaps for two factor-style selections.
+
 ## Validation
 
 Before training the model, the tool must check
@@ -87,6 +94,7 @@ I need this tool to be persistent. It's OK to hold interim results in RAM if fas
 - LightGBM .txt file output
 - model predictions as a parquet and a way to attach them back to original .parquet for queries (attach might not be the right word - I need to be able to plot A vs E charts for the model using the Line and Bar tool - so I need the original parquet as it contains the model features and the reponse, and I need the response parquet for the GBM fitted values - but they must tie up)
 - SHAP values and a way to attach them back to original .parquet for queries
+- aggregated SHAP plot payloads from saved sidecars for the GBM SHAP tab
 - evaluation log (used to drive the evaluation chart) - this records the model metric (on train and test) after each round of training
 - how long it took to train the model and calculate the SHAP values
 - the LightGBM converted to a tabular format (in R this is the output from the lgb.model.dt.tree function)

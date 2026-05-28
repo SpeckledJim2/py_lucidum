@@ -17,6 +17,7 @@ from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.demo import demo_dataset_path
 from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
+from py_lucidum.tools.gbm.shap import shap_config, shap_plot
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
@@ -130,6 +131,70 @@ class GbmToolTests(unittest.TestCase):
             {"name": "Segment", "include": True, "monotonicity": ""},
         ]
 
+    def write_shap_plot_model(self, model_id: str = "shap-model", *, with_shap: bool = True) -> GbmModelStore:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": "SHAP model",
+                "created_at": "2026-05-25T00:00:00Z",
+                "objective": "poisson",
+                "metric": "poisson",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "best_iteration": 3,
+                "training_rows": 2,
+                "test_rows": 1,
+                "scored_rows": 3,
+                "shap_rows": 3 if with_shap else 0,
+                "feature_importance": [
+                    {"name": "Age", "kind": "integer", "gain": 12.0},
+                    {"name": "lat", "kind": "numeric", "gain": 6.0},
+                    {"name": "Segment", "kind": "categorical", "gain": 3.0},
+                ],
+                "sources": {"shap_long": f"gbm:{model_id}:shap_long", "shap_summary": f"gbm:{model_id}:shap_summary"},
+            },
+        )
+        store.write_json(
+            model_dir / "feature_config.json",
+            [
+                {"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 12.0},
+                {"name": "lat", "kind": "numeric", "include": True, "monotonicity": "", "gain": 6.0},
+                {"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 3.0},
+            ],
+        )
+        if with_shap:
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 0.20 AS Age, 0.10 AS Segment, 1.00 AS lat
+  UNION ALL
+  SELECT 2, -0.40, -0.20, 2.00
+  UNION ALL
+  SELECT 3, 0.10, 0.05, -1.00
+) TO {sql_literal(str(model_dir / "shap_values.parquet"))} (FORMAT PARQUET)
+"""
+                )
+                con.execute(
+                    f"""
+COPY (
+  SELECT 'Age' AS feature, 0.233 AS mean_abs_shap, -0.033 AS mean_shap, 3 AS row_count
+  UNION ALL
+  SELECT 'lat', 1.333, 0.667, 3
+  UNION ALL
+  SELECT 'Segment', 0.117, -0.017, 3
+) TO {sql_literal(str(model_dir / "shap_summary.parquet"))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+        store.activate_model(model_id)
+        return store
+
     def test_gbm_config_routes_work_without_lightgbm_imports(self) -> None:
         app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
@@ -142,6 +207,8 @@ class GbmToolTests(unittest.TestCase):
         self.assertIn("/api/gbm/models/{model_id}", paths)
         self.assertIn("/api/gbm/models/{model_id}/activate", paths)
         self.assertIn("/api/gbm/models/{model_id}/rename", paths)
+        self.assertIn("/api/gbm/models/{model_id}/shap/config", paths)
+        self.assertIn("/api/gbm/models/{model_id}/shap/plot", paths)
         model_route_methods: set[str] = set()
         for route in app.routes:
             if route.path == "/api/gbm/models/{model_id}":
@@ -216,6 +283,136 @@ class GbmToolTests(unittest.TestCase):
             ],
         )
         self.assertEqual(payload["feature_interaction_groupings"], ["DRIVER", "POSTCODE"])
+
+    def test_shap_config_returns_trained_features_sorted_by_importance(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_config(dataset, store, "shap-model")
+
+        self.assertTrue(payload["has_shap"])
+        self.assertEqual(payload["row_count"], 3)
+        self.assertEqual([feature["name"] for feature in payload["features"]], ["Age", "lat", "Segment"])
+        self.assertEqual(payload["default_feature_1"], "Age")
+
+    def test_shap_config_handles_models_without_saved_shap_rows(self) -> None:
+        store = self.write_shap_plot_model("no-shap", with_shap=False)
+        dataset = Dataset(self.data_path)
+
+        payload = shap_config(dataset, store, "no-shap")
+
+        self.assertFalse(payload["has_shap"])
+        self.assertEqual(payload["features"], [])
+        self.assertIn("without saved SHAP rows", payload["warnings"][0])
+
+    def test_shap_plot_rejects_features_outside_trained_model(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        with self.assertRaisesRegex(ValueError, "Feature 1"):
+            shap_plot(dataset, store, "shap-model", {"feature_1": "denominator"})
+
+    def test_shap_plot_builds_flame_percentiles_for_numeric_feature(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(dataset, store, "shap-model", {"feature_1": "Age", "banding_1": 10, "tail_percent": 0})
+
+        self.assertEqual(payload["plot_type"], "flame")
+        self.assertEqual(payload["percentiles"], [0, 5, 10, 20, 30, 40, 45, 50, 55, 60, 70, 80, 90, 95, 100])
+        self.assertEqual(payload["x_domain"], [30, 50])
+        self.assertEqual(payload["y_domain"], [-0.4, 0.2])
+        by_x = {row["x"]: row for row in payload["rows"]}
+        self.assertAlmostEqual(by_x[30]["p50"], 0.2)
+        self.assertAlmostEqual(by_x[40]["p50"], -0.4)
+
+    def test_shap_plot_numeric_treat_as_factor_uses_natural_band_order(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(dataset, store, "shap-model", {"feature_1": "Age", "factor_1": True, "banding_1": 10, "tail_percent": 0})
+
+        self.assertEqual(payload["plot_type"], "box")
+        self.assertEqual([row["level"] for row in payload["rows"]], ["30.0", "40.0", "50.0"])
+
+    def test_shap_plot_builds_box_plot_sorted_by_median(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(dataset, store, "shap-model", {"feature_1": "Segment"})
+
+        self.assertEqual(payload["plot_type"], "box")
+        self.assertEqual([row["level"] for row in payload["rows"]], ["A", "C", "B"])
+        self.assertAlmostEqual(payload["rows"][0]["p50"], 0.1)
+
+    def test_shap_plot_two_numeric_features_uses_sum_for_surface(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {"feature_1": "Age", "feature_2": "lat", "banding_1": 10, "banding_2": 0.1, "tail_percent": 0},
+        )
+
+        self.assertEqual(payload["plot_type"], "surface")
+        self.assertEqual(payload["x_feature"], "lat")
+        self.assertEqual(payload["y_feature"], "Age")
+        self.assertEqual(payload["grid"]["data_shape"], [3, 3])
+        self.assertEqual(len(payload["rows"]), 9)
+        self.assertEqual(payload["x_domain"], [56.1, 57.2])
+        self.assertEqual(payload["y_domain"], [30, 50])
+        missing_cells = [row for row in payload["rows"] if row["has_data"] is False]
+        self.assertEqual(len(missing_cells), 6)
+        self.assertTrue(all(row["z"] is None and row["row_count"] == 0 for row in missing_cells))
+        first_point = next(row for row in payload["rows"] if row["y"] == 30 and row["z"] is not None)
+        self.assertTrue(first_point["has_data"])
+        self.assertAlmostEqual(first_point["z"], 1.2)
+
+    def test_shap_plot_builds_lines_for_numeric_and_factor_features(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(dataset, store, "shap-model", {"feature_1": "Age", "feature_2": "Segment", "banding_1": 10})
+
+        self.assertEqual(payload["plot_type"], "lines")
+        self.assertEqual(payload["x_feature"], "Age")
+        self.assertEqual(payload["series_feature"], "Segment")
+        self.assertEqual({row["series"] for row in payload["rows"]}, {"A", "B", "C"})
+        self.assertAlmostEqual(next(row for row in payload["rows"] if row["series"] == "A")["y"], 0.3)
+
+    def test_shap_plot_builds_heatmap_for_two_factor_features(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {"feature_1": "Age", "feature_2": "Segment", "factor_1": True, "banding_1": 10},
+        )
+
+        self.assertEqual(payload["plot_type"], "heatmap")
+        self.assertEqual(payload["x_feature"], "Segment")
+        self.assertEqual(payload["y_feature"], "Age")
+        self.assertAlmostEqual(next(row for row in payload["rows"] if row["x"] == "A")["z"], 0.3)
+
+    def test_shap_routes_work_without_lightgbm_imports(self) -> None:
+        self.write_shap_plot_model()
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+            status, body = asgi_get(app, "/api/gbm/models/shap-model/shap/config")
+            plot_status, plot_body = asgi_post_json(app, "/api/gbm/models/shap-model/shap/plot", {"feature_1": "Age", "banding_1": 10})
+            invalid_status, invalid_body = asgi_post_json(app, "/api/gbm/models/shap-model/shap/plot", {"feature_1": "denominator"})
+
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["has_shap"])
+        self.assertEqual(plot_status, 200)
+        self.assertEqual(json.loads(plot_body)["plot_type"], "flame")
+        self.assertEqual(invalid_status, 400)
+        self.assertIn("Feature 1", json.loads(invalid_body)["detail"])
 
     def test_active_feature_scenario_status_compares_against_current_spec(self) -> None:
         store = self.write_model_artifacts()

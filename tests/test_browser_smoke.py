@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -120,6 +121,8 @@ class BrowserSmokeTests(unittest.TestCase):
                     },
                 )
                 feature_config = [{"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 5.0}]
+                if model_id == "browser-smoke-model":
+                    feature_config.append({"name": "lat", "kind": "numeric", "include": True, "monotonicity": "", "gain": 4.0})
                 if model_id.endswith("-2"):
                     feature_config.append({"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 6.0})
                 store.write_json(model_dir / "feature_config.json", feature_config)
@@ -168,6 +171,28 @@ COPY (
   UNION ALL
   SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.4, 1.0, 1
 ) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+                    )
+                    con.execute(
+                        f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 0.20 AS Age, 0.10 AS Segment, 0.40 AS lat
+  UNION ALL
+  SELECT 2, -0.30, -0.15, -0.20
+  UNION ALL
+  SELECT 3, 0.05, 0.25, 0.10
+) TO {sql_literal(str(model_dir / "shap_values.parquet"))} (FORMAT PARQUET)
+"""
+                    )
+                    con.execute(
+                        f"""
+COPY (
+  SELECT 'Age' AS feature, 0.183 AS mean_abs_shap, -0.017 AS mean_shap, 3 AS row_count
+  UNION ALL
+  SELECT 'Segment', 0.167, 0.067, 3
+  UNION ALL
+  SELECT 'lat', 0.233, 0.100, 3
+) TO {sql_literal(str(model_dir / "shap_summary.parquet"))} (FORMAT PARQUET)
 """
                     )
                 finally:
@@ -653,7 +678,7 @@ COPY (
                 page.get_by_text("Grouping").first.wait_for(timeout=10_000)
                 page.get_by_text("SHAP rows").wait_for(timeout=10_000)
                 page.get_by_text("Training mode").wait_for(timeout=10_000)
-                assert_feature_heading_matches_checked(1)
+                assert_feature_heading_matches_checked(2)
                 initial_scenario = page.evaluate(
                     """
                     () => {
@@ -704,8 +729,95 @@ COPY (
                 self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "")
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
+                page.get_by_role("button", name="SHAP").click()
+                page.locator("#gbmShapChart").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && option.series?.length > 0
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
+                        && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                initial_shap_state = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      const medianIndex = option.series.findIndex((series) => series.name === "Median");
+                      const median = option.series[medianIndex];
+                      const formatter = option.tooltip?.[0]?.formatter;
+                      return {
+                        xMin: option.xAxis?.[0]?.min,
+                        xMax: option.xAxis?.[0]?.max,
+                        legendLeft: option.legend?.[0]?.left || "",
+                        hasRibbon: option.series?.some((series) => series.type === "custom"),
+                        ribbonColors: option.series
+                          ?.filter((series) => series.type === "custom")
+                          .map((series) => series.itemStyle?.color || ""),
+                        medianColor: option.series?.find((series) => series.name === "Median")?.itemStyle?.color || "",
+                        tooltipText: typeof formatter === "function"
+                          ? formatter([{ axisValue: median?.data?.[0]?.[0], value: median?.data?.[0] }])
+                          : "",
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(initial_shap_state["xMin"], 30.2)
+                self.assertAlmostEqual(initial_shap_state["xMax"], 49.8)
+                self.assertTrue(initial_shap_state["hasRibbon"])
+                self.assertEqual(initial_shap_state["legendLeft"], "center")
+                self.assertTrue(all(color.startswith("rgba(209, 63, 63,") for color in initial_shap_state["ribbonColors"]))
+                self.assertEqual(initial_shap_state["medianColor"], "#d13f3f")
+                tooltip_text = initial_shap_state["tooltipText"]
+                self.assertIn("Median", tooltip_text)
+                self.assertIsNone(re.search(r"\d+\.\d{5,}", tooltip_text))
+                page.locator("#gbmShapFeatureList2 .feature", has_text="lat").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP surface plot: Age x lat")
+                        && option.series?.some((series) => series.type === "surface");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                surface_state = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      const surface = option?.series?.find((series) => series.type === "surface");
+                      return {
+                        title: option?.title?.[0]?.text || "",
+                        invalidZ: Boolean(surface?.data?.some((point) => Number.isNaN(point?.[2]) || point?.[2] == null)),
+                        noticeHidden: Boolean(document.querySelector("#gbmNotice")?.classList.contains("hidden")),
+                        noticeText: document.querySelector("#gbmNotice")?.textContent || "",
+                      };
+                    }
+                    """
+                )
+                self.assertIn("SHAP surface plot: Age x lat", surface_state["title"])
+                self.assertTrue(surface_state["invalidZ"])
+                self.assertTrue(surface_state["noticeHidden"])
+                self.assertNotIn("undefined is not an object", surface_state["noticeText"])
+                page.get_by_role("button", name="Features and parameters").click()
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                      .some((row) => row.textContent.includes("BadText"))
+                    """,
+                    timeout=10_000,
+                )
                 invalid_feature_state = page.evaluate(
                     """
                     () => {
@@ -912,6 +1024,32 @@ COPY (
                 self.assertTrue(activated_navigator_state["activateDisabled"])
                 self.assertTrue(activated_navigator_state["deleteDisabled"])
                 self.assertIn("Second smoke model", activated_navigator_state["sidebarMeta"])
+                page.get_by_role("button", name="SHAP").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP box plot: Segment")
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Segment")
+                        && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmShapFeatureList2 .feature", has_text="Age").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP lines plot: Age x Segment")
+                        && option.series?.some((series) => series.type === "line");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertFalse(page.locator("#gbmShapMessage", has_text="undefined is not an object").is_visible())
                 page.get_by_role("button", name="Features and parameters").click()
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
@@ -1070,7 +1208,7 @@ COPY (
                 )
                 self.assertIn("old_scenario", restored_scenario["value"])
                 self.assertEqual(restored_scenario["text"], "old_scenario (trained; missing from spec)")
-                assert_feature_heading_matches_checked(1)
+                assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='normal']").is_checked())
                 self.assertTrue(page.locator("input[name='gbmEvaluationViewMode'][value='tail']").is_checked())
                 page.locator("input[name='gbmEvaluationViewMode'][value='all']").check()

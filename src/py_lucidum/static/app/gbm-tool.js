@@ -1,4 +1,5 @@
 import { createGbmTreeViewer } from "./gbm-tree-viewer.js";
+import { createGbmShapTool } from "./gbm-shap-tool.js";
 
 const GBM_PARAMETER_OPTIONS = {
   objective: [
@@ -130,6 +131,7 @@ export function createGbmTool({
   let evaluationResizeObserver = null;
   let evaluationViewMode = "all";
   const treeViewer = createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNotice });
+  const shapTool = createGbmShapTool({ api, escapeHtml, setNotice: setGbmNotice });
 
   function buildRequest() {
     if (!state.schema) return null;
@@ -190,6 +192,7 @@ export function createGbmTool({
     if (!mount) return;
     disposeEvaluationChart();
     treeViewer.dispose();
+    shapTool.dispose();
     mount.innerHTML = `
       <div class="gbm-tool">
         <div id="gbmNotice" class="gbm-notice hidden" role="alert" aria-live="polite"></div>
@@ -198,6 +201,7 @@ export function createGbmTool({
             <button class="tab ${activeTab === "features" ? "active" : ""}" type="button" data-gbm-tab="features">Features and parameters</button>
             <button class="tab ${activeTab === "models" ? "active" : ""}" type="button" data-gbm-tab="models">Model navigator</button>
             <button class="tab ${activeTab === "trees" ? "active" : ""}" type="button" data-gbm-tab="trees">Tree viewer</button>
+            <button class="tab ${activeTab === "shap" ? "active" : ""}" type="button" data-gbm-tab="shap">SHAP</button>
           </div>
           <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${escapeHtml(liveProgress?.message || "")}</div>
         </div>
@@ -299,6 +303,9 @@ export function createGbmTool({
             </section>
           </div>
         </div>
+        <div class="gbm-tab-panel ${activeTab === "shap" ? "" : "hidden"}" data-gbm-panel="shap">
+          ${shapTool.shellHtml()}
+        </div>
       </div>
     `;
     bindTabs(mount);
@@ -309,6 +316,7 @@ export function createGbmTool({
     renderTables(data);
     if (data.active_model_id) loadModelDetail(data.active_model_id);
     if (activeTab === "trees") treeViewer.render(data.active_model_id || "");
+    if (activeTab === "shap") shapTool.render(data.active_model_id || "");
     if (liveProgress) renderLiveProgress(liveProgress);
     setDuckDbTiming(tool, data.timings || {});
     setClientTiming(tool, data.client_timings || {});
@@ -2319,6 +2327,7 @@ export function createGbmTool({
         renderEvaluationChart();
       }
       treeViewer.refreshTheme();
+      shapTool.refreshTheme();
     },
     syncSidebarFromSchema,
     useCached,

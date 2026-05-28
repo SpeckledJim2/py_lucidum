@@ -8,6 +8,7 @@ from py_lucidum.app.context import AppContext
 
 from .jobs import GbmJobManager
 from .sample import SAMPLE_COLUMN, create_generated_sample, sample_metadata
+from .shap import shap_config, shap_plot
 from .sources import GbmSourceProvider
 from .store import GbmModelNameError, GbmModelStore
 from .training import MissingGbmDependency, gbm_dependencies
@@ -350,6 +351,23 @@ def register(app: FastAPI, context: AppContext) -> None:
             return tree_detail(store, model_id, tree_index)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/gbm/models/{model_id}/shap/config")
+    async def model_shap_config_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        try:
+            return shap_config(context.dataset, store, model_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/gbm/models/{model_id}/shap/plot")
+    async def model_shap_plot_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        try:
+            return shap_plot(context.dataset, store, model_id, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/gbm/models/{model_id}")
     async def model_endpoint(request: Request, model_id: str) -> dict[str, Any]:

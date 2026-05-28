@@ -22,6 +22,7 @@ This file gives future coding agents the shortest reliable path into `py_lucidum
 - LightGBM, pandas, and numpy must be imported lazily in GBM training paths, not at base app import time.
 - On macOS, LightGBM may need Homebrew `libomp`; missing native runtime errors should stay actionable rather than surfacing as server 500s.
 - GBM artifacts are sidecars under `.lucidum/models/gbm/` beside the dataset and must not be committed.
+- The GBM SHAP tab reads saved SHAP sidecars only. Keep SHAP aggregation in backend GBM modules, keep SHAP UI/chart code separate, return dense grids for 3D surfaces, and lazy-load vendored ECharts GL only for those surface plots.
 
 ## Before Committing
 
@@ -33,6 +34,8 @@ Run the standard checks from `DEVELOPMENT.md`. For frontend, app-launch, or GBM 
 node --check src/py_lucidum/static/app.js
 node --check src/py_lucidum/static/app/main.js
 node --check src/py_lucidum/static/app/gbm-tool.js
+node --check src/py_lucidum/static/app/gbm-shap-tool.js
+node --check src/py_lucidum/static/app/gbm-shap-chart.js
 node --check src/py_lucidum/static/app/gbm-tree-viewer.js
 node --check src/py_lucidum/static/app/model-tool-shell.js
 PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest

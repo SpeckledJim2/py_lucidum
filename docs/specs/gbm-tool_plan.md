@@ -2,7 +2,7 @@
 
 ## Summary
 
-Build the GBM tool as an opt-in LightGBM-backed modelling tool with persistent sidecar artifacts, background training, three GBM tabs, and shareable model-output data sources that Line/Bar and UK Map can query like normal dataset columns.
+Build the GBM tool as an opt-in LightGBM-backed modelling tool with persistent sidecar artifacts, background training, GBM diagnostic tabs including SHAP plotting, and shareable model-output data sources that Line/Bar and UK Map can query like normal dataset columns.
 
 Chosen defaults:
 
@@ -13,6 +13,7 @@ Chosen defaults:
 - Keep LightGBM/backend modelling code cleanly separated from frontend UI code.
 - Use Tabulator for the editable feature/parameter grids, vendored locally and lazy-loaded only for GBM.
 - Use backend-normalized tree routes plus a lazy-loaded D3 viewer for GBM tree diagrams.
+- Use backend SHAP aggregation routes plus ECharts, with ECharts GL lazy-loaded only for numeric/numeric SHAP surfaces.
 
 ## Key Changes
 
@@ -28,6 +29,7 @@ Chosen defaults:
 - Add GBM routes for config, validation, training, job polling, model listing/loading, and active-model selection.
 - Job polling responses include transient progress snapshots with current phase, iteration, train/test metric values, and live evaluation history.
 - Add GBM tree routes for model tree lists and selected tree detail.
+- Add GBM SHAP routes for trained-feature config and compact plot-ready aggregation payloads, including explicit numeric domains and dense numeric/numeric surface grids.
 - Extend the shared data-source contract with:
   - `gbm:<model_id>:predictions`
   - `gbm:<model_id>:shap_long`
@@ -47,6 +49,7 @@ Chosen defaults:
 - After training, persist LightGBM gain feature importance and use it to refresh the feature grid.
 - During training, a LightGBM callback updates the in-memory job with current iteration and metric values so the browser can update status text and the evaluation chart before the model is persisted.
 - SHAP row options are `0`, `10k`, `100k`, and `all`. SHAP values are stored as a wide artifact keyed by `__lucidum_row_id`, with one numeric column per selected feature; the summary artifact remains one row per feature.
+- SHAP plots read only saved SHAP rows joined to trained feature values by `__lucidum_row_id`; one-feature plots use that feature's SHAP, while two-feature plots use the sum of the two selected SHAP contributions.
 
 ## UI
 
@@ -68,6 +71,7 @@ Chosen defaults:
   - The ECharts evaluation title is a single line containing evaluation metric, test metric, and best iteration with the same font size.
 - **Model navigator** tab lists saved models, feature interaction constraints, key parameters, train/test metrics, timings, a green-dot active-model indicator, and selectable rows for rename/delete actions. Active-model switching remains in the sidebar model list.
 - **Tree viewer** tab provides a searchable tree summary table plus a graphical D3 tree from saved `tree_table.parquet` output. The diagram supports zoom, fit/reset, colour palettes, decoded categorical thresholds, edge labels, and default-branch highlighting.
+- **SHAP** tab provides two trained-feature choosers sorted by Importance or A-Z, a highlighted `None` option for Feature 2, banding/tail/factor controls, numeric percentile ribbons, factor box plots, numeric/numeric ECharts GL surfaces, continuous-by-factor line plots, and factor/factor heatmaps.
 - Keep the existing dense, utilitarian app visual style.
 
 ## Test Plan
@@ -83,10 +87,11 @@ Chosen defaults:
   - Line/Bar and UK Map can query model prediction sources.
   - Feature importance gain is persisted, returned in model detail/config responses, defaults to `0.000`, and sorts descending after training.
   - Tree summary/detail routes read saved artifacts and do not import LightGBM.
+  - SHAP config/plot routes read saved artifacts and do not import LightGBM, pandas, or numpy.
 - Backend modelling tests should target `training.py`, `validation.py`, `store.py`, and `sources.py` directly without browser/UI involvement.
 - Frontend/static tests:
-  - GBM tabs, hidden filter controls, active-model selector, train button, feature `Gain` column, active-model feature/parameter refresh, tree viewer controls, and source switching are present.
-  - Tabulator and D3 assets are lazy-loaded only for GBM.
+  - GBM tabs, hidden filter controls, active-model selector, train button, feature `Gain` column, active-model feature/parameter refresh, SHAP controls, tree viewer controls, and source switching are present.
+  - Tabulator, D3, and ECharts GL assets are lazy-loaded only for the GBM views that need them.
 - Optional integration test behind `PY_LUCIDUM_RUN_GBM_TESTS=1`: train a small LightGBM, write artifacts, reload app, activate model, verify Gain ordering, and plot predictions in Line/Bar.
 - Standard checks: `unittest`, `compileall`, JS `node --check`, `git diff --check`, and browser smoke tests.
 

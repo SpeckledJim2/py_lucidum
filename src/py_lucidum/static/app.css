@@ -2746,6 +2746,161 @@
         height: 100%;
       }
 
+      .gbm-tab-panel[data-gbm-panel="shap"] {
+        height: 100%;
+      }
+
+      .gbm-shap-view {
+        display: grid;
+        grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+        gap: 12px;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-shap-side {
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) 6px minmax(0, 1fr);
+        gap: 8px;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-shap-chooser-divider {
+        background: linear-gradient(to bottom, var(--line), transparent);
+        min-height: 6px;
+      }
+
+      .gbm-shap-feature-section {
+        min-height: 0;
+      }
+
+      .gbm-shap-feature-list {
+        min-height: 0;
+      }
+
+      .gbm-shap-sort button {
+        font-size: 11px;
+        min-height: 22px;
+        padding: 1px 6px;
+      }
+
+      .gbm-shap-main {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .gbm-shap-controls {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr);
+        gap: 6px 12px;
+        min-width: 0;
+      }
+
+      .gbm-shap-controls .control {
+        align-items: flex-start;
+        min-width: 0;
+      }
+
+      .gbm-shap-controls .gbm-shap-feature2-control {
+        align-items: flex-end;
+        text-align: right;
+      }
+
+      .gbm-shap-controls .gbm-shap-tail-control {
+        align-items: center;
+        text-align: center;
+      }
+
+      .gbm-shap-controls .control h3 {
+        font-size: 12px;
+        line-height: 1.2;
+        margin-bottom: 4px;
+      }
+
+      .gbm-shap-controls .segmented {
+        flex-wrap: wrap;
+      }
+
+      .gbm-shap-feature2-control .segmented {
+        justify-content: flex-end;
+      }
+
+      .gbm-shap-tail-control .segmented {
+        justify-content: center;
+      }
+
+      .gbm-shap-banding-control.disabled {
+        opacity: 0.68;
+      }
+
+      .gbm-shap-factor-control {
+        align-items: center;
+        color: var(--text);
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 700;
+        gap: 6px;
+        line-height: 1.2;
+        min-height: 24px;
+        white-space: nowrap;
+      }
+
+      .gbm-shap-feature2-factor {
+        justify-self: end;
+        text-align: right;
+      }
+
+      .gbm-shap-factor-control.disabled {
+        color: var(--muted);
+      }
+
+      .gbm-shap-factor-control input {
+        accent-color: var(--accent);
+        height: 13px;
+        margin: 0;
+        width: 13px;
+      }
+
+      .gbm-shap-chart-shell {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        position: relative;
+      }
+
+      .gbm-shap-message {
+        background: color-mix(in srgb, var(--panel) 88%, transparent);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        box-shadow: 0 8px 22px rgb(15 23 42 / 14%);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.25;
+        max-width: min(320px, calc(100% - 28px));
+        padding: 5px 8px;
+        pointer-events: none;
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        z-index: 3;
+      }
+
+      .gbm-shap-chart {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+      }
+
       .gbm-feature-layout {
         display: grid;
         grid-template-columns: minmax(360px, 1fr) minmax(320px, 0.9fr);
