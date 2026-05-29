@@ -259,6 +259,35 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_sidebar_vertical_resizers_work_across_tools(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,price,value\n"
+                "10,100,30,A,AB,AB10 1,AB10 1AA,57.1,-2.1,100,10\n"
+                "20,200,40,B,AB,AB10 1,AB10 1AB,57.2,-2.2,200,20\n"
+                "30,300,50,C,AL,AL1 1,AL1 1AA,51.8,-0.3,300,30\n"
+                "40,400,60,D,AL,AL1 2,AL1 2AA,51.7,-0.2,400,40\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                store,
+                "sidebar-resizer-model",
+                "Sidebar resizer model",
+                "2026-05-26T00:00:00Z",
+                [0.12, 0.23, 0.34, 0.45],
+            )
+            store.activate_model("sidebar-resizer-model")
+            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "uk_map", "gbm"])
+            try:
+                self.exercise_sidebar_vertical_resizers(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_saved_filter_theme_headings_collapse_their_rows(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -457,6 +486,175 @@ COPY (
         with urlopen(f"{base_url}{path}", timeout=5) as response:
             assert response.status == 200
             assert expected_content_type in response.headers.get("content-type", "")
+
+    def exercise_sidebar_vertical_resizers(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+            def drag_resizer(selector: str, delta_y: int) -> None:
+                box = page.locator(selector).bounding_box()
+                self.assertIsNotNone(box)
+                assert box is not None
+                x = box["x"] + box["width"] / 2
+                y = box["y"] + box["height"] / 2
+                page.mouse.move(x, y)
+                page.mouse.down()
+                page.mouse.move(x, y + delta_y, steps=5)
+                page.mouse.up()
+
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                page.locator("#gbmSidebarPanel:not(.hidden)").wait_for(timeout=10_000)
+                self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
+
+                page.locator("#filterCollapseBtn").click()
+                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "true")
+                filter_before = page.evaluate(
+                    """
+                    () => {
+                      const section = document.querySelector(".sidebar-filter-section");
+                      const rect = section.getBoundingClientRect();
+                      return { top: rect.top, height: rect.height };
+                    }
+                    """
+                )
+                drag_resizer("#sidebarFilterResizer", -90)
+                page.wait_for_function(
+                    """
+                    (before) => {
+                      const rect = document.querySelector(".sidebar-filter-section")?.getBoundingClientRect();
+                      return Number(localStorage.getItem("py_lucidum_sidebar_filter_height")) > 0
+                        && rect
+                        && rect.height > before.height + 20
+                        && rect.top < before.top - 20;
+                    }
+                    """,
+                    arg=filter_before,
+                    timeout=10_000,
+                )
+
+                gbm_before = page.evaluate(
+                    """
+                    () => {
+                      const rect = document.querySelector(".gbm-sidebar-panel").getBoundingClientRect();
+                      return { top: rect.top, bottom: rect.bottom, height: rect.height };
+                    }
+                    """
+                )
+                drag_resizer("#sidebarGbmResizer", 70)
+                page.wait_for_function(
+                    """
+                    (before) => {
+                      const rect = document.querySelector(".gbm-sidebar-panel")?.getBoundingClientRect();
+                      return Number(localStorage.getItem("py_lucidum_sidebar_gbm_height")) > 0
+                        && rect
+                        && rect.top > before.top + 16
+                        && Math.abs(rect.bottom - before.bottom) <= 2
+                        && rect.height < before.height - 16;
+                    }
+                    """,
+                    arg=gbm_before,
+                    timeout=10_000,
+                )
+
+                page.locator("#lineBarTool").click()
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.locator(".sidebar-kpi-section:not(.hidden)").wait_for(timeout=10_000)
+                if page.locator("#filterCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#filterCollapseBtn").click()
+                    self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "false")
+                if page.locator("#kpiCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#kpiCollapseBtn").click()
+                    self.assertEqual(page.locator("#kpiCollapseBtn").get_attribute("aria-expanded"), "false")
+                page.wait_for_timeout(50)
+                collapsed_kpi_gbm_before = page.evaluate(
+                    """
+                    () => {
+                      const rect = document.querySelector(".gbm-sidebar-panel").getBoundingClientRect();
+                      return { top: rect.top, bottom: rect.bottom, height: rect.height };
+                    }
+                    """
+                )
+                drag_resizer("#sidebarGbmResizer", 60)
+                page.wait_for_function(
+                    """
+                    (before) => {
+                      const rect = document.querySelector(".gbm-sidebar-panel")?.getBoundingClientRect();
+                      return rect
+                        && rect.top > before.top + 16
+                        && Math.abs(rect.bottom - before.bottom) <= 2
+                        && rect.height < before.height - 16;
+                    }
+                    """,
+                    arg=collapsed_kpi_gbm_before,
+                    timeout=10_000,
+                )
+                page.locator("#kpiCollapseBtn").click()
+                self.assertEqual(page.locator("#kpiCollapseBtn").get_attribute("aria-expanded"), "true")
+                self.assertEqual(page.locator("#sidebarKpiResizer").count(), 0)
+                self.assertTrue(page.locator("#sidebarGbmResizer").is_visible())
+                kpi_before = page.evaluate(
+                    """
+                    () => {
+                      const rect = document.querySelector(".sidebar-kpi-section").getBoundingClientRect();
+                      const gbmRect = document.querySelector(".gbm-sidebar-panel").getBoundingClientRect();
+                      return { bottom: rect.bottom, height: rect.height, gbmHeight: gbmRect.height };
+                    }
+                    """
+                )
+                kpi_delta = -80 if kpi_before["gbmHeight"] < 100 else 80
+                drag_resizer("#sidebarGbmResizer", kpi_delta)
+                page.wait_for_function(
+                    """
+                    ({ before, delta }) => {
+                      const rect = document.querySelector(".sidebar-kpi-section")?.getBoundingClientRect();
+                      const gbmRect = document.querySelector(".gbm-sidebar-panel")?.getBoundingClientRect();
+                      const moved = delta > 0
+                        ? rect && rect.height > before.height + 20 && rect.bottom > before.bottom + 20
+                        : rect && rect.height < before.height - 20 && rect.bottom < before.bottom - 20;
+                      return Number(localStorage.getItem("py_lucidum_sidebar_kpi_height")) > 0
+                        && rect
+                        && gbmRect
+                        && moved
+                        && Math.abs(rect.bottom - gbmRect.top) <= 2
+                        && !document.querySelector(".sidebar-filter-section")?.classList.contains("hidden");
+                    }
+                    """,
+                    arg={"before": kpi_before, "delta": kpi_delta},
+                    timeout=10_000,
+                )
+                if page.locator("#kpiCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#kpiCollapseBtn").click()
+                    self.assertEqual(page.locator("#kpiCollapseBtn").get_attribute("aria-expanded"), "false")
+                if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#gbmModelCollapseBtn").click()
+                    self.assertEqual(page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded"), "false")
+                if page.locator("#filterCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#filterCollapseBtn").click()
+                    self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "false")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const kpi = document.querySelector(".kpi-header h2")?.getBoundingClientRect();
+                      const gbm = document.querySelector(".gbm-model-header h2")?.getBoundingClientRect();
+                      const filter = document.querySelector(".filter-header h2")?.getBoundingClientRect();
+                      if (!kpi || !gbm || !filter) return false;
+                      const kpiToGbm = gbm.top - kpi.top;
+                      const gbmToFilter = filter.top - gbm.top;
+                      return Math.abs(kpiToGbm - gbmToFilter) <= 1;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
 
     def exercise_gbm_profile_cache_and_model_chart_refresh(self, base_url: str) -> None:
         assert sync_playwright is not None

@@ -933,8 +933,8 @@
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
         el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
         el("modelToolWrap").classList.toggle("hidden", !isModelTool(tool));
-        requestAnimationFrame(clampSidebarFilterHeight);
-        requestAnimationFrame(clampSidebarGbmHeight);
+        clampSidebarPanelHeights();
+        requestAnimationFrame(clampSidebarPanelHeights);
         syncActiveFilterLabels();
         syncActionTimingMonitor(tool);
         setStatus("");
@@ -1042,6 +1042,9 @@
             const currentHeight = section?.getBoundingClientRect().height || 0;
             setSidebarFilterHeight(Number.isFinite(savedHeight) && savedHeight > 0 ? savedHeight : currentHeight);
           });
+        } else {
+          clampSidebarPanelHeights();
+          requestAnimationFrame(clampSidebarPanelHeights);
         }
       }
 
@@ -1056,6 +1059,9 @@
             const currentHeight = section?.getBoundingClientRect().height || 0;
             setSidebarGbmHeight(Number.isFinite(savedHeight) && savedHeight > 0 ? savedHeight : currentHeight);
           });
+        } else {
+          clampSidebarPanelHeights();
+          requestAnimationFrame(clampSidebarPanelHeights);
         }
       }
 
@@ -1289,8 +1295,8 @@
         button.setAttribute("aria-expanded", String(!state.kpiCollapsed));
         button.setAttribute("aria-label", state.kpiCollapsed ? "Expand KPIs" : "Collapse KPIs");
         button.title = state.kpiCollapsed ? "Expand KPIs" : "Collapse KPIs";
-        requestAnimationFrame(clampSidebarFilterHeight);
-        requestAnimationFrame(clampSidebarGbmHeight);
+        clampSidebarPanelHeights();
+        requestAnimationFrame(clampSidebarPanelHeights);
       }
 
       function renderKpis() {
@@ -4421,82 +4427,77 @@
         });
       }
 
-      function setupSidebarFilterResize() {
-        const section = document.querySelector(".sidebar-filter-section");
-        const resizer = el("sidebarFilterResizer");
-        const savedHeight = Number(localStorage.getItem("py_lucidum_sidebar_filter_height"));
-        if (Number.isFinite(savedHeight) && savedHeight > 0) {
-          document.documentElement.style.setProperty("--sidebar-filter-height", `${Math.round(savedHeight)}px`);
-          if (!state.filterCollapsed) setSidebarFilterHeight(savedHeight);
-        }
+      const SIDEBAR_PANEL_ORDER = ["kpi", "gbm", "filter"];
+      const SIDEBAR_PANEL_RESIZE = {
+        kpi: {
+          sectionSelector: ".sidebar-kpi-section",
+          cssVar: "--sidebar-kpi-height",
+          storageKey: "py_lucidum_sidebar_kpi_height",
+          defaultHeight: 260,
+          minHeight: 42,
+          collapsed: () => state.kpiCollapsed,
+        },
+        gbm: {
+          sectionSelector: ".gbm-sidebar-panel",
+          resizerId: "sidebarGbmResizer",
+          cssVar: "--sidebar-gbm-height",
+          storageKey: "py_lucidum_sidebar_gbm_height",
+          defaultHeight: 220,
+          minHeight: 42,
+          collapsed: () => state.gbmModelCollapsed,
+        },
+        filter: {
+          sectionSelector: ".sidebar-filter-section",
+          resizerId: "sidebarFilterResizer",
+          cssVar: "--sidebar-filter-height",
+          storageKey: "py_lucidum_sidebar_filter_height",
+          defaultHeight: 238,
+          minHeight: 42,
+          collapsed: () => state.filterCollapsed,
+        },
+      };
 
-        let dragging = false;
-        let startY = 0;
-        let startHeight = 0;
-        resizer.addEventListener("pointerdown", (event) => {
-          if (state.filterCollapsed) return;
-          event.preventDefault();
-          dragging = true;
-          startY = event.clientY;
-          startHeight = section?.getBoundingClientRect().height || 0;
-          resizer.classList.add("dragging");
-          document.body.classList.add("resizing-sidebar-filter");
-          resizer.setPointerCapture(event.pointerId);
-          window.getSelection()?.removeAllRanges();
-        });
-        resizer.addEventListener("pointermove", (event) => {
-          if (!dragging) return;
-          event.preventDefault();
-          setSidebarFilterHeight(startHeight + startY - event.clientY);
-        });
-        function finishDrag(event) {
-          if (!dragging) return;
-          dragging = false;
-          resizer.classList.remove("dragging");
-          document.body.classList.remove("resizing-sidebar-filter");
-          window.getSelection()?.removeAllRanges();
-          const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-filter-height"));
-          if (Number.isFinite(height)) {
-            localStorage.setItem("py_lucidum_sidebar_filter_height", String(Math.round(height)));
-          }
-          if (event.pointerId !== undefined) {
-            try {
-              resizer.releasePointerCapture(event.pointerId);
-            } catch (_) {
-            }
-          }
-        }
-        resizer.addEventListener("pointerup", finishDrag);
-        resizer.addEventListener("pointercancel", finishDrag);
+      function setupSidebarFilterResize() {
+        setupSidebarPanelResize("filter");
       }
 
       function setupSidebarGbmResize() {
-        const section = document.querySelector(".gbm-sidebar-panel");
-        const resizer = el("sidebarGbmResizer");
-        const savedHeight = Number(localStorage.getItem("py_lucidum_sidebar_gbm_height"));
-        if (Number.isFinite(savedHeight) && savedHeight > 0) {
-          document.documentElement.style.setProperty("--sidebar-gbm-height", `${Math.round(savedHeight)}px`);
-          if (!state.gbmModelCollapsed) setSidebarGbmHeight(savedHeight);
-        }
+        setupSidebarPanelResize("gbm");
+      }
 
+      function restoreSidebarPanelHeights() {
+        SIDEBAR_PANEL_ORDER.forEach((key) => {
+          const config = SIDEBAR_PANEL_RESIZE[key];
+          const savedHeight = Number(localStorage.getItem(config.storageKey));
+          if (Number.isFinite(savedHeight) && savedHeight > 0) {
+            const height = Math.max(config.minHeight, Math.round(savedHeight));
+            document.documentElement.style.setProperty(config.cssVar, `${height}px`);
+          }
+        });
+      }
+
+      function setupSidebarPanelResize(key) {
+        const config = SIDEBAR_PANEL_RESIZE[key];
+        const resizer = el(config.resizerId);
         let dragging = false;
         let startY = 0;
-        let startHeight = 0;
+        let startLayout = null;
         resizer.addEventListener("pointerdown", (event) => {
-          if (state.gbmModelCollapsed || section?.classList.contains("hidden")) return;
+          if (!sidebarPanelCanResize(key)) return;
           event.preventDefault();
+          clampSidebarPanelHeights();
           dragging = true;
           startY = event.clientY;
-          startHeight = section?.getBoundingClientRect().height || 0;
+          startLayout = captureSidebarPanelLayout();
           resizer.classList.add("dragging");
           document.body.classList.add("resizing-sidebar-filter");
           resizer.setPointerCapture(event.pointerId);
           window.getSelection()?.removeAllRanges();
         });
         resizer.addEventListener("pointermove", (event) => {
-          if (!dragging) return;
+          if (!dragging || !startLayout) return;
           event.preventDefault();
-          setSidebarGbmHeight(startHeight + startY - event.clientY);
+          resizeSidebarBoundary(key, event.clientY - startY, startLayout);
         });
         function finishDrag(event) {
           if (!dragging) return;
@@ -4504,10 +4505,8 @@
           resizer.classList.remove("dragging");
           document.body.classList.remove("resizing-sidebar-filter");
           window.getSelection()?.removeAllRanges();
-          const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-gbm-height"));
-          if (Number.isFinite(height)) {
-            localStorage.setItem("py_lucidum_sidebar_gbm_height", String(Math.round(height)));
-          }
+          startLayout = null;
+          persistSidebarPanelHeights();
           if (event.pointerId !== undefined) {
             try {
               resizer.releasePointerCapture(event.pointerId);
@@ -4517,74 +4516,220 @@
         }
         resizer.addEventListener("pointerup", finishDrag);
         resizer.addEventListener("pointercancel", finishDrag);
+        updateSidebarPanelResizeAria(key);
       }
 
       function setSidebarFilterHeight(rawHeight) {
-        if (state.filterCollapsed) return;
-        const section = document.querySelector(".sidebar-filter-section");
-        const aside = el("appSidebar");
-        if (!section || !aside) return;
-        const toolSection = el("toolSelectorSection");
-        const kpiSection = document.querySelector(".sidebar-kpi-section");
-        const gbmSection = document.querySelector(".gbm-sidebar-panel");
-        const outerHeight = (element) => {
-          if (!element || element.classList.contains("hidden")) return 0;
-          const style = getComputedStyle(element);
-          return element.getBoundingClientRect().height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
-        };
-        const asideStyle = getComputedStyle(aside);
-        const contentHeight = aside.getBoundingClientRect().height - (parseFloat(asideStyle.paddingTop) || 0) - (parseFloat(asideStyle.paddingBottom) || 0);
-        const kpiVisible = kpiSection && !kpiSection.classList.contains("hidden") && !state.kpiCollapsed;
-        const kpiStyle = kpiSection ? getComputedStyle(kpiSection) : null;
-        const kpiMarginBottom = kpiVisible && kpiStyle ? (parseFloat(kpiStyle.marginBottom) || 0) : 0;
-        const sectionStyle = getComputedStyle(section);
-        const sectionMargins = (parseFloat(sectionStyle.marginTop) || 0) + (parseFloat(sectionStyle.marginBottom) || 0);
-        const availableHeight = contentHeight - outerHeight(toolSection);
-        const gbmHeight = outerHeight(gbmSection);
-        const minHeight = 168;
-        const minKpiHeight = kpiVisible ? 132 : 0;
-        const maxHeight = Math.max(minHeight, availableHeight - gbmHeight - minKpiHeight - kpiMarginBottom - sectionMargins);
-        const height = Math.min(Math.max(rawHeight, minHeight), maxHeight);
-        document.documentElement.style.setProperty("--sidebar-filter-height", `${Math.round(height)}px`);
+        setSidebarPanelHeight("filter", rawHeight, { preserveSpacer: true });
       }
 
       function setSidebarGbmHeight(rawHeight) {
-        if (state.gbmModelCollapsed) return;
-        const section = document.querySelector(".gbm-sidebar-panel");
-        const aside = el("appSidebar");
-        if (!section || section.classList.contains("hidden") || !aside) return;
-        const outerHeight = (element) => {
-          if (!element || element.classList.contains("hidden")) return 0;
-          const style = getComputedStyle(element);
-          return element.getBoundingClientRect().height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
-        };
-        const toolSection = el("toolSelectorSection");
-        const kpiSection = document.querySelector(".sidebar-kpi-section");
-        const filterSection = document.querySelector(".sidebar-filter-section");
-        const asideStyle = getComputedStyle(aside);
-        const contentHeight = aside.getBoundingClientRect().height - (parseFloat(asideStyle.paddingTop) || 0) - (parseFloat(asideStyle.paddingBottom) || 0);
-        const kpiVisible = kpiSection && !kpiSection.classList.contains("hidden") && !state.kpiCollapsed;
-        const filterVisible = filterSection && !filterSection.classList.contains("hidden");
-        const sectionStyle = getComputedStyle(section);
-        const sectionMargins = (parseFloat(sectionStyle.marginTop) || 0) + (parseFloat(sectionStyle.marginBottom) || 0);
-        const availableHeight = contentHeight - outerHeight(toolSection) - (filterVisible ? outerHeight(filterSection) : 0);
-        const minHeight = 132;
-        const minKpiHeight = kpiVisible ? 132 : 0;
-        const maxHeight = Math.max(minHeight, availableHeight - minKpiHeight - sectionMargins);
-        const height = Math.min(Math.max(rawHeight, minHeight), maxHeight);
-        document.documentElement.style.setProperty("--sidebar-gbm-height", `${Math.round(height)}px`);
+        setSidebarPanelHeight("gbm", rawHeight, { preserveSpacer: true });
+      }
+
+      function clampSidebarPanelHeights() {
+        const activeKeys = activeSidebarPanelKeys();
+        if (!activeKeys.length) {
+          clearSidebarPanelSpacers();
+          return;
+        }
+        const capacity = sidebarResizableHeightCapacity();
+        const heights = sidebarPanelHeights(activeKeys);
+        let spacer = Math.min(currentSidebarTopSpacer(activeKeys), sidebarMaxTopSpacer(activeKeys, capacity));
+        let total = sumPanelHeights(activeKeys, heights) + spacer;
+        if (total > capacity) {
+          const spacerReduction = Math.min(spacer, total - capacity);
+          spacer -= spacerReduction;
+          total -= spacerReduction;
+        }
+        if (total > capacity) {
+          shrinkSidebarPanels(activeKeys, heights, total - capacity);
+          total = sumPanelHeights(activeKeys, heights) + spacer;
+        }
+        if (total < capacity && activeKeys[0]) {
+          heights[activeKeys[0]] += capacity - total;
+        }
+        applySidebarPanelLayout(activeKeys, heights, spacer);
       }
 
       function clampSidebarFilterHeight() {
-        const section = document.querySelector(".sidebar-filter-section");
-        if (!section || state.filterCollapsed) return;
-        setSidebarFilterHeight(section.getBoundingClientRect().height);
+        setSidebarPanelHeight("filter", currentSidebarPanelHeight("filter"), { preserveSpacer: true });
       }
 
       function clampSidebarGbmHeight() {
-        const section = document.querySelector(".gbm-sidebar-panel");
-        if (!section || section.classList.contains("hidden") || state.gbmModelCollapsed) return;
-        setSidebarGbmHeight(section.getBoundingClientRect().height);
+        setSidebarPanelHeight("gbm", currentSidebarPanelHeight("gbm"), { preserveSpacer: true });
+      }
+
+      function setSidebarPanelHeight(key, rawHeight, options = {}) {
+        if (!sidebarPanelCanResize(key)) return;
+        const activeKeys = activeSidebarPanelKeys();
+        const heights = sidebarPanelHeights(activeKeys);
+        heights[key] = Math.max(SIDEBAR_PANEL_RESIZE[key].minHeight, Number(rawHeight) || SIDEBAR_PANEL_RESIZE[key].defaultHeight);
+        const capacity = sidebarResizableHeightCapacity();
+        let spacer = options.preserveSpacer ? Math.min(currentSidebarTopSpacer(activeKeys), sidebarMaxTopSpacer(activeKeys, capacity)) : 0;
+        let total = sumPanelHeights(activeKeys, heights) + spacer;
+        if (total > capacity) {
+          let excess = shrinkSidebarPanels(activeKeys.filter((candidate) => candidate !== key), heights, total - capacity);
+          if (excess > 0.5) excess = shrinkSidebarPanels([key], heights, excess);
+          total = sumPanelHeights(activeKeys, heights) + spacer;
+        }
+        if (total < capacity && activeKeys[0]) {
+          heights[activeKeys[0]] += capacity - total;
+        }
+        applySidebarPanelLayout(activeKeys, heights, spacer);
+      }
+
+      function resizeSidebarBoundary(key, delta, startLayout) {
+        const activeKeys = startLayout.activeKeys;
+        if (!activeKeys.includes(key)) return;
+        const heights = { ...startLayout.heights };
+        const index = activeKeys.indexOf(key);
+        const previousKey = activeKeys[index - 1];
+        const config = SIDEBAR_PANEL_RESIZE[key];
+        if (previousKey) {
+          const previousConfig = SIDEBAR_PANEL_RESIZE[previousKey];
+          const boundedDelta = Math.min(
+            Math.max(delta, previousConfig.minHeight - startLayout.heights[previousKey]),
+            startLayout.heights[key] - config.minHeight,
+          );
+          heights[previousKey] = startLayout.heights[previousKey] + boundedDelta;
+          heights[key] = startLayout.heights[key] - boundedDelta;
+          applySidebarPanelLayout(activeKeys, heights, startLayout.spacer);
+          return;
+        }
+        const boundedDelta = Math.min(
+          Math.max(delta, -startLayout.spacer),
+          startLayout.heights[key] - config.minHeight,
+        );
+        heights[key] = startLayout.heights[key] - boundedDelta;
+        applySidebarPanelLayout(activeKeys, heights, startLayout.spacer + boundedDelta);
+      }
+
+      function captureSidebarPanelLayout() {
+        const activeKeys = activeSidebarPanelKeys();
+        return {
+          activeKeys,
+          heights: sidebarPanelHeights(activeKeys),
+          spacer: currentSidebarTopSpacer(activeKeys),
+        };
+      }
+
+      function sidebarPanelCanResize(key) {
+        const config = SIDEBAR_PANEL_RESIZE[key];
+        const section = document.querySelector(config.sectionSelector);
+        return Boolean(section && !section.classList.contains("hidden") && !config.collapsed());
+      }
+
+      function activeSidebarPanelKeys() {
+        return SIDEBAR_PANEL_ORDER.filter(sidebarPanelCanResize);
+      }
+
+      function sidebarPanelHeights(activeKeys) {
+        return Object.fromEntries(activeKeys.map((key) => [key, currentSidebarPanelHeight(key)]));
+      }
+
+      function currentSidebarPanelHeight(key) {
+        const config = SIDEBAR_PANEL_RESIZE[key];
+        const section = document.querySelector(config.sectionSelector);
+        const cssHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(config.cssVar));
+        const height = Number.isFinite(cssHeight) ? cssHeight : (section?.getBoundingClientRect().height || config.defaultHeight);
+        return Math.max(config.minHeight, height);
+      }
+
+      function sumPanelHeights(activeKeys, heights) {
+        return activeKeys.reduce((total, key) => total + (heights[key] || 0), 0);
+      }
+
+      function shrinkSidebarPanels(keys, heights, excess) {
+        for (const key of keys) {
+          if (excess <= 0.5) break;
+          const config = SIDEBAR_PANEL_RESIZE[key];
+          const reduction = Math.min(excess, Math.max(0, heights[key] - config.minHeight));
+          heights[key] -= reduction;
+          excess -= reduction;
+        }
+        return excess;
+      }
+
+      function applySidebarPanelLayout(activeKeys, heights, spacer) {
+        SIDEBAR_PANEL_ORDER.forEach((key) => {
+          const config = SIDEBAR_PANEL_RESIZE[key];
+          const section = document.querySelector(config.sectionSelector);
+          if (!section) return;
+          section.style.marginTop = "";
+          if (activeKeys.includes(key)) {
+            const height = Math.max(config.minHeight, Math.round(heights[key] || config.defaultHeight));
+            document.documentElement.style.setProperty(config.cssVar, `${height}px`);
+            updateSidebarPanelResizeAria(key, height);
+          }
+        });
+        const firstActive = activeKeys[0];
+        if (firstActive) {
+          const firstSection = document.querySelector(SIDEBAR_PANEL_RESIZE[firstActive].sectionSelector);
+          if (firstSection) firstSection.style.marginTop = `${Math.max(0, Math.round(spacer))}px`;
+        }
+      }
+
+      function clearSidebarPanelSpacers() {
+        SIDEBAR_PANEL_ORDER.forEach((key) => {
+          const section = document.querySelector(SIDEBAR_PANEL_RESIZE[key].sectionSelector);
+          if (section) section.style.marginTop = "";
+        });
+      }
+
+      function currentSidebarTopSpacer(activeKeys) {
+        const firstActive = activeKeys[0];
+        if (!firstActive) return 0;
+        const section = document.querySelector(SIDEBAR_PANEL_RESIZE[firstActive].sectionSelector);
+        return parseFloat(section?.style?.marginTop || "0") || 0;
+      }
+
+      function sidebarMaxTopSpacer(activeKeys, capacity) {
+        const minPanelHeight = activeKeys.reduce((total, key) => total + SIDEBAR_PANEL_RESIZE[key].minHeight, 0);
+        return Math.max(0, capacity - minPanelHeight);
+      }
+
+      function persistSidebarPanelHeights() {
+        activeSidebarPanelKeys().forEach((key) => {
+          const height = currentSidebarPanelHeight(key);
+          if (Number.isFinite(height)) localStorage.setItem(SIDEBAR_PANEL_RESIZE[key].storageKey, String(Math.round(height)));
+        });
+      }
+
+      function sidebarResizableHeightCapacity() {
+        const aside = el("appSidebar");
+        if (!aside) return 0;
+        const asideStyle = getComputedStyle(aside);
+        let capacity = aside.getBoundingClientRect().height - (parseFloat(asideStyle.paddingTop) || 0) - (parseFloat(asideStyle.paddingBottom) || 0);
+        capacity -= visibleOuterHeight(el("toolSelectorSection"));
+        SIDEBAR_PANEL_ORDER.forEach((key) => {
+          const config = SIDEBAR_PANEL_RESIZE[key];
+          const section = document.querySelector(config.sectionSelector);
+          if (!section || section.classList.contains("hidden")) return;
+          if (config.collapsed()) capacity -= visibleOuterHeight(section);
+        });
+        return Math.max(0, capacity);
+      }
+
+      function visibleOuterHeight(element) {
+        if (!element || element.classList.contains("hidden")) return 0;
+        return element.getBoundingClientRect().height + sidebarPanelMarginHeight(element);
+      }
+
+      function sidebarPanelMarginHeight(element) {
+        if (!element) return 0;
+        const style = getComputedStyle(element);
+        return (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+      }
+
+      function updateSidebarPanelResizeAria(key, rawHeight = null) {
+        const config = SIDEBAR_PANEL_RESIZE[key];
+        if (!config.resizerId) return;
+        const resizer = el(config.resizerId);
+        if (!resizer) return;
+        const height = rawHeight ?? currentSidebarPanelHeight(key);
+        resizer.setAttribute("aria-valuemin", String(config.minHeight));
+        if (Number.isFinite(height)) resizer.setAttribute("aria-valuenow", String(Math.round(height)));
       }
 
       function setupChartControlsResize() {
@@ -4702,6 +4847,7 @@
 
       function bindControls() {
         setupSidebarResize();
+        restoreSidebarPanelHeights();
         setupSidebarFilterResize();
         setupSidebarGbmResize();
         setupChartControlsResize();
@@ -4848,7 +4994,7 @@
           refreshActiveTool({ force: true });
         });
         window.addEventListener("resize", () => {
-          if (state.sidebarVisible) clampSidebarFilterHeight();
+          if (state.sidebarVisible) clampSidebarPanelHeights();
           if (state.tool === "line_bar") {
             const controls = document.querySelector(".chart-side-controls");
             if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);

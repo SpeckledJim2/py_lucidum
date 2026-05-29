@@ -467,8 +467,10 @@
       .sidebar-kpi-section {
         display: flex;
         flex-direction: column;
-        flex: 1 1 auto;
+        flex: 0 0 var(--sidebar-kpi-height, 260px);
+        margin-bottom: 0;
         min-height: 0;
+        overflow: hidden;
       }
 
       .sidebar-kpi-section.kpi-collapsed {
@@ -492,6 +494,7 @@
         margin-top: 0;
         margin-bottom: 0;
         min-height: 0;
+        overflow: hidden;
         position: relative;
       }
 
@@ -511,22 +514,21 @@
       .sidebar-gbm-resizer {
         background: linear-gradient(to bottom, var(--line), transparent);
         cursor: row-resize;
-        height: 8px;
-        left: 0;
+        flex: 0 0 8px;
         margin-bottom: 0;
         min-height: 0;
-        position: absolute;
-        right: 0;
-        top: -8px;
         touch-action: none;
         user-select: none;
         -webkit-user-select: none;
-        z-index: 2;
       }
 
       .sidebar-gbm-resizer:hover,
       .sidebar-gbm-resizer.dragging {
         background: var(--accent);
+      }
+
+      .gbm-sidebar-panel.gbm-model-collapsed #sidebarGbmResizer {
+        display: none;
       }
 
       .kpi-header {
@@ -737,6 +739,7 @@
         margin-top: 0;
         margin-bottom: 0;
         min-height: 0;
+        overflow: hidden;
       }
 
       .sidebar-filter-section.filter-collapsed {
@@ -746,7 +749,7 @@
 
       .sidebar-kpi-section.hidden ~ .sidebar-filter-section,
       .sidebar-kpi-section.kpi-collapsed ~ .sidebar-filter-section {
-        margin-top: auto;
+        margin-top: 0;
       }
 
       .sidebar-filter-section.filter-collapsed #sidebarFilterResizer,
@@ -868,6 +871,12 @@
         width: 24px;
         min-height: 24px;
         font-size: 14px;
+      }
+
+      .sidebar-filter-section.filter-collapsed .filter-sidebar-clear {
+        width: 20px;
+        min-height: 20px;
+        font-size: 13px;
       }
 
       #savedFilterSelect {
