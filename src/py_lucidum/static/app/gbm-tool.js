@@ -1211,7 +1211,7 @@ export function createGbmTool({
         initialSort: [{ column: "important", dir: "desc" }],
         columns: [
           { title: "Parameter", field: "name", widthGrow: 2 },
-          { title: "Value", field: "value", editor: parameterValueEditor, widthGrow: 1 },
+          { title: "Value", field: "value", editor: "adaptable", editorParams: parameterValueEditorParams(), widthGrow: 1 },
         ],
       });
     } catch (_) {
@@ -1440,52 +1440,45 @@ export function createGbmTool({
   function parameterOptionsForName(name) {
     const parameterName = String(name || "");
     const configured = config?.parameter_options?.[parameterName];
-    if (Array.isArray(configured) && configured.length) return configured.map((value) => String(value));
-    return GBM_PARAMETER_OPTIONS[parameterName] || [];
+    const options = Array.isArray(configured) && configured.length
+      ? configured
+      : GBM_PARAMETER_OPTIONS[parameterName] || [];
+    return options.map((value) => String(value)).sort(compareParameterOption);
   }
 
-  function parameterValueEditor(cell, onRendered, success, cancel) {
-    const rowData = cell.getRow().getData();
-    const options = parameterOptionsForName(rowData.name);
-    let submitted = false;
-    const submit = (value) => {
-      if (submitted) return;
-      submitted = true;
-      success(value);
-    };
-    if (options.length) {
-      const select = document.createElement("select");
-      select.className = "gbm-parameter-select";
-      select.setAttribute("aria-label", rowData.name);
-      for (const option of options) {
-        select.append(new Option(option, option));
-      }
-      select.value = String(cell.getValue() ?? "");
-      select.addEventListener("change", () => submit(select.value));
-      select.addEventListener("blur", () => submit(select.value));
-      select.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") submit(select.value);
-        if (event.key === "Escape") cancel();
-      });
-      onRendered(() => select.focus());
-      return select;
-    }
+  function compareParameterOption(left, right) {
+    return left.localeCompare(right, undefined, { sensitivity: "base" });
+  }
 
-    const input = document.createElement("input");
-    input.type = "text";
-    input.className = "gbm-parameter-input";
-    input.value = String(cell.getValue() ?? "");
-    input.addEventListener("change", () => submit(input.value));
-    input.addEventListener("blur", () => submit(input.value));
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") submit(input.value);
-      if (event.key === "Escape") cancel();
-    });
-    onRendered(() => {
-      input.focus();
-      input.select();
-    });
-    return input;
+  function parameterValueEditorParams() {
+    return {
+      editorLookup: parameterValueEditorLookup,
+      paramsLookup: parameterValueEditorParamsLookup,
+    };
+  }
+
+  function parameterValueEditorLookup(cell) {
+    const rowData = cell.getRow().getData();
+    return parameterOptionsForName(rowData.name).length ? "list" : "input";
+  }
+
+  function parameterValueEditorParamsLookup(editor, cell) {
+    const rowData = cell.getRow().getData();
+    const label = String(rowData.name || "Parameter value");
+    const elementAttributes = {
+      "aria-label": label,
+      class: `gbm-parameter-editor gbm-parameter-${editor}-editor`,
+    };
+    if (editor === "list") {
+      return {
+        values: parameterOptionsForName(rowData.name),
+        elementAttributes,
+      };
+    }
+    return {
+      selectContents: true,
+      elementAttributes,
+    };
   }
 
   function parameterControlHtml(parameter) {

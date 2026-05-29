@@ -233,8 +233,8 @@ COPY (
         )
         self.assertEqual(next(row["value"] for row in payload["parameters"] if row["name"] == "objective"), "poisson")
         self.assertEqual(next(row["value"] for row in payload["parameters"] if row["name"] == "metric"), "poisson")
-        self.assertEqual(payload["parameter_options"]["objective"], list(GBM_OBJECTIVES))
-        self.assertEqual(payload["parameter_options"]["metric"], list(GBM_METRICS))
+        self.assertEqual(payload["parameter_options"]["objective"], sorted(GBM_OBJECTIVES))
+        self.assertEqual(payload["parameter_options"]["metric"], sorted(GBM_METRICS))
         self.assertEqual(
             payload["shap_options"],
             [

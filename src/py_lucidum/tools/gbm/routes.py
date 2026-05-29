@@ -306,8 +306,8 @@ WHERE feature IS NOT NULL
             "ebm_available": can_use_ebm,
             "parameters": parameter_rows(),
             "parameter_options": {
-                "objective": list(GBM_OBJECTIVES),
-                "metric": list(GBM_METRICS),
+                "objective": sorted(GBM_OBJECTIVES),
+                "metric": sorted(GBM_METRICS),
             },
             "features": features,
             "feature_scenarios": scenarios,

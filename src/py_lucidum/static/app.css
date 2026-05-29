@@ -3546,6 +3546,40 @@
         width: 100%;
       }
 
+      #gbmParameterGrid .tabulator-cell[tabulator-field="value"].tabulator-editing {
+        border: 0 !important;
+        border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent) !important;
+        box-shadow: inset 0 0 0 1px var(--accent);
+        padding: 1px 6px !important;
+      }
+
+      #gbmParameterGrid .tabulator-cell[tabulator-field="value"].tabulator-editing input.gbm-parameter-editor {
+        -webkit-appearance: none;
+        appearance: none;
+        background: transparent !important;
+        border: 0 !important;
+        border-radius: 0;
+        box-shadow: none;
+        color: var(--text) !important;
+        font: inherit;
+        height: 100% !important;
+        line-height: 1.15;
+        margin: 0;
+        outline: 0;
+        padding: 0 !important;
+        width: 100%;
+      }
+
+      .tabulator-popup-container.tabulator-edit-list {
+        font-size: 11px;
+        line-height: 1.15;
+        max-height: none;
+      }
+
+      .tabulator-popup-container.tabulator-edit-list .tabulator-edit-list-item {
+        padding: 3px 6px;
+      }
+
       #gbmFeatureGrid .tabulator-cell[tabulator-field="gain"],
       #gbmFeatureGrid .tabulator-col[tabulator-field="gain"],
       #gbmFeatureGrid .tabulator-cell[tabulator-field="mean_abs_shap"],

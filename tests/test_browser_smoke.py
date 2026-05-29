@@ -1437,10 +1437,15 @@ COPY (
                     "0.11",
                 )
                 page.locator("#gbmParameterGrid .tabulator-row", has_text="objective").locator(".tabulator-cell[tabulator-field='value']").click()
-                page.locator("#gbmParameterGrid select.gbm-parameter-select").wait_for(timeout=10_000)
+                page.locator("#gbmParameterGrid input.gbm-parameter-list-editor").wait_for(timeout=10_000)
+                page.locator(".tabulator-popup-container.tabulator-edit-list").wait_for(timeout=10_000)
                 page.keyboard.press("Escape")
+                page.wait_for_function(
+                    "() => !document.querySelector('#gbmParameterGrid .tabulator-cell.tabulator-editing')",
+                    timeout=10_000,
+                )
                 page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").click()
-                page.locator("#gbmParameterGrid input.gbm-parameter-input").wait_for(timeout=10_000)
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").wait_for(timeout=10_000)
                 page.keyboard.press("Escape")
                 page.get_by_role("button", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
@@ -2288,6 +2293,107 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "77",
                 )
+                parameter_dropdown_before = page.evaluate(
+                    """
+                    () => {
+                      const row = [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                        .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.trim() === "objective");
+                      const cell = row?.querySelector(".tabulator-cell[tabulator-field='value']");
+                      if (!cell) return null;
+                      const range = document.createRange();
+                      range.selectNodeContents(cell);
+                      const rect = range.getBoundingClientRect();
+                      range.detach();
+                      return { text: cell.textContent.trim(), textLeft: rect.left };
+                    }
+                    """
+                )
+                self.assertIsNotNone(parameter_dropdown_before)
+                assert parameter_dropdown_before is not None
+                self.assertEqual(parameter_dropdown_before["text"], "gamma")
+                page.locator("#gbmParameterGrid .tabulator-row", has_text="objective").locator(".tabulator-cell[tabulator-field='value']").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const popup = document.querySelector(".tabulator-popup-container.tabulator-edit-list");
+                      const rect = popup?.getBoundingClientRect();
+                      return Boolean(popup && rect.width > 0 && rect.height > 0);
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                parameter_dropdown_after = page.evaluate(
+                    """
+                    () => {
+                      const row = [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                        .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.trim() === "objective");
+                      const cell = row?.querySelector(".tabulator-cell[tabulator-field='value']");
+                      const input = cell?.querySelector("input.gbm-parameter-list-editor");
+                      const popup = document.querySelector(".tabulator-popup-container.tabulator-edit-list");
+                      const inputRect = input?.getBoundingClientRect();
+                      const popupRect = popup?.getBoundingClientRect();
+                      const popupStyle = popup ? getComputedStyle(popup) : null;
+                      return {
+                        editing: Boolean(cell?.classList.contains("tabulator-editing")),
+                        inputValue: input?.value || "",
+                        inputLeft: inputRect?.left || 0,
+                        popupVisible: Boolean(popup && popupRect.width > 0 && popupRect.height > 0),
+                        popupClientHeight: popup?.clientHeight || 0,
+                        popupScrollHeight: popup?.scrollHeight || 0,
+                        popupFontSize: popupStyle?.fontSize || "",
+                        popupItems: [...(popup?.querySelectorAll(".tabulator-edit-list-item") || [])]
+                          .map((item) => item.textContent.trim()),
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(parameter_dropdown_after["editing"])
+                self.assertTrue(parameter_dropdown_after["popupVisible"])
+                self.assertEqual(parameter_dropdown_after["inputValue"], "gamma")
+                self.assertLessEqual(abs(parameter_dropdown_after["inputLeft"] - parameter_dropdown_before["textLeft"]), 1)
+                self.assertGreaterEqual(parameter_dropdown_after["popupClientHeight"] + 1, parameter_dropdown_after["popupScrollHeight"])
+                self.assertEqual(parameter_dropdown_after["popupFontSize"], "11px")
+                self.assertEqual(parameter_dropdown_after["popupItems"], sorted(parameter_dropdown_after["popupItems"], key=str.casefold))
+                page.keyboard.press("Escape")
+                page.wait_for_function(
+                    "() => !document.querySelector('#gbmParameterGrid .tabulator-cell.tabulator-editing')",
+                    timeout=10_000,
+                )
+                page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").click()
+                page.wait_for_function(
+                    """
+                    () => Boolean(document.querySelector("#gbmParameterGrid .tabulator-cell[tabulator-field='value'].tabulator-editing input.gbm-parameter-input-editor"))
+                    """,
+                    timeout=10_000,
+                )
+                numeric_parameter_editor = page.evaluate(
+                    """
+                    () => {
+                      const popupVisible = [...document.querySelectorAll(".tabulator-popup-container.tabulator-edit-list")]
+                        .some((popup) => {
+                          const rect = popup.getBoundingClientRect();
+                          return rect.width > 0 && rect.height > 0;
+                        });
+                      const row = [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                        .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.trim() === "num_iterations");
+                      const cell = row?.querySelector(".tabulator-cell[tabulator-field='value']");
+                      const input = cell?.querySelector("input.gbm-parameter-input-editor");
+                      return {
+                        editing: Boolean(cell?.classList.contains("tabulator-editing")),
+                        inputType: input?.type || "",
+                        inputValue: input?.value || "",
+                        hasListEditor: Boolean(cell?.querySelector("input.gbm-parameter-list-editor")),
+                        popupVisible,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(numeric_parameter_editor["editing"])
+                self.assertEqual(numeric_parameter_editor["inputType"], "text")
+                self.assertEqual(numeric_parameter_editor["inputValue"], "77")
+                self.assertFalse(numeric_parameter_editor["hasListEditor"])
+                self.assertFalse(numeric_parameter_editor["popupVisible"])
+                page.keyboard.press("Escape")
                 feature_state = page.evaluate(
                     """
                     () => {
