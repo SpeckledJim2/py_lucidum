@@ -21,6 +21,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
   let lastPayload = null;
   let configSeq = 0;
   let plotSeq = 0;
+  let pendingLegendState = null;
   const state = {
     feature1: "",
     feature2: "",
@@ -61,6 +62,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     bindStaticEvents(root);
     if (!modelId) {
       config = null;
+      clearPendingLegendState();
       renderEmpty("No active GBM selected");
       return;
     }
@@ -71,15 +73,18 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       const nextConfig = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/shap/config`, { method: "GET" });
       if (seq !== configSeq || modelId !== String(nextModelId || "")) return;
       config = nextConfig;
-      syncStateWithConfig();
+      const syncResult = syncStateWithConfig();
+      if (syncResult.featureFallback) clearPendingLegendState();
       renderControlsAndLists();
       if (!config.has_shap) {
+        clearPendingLegendState();
         renderEmpty(config.warnings?.[0] || "This GBM has no saved SHAP rows");
         return;
       }
       await refreshPlot();
     } catch (error) {
       if (seq !== configSeq) return;
+      clearPendingLegendState();
       setNotice(error.message);
       renderEmpty("SHAP could not load");
     }
@@ -142,6 +147,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const input = event.target;
     if (input?.dataset?.gbmShapFactor) {
       state[`factor${input.dataset.gbmShapFactor}`] = Boolean(input.checked);
+      clearPendingLegendState();
       renderControls();
       refreshPlot();
     }
@@ -155,6 +161,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       state.feature1 = config?.default_feature_1 || features()[0]?.name || "";
     }
     if (previous !== state[key]) {
+      clearPendingLegendState();
       state[`banding${index}`] = defaultBanding(selectedFeature(index));
     }
     renderControlsAndLists();
@@ -223,8 +230,15 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     ensureChart(target);
     const option = shapChartOption(payload, chartTheme());
     const nextLegendEntries = legendEntryNames(option);
+    const pendingLegendSelection = pendingLegendSelectionForPayload(payload, nextLegendEntries);
     if (previousPlotType === payload.plot_type && sameEntries(previousLegendEntries, nextLegendEntries)) {
       applyLegendSelection(option, previousLegendSelection, nextLegendEntries);
+      clearPendingLegendState();
+    } else if (pendingLegendSelection) {
+      applyLegendSelection(option, pendingLegendSelection, nextLegendEntries);
+      clearPendingLegendState();
+    } else if (pendingLegendState) {
+      clearPendingLegendState();
     }
     try {
       chart.setOption(option, true);
@@ -313,6 +327,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
   function syncStateWithConfig() {
     const nextFeatures = features();
     const names = new Set(nextFeatures.map((feature) => feature.name));
+    let featureFallback = false;
     if (modelId !== lastModelId) {
       state.factor1 = false;
       state.factor2 = false;
@@ -320,10 +335,17 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       state.search2 = "";
       lastModelId = modelId;
     }
-    if (!names.has(state.feature1)) state.feature1 = firstFeatureNameForChooser(1);
-    if (state.feature2 && !names.has(state.feature2)) state.feature2 = "";
+    if (!names.has(state.feature1)) {
+      state.feature1 = firstFeatureNameForChooser(1);
+      featureFallback = true;
+    }
+    if (state.feature2 && !names.has(state.feature2)) {
+      state.feature2 = "";
+      featureFallback = true;
+    }
     state.banding1 = normaliseBanding(state.banding1, selectedFeature(1));
     state.banding2 = normaliseBanding(state.banding2, selectedFeature(2));
+    return { featureFallback };
   }
 
   function firstFeatureNameForChooser(index) {
@@ -358,6 +380,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
   function dispose() {
     configSeq += 1;
     plotSeq += 1;
+    snapshotLegendState();
     disposeChart();
     config = null;
   }
@@ -652,6 +675,33 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       ...(legend.selected || {}),
       ...Object.fromEntries(entries.map((entry) => [entry, selection?.[entry] !== false])),
     };
+  }
+
+  function snapshotLegendState() {
+    if (!chart || !lastPayload) return;
+    const option = chart.getOption?.();
+    const entries = legendEntryNames(option);
+    if (!entries.length) return;
+    pendingLegendState = {
+      entries,
+      feature1: state.feature1 || "",
+      feature2: state.feature2 || "",
+      plotType: lastPayload.plot_type || "",
+      selection: legendSelection(option, entries),
+    };
+  }
+
+  function pendingLegendSelectionForPayload(payload, entries) {
+    if (!pendingLegendState) return null;
+    if (pendingLegendState.plotType !== payload.plot_type) return null;
+    if (!sameEntries(pendingLegendState.entries, entries)) return null;
+    if ((pendingLegendState.feature1 || "") !== (state.feature1 || "")) return null;
+    if ((pendingLegendState.feature2 || "") !== (state.feature2 || "")) return null;
+    return pendingLegendState.selection;
+  }
+
+  function clearPendingLegendState() {
+    pendingLegendState = null;
   }
 
   function sameEntries(left, right) {

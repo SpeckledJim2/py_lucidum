@@ -11,7 +11,7 @@ from py_lucidum.core import Dataset, is_numeric_kind, json_number, parse_positiv
 from .store import GbmModelStore
 
 
-FLAME_PERCENTILES = (0, 5, 10, 20, 30, 40, 45, 50, 55, 60, 70, 80, 90, 95, 100)
+FLAME_PERCENTILES = (0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100)
 BOX_PERCENTILES = (0, 5, 25, 50, 75, 95, 100)
 MAX_FACTOR_LEVELS = 500
 MAX_LINE_SERIES = 80

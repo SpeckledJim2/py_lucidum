@@ -942,7 +942,10 @@ COPY (
                         xMin: option.xAxis?.[0]?.min,
                         xMax: option.xAxis?.[0]?.max,
                         xInterval: option.xAxis?.[0]?.interval,
+                        firstMedianX: median?.data?.[0]?.[0],
+                        lastMedianX: median?.data?.[median.data.length - 1]?.[0],
                         legendLeft: option.legend?.[0]?.left || "",
+                        seriesNames: option.series?.map((series) => series.name) || [],
                         hasRibbon: option.series?.some((series) => series.type === "custom"),
                         ribbonColors: option.series
                           ?.filter((series) => series.type === "custom")
@@ -955,15 +958,17 @@ COPY (
                     }
                     """
                 )
-                self.assertAlmostEqual(initial_shap_state["xMin"], 30)
-                self.assertAlmostEqual(initial_shap_state["xMax"], 50)
+                self.assertAlmostEqual(initial_shap_state["xMin"], initial_shap_state["firstMedianX"])
+                self.assertAlmostEqual(initial_shap_state["xMax"], initial_shap_state["lastMedianX"])
                 self.assertAlmostEqual(initial_shap_state["xInterval"], 5)
                 self.assertTrue(initial_shap_state["hasRibbon"])
                 self.assertEqual(initial_shap_state["legendLeft"], "center")
+                self.assertNotIn("45-55", initial_shap_state["seriesNames"])
                 self.assertTrue(all(color.startswith("rgba(209, 63, 63,") for color in initial_shap_state["ribbonColors"]))
                 self.assertEqual(initial_shap_state["medianColor"], "#d13f3f")
                 tooltip_text = initial_shap_state["tooltipText"]
                 self.assertIn("Median", tooltip_text)
+                self.assertNotIn("45-55", tooltip_text)
                 self.assertIsNone(re.search(r"\d+\.\d{5,}", tooltip_text))
                 page.evaluate(
                     """
@@ -1438,6 +1443,61 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      chart?.dispatchAction({ type: "legendUnSelect", name: "5-95" });
+                    }
+                    """
+                )
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
+                page.locator("#gbmActivateModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Second smoke model")
+                      && document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Second smoke model")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && option.legend?.[0]?.selected?.["5-95"] === false
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
+                        && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
+                page.locator("#gbmActivateModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
+                      && document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Browser smoke model")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && option.legend?.[0]?.selected?.["5-95"] === false
+                        && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age");
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator('[data-gbm-shap-feature="1"][data-gbm-shap-sort="alpha"]').click()
                 page.locator("#gbmShapFeatureList1 .feature", has_text="lat").click()
                 page.wait_for_function(
@@ -1470,6 +1530,7 @@ COPY (
                       return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
                         && document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
                         && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None")
+                        && option.legend?.[0]?.selected?.["5-95"] !== false
                         && document.querySelector('[data-gbm-shap-feature="1"][data-gbm-shap-sort="alpha"]')?.classList.contains("active");
                     }
                     """,

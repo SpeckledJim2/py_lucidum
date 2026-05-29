@@ -381,12 +381,14 @@ COPY (
         payload = shap_plot(dataset, store, "shap-model", {"feature_1": "Age", "banding_1": 10, "tail_percent": 0})
 
         self.assertEqual(payload["plot_type"], "flame")
-        self.assertEqual(payload["percentiles"], [0, 5, 10, 20, 30, 40, 45, 50, 55, 60, 70, 80, 90, 95, 100])
+        self.assertEqual(payload["percentiles"], [0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100])
         self.assertEqual(payload["x_domain"], [30, 50])
         self.assertEqual(payload["y_domain"], [-0.4, 0.2])
         by_x = {row["x"]: row for row in payload["rows"]}
         self.assertAlmostEqual(by_x[30]["p50"], 0.2)
         self.assertAlmostEqual(by_x[40]["p50"], -0.4)
+        self.assertNotIn("p45", by_x[30])
+        self.assertNotIn("p55", by_x[30])
 
     def test_shap_plot_numeric_treat_as_factor_uses_natural_band_order(self) -> None:
         store = self.write_shap_plot_model()

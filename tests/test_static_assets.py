@@ -187,6 +187,63 @@ for (const value of [4, 7, 12]) {
 """
         self.run_node_script(script)
 
+    def test_gbm_shap_flame_option_uses_exact_domain_without_45_55(self) -> None:
+        chart_path = Path(__file__).resolve().parents[1] / "src/py_lucidum/static/app/gbm-shap-chart.js"
+        script = f"""
+import fs from "node:fs";
+const source = fs.readFileSync({str(chart_path)!r}, "utf8").replaceAll("export ", "");
+eval(source + "\\nglobalThis.__shapChartOption = shapChartOption;");
+const rows = [
+  {{ x: 18, p0: 0.1, p5: 0.11, p10: 0.12, p20: 0.13, p30: 0.14, p40: 0.15, p50: 0.16, p60: 0.17, p70: 0.18, p80: 0.19, p90: 0.2, p95: 0.21, p100: 0.22 }},
+  {{ x: 83, p0: -0.2, p5: -0.19, p10: -0.18, p20: -0.17, p30: -0.16, p40: -0.15, p50: -0.14, p60: -0.13, p70: -0.12, p80: -0.11, p90: -0.1, p95: -0.09, p100: -0.08 }},
+];
+const option = globalThis.__shapChartOption({{
+  plot_type: "flame",
+  title: "SHAP flame plot: Age",
+  x_feature: "Age",
+  y_label: "SHAP",
+  x_domain: [18, 83],
+  y_domain: [-0.2, 0.22],
+  rows,
+}}, {{}});
+if (option.xAxis.min !== 18 || option.xAxis.max !== 83) {{
+  throw new Error(`expected exact x domain 18..83, got ${{option.xAxis.min}}..${{option.xAxis.max}}`);
+}}
+const seriesNames = option.series.map((series) => series.name);
+if (seriesNames.includes("45-55")) throw new Error("45-55 series should not be rendered");
+const tooltip = option.tooltip.formatter([{{ axisValue: 18, value: [18, 0.16] }}]);
+if (tooltip.includes("45-55")) throw new Error("45-55 tooltip row should not be rendered");
+"""
+        self.run_node_script(script)
+
+    def test_gbm_shap_box_axis_title_sits_below_rotated_labels(self) -> None:
+        chart_path = Path(__file__).resolve().parents[1] / "src/py_lucidum/static/app/gbm-shap-chart.js"
+        script = f"""
+import fs from "node:fs";
+const source = fs.readFileSync({str(chart_path)!r}, "utf8").replaceAll("export ", "");
+eval(source + "\\nglobalThis.__shapChartOption = shapChartOption;");
+const rows = Array.from({{ length: 30 }}, (_, index) => ({{
+  level: `Make ${{index + 1}}`,
+  p0: -0.01,
+  p25: -0.005,
+  p50: 0,
+  p75: 0.005,
+  p100: 0.01,
+  mean: 0,
+}}));
+const option = globalThis.__shapChartOption({{
+  plot_type: "box",
+  title: "SHAP box plot: MAKE",
+  x_feature: "MAKE",
+  y_label: "SHAP",
+  rows,
+}}, {{}});
+if (option.xAxis.axisLabel.rotate !== 60) throw new Error(`expected rotated labels, got ${{option.xAxis.axisLabel.rotate}}`);
+if (option.xAxis.nameGap !== 88) throw new Error(`expected lower x-axis title gap, got ${{option.xAxis.nameGap}}`);
+if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unchanged, got ${{option.grid.bottom}}`);
+"""
+        self.run_node_script(script)
+
     def test_index_uses_stable_local_asset_urls_and_disables_cache(self) -> None:
         _, body = self.assert_no_store("/")
         html = body.decode("utf-8")

@@ -6,7 +6,6 @@ const SHAP_RED_RIBBONS = [
   "rgba(209, 63, 63, 0.20)",
   "rgba(209, 63, 63, 0.25)",
   "rgba(209, 63, 63, 0.31)",
-  "rgba(209, 63, 63, 0.38)",
 ];
 const LINE_COLORS = ["#4fb99f", "#ff7f50", "#8aa1d6", "#b779d6", "#e7b84b", "#5aa2d6", "#d96a8a", "#84b547"];
 const AXIS_TARGET_INTERVALS = 6;
@@ -91,7 +90,6 @@ function flameOption(payload, common, theme) {
     ["p20", "p80", "20-80"],
     ["p30", "p70", "30-70"],
     ["p40", "p60", "40-60"],
-    ["p45", "p55", "45-55"],
   ];
   const series = [];
   ribbons.forEach(([lowKey, highKey, label], index) => {
@@ -111,7 +109,7 @@ function flameOption(payload, common, theme) {
     ...common,
     legend: centeredLegend(common.legend),
     tooltip: { trigger: "axis", confine: true, formatter: flameTooltipFormatter(rows, payload) },
-    xAxis: valueAxis(payload.x_feature, theme, payload.x_domain),
+    xAxis: valueAxis(payload.x_feature, theme, payload.x_domain, { exactDomain: true }),
     yAxis: valueAxis(payload.y_label || "SHAP", theme, payload.y_domain),
     series,
   };
@@ -126,7 +124,7 @@ function boxOption(payload, common, theme) {
     legend: { show: false },
     grid: { ...common.grid, top: 56 },
     tooltip: { trigger: "item", confine: true, formatter: (params) => boxTooltip(params, rows, feature) },
-    xAxis: categoryAxis(labels, payload.x_feature, theme, feature),
+    xAxis: categoryAxis(labels, payload.x_feature, theme, feature, { axis: "x" }),
     yAxis: valueAxis(payload.y_label || "SHAP", theme),
     dataZoom: labels.length > 60 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
     series: [
@@ -236,7 +234,7 @@ function heatmapOption(payload, common, theme) {
       confine: true,
       formatter: (params) => heatmapTooltip(params, payload, xLabels, yLabels, xFeature, yFeature),
     },
-    xAxis: categoryAxis(xLabels, payload.x_feature, theme, xFeature),
+    xAxis: categoryAxis(xLabels, payload.x_feature, theme, xFeature, { axis: "x" }),
     yAxis: categoryAxis(yLabels, payload.y_feature, theme, yFeature),
     visualMap: {
       min: extent.min,
@@ -260,7 +258,7 @@ function heatmapOption(payload, common, theme) {
   };
 }
 
-function valueAxis(name, theme, domain = null) {
+function valueAxis(name, theme, domain = null, options = {}) {
   const axis = {
     type: "value",
     name,
@@ -272,7 +270,7 @@ function valueAxis(name, theme, domain = null) {
     splitLine: { lineStyle: { color: theme.grid || "#e5e7eb" } },
     nameTextStyle: { color: theme.text || "#334155", fontWeight: 700 },
   };
-  const bounds = niceAxisBounds(domain);
+  const bounds = options.exactDomain ? exactAxisBounds(domain) : niceAxisBounds(domain);
   if (bounds) {
     axis.min = bounds.min;
     axis.max = bounds.max;
@@ -281,24 +279,29 @@ function valueAxis(name, theme, domain = null) {
   return axis;
 }
 
-function categoryAxis(labels, name, theme, feature = null) {
+function categoryAxis(labels, name, theme, feature = null, options = {}) {
   const numericTickPolicy = numericCategoryTickPolicy(labels, feature);
+  const rotate = labels.length > 25 ? 60 : 0;
   return {
     type: "category",
     data: labels,
     name,
     nameLocation: "middle",
-    nameGap: 34,
+    nameGap: categoryAxisNameGap(rotate, options),
     axisLine: { lineStyle: { color: theme.line || "#cbd5e1" } },
     axisLabel: {
       color: theme.text || "#334155",
       interval: numericTickPolicy?.interval || (labels.length > 80 ? "auto" : 0),
-      rotate: labels.length > 25 ? 60 : 0,
+      rotate,
       formatter: (value) => formatCategoryLabel(value, feature),
     },
     splitLine: { show: true, lineStyle: { color: theme.grid || "#e5e7eb" } },
     nameTextStyle: { color: theme.text || "#334155", fontWeight: 700 },
   };
+}
+
+function categoryAxisNameGap(rotate, options = {}) {
+  return options.axis === "x" && Number(rotate) > 0 ? 88 : 34;
 }
 
 function axis3D(name, theme, domain = null) {
@@ -371,7 +374,6 @@ function flameTooltipFormatter(rows, payload) {
     return [
       `${payload.x_feature}: ${formatTooltipNumber(row.x)}`,
       `Median: ${formatTooltipNumber(row.p50)}`,
-      `45-55: ${formatTooltipRange(row.p45, row.p55)}`,
       `40-60: ${formatTooltipRange(row.p40, row.p60)}`,
       `5-95: ${formatTooltipRange(row.p5, row.p95)}`,
       `Min-Max: ${formatTooltipRange(row.p0, row.p100)}`,
@@ -470,6 +472,20 @@ function numericExtent(values) {
     max += pad;
   }
   return { min, max };
+}
+
+function exactAxisBounds(domain) {
+  if (!Array.isArray(domain) || domain.length < 2) return null;
+  const min = numberOrNull(domain[0]);
+  const max = numberOrNull(domain[1]);
+  if (min === null || max === null) return null;
+  if (min === max) return niceAxisBounds(domain);
+  const step = niceAxisStep(max - min);
+  return {
+    min: roundAxisValue(min, step),
+    max: roundAxisValue(max, step),
+    interval: roundAxisValue(step, step),
+  };
 }
 
 function niceAxisBounds(domain) {
