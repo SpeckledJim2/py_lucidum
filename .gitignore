@@ -11,6 +11,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-linux/
 dist/
 build/
 *.egg-info/
