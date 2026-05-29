@@ -486,6 +486,25 @@ COPY (
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
+                startup_model_details = page.evaluate(
+                    """
+                    () => Object.fromEntries(
+                      [...document.querySelectorAll("#gbmModelSelect [data-gbm-model-id]")]
+                        .map((button) => [
+                          button.dataset.gbmModelId,
+                          button.querySelector(".gbm-model-detail")?.textContent || "",
+                        ])
+                    )
+                    """
+                )
+                self.assertEqual(
+                    startup_model_details["browser-smoke-model"],
+                    "gamma · iter 3 · train 0.31 · test 0.31",
+                )
+                self.assertEqual(
+                    startup_model_details["browser-smoke-model-2"],
+                    "gamma · iter 3 · train 0.61 · test 0.61",
+                )
 
                 profile_requests_before = profile_requests
                 profile_detail_requests_before = profile_detail_requests

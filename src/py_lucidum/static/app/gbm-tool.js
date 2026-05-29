@@ -1137,6 +1137,7 @@ export function createGbmTool({
         metric: source.metric,
         training_mode: source.training_mode,
         best_iteration: source.best_iteration,
+        best_metrics: source.best_metrics,
       });
     }
     const activeModel = models.find((model) => model.active)?.model_id || "";

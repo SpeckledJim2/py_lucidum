@@ -2098,10 +2098,21 @@ COPY (
 
     def test_model_sources_are_exposed_and_chartable(self) -> None:
         store = self.write_model_artifacts()
+        store.write_json(
+            store.artifact_path("m1", "training_log"),
+            {
+                "evaluation": {
+                    "training": {"poisson": [9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0]},
+                    "test": {"poisson": [9.5, 8.5, 7.5, 6.5, 5.5, 4.5, 3.5]},
+                }
+            },
+        )
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/schema")
         schema = json.loads(body)
+        models_status, models_body = asgi_get(app, "/api/gbm/models")
+        models = {model["model_id"]: model for model in json.loads(models_body)["models"]}
         con = duckdb.connect(database=":memory:")
         try:
             artifact_columns = con.execute(
@@ -2111,6 +2122,7 @@ COPY (
             con.close()
 
         self.assertEqual(status, 200)
+        self.assertEqual(models_status, 200)
         self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "gbm_prediction"])
         source_ids = [source["id"] for source in schema["data_sources"]]
         self.assertIn("gbm:m1:predictions", source_ids)
@@ -2121,6 +2133,8 @@ COPY (
         self.assertEqual(prediction_source["metric"], "poisson")
         self.assertEqual(prediction_source["training_mode"], "normal")
         self.assertEqual(prediction_source["best_iteration"], 7)
+        self.assertEqual(prediction_source["best_metrics"], models["m1"]["best_metrics"])
+        self.assertEqual(prediction_source["best_metrics"], {"training": 3.0, "test": 3.5})
         prediction_columns = [column["name"] for column in prediction_source["columns"]]
         self.assertNotIn("__lucidum_row_id", prediction_columns)
         self.assertIn("Age", prediction_columns)

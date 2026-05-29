@@ -453,6 +453,7 @@ class GbmSourceProvider:
                     "metric": model.get("metric"),
                     "training_mode": model.get("training_mode", DEFAULT_TRAINING_MODE),
                     "best_iteration": model.get("best_iteration"),
+                    "best_metrics": model.get("best_metrics"),
                     "row_count": schema["row_count"],
                     "columns": schema["columns"],
                 }
