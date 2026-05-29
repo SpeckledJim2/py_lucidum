@@ -2228,9 +2228,11 @@
         const pane = profileDetailPane();
         if (!pane) return;
         pane.innerHTML = `
-          <div class="profile-detail-state">
-            <strong>${escapeHtml(columnName)}</strong>
-            <span>Loading profile...</span>
+          <div class="profile-detail-header">
+            <div>
+              <h3 id="profileDetailTitle">${escapeHtml(columnName)}</h3>
+              <div class="profile-detail-subtitle"><span>Loading profile...</span></div>
+            </div>
           </div>
         `;
       }
