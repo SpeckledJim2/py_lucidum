@@ -64,6 +64,7 @@
         activeFilter: "",
         profileSort: { key: "", direction: "asc" },
         profileDetailSort: { key: "count", direction: "desc" },
+        profileSummaryMode: "auto",
         selectedProfileColumn: "",
         lastProfileData: null,
         lastProfileDetailData: null,
@@ -425,6 +426,23 @@
         el(id).textContent = message || "";
       }
 
+      function setProfileGroupMeta(data, groupMeta) {
+        const meta = el("profileGroupMeta");
+        const skippedColumns = Array.isArray(data?.skipped_columns) ? data.skipped_columns : [];
+        if (!skippedColumns.length) {
+          meta.textContent = groupMeta || "";
+          return;
+        }
+        const skippedLabel = profileSkippedLabel(skippedColumns.length);
+        const detailHtml = profileSkippedPopoverHtml(skippedColumns);
+        meta.innerHTML = escapeHtml(groupMeta || "").replace(
+          escapeHtml(skippedLabel),
+          `<button id="profileSkippedBtn" class="profile-skipped-button" type="button" aria-expanded="false" aria-controls="profileSkippedPopover">${escapeHtml(skippedLabel)}</button>${detailHtml}`,
+        );
+        const button = el("profileSkippedBtn");
+        button?.addEventListener("click", toggleProfileSkippedPopover);
+      }
+
       function activeFilterLabel() {
         return state.activeFilter || "no filter";
       }
@@ -559,6 +577,7 @@
           if (previousActionTimings[tool]) state.actionTimings[tool] = previousActionTimings[tool];
         });
         if (!preserve.has("column_profile")) {
+          state.profileSummaryMode = "auto";
           state.lastProfileData = null;
           state.lastProfileDetailData = null;
           state.profileDetailRequestSeq += 1;
@@ -1665,6 +1684,7 @@
           return;
         }
         state.activeFilter = nextFilter;
+        state.profileSummaryMode = "auto";
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshActiveTool();
@@ -1682,6 +1702,7 @@
           return;
         }
         state.activeFilter = "";
+        state.profileSummaryMode = "auto";
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshActiveTool();
@@ -1766,6 +1787,7 @@
         if (!state.schema) return null;
         return {
           filter: state.activeFilter,
+          mode: state.profileSummaryMode || "auto",
         };
       }
 
@@ -1809,7 +1831,6 @@
         state.lastProfileData = cache.data;
         measureToolRender("column_profile", () => {
           renderProfileData(cache.data);
-          applyToolPresentation("column_profile");
         });
       }
 
@@ -1822,13 +1843,16 @@
         ensureSelectedProfileColumn(columns);
         renderProfileTable(data, columns);
         const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
+        const calculationMeta = profileCalculationMeta(data);
+        const skippedMeta = skippedCount ? profileSkippedLabel(skippedCount) : "";
         const columnMeta = skippedCount
           ? `${columns.length.toLocaleString()} / ${totalColumnCount.toLocaleString()} columns profiled`
           : `${columns.length.toLocaleString()} columns`;
-        const groupMeta = `${columnMeta} · ${rowMeta}`;
-        const chartMessage = (Array.isArray(data.warnings) ? data.warnings : []).filter(Boolean).join(" ");
+        const groupMeta = [columnMeta, skippedMeta, rowMeta].filter(Boolean).join(" · ");
+        const chartMessage = "";
         setFilterRowMeta(data.row_count, data.filtered_row_count);
-        setGroupMeta("column_profile", groupMeta);
+        setProfileGroupMeta(data, groupMeta);
+        setProfileFilterMeta(data, calculationMeta);
         setStatus("");
         setChartMessage(chartMessage);
         saveToolPresentation("column_profile", { groupMeta, chartMessage });
@@ -1858,6 +1882,7 @@
         const currentDetail = el("profileDetailPane")?.innerHTML || profileDetailEmptyHtml("Select a column to view details.");
         el("profileWrap").innerHTML = `
           <div class="profile-summary-pane">
+            ${profileSummaryActionsHtml(data)}
             <div class="profile-table-scroll">
               <table class="profile-table">
                 <thead>
@@ -1880,6 +1905,7 @@
       }
 
       function bindProfileTable() {
+        el("profileFullCalcBtn")?.addEventListener("click", calculateFullProfile);
         el("profileWrap").querySelectorAll("[data-profile-sort]").forEach((button) => {
           button.addEventListener("click", () => setProfileSort(button.dataset.profileSort));
         });
@@ -1892,6 +1918,111 @@
             selectProfileColumn(row.dataset.profileColumn || "");
           });
         });
+      }
+
+      async function calculateFullProfile() {
+        const button = el("profileFullCalcBtn");
+        if (button) {
+          button.disabled = true;
+          button.textContent = "Calculating...";
+        }
+        state.profileSummaryMode = "full";
+        await refreshTool("column_profile", { force: true });
+      }
+
+      function profileCalculation(data) {
+        const calculation = data?.calculation || {};
+        const fullRowCount = Number(calculation.full_row_count ?? data?.filtered_row_count ?? data?.row_count ?? 0);
+        const profiledRowCount = Number(calculation.profiled_row_count ?? fullRowCount);
+        const exact = calculation.exact !== false || profiledRowCount >= fullRowCount;
+        return {
+          exact,
+          fullAvailable: Boolean(calculation.full_available) && !exact,
+          fullRowCount: Number.isFinite(fullRowCount) ? Math.max(0, fullRowCount) : 0,
+          profiledRowCount: Number.isFinite(profiledRowCount) ? Math.max(0, profiledRowCount) : 0,
+        };
+      }
+
+      function profileCalculationMeta(data) {
+        const calculation = profileCalculation(data);
+        if (calculation.exact) return "";
+        return `preview ${calculation.profiledRowCount.toLocaleString()} rows`;
+      }
+
+      function setProfileFilterMeta(data, calculationMeta = profileCalculationMeta(data)) {
+        const filterLabel = activeFilterLabel();
+        if (!calculationMeta) {
+          el("profileFilter").textContent = filterLabel;
+          return;
+        }
+        el("profileFilter").innerHTML = `<span class="profile-warning-meta">${escapeHtml(calculationMeta)}</span> · ${escapeHtml(filterLabel)}`;
+      }
+
+      function profileSkippedLabel(count) {
+        const safeCount = Math.max(0, Number(count) || 0);
+        return `${safeCount.toLocaleString()} skipped`;
+      }
+
+      function profileSkippedPopoverHtml(skippedColumns) {
+        const rows = skippedColumns.map((column) => `
+          <div class="profile-skipped-row">
+            <strong>${escapeHtml(column.name || "")}</strong>
+            <span>${escapeHtml(column.error || "DuckDB could not read this column.")}</span>
+          </div>
+        `).join("");
+        return `<div id="profileSkippedPopover" class="profile-skipped-popover" hidden>${rows}</div>`;
+      }
+
+      function toggleProfileSkippedPopover(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        const popover = el("profileSkippedPopover");
+        const button = el("profileSkippedBtn");
+        if (!popover || !button) return;
+        const show = popover.hidden;
+        popover.hidden = !show;
+        button.setAttribute("aria-expanded", String(show));
+        if (show) {
+          window.addEventListener("pointerdown", closeProfileSkippedPopoverOnPointerDown, true);
+          window.addEventListener("keydown", closeProfileSkippedPopoverOnEscape, true);
+        } else {
+          removeProfileSkippedPopoverListeners();
+        }
+      }
+
+      function closeProfileSkippedPopover() {
+        const popover = el("profileSkippedPopover");
+        const button = el("profileSkippedBtn");
+        if (popover) popover.hidden = true;
+        if (button) button.setAttribute("aria-expanded", "false");
+        removeProfileSkippedPopoverListeners();
+      }
+
+      function closeProfileSkippedPopoverOnPointerDown(event) {
+        const popover = el("profileSkippedPopover");
+        const button = el("profileSkippedBtn");
+        if (!popover || popover.hidden || popover.contains(event.target) || button?.contains(event.target)) return;
+        closeProfileSkippedPopover();
+      }
+
+      function closeProfileSkippedPopoverOnEscape(event) {
+        if (event.key !== "Escape") return;
+        closeProfileSkippedPopover();
+      }
+
+      function removeProfileSkippedPopoverListeners() {
+        window.removeEventListener("pointerdown", closeProfileSkippedPopoverOnPointerDown, true);
+        window.removeEventListener("keydown", closeProfileSkippedPopoverOnEscape, true);
+      }
+
+      function profileSummaryActionsHtml(data) {
+        const calculation = profileCalculation(data);
+        if (!calculation.fullAvailable) return "";
+        return `
+          <div class="profile-summary-actions">
+            <button id="profileFullCalcBtn" class="tab profile-full-calc-button" type="button">Calc all rows</button>
+          </div>
+        `;
       }
 
       function profileColumnContextMenu() {

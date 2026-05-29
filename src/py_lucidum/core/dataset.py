@@ -16,6 +16,7 @@ class Dataset:
         if not self.path.exists():
             raise FileNotFoundError(f"Dataset does not exist: {self.path}")
         self.con = duckdb.connect(database=":memory:")
+        self.con.execute("PRAGMA disable_progress_bar")
         self._schema: list[ColumnInfo] | None = None
         self._invalid_column_errors: dict[str, str] | None = None
         self._row_count: int | None = None

@@ -1817,6 +1817,62 @@
         font-size: 10px;
       }
 
+      #profileGroupMeta {
+        position: relative;
+      }
+
+      .profile-skipped-button {
+        border: 0;
+        background: transparent;
+        color: var(--danger);
+        cursor: help;
+        font: inherit;
+        padding: 0;
+        pointer-events: auto;
+        text-decoration: underline dotted;
+        text-underline-offset: 2px;
+      }
+
+      .profile-warning-meta {
+        color: var(--danger);
+      }
+
+      .profile-skipped-popover {
+        position: absolute;
+        top: 16px;
+        right: 0;
+        z-index: 20;
+        width: min(360px, calc(100vw - 48px));
+        max-height: 180px;
+        overflow: auto;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        color: var(--text);
+        font-size: 11px;
+        line-height: 1.25;
+        pointer-events: auto;
+        text-align: left;
+        white-space: normal;
+      }
+
+      .profile-skipped-popover[hidden] {
+        display: none;
+      }
+
+      .profile-skipped-row {
+        display: grid;
+        gap: 3px;
+      }
+
+      .profile-skipped-row + .profile-skipped-row {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+
       #profileFilter,
       #lineBarFilter {
         color: var(--muted);
@@ -1904,6 +1960,25 @@
       .profile-summary-pane {
         display: flex;
         flex-direction: column;
+        overflow: visible;
+        position: relative;
+      }
+
+      .profile-summary-actions {
+        position: absolute;
+        top: -32px;
+        left: 0;
+        z-index: 7;
+      }
+
+      #visualArea.profile-mode .workspace-messages {
+        max-width: min(760px, calc(100% - 190px));
+      }
+
+      .profile-full-calc-button {
+        min-height: 24px;
+        padding: 2px 8px;
+        font-size: 11px;
       }
 
       .profile-detail-pane {

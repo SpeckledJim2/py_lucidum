@@ -15,6 +15,8 @@ PROFILE_HISTOGRAM_BINS = 10
 PROFILE_DETAIL_TOP_VALUE_LIMIT = 2000
 PROFILE_DETAIL_HISTOGRAM_BINS = 20
 PROFILE_DETAIL_EXACT_LEVEL_BIN_LIMIT = 100
+PROFILE_FULL_CELL_LIMIT = 10_000_000
+PROFILE_PREVIEW_ROW_LIMIT = 100_000
 
 
 def profile(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
@@ -24,20 +26,23 @@ def profile(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         filter_sql = dataset.normalise_filter(request.get("filter"))
         row_count = dataset.row_count()
         filtered_row_count = dataset.filtered_row_count(filter_sql)
-        column_profiles = []
-        skipped_columns = []
-        for column in columns.values():
-            if column.name in invalid_columns:
-                skipped_columns.append({"name": column.name, "error": invalid_columns[column.name]})
-                continue
-            try:
-                column_profiles.append(profile_column(dataset, column, filter_sql, filtered_row_count))
-            except duckdb.Error as exc:
-                skipped_columns.append(skipped_profile_column(dataset, column, exc))
+        readable_columns = [column for column in columns.values() if column.name not in invalid_columns]
+        skipped_columns = [
+            {"name": column.name, "error": invalid_columns[column.name]}
+            for column in columns.values()
+            if column.name in invalid_columns
+        ]
+        calculation = profile_calculation(request.get("mode"), filtered_row_count, len(readable_columns))
+        stats_by_column = summary_column_stats(dataset, readable_columns, filter_sql, calculation)
+        column_profiles = [
+            profile_column_from_stats(column, stats_by_column.get(column.name, {}), calculation["profiled_row_count"])
+            for column in readable_columns
+        ]
         return {
             "row_count": row_count,
             "filtered_row_count": filtered_row_count,
             "filter": filter_sql,
+            "calculation": calculation,
             "columns": column_profiles,
             "skipped_columns": skipped_columns,
             "warnings": profile_warnings(skipped_columns),
@@ -145,6 +150,93 @@ def numeric_detail_bin_count(distinct_count: int) -> int:
     return PROFILE_DETAIL_HISTOGRAM_BINS
 
 
+def normalise_profile_mode(raw: Any) -> str:
+    mode = str(raw or "auto").strip().lower()
+    if mode in {"", "auto"}:
+        return "auto"
+    if mode == "full":
+        return "full"
+    raise ValueError("Choose a valid profile calculation mode")
+
+
+def profile_calculation(raw_mode: Any, filtered_row_count: int, readable_column_count: int) -> dict[str, Any]:
+    requested_mode = normalise_profile_mode(raw_mode)
+    full_row_count = max(0, int(filtered_row_count))
+    column_count = max(0, int(readable_column_count))
+    exact = (
+        requested_mode == "full"
+        or full_row_count == 0
+        or column_count == 0
+        or full_row_count * column_count <= PROFILE_FULL_CELL_LIMIT
+    )
+    profiled_row_count = full_row_count if exact else min(full_row_count, PROFILE_PREVIEW_ROW_LIMIT)
+    if profiled_row_count >= full_row_count:
+        exact = True
+    return {
+        "mode": "full" if exact else "preview",
+        "requested_mode": requested_mode,
+        "profiled_row_count": profiled_row_count,
+        "full_row_count": full_row_count,
+        "exact": exact,
+        "full_available": not exact,
+    }
+
+
+def summary_column_stats(
+    dataset: Dataset,
+    columns: list[ColumnInfo],
+    filter_sql: str,
+    calculation: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    if not columns:
+        return {}
+    aliases: dict[str, tuple[str, str]] = {}
+    select_parts: list[str] = []
+    for index, column in enumerate(columns):
+        column_sql = quote_ident(column.name)
+        missing_alias = f"c{index}_missing"
+        distinct_alias = f"c{index}_distinct"
+        select_parts.append(
+            f"COALESCE(SUM(CASE WHEN {column_sql} IS NULL THEN 1 ELSE 0 END), 0) AS {quote_ident(missing_alias)}"
+        )
+        select_parts.append(f"COUNT(DISTINCT {column_sql}) AS {quote_ident(distinct_alias)}")
+        aliases[missing_alias] = (column.name, "missing_count")
+        aliases[distinct_alias] = (column.name, "distinct_count")
+        if column.kind in {"integer", "numeric", "date", "datetime"}:
+            min_alias = f"c{index}_min"
+            max_alias = f"c{index}_max"
+            select_parts.append(f"MIN({column_sql}) AS {quote_ident(min_alias)}")
+            select_parts.append(f"MAX({column_sql}) AS {quote_ident(max_alias)}")
+            aliases[min_alias] = (column.name, "min_value")
+            aliases[max_alias] = (column.name, "max_value")
+    sql = f"""
+WITH {summary_base_cte(dataset, columns, filter_sql, calculation)}
+SELECT
+    {",\n    ".join(select_parts)}
+FROM base
+"""
+    row = one_row_dict(dataset, sql)
+    stats = {column.name: {} for column in columns}
+    for alias, value in row.items():
+        metric = aliases.get(alias)
+        if metric:
+            name, key = metric
+            stats[name][key] = value
+    return stats
+
+
+def summary_base_cte(
+    dataset: Dataset,
+    columns: list[ColumnInfo],
+    filter_sql: str,
+    calculation: dict[str, Any],
+) -> str:
+    projection = ", ".join(quote_ident(column.name) for column in columns)
+    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    limit_sql = "" if calculation.get("exact") else f"\n  LIMIT {int(calculation['profiled_row_count'])}"
+    return f"base AS (\n  SELECT {projection} FROM {dataset.relation_sql()}{where_sql}{limit_sql}\n)"
+
+
 def numeric_level_distribution(
     dataset: Dataset,
     column: ColumnInfo,
@@ -177,9 +269,17 @@ def profile_column(
     filtered_row_count: int,
 ) -> dict[str, Any]:
     stats = column_stats(dataset, column, filter_sql)
+    return profile_column_from_stats(column, stats, filtered_row_count)
+
+
+def profile_column_from_stats(
+    column: ColumnInfo,
+    stats: dict[str, Any],
+    profiled_row_count: int,
+) -> dict[str, Any]:
     missing_count = int(stats.get("missing_count") or 0)
     distinct_count = int(stats.get("distinct_count") or 0)
-    missing_rate = (missing_count / filtered_row_count) if filtered_row_count else 0
+    missing_rate = (missing_count / profiled_row_count) if profiled_row_count else 0
     min_value = json_value(stats.get("min_value")) if column.kind in {"integer", "numeric", "date", "datetime"} else None
     max_value = json_value(stats.get("max_value")) if column.kind in {"integer", "numeric", "date", "datetime"} else None
 

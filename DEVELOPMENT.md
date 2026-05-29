@@ -103,7 +103,7 @@ Tool code should depend on `core` and the app registration context, but tools sh
 
 - Column profile is the first startup tool.
 - Column profile is mandatory: `--tools` and `create_app(..., tools=...)` cannot remove it, and the backend always reports/registers it first so startup lands on the profile view.
-- Summary requests return every readable dataset column with inferred kind, DuckDB type, filtered missing count, exact distinct count, and min/max for numeric/date-like columns.
+- Summary requests return every readable dataset column with inferred kind, DuckDB type, filtered missing count, distinct count, and min/max for numeric/date-like columns. Auto-mode summaries are exact when `filtered rows * readable columns <= 10,000,000`; larger summaries use the first 100,000 filtered readable rows and include `calculation` metadata plus a UI action to recalculate all rows exactly. Passing `mode: "full"` to `/api/column-profile/summary` forces exact all-row summary stats.
 - Unreadable columns are omitted from profile summaries and returned through `skipped_columns` with sanitized errors.
 - Detail requests return value counts for categorical columns and histogram/stat tables for numeric/date-like columns.
 - Profile requests respect the same active footer/saved-filter expression as the other tools.

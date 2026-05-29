@@ -157,17 +157,25 @@ class ColumnProfileToolTests(unittest.TestCase):
 
     def test_profile_endpoint_skips_unreadable_columns(self) -> None:
         app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)
-        original_column_stats = column_profile_query.column_stats
+        original_probe = Dataset.probe_column_readable
+        original_summary_column_stats = column_profile_query.summary_column_stats
 
-        def fake_column_stats(dataset: Dataset, column: Any, filter_sql: str) -> dict[str, Any]:
+        def fake_probe(dataset: Dataset, column: Any) -> None:
             if column.name == "Segment":
                 raise duckdb.InvalidInputException(
                     'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
                     'value "bad" is not valid UTF8!'
                 )
-            return original_column_stats(dataset, column, filter_sql)
+            original_probe(dataset, column)
 
-        with patch("py_lucidum.tools.column_profile.query.column_stats", side_effect=fake_column_stats):
+        def fake_summary_column_stats(dataset: Dataset, columns: list[Any], filter_sql: str, calculation: dict[str, Any]) -> dict[str, dict[str, Any]]:
+            self.assertNotIn("Segment", [column.name for column in columns])
+            return original_summary_column_stats(dataset, columns, filter_sql, calculation)
+
+        with (
+            patch.object(Dataset, "probe_column_readable", fake_probe),
+            patch("py_lucidum.tools.column_profile.query.summary_column_stats", side_effect=fake_summary_column_stats),
+        ):
             status, _, body = asgi_post_json(app, "/api/column-profile/summary", {"filter": ""})
         payload = json.loads(body)
 
@@ -244,6 +252,14 @@ class ColumnProfileToolTests(unittest.TestCase):
 
         self.assertEqual(payload["row_count"], 4)
         self.assertEqual(payload["filtered_row_count"], 2)
+        self.assertEqual(payload["calculation"], {
+            "mode": "full",
+            "requested_mode": "auto",
+            "profiled_row_count": 2,
+            "full_row_count": 2,
+            "exact": True,
+            "full_available": False,
+        })
         self.assertEqual(age["missing_count"], 0)
         self.assertEqual(age["distinct_count"], 2)
         self.assertEqual(age["min"], 1)
@@ -257,6 +273,84 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(score["distinct_count"], 1)
         self.assertEqual(quote_date["min"], "2024-01-01")
         self.assertEqual(quote_date["max"], "2024-01-02")
+
+    def test_profile_preview_uses_bounded_rows_when_auto_threshold_exceeded(self) -> None:
+        data_path = self.root / "preview.csv"
+        data_path.write_text(
+            "Age,Segment\n"
+            "1,A\n"
+            "2,A\n"
+            "3,B\n"
+            "4,B\n"
+            "5,C\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("py_lucidum.tools.column_profile.query.PROFILE_FULL_CELL_LIMIT", 1),
+            patch("py_lucidum.tools.column_profile.query.PROFILE_PREVIEW_ROW_LIMIT", 2),
+        ):
+            payload = profile(Dataset(data_path), {"filter": ""})
+
+        age = self.column(payload, "Age")
+        segment = self.column(payload, "Segment")
+
+        self.assertEqual(payload["row_count"], 5)
+        self.assertEqual(payload["filtered_row_count"], 5)
+        self.assertEqual(payload["calculation"], {
+            "mode": "preview",
+            "requested_mode": "auto",
+            "profiled_row_count": 2,
+            "full_row_count": 5,
+            "exact": False,
+            "full_available": True,
+        })
+        self.assertEqual(age["distinct_count"], 2)
+        self.assertEqual(age["min"], 1)
+        self.assertEqual(age["max"], 2)
+        self.assertEqual(segment["distinct_count"], 1)
+
+    def test_profile_full_mode_forces_exact_stats_above_preview_threshold(self) -> None:
+        data_path = self.root / "preview_full.csv"
+        data_path.write_text(
+            "Age,Segment\n"
+            "1,A\n"
+            "2,A\n"
+            "3,B\n"
+            "4,B\n"
+            "5,C\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("py_lucidum.tools.column_profile.query.PROFILE_FULL_CELL_LIMIT", 1),
+            patch("py_lucidum.tools.column_profile.query.PROFILE_PREVIEW_ROW_LIMIT", 2),
+        ):
+            payload = profile(Dataset(data_path), {"filter": "", "mode": "full"})
+
+        age = self.column(payload, "Age")
+        segment = self.column(payload, "Segment")
+
+        self.assertEqual(payload["calculation"], {
+            "mode": "full",
+            "requested_mode": "full",
+            "profiled_row_count": 5,
+            "full_row_count": 5,
+            "exact": True,
+            "full_available": False,
+        })
+        self.assertEqual(age["distinct_count"], 5)
+        self.assertEqual(age["min"], 1)
+        self.assertEqual(age["max"], 5)
+        self.assertEqual(segment["distinct_count"], 3)
+
+    def test_profile_endpoint_rejects_invalid_summary_mode(self) -> None:
+        app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/column-profile/summary", {"filter": "", "mode": "random"})
+
+        self.assertEqual(status, 400)
+        self.assertIn(b"valid profile calculation mode", body)
 
     def test_profile_detail_returns_numeric_histogram_and_stats_under_filter(self) -> None:
         payload = profile_detail(Dataset(self.data_path), {"column": "Age", "filter": "Segment = 'A'"})
