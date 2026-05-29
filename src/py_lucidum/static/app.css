@@ -134,8 +134,9 @@
       }
 
       .sidebar-toggle {
-        width: 32px;
-        height: 32px;
+        width: 28px;
+        height: 24px;
+        min-height: 24px;
         border: 0;
         border-radius: 8px;
         background: var(--panel);
@@ -152,9 +153,9 @@
       }
 
       .sidebar-toggle-icon {
-        width: 20px;
-        height: 22px;
-        border: 2px solid currentColor;
+        width: 18px;
+        height: 20px;
+        border: 1.5px solid currentColor;
         border-radius: 4px;
         position: relative;
         display: block;
@@ -166,7 +167,7 @@
         top: 0;
         bottom: 0;
         left: 0;
-        width: 6px;
+        width: 5px;
         background: currentColor;
         border-radius: 1px 0 0 1px;
       }
@@ -176,8 +177,8 @@
         position: absolute;
         top: 0;
         bottom: 0;
-        left: 4px;
-        width: 2px;
+        left: 3.5px;
+        width: 1.5px;
         background: currentColor;
       }
 
@@ -193,8 +194,9 @@
       }
 
       .footer-toggle {
-        width: 32px;
-        height: 32px;
+        width: 28px;
+        height: 24px;
+        min-height: 24px;
         border: 0;
         border-radius: 8px;
         background: var(--panel);
@@ -211,9 +213,9 @@
       }
 
       .footer-toggle-icon {
-        width: 20px;
-        height: 22px;
-        border: 2px solid currentColor;
+        width: 18px;
+        height: 20px;
+        border: 1.5px solid currentColor;
         border-radius: 4px;
         position: relative;
         display: block;
@@ -225,7 +227,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        height: 6px;
+        height: 5px;
         background: currentColor;
         border-radius: 0 0 1px 1px;
       }
@@ -235,8 +237,8 @@
         position: absolute;
         left: 0;
         right: 0;
-        bottom: 4px;
-        height: 2px;
+        bottom: 3.5px;
+        height: 1.5px;
         background: currentColor;
       }
 
