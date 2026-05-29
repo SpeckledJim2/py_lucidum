@@ -20,6 +20,7 @@ class Dataset:
         self._invalid_column_errors: dict[str, str] | None = None
         self._row_count: int | None = None
         self._band_suggestions: dict[str, float | int | None] | None = None
+        self._source_band_suggestions: dict[str, dict[str, float | int | None]] = {}
         self._lock = threading.RLock()
         self._source_providers: list[Any] = []
 
@@ -87,6 +88,7 @@ class Dataset:
             self._invalid_column_errors = None
             self._row_count = None
             self._band_suggestions = None
+            self._source_band_suggestions = {}
 
     def schema(self) -> dict[str, Any]:
         with self._lock:
@@ -204,9 +206,22 @@ class Dataset:
             return self.schema()
         relation = self.relation_sql_for_source(source)
         rows = self.con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
-        columns = [
+        base_columns = [
             ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
             for row in rows
+        ]
+        try:
+            suggestions = self.band_suggestions_for_source(source, base_columns, relation)
+        except duckdb.Error:
+            suggestions = {}
+        columns = [
+            ColumnInfo(
+                name=col.name,
+                duckdb_type=col.duckdb_type,
+                kind=col.kind,
+                band_suggestion=suggestions.get(col.name),
+            )
+            for col in base_columns
         ]
         return {
             "path": source,
@@ -226,10 +241,29 @@ class Dataset:
     def band_suggestions(self, schema: list[ColumnInfo]) -> dict[str, float | int | None]:
         if self._band_suggestions is not None:
             return self._band_suggestions
+        self._band_suggestions = self.band_suggestions_for_relation(schema, self.relation_sql())
+        return self._band_suggestions
+
+    def band_suggestions_for_source(
+        self,
+        source: str,
+        schema: list[ColumnInfo],
+        relation_sql: str,
+    ) -> dict[str, float | int | None]:
+        if source == "dataset":
+            return self.band_suggestions(schema)
+        if source not in self._source_band_suggestions:
+            self._source_band_suggestions[source] = self.band_suggestions_for_relation(schema, relation_sql)
+        return self._source_band_suggestions[source]
+
+    def band_suggestions_for_relation(
+        self,
+        schema: list[ColumnInfo],
+        relation_sql: str,
+    ) -> dict[str, float | int | None]:
         numeric = [col for col in schema if is_numeric_kind(col.kind)]
         if not numeric:
-            self._band_suggestions = {}
-            return self._band_suggestions
+            return {}
         select_parts: list[str] = []
         aliases: dict[str, tuple[str, str]] = {}
         for index, col in enumerate(numeric):
@@ -240,7 +274,7 @@ class Dataset:
         select_sql = ",\n    ".join(select_parts)
         sql = f"""
 WITH sample AS (
-  SELECT * FROM {self.relation_sql()} LIMIT 10000
+  SELECT * FROM {relation_sql} LIMIT 10000
 )
 SELECT
     {select_sql}
@@ -265,7 +299,7 @@ FROM sample
                 range_parts.append(f"MAX(TRY_CAST({raw} AS BIGINT)) AS {quote_ident(max_alias)}")
                 range_aliases[min_alias] = (col.name, "min")
                 range_aliases[max_alias] = (col.name, "max")
-            range_sql = f"SELECT {', '.join(range_parts)} FROM {self.relation_sql()}"
+            range_sql = f"SELECT {', '.join(range_parts)} FROM {relation_sql}"
             range_row = self.con.execute(range_sql).fetchone()
             for description, value in zip(self.con.description, range_row):
                 metric = range_aliases.get(description[0])
@@ -280,8 +314,7 @@ FROM sample
                     suggestions[name] = 1
                     continue
             suggestions[name] = suggested_band_width(values.get("std"))
-        self._band_suggestions = suggestions
-        return self._band_suggestions
+        return suggestions
 
     def column_map(self) -> dict[str, ColumnInfo]:
         return {c.name: c for c in self.valid_schema_columns()}

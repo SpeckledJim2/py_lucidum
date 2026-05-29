@@ -2123,8 +2123,12 @@ COPY (
         self.assertEqual(prediction_source["best_iteration"], 7)
         prediction_columns = [column["name"] for column in prediction_source["columns"]]
         self.assertNotIn("__lucidum_row_id", prediction_columns)
+        self.assertIn("Age", prediction_columns)
         self.assertIn("Segment", prediction_columns)
         self.assertIn("gbm_prediction", prediction_columns)
+        prediction_columns_by_name = {column["name"]: column for column in prediction_source["columns"]}
+        self.assertEqual(prediction_columns_by_name["Age"]["band_suggestion"], 1)
+        self.assertGreater(prediction_columns_by_name["gbm_prediction"]["band_suggestion"], 0)
 
         dataset = Dataset(self.data_path)
         dataset.register_data_source_provider(GbmSourceProvider(GbmModelStore(self.data_path)))

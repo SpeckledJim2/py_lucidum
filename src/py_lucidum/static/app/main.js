@@ -1044,13 +1044,18 @@
 
       function normalizeBandWidthForQuantiles() {
         state.bandWidth = String(quantileCountForBandWidth());
-        state.bandFeature = state.x;
+        state.bandFeature = currentBandFeatureKey();
         syncBandingControl();
+      }
+
+      function currentBandFeatureKey() {
+        return JSON.stringify([state.source || "dataset", state.x || ""]);
       }
 
       function autoBandWidthForSelectedColumn() {
         const suggestion = selectedColumn()?.band_suggestion;
-        return suggestion ? formatBandWidth(suggestion) : "0";
+        const formatted = formatBandWidth(suggestion);
+        return formatted === "0" ? "1" : formatted;
       }
 
       function stepBandWidth(direction) {
@@ -1063,7 +1068,7 @@
           next = BAND_STEPS.find((step) => step > current) || current;
         }
         state.bandWidth = state.quantileMode === "quantile" ? String(quantileCountForBandWidth(next)) : formatBandWidth(next);
-        state.bandFeature = state.x;
+        state.bandFeature = currentBandFeatureKey();
         syncBandingControl();
         refreshChart();
       }
@@ -1079,9 +1084,10 @@
         el("dateControl").classList.toggle("hidden", !isDate);
         el("bandControl").classList.toggle("hidden", !isNumeric);
         el("quantileControl").classList.toggle("hidden", !isNumeric);
-        if (isNumeric && state.bandFeature !== state.x) {
+        const bandFeatureKey = currentBandFeatureKey();
+        if (isNumeric && state.bandFeature !== bandFeatureKey) {
           state.bandWidth = autoBandWidthForSelectedColumn();
-          state.bandFeature = state.x;
+          state.bandFeature = bandFeatureKey;
         }
         if (isNumeric && state.quantileMode === "quantile") {
           normalizeBandWidthForQuantiles();
@@ -1099,7 +1105,7 @@
         if (!isNumeric) {
           state.bandWidth = "0";
           state.quantileMode = "off";
-          state.bandFeature = state.x;
+          state.bandFeature = bandFeatureKey;
           syncSegmented("bandWidth", "0");
         }
         syncBandingControl();
@@ -4468,7 +4474,7 @@
               return;
             }
             if (group.dataset.control === "bandWidth") {
-              state.bandFeature = state.x;
+              state.bandFeature = currentBandFeatureKey();
               if (state.quantileMode === "quantile") {
                 normalizeBandWidthForQuantiles();
               } else {
@@ -4478,7 +4484,7 @@
             if (group.dataset.control === "quantileMode") {
               if (state.quantileMode === "quantile" && previousControlValue !== "quantile") {
                 state.bandWidth = "10";
-                state.bandFeature = state.x;
+                state.bandFeature = currentBandFeatureKey();
                 syncBandingControl();
               } else if (state.quantileMode === "quantile") {
                 normalizeBandWidthForQuantiles();
