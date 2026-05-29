@@ -611,7 +611,33 @@ COPY (
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")
-                page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]').click()
+                vehicle_age_row = page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]')
+                self.assertEqual(vehicle_age_row.evaluate("node => getComputedStyle(node).userSelect"), "none")
+                page.evaluate(
+                    """
+                    () => {
+                        window.__lucidumCopiedText = null;
+                        Object.defineProperty(navigator, "clipboard", {
+                            configurable: true,
+                            value: {
+                                writeText: async (text) => {
+                                    window.__lucidumCopiedText = text;
+                                },
+                            },
+                        });
+                    }
+                    """
+                )
+                vehicle_age_row.click(button="right")
+                page.locator("#profileColumnContextMenu:not([hidden])").get_by_text("Copy feature to clipboard").wait_for(timeout=10_000)
+                page.locator("#profileColumnContextMenu [role='menuitem']").click()
+                page.wait_for_function("() => window.__lucidumCopiedText === 'vehicle_age'")
+                page.wait_for_function('() => document.querySelector("#profileColumnContextMenu")?.hidden === true')
+                page.locator("#clipboardToast").get_by_text("Copied vehicle_age to clipboard").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#clipboardToast").evaluate("node => getComputedStyle(node).position"), "fixed")
+                self.assertEqual(page.locator("#status").text_content(), "")
+                self.assertNotEqual(vehicle_age_row.get_attribute("aria-selected"), "true")
+                vehicle_age_row.click()
                 page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"][aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("vehicle_age").wait_for(timeout=10_000)
                 page.locator('#profileWrap .profile-sort-button[data-profile-sort="distinct"]').click()

@@ -199,6 +199,7 @@
       let mapHomeControl = null;
       let mapResizeObserver = null;
       let serverHeartbeatTimer = null;
+      let clipboardToastTimer = null;
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
       const el = (id) => document.getElementById(id);
@@ -356,6 +357,58 @@
         el("status").textContent = message || "";
         el("status").classList.toggle("error", isError);
         el("status").classList.toggle("hidden", !message);
+      }
+
+      function copyTextToClipboard(text) {
+        if (navigator.clipboard?.writeText) {
+          return navigator.clipboard.writeText(text)
+            .then(() => true)
+            .catch(() => fallbackCopyTextToClipboard(text));
+        }
+        return Promise.resolve(fallbackCopyTextToClipboard(text));
+      }
+
+      function fallbackCopyTextToClipboard(text) {
+        const input = document.createElement("textarea");
+        input.value = text;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.left = "-9999px";
+        input.style.top = "0";
+        document.body.append(input);
+        input.select();
+        try {
+          return document.execCommand("copy");
+        } catch (_) {
+          return false;
+        } finally {
+          input.remove();
+        }
+      }
+
+      function showClipboardToast(message, isError = false) {
+        let toast = document.getElementById("clipboardToast");
+        if (!toast) {
+          toast = document.createElement("div");
+          toast.id = "clipboardToast";
+          toast.className = "clipboard-toast";
+          toast.hidden = true;
+          toast.setAttribute("role", "status");
+          toast.setAttribute("aria-live", "polite");
+          document.body.append(toast);
+        }
+        if (clipboardToastTimer) {
+          window.clearTimeout(clipboardToastTimer);
+          clipboardToastTimer = null;
+        }
+        toast.textContent = message || "";
+        toast.classList.toggle("error", isError);
+        toast.hidden = !message;
+        if (!message) return;
+        clipboardToastTimer = window.setTimeout(() => {
+          toast.hidden = true;
+          clipboardToastTimer = null;
+        }, 1800);
       }
 
       function setChartMessage(message) {
@@ -1788,6 +1841,7 @@
       }
 
       function renderProfileTable(data, columns = sortedProfileColumns(data.columns || [])) {
+        closeProfileColumnContextMenu();
         ensureSelectedProfileColumn(columns);
         const rows = columns.map((column) => `
           <tr class="profile-summary-row${column.name === state.selectedProfileColumn ? " selected" : ""}" data-profile-column="${escapeHtml(column.name)}" tabindex="0" aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}">
@@ -1831,12 +1885,96 @@
         });
         el("profileWrap").querySelectorAll("[data-profile-column]").forEach((row) => {
           row.addEventListener("click", () => selectProfileColumn(row.dataset.profileColumn || ""));
+          row.addEventListener("contextmenu", openProfileColumnContextMenu);
           row.addEventListener("keydown", (event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
             selectProfileColumn(row.dataset.profileColumn || "");
           });
         });
+      }
+
+      function profileColumnContextMenu() {
+        let menu = document.getElementById("profileColumnContextMenu");
+        if (menu) return menu;
+        menu = document.createElement("div");
+        menu.id = "profileColumnContextMenu";
+        menu.className = "profile-context-menu";
+        menu.hidden = true;
+        menu.setAttribute("role", "menu");
+        menu.innerHTML = '<button class="profile-context-menu-item" type="button" role="menuitem">Copy feature to clipboard</button>';
+        menu.querySelector("button").addEventListener("click", copyProfileContextMenuFeature);
+        document.body.append(menu);
+        return menu;
+      }
+
+      function openProfileColumnContextMenu(event) {
+        const columnName = event.currentTarget?.dataset?.profileColumn || "";
+        if (!columnName) return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeProfileColumnContextMenu();
+        const menu = profileColumnContextMenu();
+        menu.dataset.profileColumn = columnName;
+        menu.hidden = false;
+        const rowRect = event.currentTarget.getBoundingClientRect();
+        const clientX = event.clientX || rowRect.left + 12;
+        const clientY = event.clientY || rowRect.top + Math.min(18, Math.max(8, rowRect.height / 2));
+        positionProfileColumnContextMenu(menu, clientX, clientY);
+        menu.querySelector("button")?.focus({ preventScroll: true });
+        window.addEventListener("pointerdown", handleProfileColumnContextMenuPointerDown, true);
+        window.addEventListener("keydown", handleProfileColumnContextMenuKeydown, true);
+        window.addEventListener("resize", closeProfileColumnContextMenu, true);
+        window.addEventListener("scroll", closeProfileColumnContextMenu, true);
+      }
+
+      function positionProfileColumnContextMenu(menu, clientX, clientY) {
+        const margin = 8;
+        menu.style.left = "0px";
+        menu.style.top = "0px";
+        const rect = menu.getBoundingClientRect();
+        const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+        const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+        const left = Math.min(Math.max(margin, clientX), maxLeft);
+        const top = Math.min(Math.max(margin, clientY), maxTop);
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+      }
+
+      async function copyProfileContextMenuFeature() {
+        const menu = document.getElementById("profileColumnContextMenu");
+        const columnName = menu?.dataset?.profileColumn || "";
+        if (!columnName) {
+          closeProfileColumnContextMenu();
+          return;
+        }
+        const copied = await copyTextToClipboard(columnName);
+        showClipboardToast(copied ? `Copied ${columnName} to clipboard` : "Could not copy feature to clipboard", !copied);
+        closeProfileColumnContextMenu();
+      }
+
+      function handleProfileColumnContextMenuPointerDown(event) {
+        const menu = document.getElementById("profileColumnContextMenu");
+        if (!menu || menu.hidden || menu.contains(event.target)) return;
+        closeProfileColumnContextMenu();
+      }
+
+      function handleProfileColumnContextMenuKeydown(event) {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        closeProfileColumnContextMenu();
+      }
+
+      function closeProfileColumnContextMenu() {
+        const menu = document.getElementById("profileColumnContextMenu");
+        if (menu) {
+          menu.hidden = true;
+          menu.dataset.profileColumn = "";
+        }
+        window.removeEventListener("pointerdown", handleProfileColumnContextMenuPointerDown, true);
+        window.removeEventListener("keydown", handleProfileColumnContextMenuKeydown, true);
+        window.removeEventListener("resize", closeProfileColumnContextMenu, true);
+        window.removeEventListener("scroll", closeProfileColumnContextMenu, true);
       }
 
       function profileSortHeaderHtml(key, label) {

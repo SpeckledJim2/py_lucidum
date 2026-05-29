@@ -1993,6 +1993,8 @@
 
       .profile-summary-row {
         cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
       }
 
       .profile-summary-row:hover td {
@@ -2014,6 +2016,69 @@
         overflow: hidden;
         text-overflow: ellipsis;
         font-weight: 650;
+      }
+
+      .profile-context-menu {
+        position: fixed;
+        z-index: 1100;
+        min-width: 178px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        box-shadow: 0 12px 30px rgb(15 23 42 / 18%);
+        padding: 3px;
+      }
+
+      .profile-context-menu[hidden] {
+        display: none;
+      }
+
+      .profile-context-menu-item {
+        display: block;
+        width: 100%;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        line-height: 1.2;
+        padding: 6px 8px;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      .profile-context-menu-item:hover,
+      .profile-context-menu-item:focus-visible {
+        background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+        outline: none;
+      }
+
+      .clipboard-toast {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 1100;
+        max-width: min(360px, calc(100vw - 36px));
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        box-shadow: 0 12px 30px rgb(15 23 42 / 18%);
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.2;
+        padding: 7px 9px;
+        pointer-events: none;
+      }
+
+      .clipboard-toast.error {
+        border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
+        color: var(--danger);
+      }
+
+      .clipboard-toast[hidden] {
+        display: none;
       }
 
       .profile-badge {
@@ -3372,6 +3437,15 @@
         background: var(--panel) !important;
       }
 
+      .gbm-model-grid .tabulator-row,
+      .gbm-tree-summary-grid .tabulator-row,
+      .gbm-model-table tr[data-gbm-model-row],
+      .gbm-tree-fallback-table tr[data-gbm-tree-row] {
+        cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
       .gbm-parameter-input,
       .gbm-parameter-select {
         background: var(--panel);
@@ -3814,10 +3888,6 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow: auto;
-      }
-
-      .gbm-model-grid .tabulator-row {
-        cursor: pointer;
       }
 
       .gbm-model-grid .tabulator-row.tabulator-selected,
