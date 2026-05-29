@@ -39,6 +39,7 @@ from .validation import (
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 EBM_INITIAL_LEARNING_RATE = 0.3
+DEFAULT_SHAP_SAMPLE_SEED = 2026
 
 
 class MissingGbmDependency(RuntimeError):
@@ -514,6 +515,7 @@ def train_model(
     feature_config = sorted(feature_config, key=lambda item: (-float(item["gain"]), str(item["name"]).lower()))
 
     shap_mode = str(payload.get("shap_rows") or "0").strip().lower()
+    shap_written_rows = 0
     shap_summary_rows: list[dict[str, Any]] = []
     if shap_mode not in {"zero", "0", "none"}:
         emit_progress(
@@ -537,8 +539,10 @@ def train_model(
             feature_names=feature_names,
             model_id=model_id,
             shap_mode=shap_mode,
+            shap_seed=shap_sampling_seed(params.get("seed")),
             best_iteration=best_iteration,
         )
+        shap_written_rows = int(len(shap_frame))
         write_dataframe_parquet(shap_frame, store.artifact_path(model_id, "shap_long"))
         write_dataframe_parquet(shap_summary, store.artifact_path(model_id, "shap_summary"))
         shap_summary_rows = shap_summary.to_dict("records")
@@ -584,7 +588,7 @@ def train_model(
         "sample_column": sample_mode if sample_mode != "none" else None,
         "sample_source": sample_source,
         "source_columns": source_columns,
-        "shap_rows": int(len(shap_summary_rows) and min(len(score_frame), shap_row_limit(shap_mode, len(score_frame)))),
+        "shap_rows": shap_written_rows,
         "timings": {"training_seconds": elapsed},
         "warnings": validation.warnings,
         "feature_importance": feature_config,
@@ -977,6 +981,23 @@ def shap_row_limit(mode: str, row_count: int) -> int:
         return 0
 
 
+def shap_sampling_seed(raw: Any) -> int:
+    try:
+        seed = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_SHAP_SAMPLE_SEED
+    return seed if seed >= 0 else DEFAULT_SHAP_SAMPLE_SEED
+
+
+def shap_sample_positions(np: Any, *, mode: str, row_count: int, seed: int) -> Any:
+    limit = shap_row_limit(mode, row_count)
+    if limit <= 0:
+        return np.array([], dtype="int64")
+    if limit >= row_count:
+        return np.arange(row_count, dtype="int64")
+    return np.sort(np.random.default_rng(seed).choice(row_count, size=limit, replace=False))
+
+
 def shap_dataframes(
     *,
     np: Any,
@@ -987,11 +1008,23 @@ def shap_dataframes(
     feature_names: list[str],
     model_id: str,
     shap_mode: str,
+    shap_seed: int,
     best_iteration: int,
 ) -> tuple[Any, Any]:
-    limit = shap_row_limit(shap_mode, len(feature_frame))
-    sampled = feature_frame.head(limit)
-    sampled_scores = score_frame.head(limit)
+    positions = shap_sample_positions(np, mode=shap_mode, row_count=len(feature_frame), seed=shap_seed)
+    if len(positions) == 0:
+        return (
+            pd.DataFrame(
+                {
+                    "__lucidum_row_id": pd.Series(dtype="int64"),
+                    **{feature_name: pd.Series(dtype="float64") for feature_name in feature_names},
+                }
+            ),
+            pd.DataFrame(columns=["gbm_model_id", "feature", "mean_abs_shap", "mean_shap", "row_count"]),
+        )
+
+    sampled = feature_frame.iloc[positions]
+    sampled_scores = score_frame.iloc[positions]
     contributions = booster.predict(sampled, pred_contrib=True, num_iteration=best_iteration)
     if contributions.ndim == 3:
         contributions = contributions[:, :, 0]

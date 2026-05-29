@@ -48,7 +48,7 @@ Chosen defaults:
 - Training reads only selected features plus required response, offset, and sample columns from the raw dataset. Prediction sources join back only readable source columns.
 - After training, persist LightGBM gain feature importance and use it to refresh the feature grid.
 - During training, a LightGBM callback updates the in-memory job with current iteration and metric values so the browser can update status text and the evaluation chart before the model is persisted.
-- SHAP row options are `0`, `10k`, `100k`, and `all`. SHAP values are stored as a wide artifact keyed by `__lucidum_row_id`, with one numeric column per selected feature; the summary artifact remains one row per feature.
+- SHAP row options are `0`, `10k`, `100k`, and `all`. Bounded options save a deterministic random sample from all scored rows using the model seed. SHAP values are stored as a wide artifact keyed by `__lucidum_row_id`, with one numeric column per selected feature; the summary artifact remains one row per feature.
 - SHAP plots read only saved SHAP rows joined to trained feature values by `__lucidum_row_id`; one-feature plots use that feature's SHAP, while two-feature plots use the sum of the two selected SHAP contributions.
 
 ## UI

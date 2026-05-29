@@ -1726,6 +1726,121 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         self.assertEqual(shap_row_limit("100k", 123456), 100000)
         self.assertEqual(shap_row_limit("all", 123456), 123456)
 
+    def test_shap_values_use_seeded_random_sample_for_bounded_modes(self) -> None:
+        try:
+            import numpy as np
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        test_case = self
+        observed_feature_rows: list[list[int]] = []
+
+        class Booster:
+            def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
+                test_case.assertTrue(pred_contrib)
+                test_case.assertEqual(num_iteration, 3)
+                observed_feature_rows.append(frame["Age"].astype(int).tolist())
+                values = frame["Age"].to_numpy(dtype="float64")
+                return np.column_stack([values, values / 10.0, np.zeros(len(frame))])
+
+        feature_frame = pd.DataFrame({"Age": list(range(10)), "Segment": list(range(100, 110))})
+        score_frame = pd.DataFrame({"__lucidum_row_id": list(range(1, 11)), "Age": list(range(10)), "Segment": list(range(100, 110))})
+
+        first_frame, _ = shap_dataframes(
+            np=np,
+            pd=pd,
+            booster=Booster(),
+            feature_frame=feature_frame,
+            score_frame=score_frame,
+            feature_names=["Age", "Segment"],
+            model_id="m1",
+            shap_mode="3",
+            shap_seed=7,
+            best_iteration=3,
+        )
+        second_frame, _ = shap_dataframes(
+            np=np,
+            pd=pd,
+            booster=Booster(),
+            feature_frame=feature_frame,
+            score_frame=score_frame,
+            feature_names=["Age", "Segment"],
+            model_id="m1",
+            shap_mode="3",
+            shap_seed=7,
+            best_iteration=3,
+        )
+        different_seed_frame, _ = shap_dataframes(
+            np=np,
+            pd=pd,
+            booster=Booster(),
+            feature_frame=feature_frame,
+            score_frame=score_frame,
+            feature_names=["Age", "Segment"],
+            model_id="m1",
+            shap_mode="3",
+            shap_seed=2026,
+            best_iteration=3,
+        )
+
+        selected_row_ids = first_frame["__lucidum_row_id"].tolist()
+        expected_row_ids = sorted((np.random.default_rng(7).choice(10, size=3, replace=False) + 1).tolist())
+        self.assertEqual(selected_row_ids, expected_row_ids)
+        self.assertNotEqual(selected_row_ids, [1, 2, 3])
+        self.assertEqual(second_frame["__lucidum_row_id"].tolist(), selected_row_ids)
+        self.assertNotEqual(different_seed_frame["__lucidum_row_id"].tolist(), selected_row_ids)
+        self.assertEqual(observed_feature_rows[0], [row_id - 1 for row_id in selected_row_ids])
+
+    def test_shap_values_all_and_zero_modes_keep_expected_counts(self) -> None:
+        try:
+            import numpy as np
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class Booster:
+            def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
+                values = frame["Age"].to_numpy(dtype="float64")
+                return np.column_stack([values, np.zeros(len(frame))])
+
+        class UnexpectedBooster:
+            def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
+                raise AssertionError("zero SHAP rows should not call LightGBM predict")
+
+        feature_frame = pd.DataFrame({"Age": [30, 40, 50, 60]})
+        score_frame = pd.DataFrame({"__lucidum_row_id": [1, 2, 3, 4], "Age": [30, 40, 50, 60]})
+        all_frame, all_summary = shap_dataframes(
+            np=np,
+            pd=pd,
+            booster=Booster(),
+            feature_frame=feature_frame,
+            score_frame=score_frame,
+            feature_names=["Age"],
+            model_id="m1",
+            shap_mode="all",
+            shap_seed=7,
+            best_iteration=3,
+        )
+        zero_frame, zero_summary = shap_dataframes(
+            np=np,
+            pd=pd,
+            booster=UnexpectedBooster(),
+            feature_frame=feature_frame,
+            score_frame=score_frame,
+            feature_names=["Age"],
+            model_id="m1",
+            shap_mode="0",
+            shap_seed=7,
+            best_iteration=3,
+        )
+
+        self.assertEqual(all_frame["__lucidum_row_id"].tolist(), [1, 2, 3, 4])
+        self.assertEqual(int(all_summary["row_count"].iloc[0]), 4)
+        self.assertEqual(list(zero_frame.columns), ["__lucidum_row_id", "Age"])
+        self.assertTrue(zero_frame.empty)
+        self.assertTrue(zero_summary.empty)
+
     def test_shap_values_are_written_as_wide_numeric_feature_columns(self) -> None:
         try:
             import numpy as np
@@ -1751,6 +1866,7 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             feature_names=["Age", "Segment"],
             model_id="m1",
             shap_mode="10k",
+            shap_seed=2026,
             best_iteration=3,
         )
 
