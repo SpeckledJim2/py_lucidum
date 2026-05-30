@@ -64,6 +64,7 @@ class StaticAssetTests(unittest.TestCase):
         module_paths = [
             "/static/app.js",
             "/static/app/main.js",
+            "/static/app/column-profile-tool.js",
             "/static/app/shared/api.js",
             "/static/app/shared/format.js",
             "/static/app/shared/schema.js",
@@ -380,6 +381,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
     def test_static_app_assets_disable_cache(self) -> None:
         self.assert_no_store("/static/app.js")
         self.assert_no_store("/static/app/main.js")
+        self.assert_no_store("/static/app/column-profile-tool.js")
         self.assert_no_store("/static/app/shared/api.js")
         self.assert_no_store("/static/app/shared/format.js")
         self.assert_no_store("/static/app/shared/schema.js")
@@ -1857,6 +1859,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         css = css_body.decode("utf-8")
 
         self.assertLess(html.index('id="profileTool"'), html.index('id="lineBarTool"'))
+        self.assertIn('import { createColumnProfileTool } from "./column-profile-tool.js";', js)
+        self.assertIn("export function createColumnProfileTool", js)
         self.assertIn('tool: "column_profile"', js)
         self.assertIn('column_profile: "Profile render"', js)
         self.assertIn('if (tool === "column_profile")', js)
@@ -1951,7 +1955,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('toast.id = "clipboardToast";', js)
         self.assertIn("showClipboardToast(copied ? `Copied ${columnName} to clipboard`", js)
         self.assertNotIn("setStatus(copied ? `Copied ${columnName} to clipboard`", js)
-        self.assertIn("closeProfileColumnContextMenu();\n        ensureSelectedProfileColumn(columns);", js)
+        self.assertIn("closeProfileColumnContextMenu();", js)
+        self.assertIn("ensureSelectedProfileColumn(columns);", js)
         self.assertIn('aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}"', js)
         self.assertIn('if (toolEnabled("column_profile")) return "column_profile";', js)
         self.assertIn("const skippedColumns = Array.isArray(data.skipped_columns) ? data.skipped_columns : [];", js)
