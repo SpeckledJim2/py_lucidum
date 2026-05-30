@@ -1,0 +1,89 @@
+      .visual-area {
+        display: grid;
+        grid-template-columns: var(--chart-controls-width, 340px) 6px minmax(0, 1fr);
+        gap: 8px;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      .visual-area.map-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .visual-area.profile-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .visual-area.model-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .chart-controls-resizer {
+        background: linear-gradient(to right, var(--line), transparent);
+        cursor: col-resize;
+        min-width: 6px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .chart-controls-resizer:hover,
+      .chart-controls-resizer.dragging {
+        background: var(--accent);
+      }
+
+      .chart-side-controls {
+        display: grid;
+        grid-template-rows: var(--chart-feature-controls-height, minmax(0, 1fr)) 6px minmax(0, 1fr);
+        gap: 8px;
+        min-width: 0;
+        min-height: 0;
+      }
+
+      .chart-control-height-resizer {
+        background: linear-gradient(to bottom, var(--line), transparent);
+        cursor: row-resize;
+        min-height: 6px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .chart-control-height-resizer:hover,
+      .chart-control-height-resizer.dragging {
+        background: var(--accent);
+      }
+
+      .chart-side-section {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        display: flex;
+        flex: 1 1 0;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .chart-side-section h2 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+
+      .chart-side-section .feature-list {
+        min-height: 0;
+      }
+
+      .visual-area .workspace {
+        height: 100%;
+        min-width: 0;
+      }
+
+      #chart {
+        width: 100%;
+        height: 100%;
+      }

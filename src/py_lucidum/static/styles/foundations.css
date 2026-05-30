@@ -1,0 +1,98 @@
+      :root {
+        color-scheme: light;
+        --bg: #eef2f7;
+        --panel: #ffffff;
+        --panel-2: #f8fafc;
+        --sidebar-bg: #dce4ef;
+        --text: #1f2937;
+        --muted: #667085;
+        --line: #d7dde7;
+        --actual-line: #222222;
+        --accent: #2276d2;
+        --accent-2: #12a8c7;
+        --bar: #bfeefa;
+        --tail: #72c7df;
+        --danger: #b42318;
+        --saved-filter-theme-bg: #c8daec;
+        --saved-filter-theme-hover-bg: #b9d0e7;
+        --saved-filter-theme-text: #58677c;
+        --sidebar-collapsed-width: 52px;
+        --shadow: 0 1px 2px rgb(15 23 42 / 8%);
+      }
+
+      body.dark {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --panel: #151f32;
+        --panel-2: #111827;
+        --sidebar-bg: #24334b;
+        --text: #e5e7eb;
+        --muted: #a8b3c7;
+        --line: #2c3952;
+        --actual-line: #ffffff;
+        --accent: #72b7ff;
+        --accent-2: #2dd4bf;
+        --bar: #245b73;
+        --tail: #3b91ad;
+        --danger: #fca5a5;
+        --saved-filter-theme-bg: #30415c;
+        --saved-filter-theme-hover-bg: #38506f;
+        --saved-filter-theme-text: #c1ccdc;
+        --shadow: none;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      body.resizing-sidebar,
+      body.resizing-sidebar *,
+      body.resizing-chart-controls,
+      body.resizing-chart-controls * {
+        cursor: col-resize !important;
+        user-select: none !important;
+      }
+
+      body.resizing-chart-control-heights,
+      body.resizing-chart-control-heights * {
+        cursor: row-resize !important;
+        user-select: none !important;
+      }
+
+      body.resizing-sidebar-filter,
+      body.resizing-sidebar-filter * {
+        cursor: row-resize !important;
+        user-select: none !important;
+      }
+
+      body.dragging-map-control,
+      body.dragging-map-control * {
+        cursor: move !important;
+        user-select: none !important;
+      }
+
+      body.app-stopped .app {
+        filter: grayscale(1);
+        opacity: 0.28;
+        pointer-events: none;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }

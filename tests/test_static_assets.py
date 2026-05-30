@@ -46,6 +46,17 @@ def asgi_get(app: Any, path: str, headers: dict[str, str] | None = None) -> tupl
 
 
 class StaticAssetTests(unittest.TestCase):
+    CSS_MODULE_PATHS = [
+        "/static/styles/foundations.css",
+        "/static/styles/shell.css",
+        "/static/styles/controls.css",
+        "/static/styles/line-bar.css",
+        "/static/styles/uk-map.css",
+        "/static/styles/column-profile.css",
+        "/static/styles/model-shell.css",
+        "/static/styles/gbm.css",
+    ]
+
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -59,6 +70,13 @@ class StaticAssetTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("cache-control"), "no-store")
         return headers, body
+
+    def app_css_contract(self) -> str:
+        module_paths = ["/static/app.css", *self.CSS_MODULE_PATHS]
+        return "\n".join(
+            self.assert_no_store(path)[1].decode("utf-8")
+            for path in module_paths
+        )
 
     def app_js_contract(self) -> str:
         module_paths = [
@@ -376,7 +394,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('id="gbmModelSelectedMeta"', html)
         self.assertIn('id="gbmModelSelect" class="feature-list gbm-model-list" role="listbox"', html)
         self.assertIn("No GBMs trained yet", self.app_js_contract())
-        self.assertIn(".gbm-model-list .gbm-empty-state", self.assert_no_store("/static/app.css")[1].decode("utf-8"))
+        self.assertIn(".gbm-model-list .gbm-empty-state", self.app_css_contract())
         self.assertNotIn('id="gbmActiveModelSelect"', html)
         self.assertNotIn("?v=", html)
 
@@ -401,13 +419,18 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/vendor/tabulator/tabulator.min.css")
         self.assert_no_store("/static/vendor/d3/d3.min.js")
         self.assert_no_store("/static/vendor/echarts-gl/echarts-gl.min.js")
-        self.assert_no_store("/static/app.css")
+        app_css = self.assert_no_store("/static/app.css")[1].decode("utf-8")
+        for path in self.CSS_MODULE_PATHS:
+            import_path = f'.{path.removeprefix("/static")}'
+            self.assertIn(f'@import url("{import_path}");', app_css)
+        for path in self.CSS_MODULE_PATHS:
+            self.assert_no_store(path)
         self.assert_no_store("/static/monitor.js")
         self.assert_no_store("/static/monitor.css")
 
     def test_gbm_frontend_contains_real_tool_contract(self) -> None:
         js = self.app_js_contract()
-        css = self.assert_no_store("/static/app.css")[1].decode("utf-8")
+        css = self.app_css_contract()
 
         self.assertIn('import { createGbmTool } from "./gbm-tool.js";', js)
         self.assertIn('import { createGbmTreeViewer } from "./gbm-tree-viewer.js";', js)
@@ -736,8 +759,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("class: `gbm-parameter-editor gbm-parameter-${editor}-editor`,", js)
         self.assertIn("function parameterControlHtml(parameter)", js)
         self.assertIn("<select data-gbm-parameter=", js)
-        _, css_body = self.assert_no_store("/static/app.css")
-        css = css_body.decode("utf-8")
+        css = self.app_css_contract()
         self.assertIn(".gbm-grid .tabulator-row .tabulator-cell", css)
         self.assertIn(".gbm-grid .tabulator-row.tabulator-row-even", css)
         self.assertIn("background: var(--panel) !important", css)
@@ -1156,9 +1178,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_line_bar_warnings_render_inside_chart_messages(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
-        css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
         self.assertLess(html.index('id="lineBarFilter"'), html.index('id="chartMessage"'))
@@ -1174,8 +1195,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".workspace-meta,\n      .chart-message {\n        color: var(--muted);\n        font-size: 10px;", css)
 
     def test_stop_app_confirmation_uses_custom_favicon_dialog(self) -> None:
-        _, css_body = self.assert_no_store("/static/app.css")
-        css = css_body.decode("utf-8")
+        css = self.app_css_contract()
         js = self.app_js_contract()
 
         self.assertIn("function confirmStopApp()", js)
@@ -1191,8 +1211,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".stop-confirm-actions {\n        display: flex;\n        justify-content: flex-end;", css)
 
     def test_stopped_overlay_uses_cached_icon_message_layout(self) -> None:
-        _, css_body = self.assert_no_store("/static/app.css")
-        css = css_body.decode("utf-8")
+        css = self.app_css_contract()
         js = self.app_js_contract()
 
         self.assertIn('let faviconDataUrl = "";', js)
@@ -1234,8 +1253,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertNotIn("Math.round(bytes / divisor)", js)
 
     def test_feature_picker_rows_are_compact(self) -> None:
-        _, body = self.assert_no_store("/static/app.css")
-        css = body.decode("utf-8")
+        css = self.app_css_contract()
 
         self.assertIn("min-height: 20px;", css)
         self.assertIn("padding: 1px 6px;", css)
@@ -1244,9 +1262,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_saved_filter_select_uses_feature_list_row_spacing(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
-        css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
         self.assertIn('id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox"', html)
@@ -1330,9 +1347,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_filter_panel_collapses_and_shows_row_meta(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
-        css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
         self.assertIn('<section class="section sidebar-filter-section filter-collapsed">', html)
@@ -1368,9 +1384,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_kpi_sidebar_section_contains_metric_selects_and_grouped_rows(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
-        css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
         self.assertIn('<section class="section sidebar-kpi-section hidden">', html)
@@ -1453,9 +1468,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_filter_footer_and_sidebar_filter_controls_contract(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
-        css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
         self.assertLess(html.index('id="sidebarToggleBtn"'), html.index('id="filterFooterToggleBtn"'))
@@ -1579,9 +1593,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_chart_search_inputs_have_clear_buttons(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
-        css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
         self.assertIn('<div class="chart-search-row">', html)
@@ -1653,9 +1666,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_theme_toggle_uses_icons_and_accessible_labels(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
-        css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
         self.assertIn(".theme-toggle", css)
@@ -1722,8 +1734,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('function normalizeBandWidthForQuantiles()', js)
 
     def test_london_map_button_icon_fills_button(self) -> None:
-        _, css_body = self.assert_no_store("/static/app.css")
-        css = css_body.decode("utf-8")
+        css = self.app_css_contract()
         js = self.app_js_contract()
 
         self.assertIn('class="map-place-icon-london"', js)
@@ -1736,9 +1747,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_map_layer_control_uses_distinct_radio_groups(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
-        css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
         self.assertIn('import { createUkMapTool } from "./uk-map-tool.js";', js)
@@ -1811,8 +1821,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("font-size: 10px;", css)
 
     def test_sidebar_toggle_contract(self) -> None:
-        _, css_body = self.assert_no_store("/static/app.css")
-        css = css_body.decode("utf-8")
+        css = self.app_css_contract()
         js = self.app_js_contract()
 
         self.assertIn("--sidebar-bg: #dce4ef;", css)
@@ -1858,17 +1867,15 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('button.setAttribute("aria-expanded", String(state.sidebarVisible));', js)
 
     def test_tool_selector_aligns_with_main_toolbar(self) -> None:
-        _, css_body = self.assert_no_store("/static/app.css")
-        css = css_body.decode("utf-8")
+        css = self.app_css_contract()
 
         self.assertIn(".tool-selector-section {\n        margin-bottom: 14px;\n        padding-top: 2px;", css)
 
     def test_column_profile_tool_static_assets_are_registered(self) -> None:
         _, html_body = self.assert_no_store("/")
-        _, css_body = self.assert_no_store("/static/app.css")
+        css = self.app_css_contract()
         html = html_body.decode("utf-8")
         js = self.app_js_contract()
-        css = css_body.decode("utf-8")
 
         self.assertLess(html.index('id="profileTool"'), html.index('id="lineBarTool"'))
         self.assertIn('import { createColumnProfileTool } from "./column-profile-tool.js";', js)
