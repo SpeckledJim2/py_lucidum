@@ -65,6 +65,7 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app.js",
             "/static/app/main.js",
             "/static/app/column-profile-tool.js",
+            "/static/app/line-bar-tool.js",
             "/static/app/shared/api.js",
             "/static/app/shared/format.js",
             "/static/app/shared/schema.js",
@@ -382,6 +383,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app.js")
         self.assert_no_store("/static/app/main.js")
         self.assert_no_store("/static/app/column-profile-tool.js")
+        self.assert_no_store("/static/app/line-bar-tool.js")
         self.assert_no_store("/static/app/shared/api.js")
         self.assert_no_store("/static/app/shared/format.js")
         self.assert_no_store("/static/app/shared/schema.js")
@@ -1644,7 +1646,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("const titleGap = rotate ? Math.max(26, labelSpace - 10) : 26;", js)
         self.assertIn("nameGap: titleGap,", js)
         self.assertIn("bottom: titleGap + 16 + dataZoomSpace,", js)
-        self.assertIn("nameGap: 26,\n          bottom: 46 + dataZoomSpace,", js)
+        self.assertIn("nameGap: 26,", js)
+        self.assertIn("bottom: 46 + dataZoomSpace,", js)
 
     def test_theme_toggle_uses_icons_and_accessible_labels(self) -> None:
         _, html_body = self.assert_no_store("/")
@@ -1687,7 +1690,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('document.body.classList.toggle("dark");\n          syncThemeButton();', js)
         self.assertIn("syncCartoBaseMapForTheme();", js)
         self.assertIn('if (state.tool === "gbm") measureToolRender("gbm", () => gbmTool.refreshTheme());', js)
-        self.assertIn("bindControls();\n        syncThemeButton();", js)
+        self.assertIn("lineBarTool.bindControls();", js)
+        self.assertIn("syncThemeButton();", js)
         self.assertIn("applyMapBackground();", js)
         self.assertNotIn('.textContent = document.body.classList.contains("dark") ? "Light" : "Dark"', js)
 
@@ -1698,6 +1702,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
         self.assertIn('id="bandControl"', html)
         self.assertIn('id="quantileControl"', html)
+        self.assertIn('import { createLineBarTool } from "./line-bar-tool.js";', js)
+        self.assertIn("export function createLineBarTool", js)
         self.assertLess(html.index('id="bandControl"'), html.index('id="quantileControl"'))
         self.assertIn('<span id="bandLabel">Banding</span>', html)
         self.assertIn("<h3>Quantile</h3>", html)
