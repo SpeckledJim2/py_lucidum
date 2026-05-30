@@ -168,6 +168,22 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     refreshPlot();
   }
 
+  function preselectFeatures(feature1, feature2 = "") {
+    const nextFeature1 = String(feature1 || "");
+    const nextFeature2 = String(feature2 || "");
+    if (!nextFeature1) return;
+    const changed = state.feature1 !== nextFeature1 || state.feature2 !== nextFeature2;
+    state.feature1 = nextFeature1;
+    state.feature2 = nextFeature2;
+    state.search1 = "";
+    state.search2 = "";
+    if (changed) {
+      clearPendingLegendState();
+      state.banding1 = defaultBanding(selectedFeature(1));
+      state.banding2 = defaultBanding(selectedFeature(2));
+    }
+  }
+
   function setBanding(index, value) {
     state[`banding${index}`] = normaliseBanding(value, selectedFeature(index));
     renderControls();
@@ -711,6 +727,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
 
   return {
     dispose,
+    preselectFeatures,
     refreshTheme,
     render,
     shellHtml,

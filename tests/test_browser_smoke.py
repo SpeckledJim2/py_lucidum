@@ -1030,6 +1030,69 @@ COPY (
                 self.assertNotIn("Gain", default_metric_state["headers"])
                 self.assertIn("lat", default_metric_state["firstRowText"])
                 self.assertEqual(default_metric_state["ageShap"], "0.1830")
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").click(button="right")
+                page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
+                normal_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
+                    "(items) => items.map((item) => item.textContent.trim())"
+                )
+                self.assertEqual(normal_context_labels, ["Go to Line and Bar", "Go to SHAP", "Go to Stacked SHAP"])
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to Line and Bar").click()
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#featureList .feature.active", has_text="Age").wait_for(timeout=10_000)
+                page.locator("#gbmTool").click()
+                page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").click(button="right")
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST", timeout=10_000):
+                    page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to SHAP").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
+                      && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Features and parameters").click()
+                page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").click(button="right")
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST", timeout=10_000):
+                    page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to Stacked SHAP").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmStackedShapFeatureList .feature.active")?.textContent.includes("Age")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Features and parameters").click()
+                page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="PostcodeArea").click(button="right")
+                page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
+                no_shap_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
+                    "(items) => items.map((item) => item.textContent.trim())"
+                )
+                self.assertEqual(no_shap_context_labels, ["Go to Line and Bar"])
+                page.keyboard.press("Escape")
+                page.wait_for_function('() => document.querySelector("#gbmFeatureContextMenu")?.hidden === true')
+                page.get_by_role("button", name="SHAP", exact=True).click()
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST", timeout=10_000):
+                    page.locator("#gbmShapFeatureList1 .feature", has_text="lat").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("lat")
+                      && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("None")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Stacked SHAP", exact=True).click()
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST", timeout=10_000):
+                    page.locator("#gbmStackedShapFeatureList .feature", has_text="lat").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmStackedShapFeatureList .feature.active")?.textContent.includes("lat")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Features and parameters").click()
+                page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
                 page.locator("input[name='gbmFeatureMetric'][value='gain']").check(force=True)
                 page.wait_for_function(
                     """
@@ -1841,8 +1904,21 @@ COPY (
                 for style in ebm_summary_alignment.values():
                     self.assertEqual(style["textAlign"], "center")
                     self.assertEqual(style["justifyContent"], "center")
-                page.get_by_role("button", name="SHAP", exact=True).click()
-                page.locator("#gbmShapChart").wait_for(timeout=10_000)
+                page.locator("#gbmEbmGainSummaryGrid .tabulator-row", has_text="Age x Segment").click(button="right")
+                page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
+                ebm_dim2_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
+                    "(items) => items.map((item) => item.textContent.trim())"
+                )
+                self.assertEqual(ebm_dim2_context_labels, ["Go to SHAP"])
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST", timeout=10_000):
+                    page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to SHAP").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
+                      && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("Segment")
+                    """,
+                    timeout=10_000,
+                )
                 page.get_by_role("button", name="Features and parameters").click()
                 page.wait_for_function(
                     """

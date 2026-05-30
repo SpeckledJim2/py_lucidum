@@ -67,6 +67,8 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/gbm-tool.js",
             "/static/app/gbm-shap-tool.js",
             "/static/app/gbm-shap-chart.js",
+            "/static/app/gbm-stacked-shap-tool.js",
+            "/static/app/gbm-stacked-shap-chart.js",
             "/static/app/gbm-tree-viewer.js",
             "/static/app/model-tool-shell.js",
         ]
@@ -307,6 +309,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/gbm-tool.js")
         self.assert_no_store("/static/app/gbm-shap-tool.js")
         self.assert_no_store("/static/app/gbm-shap-chart.js")
+        self.assert_no_store("/static/app/gbm-stacked-shap-tool.js")
+        self.assert_no_store("/static/app/gbm-stacked-shap-chart.js")
         self.assert_no_store("/static/app/gbm-tree-viewer.js")
         self.assert_no_store("/static/app/model-tool-shell.js")
         self.assert_no_store("/static/vendor/tabulator/tabulator.min.js")
@@ -328,6 +332,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("export function createGbmTool", js)
         self.assertIn("export function createGbmTreeViewer", js)
         self.assertIn("export function createGbmShapTool", js)
+        self.assertIn("function preselectFeatures(feature1, feature2 = \"\")", js)
+        self.assertIn("function preselectFeature(value)", js)
+        self.assertIn("preselectFeatures,", js)
+        self.assertIn("preselectFeature,", js)
         self.assertIn('api("/api/gbm/config"', js)
         self.assertIn('api("/api/gbm/validate"', js)
         self.assertIn('api("/api/gbm/train"', js)
@@ -468,6 +476,22 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("function featureMetricColumn()", js)
         self.assertIn("function ebmGainSummaryColumns()", js)
         self.assertIn("function renderEbmGainSummaryFallback(rows)", js)
+        self.assertIn('featureTable.on("rowContext", openFeatureContextMenuForTabulatorRow);', js)
+        self.assertIn('ebmGainSummaryTable.on("rowContext", openEbmGainContextMenuForTabulatorRow);', js)
+        self.assertIn("function openGbmFeatureContextMenu(event, context)", js)
+        self.assertIn("function gbmFeatureContextActions(context = {})", js)
+        self.assertIn("canNavigateToLineBarFeature,", js)
+        self.assertIn("navigateToLineBarFeature,", js)
+        self.assertIn("function canNavigateToLineBarFeature(featureName)", js)
+        self.assertIn("function navigateToLineBarFeature(featureName)", js)
+        self.assertIn("state.bandFeature = null;", js)
+        self.assertIn('label: "Go to Line and Bar"', js)
+        self.assertIn('label: "Go to SHAP"', js)
+        self.assertIn('label: "Go to Stacked SHAP"', js)
+        self.assertIn("function closeGbmFeatureContextMenu()", js)
+        self.assertIn('data-gbm-ebm-features="${escapeHtml(JSON.stringify(ebmSummaryFeatures(row)))}"', js)
+        self.assertIn("shapTool.preselectFeatures(features[0], features[1] || \"\");", js)
+        self.assertIn("stackedShapTool.preselectFeature(name);", js)
         self.assertIn("function formatMeanAbsShap(value)", js)
         self.assertIn("function formatGainPercent(value)", js)
         self.assertIn("function featureInteractionConstraintDropdownHtml(groupings, activeConstraints = null, features = [])", js)
@@ -664,6 +688,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".gbm-feature-metric-toggle", css)
         self.assertIn(".gbm-feature-metric-option.active", css)
         self.assertIn(".gbm-feature-metric-cell", css)
+        self.assertIn(".gbm-feature-context-menu", css)
+        self.assertIn(".gbm-feature-context-menu-item", css)
         self.assertIn(".gbm-interaction-constraint-select", css)
         self.assertIn(".gbm-interaction-constraint-menu", css)
         self.assertIn(".gbm-interaction-lock", css)
@@ -1850,8 +1876,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".profile-sort-button {", css)
         self.assertIn(".profile-summary-row {\n        cursor: pointer;\n        user-select: none;\n        -webkit-user-select: none;", css)
         self.assertIn(".profile-summary-row.selected td {", css)
-        self.assertIn(".profile-context-menu {", css)
-        self.assertIn(".profile-context-menu-item {", css)
+        self.assertIn(".profile-context-menu,\n      .gbm-feature-context-menu {", css)
+        self.assertIn(".profile-context-menu-item,\n      .gbm-feature-context-menu-item {", css)
         self.assertIn(".clipboard-toast {\n        position: fixed;", css)
         self.assertIn(".clipboard-toast[hidden] {\n        display: none;", css)
         self.assertIn(".gbm-model-grid .tabulator-row,\n      .gbm-tree-summary-grid .tabulator-row,\n      .gbm-model-table tr[data-gbm-model-row],\n      .gbm-tree-fallback-table tr[data-gbm-tree-row] {\n        cursor: pointer;\n        user-select: none;\n        -webkit-user-select: none;", css)

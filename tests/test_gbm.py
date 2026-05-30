@@ -2242,8 +2242,8 @@ COPY (
         self.assertEqual(
             payload["rows"],
             [
-                {"tree_features": "Age x Segment", "dim": 2, "trees": 2, "gain": 25.0, "gain_percent": 25.0 / 45.0 * 100.0},
-                {"tree_features": "NCD", "dim": 1, "trees": 1, "gain": 20.0, "gain_percent": 20.0 / 45.0 * 100.0},
+                {"tree_features": "Age x Segment", "features": ["Age", "Segment"], "dim": 2, "trees": 2, "gain": 25.0, "gain_percent": 25.0 / 45.0 * 100.0},
+                {"tree_features": "NCD", "features": ["NCD"], "dim": 1, "trees": 1, "gain": 20.0, "gain_percent": 20.0 / 45.0 * 100.0},
             ],
         )
 

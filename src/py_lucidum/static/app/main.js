@@ -241,6 +241,8 @@
         setToolTimingFailed,
         startToolTiming,
         state,
+        canNavigateToLineBarFeature,
+        navigateToLineBarFeature,
         syncClientTimingFromData,
         syncDuckDbTimingFromData,
         toolCache,
@@ -489,12 +491,60 @@
       }
 
       function currentDataSource() {
-        const sources = state.schema?.data_sources || [];
-        return sources.find((source) => source.id === (state.source || "dataset")) || sources.find((source) => source.id === "dataset") || null;
+        return dataSourceForId(state.source || "dataset") || dataSourceForId("dataset");
       }
 
       function sourceColumns() {
         return currentDataSource()?.columns || state.schema?.columns || [];
+      }
+
+      function dataSourceForId(sourceId) {
+        const id = String(sourceId || "dataset");
+        const sources = state.schema?.data_sources || [];
+        const source = sources.find((item) => item.id === id);
+        if (source) return source;
+        return id === "dataset" ? { id: "dataset", columns: state.schema?.columns || [] } : null;
+      }
+
+      function dataSourceColumns(sourceId) {
+        return dataSourceForId(sourceId)?.columns || [];
+      }
+
+      function dataSourceHasColumn(sourceId, columnName) {
+        const name = String(columnName || "");
+        return Boolean(name && dataSourceColumns(sourceId).some((column) => column.name === name));
+      }
+
+      function lineBarFeatureTargetSource(featureName) {
+        if (!lineBarToolAvailable()) return "";
+        const name = String(featureName || "");
+        if (!name) return "";
+        const currentSource = state.source || "dataset";
+        if (dataSourceHasColumn(currentSource, name)) return currentSource;
+        return "dataset";
+      }
+
+      function lineBarToolAvailable() {
+        if (toolEnabled("line_bar")) return true;
+        const button = el("lineBarTool");
+        return Boolean(button && !button.disabled && !button.classList.contains("hidden"));
+      }
+
+      function canNavigateToLineBarFeature(featureName) {
+        return Boolean(lineBarFeatureTargetSource(featureName));
+      }
+
+      function navigateToLineBarFeature(featureName) {
+        const name = String(featureName || "");
+        const targetSource = lineBarFeatureTargetSource(name);
+        if (!targetSource) return false;
+        state.source = targetSource;
+        state.x = name;
+        state.bandFeature = null;
+        renderFeatures();
+        updateAxisControls();
+        setTool("line_bar");
+        return state.tool === "line_bar";
       }
 
       function isModelPredictionColumn(column) {

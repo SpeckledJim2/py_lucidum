@@ -499,6 +499,7 @@ def ebm_gain_summary_row(features: tuple[str, ...], trees: int, gain: float, tot
     percent = gain_value / total_gain * 100 if total_gain > 0 else 0.0
     return {
         "tree_features": " x ".join(features),
+        "features": list(features),
         "dim": len(features),
         "trees": int(trees),
         "gain": round(gain_value, 3),

@@ -147,6 +147,14 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     refreshPlot();
   }
 
+  function preselectFeature(value) {
+    const nextFeature = String(value || "");
+    if (!nextFeature) return;
+    const changed = state.modelFeature !== nextFeature;
+    state.modelFeature = nextFeature;
+    if (changed) state.banding = defaultBanding(selectedFeature());
+  }
+
   function setBanding(value) {
     state.banding = normaliseBanding(value, selectedFeature());
     renderControls();
@@ -232,7 +240,6 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     const names = new Set(features().map((feature) => feature.name));
     if (modelId !== lastModelId) {
       lastModelId = modelId;
-      state.modelFeature = "";
       state.featureSort = "importance";
       state.xSort = "alpha";
       state.tailPercent = 0;
@@ -454,6 +461,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
 
   return {
     dispose,
+    preselectFeature,
     refreshTheme,
     render,
     shellHtml,

@@ -109,6 +109,8 @@ export function createGbmTool({
   setToolTimingFailed,
   startToolTiming,
   state,
+  canNavigateToLineBarFeature,
+  navigateToLineBarFeature,
   syncClientTimingFromData,
   syncDuckDbTimingFromData,
   toolCache,
@@ -199,6 +201,7 @@ export function createGbmTool({
     setChartMessage("");
     const mount = el("modelToolWrap");
     if (!mount) return;
+    closeGbmFeatureContextMenu();
     disposeEvaluationChart();
     treeViewer.dispose();
     shapTool.dispose();
@@ -465,6 +468,7 @@ export function createGbmTool({
   function bindTabs(mount) {
     for (const button of mount.querySelectorAll("[data-gbm-tab]")) {
       button.addEventListener("click", () => {
+        closeGbmFeatureContextMenu();
         activeTab = button.dataset.gbmTab;
         render(config || {});
       });
@@ -1327,6 +1331,7 @@ export function createGbmTool({
           element.classList.toggle("gbm-feature-warning", isFeatureSelectable(data) && Boolean(data.high_cardinality));
         },
       });
+      featureTable.on("rowContext", openFeatureContextMenuForTabulatorRow);
       ebmGainSummaryTable = new Tabulator("#gbmEbmGainSummaryGrid", {
         data: cachedEbmGainSummaryRowsForActiveModel(),
         height: "100%",
@@ -1335,6 +1340,7 @@ export function createGbmTool({
         initialSort: [{ column: "gain", dir: "desc" }],
         columns: ebmGainSummaryColumns(),
       });
+      ebmGainSummaryTable.on("rowContext", openEbmGainContextMenuForTabulatorRow);
       parameterTable = new Tabulator("#gbmParameterGrid", {
         data: parameters,
         height: "100%",
@@ -1525,7 +1531,7 @@ export function createGbmTool({
         <thead><tr><th>Feature</th><th>Grouping</th><th>Use</th><th>Monotonicity</th><th>${metricTitle}</th></tr></thead>
         <tbody>
           ${sortedFeatureRowsForMetric(features).map((feature) => `
-            <tr class="${featureRowClasses(feature)}">
+            <tr class="${featureRowClasses(feature)}" data-gbm-feature-row data-gbm-feature-name="${escapeHtml(feature.name)}">
               <td>${featureNameHtml(feature)}</td>
               <td>${groupingHtml(feature)}</td>
               <td class="gbm-use-cell">${isFeatureSelectable(feature) ? `<input type="checkbox" data-gbm-feature="${escapeHtml(feature.name)}" ${feature.include ? "checked" : ""} />` : ""}</td>
@@ -1542,6 +1548,9 @@ export function createGbmTool({
         syncFeatureSectionTitle();
         syncFeatureInteractionControls();
       });
+    }
+    for (const row of target.querySelectorAll("[data-gbm-feature-row]")) {
+      row.addEventListener("contextmenu", openFeatureContextMenuForFallbackRow);
     }
     syncFeatureSectionTitle();
   }
@@ -1563,7 +1572,7 @@ export function createGbmTool({
         <thead><tr><th>Tree features</th><th>Dim</th><th>Trees</th><th>Gain</th><th>% Gain</th></tr></thead>
         <tbody>
           ${summaryRows.map((row) => `
-            <tr>
+            <tr data-gbm-ebm-gain-row data-gbm-ebm-features="${escapeHtml(JSON.stringify(ebmSummaryFeatures(row)))}" data-gbm-ebm-dim="${escapeHtml(row.dim)}">
               <td>${escapeHtml(row.tree_features || "")}</td>
               <td class="numeric">${escapeHtml(formatModelInteger(row.dim))}</td>
               <td class="numeric">${escapeHtml(formatModelInteger(row.trees))}</td>
@@ -1574,6 +1583,221 @@ export function createGbmTool({
         </tbody>
       </table>
     `;
+    for (const row of target.querySelectorAll("[data-gbm-ebm-gain-row]")) {
+      row.addEventListener("contextmenu", openEbmGainContextMenuForFallbackRow);
+    }
+  }
+
+  function openFeatureContextMenuForTabulatorRow(event, row) {
+    const feature = row?.getData?.() || {};
+    openGbmFeatureContextMenu(event, { features: [feature.name] });
+  }
+
+  function openEbmGainContextMenuForTabulatorRow(event, row) {
+    const data = row?.getData?.() || {};
+    openGbmFeatureContextMenu(event, { features: ebmSummaryFeatures(data), ebmDim: data.dim });
+  }
+
+  function openFeatureContextMenuForFallbackRow(event) {
+    openGbmFeatureContextMenu(event, { features: [event.currentTarget?.dataset?.gbmFeatureName || ""] });
+  }
+
+  function openEbmGainContextMenuForFallbackRow(event) {
+    const row = event.currentTarget;
+    openGbmFeatureContextMenu(event, {
+      features: parseFallbackEbmFeatures(row?.dataset?.gbmEbmFeatures || "[]"),
+      ebmDim: row?.dataset?.gbmEbmDim,
+    });
+  }
+
+  function openGbmFeatureContextMenu(event, context) {
+    const actions = gbmFeatureContextActions(context);
+    closeGbmFeatureContextMenu();
+    if (!actions.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = gbmFeatureContextMenu();
+    menu.innerHTML = "";
+    for (const action of actions) {
+      const button = document.createElement("button");
+      button.className = "gbm-feature-context-menu-item";
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      button.textContent = action.label;
+      button.addEventListener("click", () => {
+        closeGbmFeatureContextMenu();
+        action.run();
+      });
+      menu.append(button);
+    }
+    menu.hidden = false;
+    const rowRect = event.currentTarget?.getElement?.()?.getBoundingClientRect?.()
+      || event.currentTarget?.getBoundingClientRect?.()
+      || { left: event.clientX, top: event.clientY, height: 18 };
+    const clientX = event.clientX || rowRect.left + 12;
+    const clientY = event.clientY || rowRect.top + Math.min(18, Math.max(8, rowRect.height / 2));
+    positionGbmFeatureContextMenu(menu, clientX, clientY);
+    menu.querySelector("button")?.focus({ preventScroll: true });
+    window.addEventListener("pointerdown", handleGbmFeatureContextMenuPointerDown, true);
+    window.addEventListener("keydown", handleGbmFeatureContextMenuKeydown, true);
+    window.addEventListener("resize", closeGbmFeatureContextMenu, true);
+    window.addEventListener("scroll", closeGbmFeatureContextMenu, true);
+  }
+
+  function gbmFeatureContextMenu() {
+    let menu = document.getElementById("gbmFeatureContextMenu");
+    if (menu) return menu;
+    menu = document.createElement("div");
+    menu.id = "gbmFeatureContextMenu";
+    menu.className = "gbm-feature-context-menu";
+    menu.hidden = true;
+    menu.setAttribute("role", "menu");
+    document.body.append(menu);
+    return menu;
+  }
+
+  function gbmFeatureContextActions(context = {}) {
+    const names = normaliseContextFeatureNames(context.features);
+    const dim = Number(context.ebmDim || names.length || 0);
+    if (context.ebmDim !== undefined && ![1, 2].includes(dim)) return [];
+    if (dim === 2) {
+      if (names.length !== 2 || !featuresHaveSavedShap(names)) return [];
+      return [{ label: "Go to SHAP", run: () => goToGbmShap(names) }];
+    }
+    if (names.length !== 1) return [];
+    const featureName = names[0];
+    const actions = [];
+    if (canNavigateFeatureToLineBar(featureName)) {
+      actions.push({ label: "Go to Line and Bar", run: () => goToLineBarFeature(featureName) });
+    }
+    if (featuresHaveSavedShap([featureName])) {
+      actions.push({ label: "Go to SHAP", run: () => goToGbmShap([featureName]) });
+      actions.push({ label: "Go to Stacked SHAP", run: () => goToGbmStackedShap(featureName) });
+    }
+    return actions;
+  }
+
+  function normaliseContextFeatureNames(features) {
+    const names = Array.isArray(features) ? features : [features];
+    const seen = new Set();
+    const result = [];
+    for (const value of names) {
+      const name = String(value || "").trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      result.push(name);
+    }
+    return result;
+  }
+
+  function ebmSummaryFeatures(row = {}) {
+    const features = Array.isArray(row.features) ? row.features : [];
+    const names = normaliseContextFeatureNames(features);
+    if (names.length) return names;
+    return normaliseContextFeatureNames(String(row.tree_features || "").split(/\s+x\s+/));
+  }
+
+  function parseFallbackEbmFeatures(value) {
+    try {
+      return normaliseContextFeatureNames(JSON.parse(value));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function featuresHaveSavedShap(names) {
+    return names.length > 0 && names.every((name) => featureMeanAbsShap(featureByName(name)) !== null);
+  }
+
+  function featureByName(name) {
+    return (config?.features || []).find((feature) => feature?.name === name) || null;
+  }
+
+  function canNavigateFeatureToLineBar(name) {
+    return Boolean(lineBarFeatureTargetSource(name));
+  }
+
+  function lineBarFeatureTargetSource(name) {
+    const featureName = String(name || "");
+    if (!featureName || !lineBarToolAvailable()) return "";
+    const currentSource = state.source || "dataset";
+    if (sourceHasFeature(currentSource, featureName)) return currentSource;
+    if (sourceHasFeature("dataset", featureName)) return "dataset";
+    const feature = featureByName(featureName);
+    return feature && !isInvalidFeature(feature) ? "dataset" : "";
+  }
+
+  function lineBarToolAvailable() {
+    if ((state.schema?.tools || []).some((item) => item?.id === "line_bar")) return true;
+    const button = document.getElementById("lineBarTool");
+    return Boolean(button && !button.disabled && !button.classList.contains("hidden"));
+  }
+
+  function sourceHasFeature(sourceId, featureName) {
+    const source = dataSourceById(sourceId);
+    return Boolean(source?.columns?.some((column) => column?.name === featureName));
+  }
+
+  function dataSourceById(sourceId) {
+    const id = String(sourceId || "dataset");
+    const sources = state.schema?.data_sources || [];
+    const source = sources.find((item) => item?.id === id);
+    if (source) return source;
+    return id === "dataset" ? { columns: state.schema?.columns || [] } : null;
+  }
+
+  function goToLineBarFeature(name) {
+    if (typeof navigateToLineBarFeature === "function" && navigateToLineBarFeature(name)) return;
+    setGbmNotice(`Feature ${name} is not available in Line and Bar`);
+  }
+
+  function goToGbmShap(names) {
+    const features = normaliseContextFeatureNames(names);
+    if (!features.length) return;
+    shapTool.preselectFeatures(features[0], features[1] || "");
+    activeTab = "shap";
+    render(config || {});
+  }
+
+  function goToGbmStackedShap(name) {
+    if (!name) return;
+    stackedShapTool.preselectFeature(name);
+    activeTab = "stacked-shap";
+    render(config || {});
+  }
+
+  function positionGbmFeatureContextMenu(menu, clientX, clientY) {
+    const margin = 8;
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const rect = menu.getBoundingClientRect();
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    const left = Math.min(Math.max(margin, clientX), maxLeft);
+    const top = Math.min(Math.max(margin, clientY), maxTop);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+
+  function handleGbmFeatureContextMenuPointerDown(event) {
+    const menu = document.getElementById("gbmFeatureContextMenu");
+    if (!menu || menu.hidden || menu.contains(event.target)) return;
+    closeGbmFeatureContextMenu();
+  }
+
+  function handleGbmFeatureContextMenuKeydown(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeGbmFeatureContextMenu();
+  }
+
+  function closeGbmFeatureContextMenu() {
+    const menu = document.getElementById("gbmFeatureContextMenu");
+    if (menu) menu.hidden = true;
+    window.removeEventListener("pointerdown", handleGbmFeatureContextMenuPointerDown, true);
+    window.removeEventListener("keydown", handleGbmFeatureContextMenuKeydown, true);
+    window.removeEventListener("resize", closeGbmFeatureContextMenu, true);
+    window.removeEventListener("scroll", closeGbmFeatureContextMenu, true);
   }
 
   function sortedFeatureRowsForMetric(features = []) {
