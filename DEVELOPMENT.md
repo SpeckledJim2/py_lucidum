@@ -20,7 +20,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
 - `py_lucidum.tools.glm` registers a lightweight shell route for future modelling work.
 - `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM training, validation, persistence, tree summary/detail, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
-- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, `src/py_lucidum/static/app/model-tool-shell.js` owns remaining modelling shell UI, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
+- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, `src/py_lucidum/static/app/model-tool-shell.js` owns remaining modelling shell UI, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
 - Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/` and lazy-loaded by the tools that need them. GBM currently uses Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
 
 Tool code should depend on `core` and the app registration context, but tools should not depend on each other. Shared behavior should move into `core` or another shared module only when there is real reuse.
@@ -199,6 +199,7 @@ node --check src/py_lucidum/static/app.js
 node --check src/py_lucidum/static/app/main.js
 node --check src/py_lucidum/static/app/column-profile-tool.js
 node --check src/py_lucidum/static/app/line-bar-tool.js
+node --check src/py_lucidum/static/app/uk-map-tool.js
 node --check src/py_lucidum/static/app/shared/api.js
 node --check src/py_lucidum/static/app/shared/format.js
 node --check src/py_lucidum/static/app/shared/schema.js

@@ -66,6 +66,7 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/main.js",
             "/static/app/column-profile-tool.js",
             "/static/app/line-bar-tool.js",
+            "/static/app/uk-map-tool.js",
             "/static/app/shared/api.js",
             "/static/app/shared/format.js",
             "/static/app/shared/schema.js",
@@ -384,6 +385,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/main.js")
         self.assert_no_store("/static/app/column-profile-tool.js")
         self.assert_no_store("/static/app/line-bar-tool.js")
+        self.assert_no_store("/static/app/uk-map-tool.js")
         self.assert_no_store("/static/app/shared/api.js")
         self.assert_no_store("/static/app/shared/format.js")
         self.assert_no_store("/static/app/shared/schema.js")
@@ -1315,7 +1317,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("const previousFilterSignature = savedFilterSpecSignature();", js)
         self.assertIn("const previousSidebarVisible = state.sidebarVisible;", js)
         self.assertIn("const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);", js)
-        self.assertIn('if (state.tool === "uk_map") captureMapView("reload");', js)
+        self.assertIn('if (state.tool === "uk_map") ukMapTool.captureView("reload");', js)
         self.assertIn("if (filtersUnchanged) restoreSavedFilterSelection(previousSavedFilterSelection);", js)
         self.assertIn("setSidebarVisible(previousSidebarVisible);", js)
         self.assertIn("function combinedGroupedSavedFilterExpression(rows)", js)
@@ -1739,6 +1741,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         css = css_body.decode("utf-8")
         js = self.app_js_contract()
 
+        self.assertIn('import { createUkMapTool } from "./uk-map-tool.js";', js)
+        self.assertIn("export function createUkMapTool", js)
+        self.assertIn("ukMapTool.bindControls();", js)
+        self.assertIn("ukMapTool.activate();", js)
         self.assertIn("<span>Line</span>", html)
         self.assertIn("<span>Opacity</span>", html)
         self.assertIn("<span>Extremes</span>", html)
@@ -2078,7 +2084,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('function scheduleMapViewportSync({ mode = "preserve" } = {})', js)
         self.assertIn("mapResizeObserver = new ResizeObserver", js)
         self.assertIn('scheduleMapViewportSync({ mode: "preserve" });', js)
-        self.assertIn('captureMapView("tool-switch")', js)
+        self.assertIn('ukMapTool.captureView("tool-switch")', js)
         self.assertIn('captureMapView("map-level-change")', js)
         self.assertIn("zoomSnap: 0.25", js)
         self.assertIn("zoomDelta: 0.5", js)
