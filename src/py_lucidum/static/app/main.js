@@ -1,5 +1,19 @@
       import { createGbmTool } from "./gbm-tool.js";
       import { createModelToolShell } from "./model-tool-shell.js";
+      import { createApiClient, monitorPath } from "./shared/api.js";
+      import { createFormatters, escapeHtml } from "./shared/format.js";
+      import {
+        currentDataSource as schemaCurrentDataSource,
+        dataSourceColumns as schemaDataSourceColumns,
+        dataSourceForId as schemaDataSourceForId,
+        dataSourceHasColumn as schemaDataSourceHasColumn,
+        isModelPredictionColumn,
+        isModelTool,
+        preferredStartupSource as schemaPreferredStartupSource,
+        sourceColumns as schemaSourceColumns,
+        toolEnabled as schemaToolEnabled,
+      } from "./shared/schema.js";
+      import { createActionTimingController, freshActionTimings } from "./shared/timing.js";
 
       function paramsFromLocation() {
         const standardParams = new URLSearchParams(location.search);
@@ -204,6 +218,32 @@
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
       const el = (id) => document.getElementById(id);
+      const api = createApiClient({ token });
+      const {
+        formatNumber,
+        formatChartLabel,
+        formatLineLabel,
+        formatLineValue,
+        formatWeightValue,
+        formatFileSize,
+        formatXLabel,
+        formatRowMeta,
+      } = createFormatters({ getActiveKpiFormat: () => state.activeKpiFormat });
+      const {
+        syncActionTimingMonitor,
+        startToolTiming,
+        setDuckDbTiming,
+        setToolTimingFailed,
+        setRenderTiming,
+        measureToolRender,
+        syncDuckDbTimingFromData,
+        setClientTiming,
+        syncClientTimingFromData,
+      } = createActionTimingController({
+        state,
+        el,
+        renderLabels: ACTION_RENDER_LABELS,
+      });
       const modelToolShell = createModelToolShell({
         api,
         el,
@@ -268,51 +308,12 @@
       });
 
       function monitorUrl() {
-        const url = new URL("/monitor", location.href);
-        if (token) url.searchParams.set("token", token);
-        return `${url.pathname}${url.search}`;
+        return monitorPath({ token, href: location.href });
       }
 
       function syncMonitorLink() {
         const link = el("monitorLink");
         if (link) link.href = monitorUrl();
-      }
-
-      async function api(path, options = {}) {
-        const { clientTiming = false, ...fetchOptions } = options;
-        const started = performance.now();
-        const response = await fetch(path, {
-          ...fetchOptions,
-          headers: {
-            "Content-Type": "application/json",
-            "x-lucidum-token": token,
-            ...(fetchOptions.headers || {}),
-          },
-        });
-        const responseReady = performance.now();
-        const text = await response.text();
-        const bodyReady = performance.now();
-        if (!response.ok) {
-          let message = text;
-          try {
-            message = JSON.parse(text).detail || text;
-          } catch (_) {
-          }
-          throw new Error(message);
-        }
-        const parseStarted = performance.now();
-        const data = JSON.parse(text);
-        const parsed = performance.now();
-        if (clientTiming && data && typeof data === "object") {
-          data.client_timings = {
-            response_ms: responseReady - started,
-            body_ms: bodyReady - responseReady,
-            parse_ms: parsed - parseStarted,
-            data_ms: parsed - responseReady,
-            total_ms: parsed - started,
-          };
-        }
-        return data;
       }
 
       function startServerHeartbeat() {
@@ -457,16 +458,6 @@
         el("mapControlFilter").textContent = label;
       }
 
-      function formatRowMeta(rowCount, filteredRowCount = rowCount) {
-        const total = Number(rowCount);
-        if (!Number.isFinite(total)) return "";
-        const filtered = Number(filteredRowCount ?? total);
-        const shown = Number.isFinite(filtered) ? filtered : total;
-        return shown === total
-          ? `${total.toLocaleString()} rows`
-          : `${shown.toLocaleString()} / ${total.toLocaleString()} rows`;
-      }
-
       function setFilterRowMeta(rowCount, filteredRowCount = rowCount) {
         const meta = formatRowMeta(rowCount, filteredRowCount);
         if (meta) el("filterRowMeta").textContent = meta;
@@ -491,28 +482,23 @@
       }
 
       function currentDataSource() {
-        return dataSourceForId(state.source || "dataset") || dataSourceForId("dataset");
+        return schemaCurrentDataSource(state.schema, state.source || "dataset");
       }
 
       function sourceColumns() {
-        return currentDataSource()?.columns || state.schema?.columns || [];
+        return schemaSourceColumns(state.schema, state.source || "dataset");
       }
 
       function dataSourceForId(sourceId) {
-        const id = String(sourceId || "dataset");
-        const sources = state.schema?.data_sources || [];
-        const source = sources.find((item) => item.id === id);
-        if (source) return source;
-        return id === "dataset" ? { id: "dataset", columns: state.schema?.columns || [] } : null;
+        return schemaDataSourceForId(state.schema, sourceId);
       }
 
       function dataSourceColumns(sourceId) {
-        return dataSourceForId(sourceId)?.columns || [];
+        return schemaDataSourceColumns(state.schema, sourceId);
       }
 
       function dataSourceHasColumn(sourceId, columnName) {
-        const name = String(columnName || "");
-        return Boolean(name && dataSourceColumns(sourceId).some((column) => column.name === name));
+        return schemaDataSourceHasColumn(state.schema, sourceId, columnName);
       }
 
       function lineBarFeatureTargetSource(featureName) {
@@ -547,10 +533,6 @@
         return state.tool === "line_bar";
       }
 
-      function isModelPredictionColumn(column) {
-        return ["gbm_prediction", "glm_prediction"].includes(String(column?.name || ""));
-      }
-
       function expectedDisplayColumns() {
         const columns = [...numericColumns()];
         if (state.expectedSort === "alpha") {
@@ -562,19 +544,11 @@
       }
 
       function preferredStartupSource(availableSources, requestedSource) {
-        if (availableSources.some((source) => source.id === requestedSource)) return requestedSource;
-        const activePredictionSource = availableSources.find((source) => source.kind === "gbm_predictions" && source.active);
-        if (activePredictionSource) return activePredictionSource.id;
-        const predictionSource = availableSources.find((source) => source.kind === "gbm_predictions");
-        return predictionSource?.id || "dataset";
+        return schemaPreferredStartupSource(availableSources, requestedSource);
       }
 
       function toolEnabled(id) {
-        return Boolean((state.schema?.tools || []).some((tool) => tool.id === id));
-      }
-
-      function isModelTool(tool) {
-        return tool === "glm" || tool === "gbm";
+        return schemaToolEnabled(state.schema, id);
       }
 
       function freshProfileCache() {
@@ -588,31 +562,6 @@
           uk_map: { requestKey: null, data: null, presentation: null },
           glm: { requestKey: null, data: null, presentation: null },
           gbm: { requestKey: null, data: null, presentation: null },
-        };
-      }
-
-      function freshActionTimings() {
-        return {
-          column_profile: freshActionTiming(),
-          line_bar: freshActionTiming(),
-          uk_map: freshActionTiming(),
-          glm: freshActionTiming(),
-          gbm: freshActionTiming(),
-        };
-      }
-
-      function freshActionTiming() {
-        return {
-          duckdbNs: null,
-          duckdbMs: null,
-          duckdbStatus: "idle",
-          clientResponseMs: null,
-          clientBodyMs: null,
-          clientParseMs: null,
-          clientDataMs: null,
-          clientTotalMs: null,
-          renderNs: null,
-          renderStatus: "idle",
         };
       }
 
@@ -654,180 +603,6 @@
           state.toolCache[tool].details = new Map();
         }
         return state.toolCache[tool];
-      }
-
-      function actionTiming(tool) {
-        if (!state.actionTimings[tool]) {
-          state.actionTimings[tool] = freshActionTiming();
-        }
-        return state.actionTimings[tool];
-      }
-
-      function formatDurationNumber(value) {
-        const number = Number(value);
-        if (!Number.isFinite(number)) return "";
-        return String(Math.round(number));
-      }
-
-      function roundedTimingMilliseconds(valueMs) {
-        const number = Number(valueMs);
-        return Number.isFinite(number) ? Math.max(0, Math.round(number)) : null;
-      }
-
-      function formatActionTimingValue(valueNs, status = "idle") {
-        if (status === "running") return "running";
-        if (status === "failed") return "failed";
-        if (valueNs === null || valueNs === undefined) return "--";
-        const ns = Number(valueNs);
-        if (!Number.isFinite(ns)) return "--";
-        const roundedNs = Math.max(0, Math.round(ns));
-        if (roundedNs < 1000) return `${roundedNs}ns`;
-        if (roundedNs < 1_000_000) return `${formatDurationNumber(roundedNs / 1000)}us`;
-        return `${formatDurationNumber(roundedNs / 1_000_000)}ms`;
-      }
-
-      function formatDuckDbTimingValue(timing) {
-        if (timing.duckdbStatus === "running") return "running";
-        if (timing.duckdbStatus === "failed") return "failed";
-        const duckdbNs = Number(timing.duckdbNs);
-        if (Number.isFinite(duckdbNs)) return formatActionTimingValue(duckdbNs);
-        const duckdbMs = Number(timing.duckdbMs);
-        return Number.isFinite(duckdbMs) ? `${formatDurationNumber(Math.max(0, duckdbMs))}ms` : "--";
-      }
-
-      function duckDbTimingMilliseconds(timing) {
-        const duckdbNs = Number(timing.duckdbNs);
-        if (Number.isFinite(duckdbNs)) return roundedTimingMilliseconds(duckdbNs / 1_000_000);
-        const duckdbMs = Number(timing.duckdbMs);
-        return roundedTimingMilliseconds(duckdbMs);
-      }
-
-      function formatRenderTimingValue(timing) {
-        if (timing.renderStatus === "rendering") return "rendering...";
-        return formatActionTimingValue(timing.renderNs);
-      }
-
-      function renderTimingMilliseconds(timing) {
-        if (timing.renderStatus === "rendering") return null;
-        const renderNs = Number(timing.renderNs);
-        return Number.isFinite(renderNs) ? roundedTimingMilliseconds(renderNs / 1_000_000) : null;
-      }
-
-      function formatClientTimingValue(timing) {
-        if (timing.duckdbStatus === "running") return "--";
-        if (timing.duckdbStatus === "failed") return "--";
-        const valueMs = timing.clientDataMs;
-        const number = Number(valueMs);
-        return Number.isFinite(number) ? `${formatDurationNumber(Math.max(0, number))}ms` : "--";
-      }
-
-      function formatTotalTimingValue(timing) {
-        if (timing.duckdbStatus === "running") return "--";
-        if (timing.duckdbStatus === "failed") return "failed";
-        const duckdbMs = duckDbTimingMilliseconds(timing);
-        const jsonMs = roundedTimingMilliseconds(timing.clientDataMs);
-        const renderMs = renderTimingMilliseconds(timing);
-        if (duckdbMs === null || jsonMs === null || renderMs === null) return "--";
-        return `${formatDurationNumber(duckdbMs + jsonMs + renderMs)}ms`;
-      }
-
-      function syncActionTimingMonitor(tool = state.tool) {
-        const timing = actionTiming(tool);
-        const renderLabel = ACTION_RENDER_LABELS[tool] || "Render";
-        el("actionTimingMonitor").textContent = `DuckDB: ${formatDuckDbTimingValue(timing)}, JSON: ${formatClientTimingValue(timing)}, ${renderLabel}: ${formatRenderTimingValue(timing)}, Total: ${formatTotalTimingValue(timing)}`;
-      }
-
-      function startToolTiming(tool) {
-        const timing = actionTiming(tool);
-        timing.duckdbNs = null;
-        timing.duckdbMs = null;
-        timing.duckdbStatus = "running";
-        timing.clientResponseMs = null;
-        timing.clientBodyMs = null;
-        timing.clientParseMs = null;
-        timing.clientDataMs = null;
-        timing.clientTotalMs = null;
-        timing.renderNs = null;
-        timing.renderStatus = "idle";
-        if (state.tool === tool) syncActionTimingMonitor(tool);
-      }
-
-      function setDuckDbTiming(tool, timings = {}) {
-        const timing = actionTiming(tool);
-        const duckdbNs = Number(timings.duckdb_ns);
-        const duckdbMs = Number(timings.duckdb_ms);
-        timing.duckdbNs = Number.isFinite(duckdbNs) ? Math.max(0, Math.round(duckdbNs)) : null;
-        timing.duckdbMs = timing.duckdbNs === null && Number.isFinite(duckdbMs) ? Math.max(0, duckdbMs) : null;
-        timing.duckdbStatus = "idle";
-        if (state.tool === tool) syncActionTimingMonitor(tool);
-      }
-
-      function setToolTimingFailed(tool) {
-        const timing = actionTiming(tool);
-        timing.duckdbNs = null;
-        timing.duckdbMs = null;
-        timing.duckdbStatus = "failed";
-        timing.clientResponseMs = null;
-        timing.clientBodyMs = null;
-        timing.clientParseMs = null;
-        timing.clientDataMs = null;
-        timing.clientTotalMs = null;
-        timing.renderNs = null;
-        timing.renderStatus = "idle";
-        if (state.tool === tool) syncActionTimingMonitor(tool);
-      }
-
-      function setRenderTimingRunning(tool) {
-        const timing = actionTiming(tool);
-        timing.renderNs = null;
-        timing.renderStatus = "rendering";
-        if (state.tool === tool) syncActionTimingMonitor(tool);
-      }
-
-      function setRenderTiming(tool, valueMs) {
-        const timing = actionTiming(tool);
-        const number = Number(valueMs);
-        timing.renderNs = Number.isFinite(number) ? Math.max(0, Math.round(number * 1_000_000)) : null;
-        timing.renderStatus = "idle";
-        if (state.tool === tool) syncActionTimingMonitor(tool);
-      }
-
-      function measureToolRender(tool, renderCallback) {
-        const started = performance.now();
-        setRenderTimingRunning(tool);
-        try {
-          const result = renderCallback();
-          requestAnimationFrame(() => {
-            setRenderTiming(tool, performance.now() - started);
-          });
-          return result;
-        } catch (error) {
-          setRenderTiming(tool, null);
-          throw error;
-        }
-      }
-
-      function syncDuckDbTimingFromData(tool, data) {
-        setDuckDbTiming(tool, data?.timings || {});
-      }
-
-      function setClientTiming(tool, timings = {}) {
-        const timing = actionTiming(tool);
-        const responseMs = Number(timings.response_ms);
-        const bodyMs = Number(timings.body_ms);
-        const parseMs = Number(timings.parse_ms);
-        const dataMs = Number(timings.data_ms);
-        const totalMs = Number(timings.total_ms);
-        timing.clientResponseMs = Number.isFinite(responseMs) ? Math.max(0, responseMs) : null;
-        timing.clientBodyMs = Number.isFinite(bodyMs) ? Math.max(0, bodyMs) : null;
-        timing.clientParseMs = Number.isFinite(parseMs) ? Math.max(0, parseMs) : null;
-        timing.clientDataMs = Number.isFinite(dataMs) ? Math.max(0, dataMs) : null;
-        timing.clientTotalMs = Number.isFinite(totalMs) ? Math.max(0, totalMs) : null;
-        if (state.tool === tool) syncActionTimingMonitor(tool);
-      }
-
-      function syncClientTimingFromData(tool, data) {
-        setClientTiming(tool, data?.client_timings || {});
       }
 
       function normaliseForRequestKey(value) {
@@ -5219,110 +4994,6 @@
             searchMapPostcode();
           }
         });
-      }
-
-      function escapeHtml(value) {
-        return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
-      }
-
-      function formatNumber(value) {
-        if (value === null || value === undefined || Number.isNaN(value)) return "";
-        const number = Number(value);
-        if (!Number.isFinite(number)) return "";
-        const abs = Math.abs(number);
-        let maximumFractionDigits = 0;
-        if (abs !== 0 && abs < 0.01) maximumFractionDigits = 6;
-        else if (abs < 1) maximumFractionDigits = 4;
-        else if (abs < 10) maximumFractionDigits = 3;
-        else if (abs < 1000) maximumFractionDigits = 2;
-        else maximumFractionDigits = 1;
-        return number.toLocaleString(undefined, {
-          minimumFractionDigits: 0,
-          maximumFractionDigits,
-        });
-      }
-
-      function formatChartLabel(params) {
-        const value = Array.isArray(params.value) ? params.value[1] : params.value;
-        return formatNumber(value);
-      }
-
-      function formatLineLabel(params) {
-        const value = Array.isArray(params.value) ? params.value[1] : params.value;
-        return formatLineValue(value);
-      }
-
-      function formatLineValue(value) {
-        if (value === null || value === undefined || Number.isNaN(value)) return "";
-        const number = Number(value);
-        if (!Number.isFinite(number)) return "";
-        if (state.activeKpiFormat) {
-          const decimals = Number(state.activeKpiFormat.decimals);
-          const fractionDigits = Number.isInteger(decimals) ? Math.max(0, Math.min(12, decimals)) : 2;
-          const displayNumber = state.activeKpiFormat.format === "percent" ? number * 100 : number;
-          const formatted = Math.abs(displayNumber).toLocaleString(undefined, {
-            minimumFractionDigits: fractionDigits,
-            maximumFractionDigits: fractionDigits,
-          });
-          const sign = displayNumber < 0 ? "-" : "";
-          if (state.activeKpiFormat.format === "currency") return `${sign}£${formatted}`;
-          const signed = `${sign}${formatted}`;
-          if (state.activeKpiFormat.format === "percent") return `${signed}%`;
-          return signed;
-        }
-        const abs = Math.abs(number);
-        let fractionDigits = 2;
-        if (abs !== 0 && abs < 0.01) fractionDigits = 6;
-        else if (abs < 1) fractionDigits = 4;
-        return number.toLocaleString(undefined, {
-          minimumFractionDigits: fractionDigits,
-          maximumFractionDigits: fractionDigits,
-        });
-      }
-
-      function formatWeightValue(value) {
-        if (value === null || value === undefined || Number.isNaN(value)) return "";
-        const number = Number(value);
-        if (!Number.isFinite(number)) return "";
-        const abs = Math.abs(number);
-        if (abs >= 10 || Number.isInteger(number)) {
-          return number.toLocaleString(undefined, {
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 0,
-          });
-        }
-        return formatNumber(number);
-      }
-
-      function formatFileSize(value) {
-        const bytes = Number(value);
-        if (!Number.isFinite(bytes) || bytes < 0) return "";
-        let divisor = 1024;
-        let suffix = "Kb";
-        if (bytes >= 1024 ** 3) {
-          divisor = 1024 ** 3;
-          suffix = "Gb";
-        } else if (bytes >= 1024 ** 2) {
-          divisor = 1024 ** 2;
-          suffix = "Mb";
-        }
-        const size = bytes / divisor;
-        return `${(bytes > 0 ? Math.max(0.1, size) : 0).toFixed(1)}${suffix}`;
-      }
-
-      function formatXLabel(value, kind) {
-        if (kind === "numeric") return formatNumericXLabel(value);
-        if (kind !== "integer") return String(value);
-        const number = Number(value);
-        if (!Number.isFinite(number) || !Number.isInteger(number)) return String(value);
-        return number.toLocaleString(undefined, { maximumFractionDigits: 0 });
-      }
-
-      function formatNumericXLabel(value) {
-        const text = String(value);
-        const number = Number(text);
-        if (!Number.isFinite(number)) return text;
-        return number.toLocaleString(undefined, { maximumFractionDigits: 12 });
       }
 
       function getCss(name) {

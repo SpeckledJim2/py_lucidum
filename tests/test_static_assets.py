@@ -64,6 +64,10 @@ class StaticAssetTests(unittest.TestCase):
         module_paths = [
             "/static/app.js",
             "/static/app/main.js",
+            "/static/app/shared/api.js",
+            "/static/app/shared/format.js",
+            "/static/app/shared/schema.js",
+            "/static/app/shared/timing.js",
             "/static/app/gbm-tool.js",
             "/static/app/gbm-shap-tool.js",
             "/static/app/gbm-shap-chart.js",
@@ -107,6 +111,76 @@ class StaticAssetTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_shared_format_helpers_are_importable(self) -> None:
+        module = Path("src/py_lucidum/static/app/shared/format.js").resolve().as_uri()
+        script = f"""
+import {{ createFormatters, escapeHtml }} from "{module}";
+const state = {{ activeKpiFormat: null }};
+const formatters = createFormatters({{ getActiveKpiFormat: () => state.activeKpiFormat }});
+if (escapeHtml("<a&b>") !== "&lt;a&amp;b&gt;") throw new Error("escapeHtml failed");
+if (formatters.formatFileSize(1536) !== "1.5Kb") throw new Error("formatFileSize failed");
+if (formatters.formatRowMeta(100, 25) !== "25 / 100 rows") throw new Error("formatRowMeta failed");
+if (formatters.formatXLabel(1234, "integer") !== "1,234") throw new Error("formatXLabel failed");
+state.activeKpiFormat = {{ decimals: 1, format: "percent" }};
+if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percent formatting failed");
+"""
+        self.run_node_script(script)
+
+    def test_shared_schema_helpers_are_importable(self) -> None:
+        module = Path("src/py_lucidum/static/app/shared/schema.js").resolve().as_uri()
+        script = f"""
+import {{
+  dataSourceForId,
+  dataSourceHasColumn,
+  isModelPredictionColumn,
+  isModelTool,
+  preferredStartupSource,
+  sourceColumns,
+  toolEnabled,
+}} from "{module}";
+const schema = {{
+  columns: [{{ name: "Actual", kind: "numeric" }}],
+  tools: [{{ id: "line_bar" }}],
+  data_sources: [
+    {{ id: "dataset", columns: [{{ name: "Actual", kind: "numeric" }}] }},
+    {{ id: "gbm:one:predictions", kind: "gbm_predictions", active: true, columns: [{{ name: "gbm_prediction", kind: "numeric" }}] }},
+  ],
+}};
+if (dataSourceForId(schema, "dataset").id !== "dataset") throw new Error("dataSourceForId failed");
+if (!dataSourceHasColumn(schema, "gbm:one:predictions", "gbm_prediction")) throw new Error("dataSourceHasColumn failed");
+if (sourceColumns(schema, "dataset").length !== 1) throw new Error("sourceColumns failed");
+if (!toolEnabled(schema, "line_bar")) throw new Error("toolEnabled failed");
+if (!isModelTool("gbm") || isModelTool("line_bar")) throw new Error("isModelTool failed");
+if (!isModelPredictionColumn({{ name: "gbm_prediction" }})) throw new Error("isModelPredictionColumn failed");
+if (preferredStartupSource(schema.data_sources, "missing") !== "gbm:one:predictions") throw new Error("preferredStartupSource failed");
+"""
+        self.run_node_script(script)
+
+    def test_shared_timing_controller_is_importable(self) -> None:
+        module = Path("src/py_lucidum/static/app/shared/timing.js").resolve().as_uri()
+        script = f"""
+import {{ createActionTimingController, freshActionTimings }} from "{module}";
+const monitor = {{ textContent: "" }};
+const state = {{ tool: "line_bar", actionTimings: freshActionTimings() }};
+const controller = createActionTimingController({{
+  state,
+  el: (id) => {{
+    if (id !== "actionTimingMonitor") throw new Error(`unexpected element ${{id}}`);
+    return monitor;
+  }},
+  renderLabels: {{ line_bar: "Chart render" }},
+  performanceImpl: {{ now: () => 0 }},
+  requestAnimationFrameImpl: (callback) => callback(),
+}});
+controller.startToolTiming("line_bar");
+if (monitor.textContent !== "DuckDB: running, JSON: --, Chart render: --, Total: --") throw new Error(monitor.textContent);
+controller.setDuckDbTiming("line_bar", {{ duckdb_ns: 2000000 }});
+controller.setClientTiming("line_bar", {{ data_ms: 3 }});
+controller.setRenderTiming("line_bar", 12);
+if (monitor.textContent !== "DuckDB: 2ms, JSON: 3ms, Chart render: 12ms, Total: 17ms") throw new Error(monitor.textContent);
+"""
+        self.run_node_script(script)
 
     def test_gbm_shap_selection_helper_maps_active_model_metadata(self) -> None:
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
@@ -306,6 +380,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
     def test_static_app_assets_disable_cache(self) -> None:
         self.assert_no_store("/static/app.js")
         self.assert_no_store("/static/app/main.js")
+        self.assert_no_store("/static/app/shared/api.js")
+        self.assert_no_store("/static/app/shared/format.js")
+        self.assert_no_store("/static/app/shared/schema.js")
+        self.assert_no_store("/static/app/shared/timing.js")
         self.assert_no_store("/static/app/gbm-tool.js")
         self.assert_no_store("/static/app/gbm-shap-tool.js")
         self.assert_no_store("/static/app/gbm-shap-chart.js")
@@ -1344,7 +1422,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("const firstKpi = availableKpis()[0];", js)
         self.assertIn('el("actualNumerator").value = firstKpi.actual;', js)
         self.assertIn('el("denominator").value = firstKpi.denominator;', js)
-        self.assertIn('const displayNumber = state.activeKpiFormat.format === "percent" ? number * 100 : number;', js)
+        self.assertIn('const displayNumber = activeKpiFormat.format === "percent" ? number * 100 : number;', js)
         self.assertIn('const sign = displayNumber < 0 ? "-" : "";', js)
         self.assertIn('el("kpiSelectedMeta").textContent = kpi ? kpi.name : "";', js)
         self.assertIn('if (denominator === "__none__") return "N";', js)
@@ -1428,8 +1506,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('el("filterFooter").setAttribute("aria-hidden", String(state.filterFooterCollapsed));', js)
         self.assertIn("function syncActionTimingMonitor(tool = state.tool)", js)
         self.assertIn('DuckDB: ${formatDuckDbTimingValue(timing)}, JSON: ${formatClientTimingValue(timing)}, ${renderLabel}: ${formatRenderTimingValue(timing)}, Total: ${formatTotalTimingValue(timing)}', js)
-        self.assertIn("const started = performance.now();", js)
-        self.assertIn("requestAnimationFrame(() => {\n            setRenderTiming(tool, performance.now() - started);", js)
+        self.assertIn("const started = performanceImpl.now();", js)
+        self.assertIn("requestAnimationFrameImpl(() => {\n        setRenderTiming(tool, performanceImpl.now() - started);", js)
         self.assertIn("function formatActionTimingValue(valueNs, status = \"idle\")", js)
         self.assertIn('if (valueNs === null || valueNs === undefined) return "--";', js)
         self.assertIn("return String(Math.round(number));", js)
