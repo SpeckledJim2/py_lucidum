@@ -1030,7 +1030,7 @@ COPY (
                 self.assertNotIn("Gain", default_metric_state["headers"])
                 self.assertIn("lat", default_metric_state["firstRowText"])
                 self.assertEqual(default_metric_state["ageShap"], "0.1830")
-                page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option", has_text="Gain").click()
+                page.locator("input[name='gbmFeatureMetric'][value='gain']").check(force=True)
                 page.wait_for_function(
                     """
                     () => {
@@ -1044,6 +1044,32 @@ COPY (
                     timeout=10_000,
                 )
                 assert_feature_heading_matches_checked(2)
+                page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const labels = [...document.querySelectorAll("#gbmFeatureMetricToggle .gbm-feature-metric-option span")]
+                        .map((node) => node.textContent.trim());
+                      return document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Second smoke model")
+                        && document.querySelector("input[name='gbmFeatureMetric']:checked")?.value === "gain"
+                        && labels.join("|") === "EBM Gain|Gain|SHAP";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const labels = [...document.querySelectorAll("#gbmFeatureMetricToggle .gbm-feature-metric-option span")]
+                        .map((node) => node.textContent.trim());
+                      return document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
+                        && document.querySelector("input[name='gbmFeatureMetric']:checked")?.value === "gain"
+                        && labels.join("|") === "Gain|SHAP";
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 initial_scenario = page.evaluate(
                     """
                     () => {
@@ -1774,6 +1800,78 @@ COPY (
                 self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraints (1)")
                 assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
+                ebm_metric_state = page.evaluate(
+                    """
+                    () => ({
+                      checkedMetric: document.querySelector("input[name='gbmFeatureMetric']:checked")?.value || "",
+                      metricLabels: [...document.querySelectorAll("#gbmFeatureMetricToggle .gbm-feature-metric-option span")].map((node) => node.textContent.trim()),
+                    })
+                    """
+                )
+                self.assertEqual(ebm_metric_state["checkedMetric"], "gain")
+                self.assertEqual(ebm_metric_state["metricLabels"], ["EBM Gain", "Gain", "SHAP"])
+                page.locator("input[name='gbmFeatureMetric'][value='gain_ebm']").check(force=True)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#gbmEbmGainSummaryGrid .tabulator-col-title")]
+                        .map((node) => node.textContent.trim()).filter(Boolean);
+                      const firstRow = document.querySelector("#gbmEbmGainSummaryGrid .tabulator-row");
+                      return document.querySelector("input[name='gbmFeatureMetric']:checked")?.value === "gain_ebm"
+                        && document.querySelector("#gbmFeatureGrid")?.classList.contains("hidden")
+                        && !document.querySelector("#gbmEbmGainSummaryGrid")?.classList.contains("hidden")
+                        && ["Tree features", "Dim", "Trees", "Gain", "% Gain"].every((header) => headers.includes(header))
+                        && firstRow?.textContent.includes("Age x Segment")
+                        && firstRow?.textContent.includes("100.0%");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                ebm_summary_alignment = page.evaluate(
+                    """
+                    () => Object.fromEntries(["dim", "trees", "gain", "gain_percent"].map((field) => {
+                      const cell = document.querySelector(`#gbmEbmGainSummaryGrid .tabulator-cell[tabulator-field='${field}']`);
+                      return [field, {
+                        textAlign: cell ? getComputedStyle(cell).textAlign : "",
+                        justifyContent: cell ? getComputedStyle(cell).justifyContent : "",
+                      }];
+                    }))
+                    """
+                )
+                for style in ebm_summary_alignment.values():
+                    self.assertEqual(style["textAlign"], "center")
+                    self.assertEqual(style["justifyContent"], "center")
+                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.locator("#gbmShapChart").wait_for(timeout=10_000)
+                page.get_by_role("button", name="Features and parameters").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const firstRow = document.querySelector("#gbmEbmGainSummaryGrid .tabulator-row");
+                      return document.querySelector("input[name='gbmFeatureMetric']:checked")?.value === "gain_ebm"
+                        && document.querySelector("#gbmFeatureGrid")?.classList.contains("hidden")
+                        && !document.querySelector("#gbmEbmGainSummaryGrid")?.classList.contains("hidden")
+                        && firstRow?.textContent.includes("Age x Segment")
+                        && firstRow?.textContent.includes("100.0%");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("input[name='gbmFeatureMetric'][value='gain']").check(force=True)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-col-title")]
+                        .map((node) => node.textContent.trim()).filter(Boolean);
+                      return document.querySelector("input[name='gbmFeatureMetric']:checked")?.value === "gain"
+                        && !document.querySelector("#gbmFeatureGrid")?.classList.contains("hidden")
+                        && document.querySelector("#gbmEbmGainSummaryGrid")?.classList.contains("hidden")
+                        && headers.includes("Gain");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                assert_feature_heading_matches_checked(2)
                 page.wait_for_function(
                     """
                     () => {

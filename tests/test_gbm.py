@@ -19,7 +19,7 @@ from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.shap import shap_config, shap_plot, stacked_shap_plot
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
-from py_lucidum.tools.gbm.trees import tree_detail, tree_summary
+from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_groupings, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
@@ -207,6 +207,7 @@ COPY (
         self.assertIn("/api/gbm/models/{model_id}", paths)
         self.assertIn("/api/gbm/models/{model_id}/activate", paths)
         self.assertIn("/api/gbm/models/{model_id}/rename", paths)
+        self.assertIn("/api/gbm/models/{model_id}/ebm-gain-summary", paths)
         self.assertIn("/api/gbm/models/{model_id}/shap/config", paths)
         self.assertIn("/api/gbm/models/{model_id}/shap/plot", paths)
         self.assertIn("/api/gbm/models/{model_id}/shap/stacked", paths)
@@ -2193,6 +2194,95 @@ COPY (
         self.assertEqual(detail_status, 200)
         self.assertEqual(json.loads(summary_body)["trees"][0]["features"], "Segment x Age")
         self.assertEqual(json.loads(detail_body)["root"]["feature"], "Segment")
+
+    def test_ebm_gain_summary_groups_tree_feature_combinations(self) -> None:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir("ebm-summary")
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": "ebm-summary",
+                "label": "EBM summary",
+                "created_at": "2026-05-25T00:00:00Z",
+                "training_mode": "ebm",
+                "objective": "poisson",
+                "metric": "poisson",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "best_iteration": 3,
+                "sources": {},
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 0 AS tree_index, 'Segment' AS split_feature, 10.0 AS split_gain
+  UNION ALL SELECT 0, 'Age', 5.0
+  UNION ALL SELECT 0, NULL, NULL
+  UNION ALL SELECT 1, 'Age', 7.0
+  UNION ALL SELECT 1, 'Segment', 3.0
+  UNION ALL SELECT 2, 'NCD', 20.0
+  UNION ALL SELECT 3, 'Future', 100.0
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+            status, body = asgi_get(app, "/api/gbm/models/ebm-summary/ebm-gain-summary")
+
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(ebm_gain_summary(store, "ebm-summary"), payload)
+        self.assertEqual(
+            payload["rows"],
+            [
+                {"tree_features": "Age x Segment", "dim": 2, "trees": 2, "gain": 25.0, "gain_percent": 25.0 / 45.0 * 100.0},
+                {"tree_features": "NCD", "dim": 1, "trees": 1, "gain": 20.0, "gain_percent": 20.0 / 45.0 * 100.0},
+            ],
+        )
+
+    def test_ebm_gain_summary_is_empty_for_normal_models(self) -> None:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir("normal-summary")
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": "normal-summary",
+                "label": "Normal summary",
+                "created_at": "2026-05-25T00:00:00Z",
+                "training_mode": "normal",
+                "objective": "poisson",
+                "metric": "poisson",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "best_iteration": 1,
+                "sources": {},
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 0 AS tree_index, 'Age' AS split_feature, 9.0 AS split_gain
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_get(app, "/api/gbm/models/normal-summary/ebm-gain-summary")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(ebm_gain_summary(store, "normal-summary"), {"model_id": "normal-summary", "rows": []})
+        self.assertEqual(json.loads(body), {"model_id": "normal-summary", "rows": []})
 
     def test_tree_endpoints_return_empty_payloads_for_missing_artifacts(self) -> None:
         store = GbmModelStore(self.data_path)

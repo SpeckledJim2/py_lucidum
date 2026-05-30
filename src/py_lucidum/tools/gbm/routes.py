@@ -14,7 +14,7 @@ from .shap import shap_config, shap_plot, stacked_shap_plot
 from .sources import GbmSourceProvider
 from .store import GbmModelNameError, GbmModelStore
 from .training import MissingGbmDependency, gbm_dependencies
-from .trees import tree_detail, tree_summary
+from .trees import ebm_gain_summary, tree_detail, tree_summary
 from .validation import (
     OFFSET_COLUMN,
     RESPONSE_COLUMN,
@@ -387,6 +387,14 @@ WHERE feature IS NOT NULL
         context.check_token(request)
         try:
             return tree_summary(store, model_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/gbm/models/{model_id}/ebm-gain-summary")
+    async def model_ebm_gain_summary_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        try:
+            return ebm_gain_summary(store, model_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

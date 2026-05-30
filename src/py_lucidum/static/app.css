@@ -3589,6 +3589,19 @@
         font-variant-numeric: tabular-nums;
       }
 
+      #gbmEbmGainSummaryGrid .tabulator-cell[tabulator-field="dim"],
+      #gbmEbmGainSummaryGrid .tabulator-col[tabulator-field="dim"],
+      #gbmEbmGainSummaryGrid .tabulator-cell[tabulator-field="trees"],
+      #gbmEbmGainSummaryGrid .tabulator-col[tabulator-field="trees"],
+      #gbmEbmGainSummaryGrid .tabulator-cell[tabulator-field="gain"],
+      #gbmEbmGainSummaryGrid .tabulator-col[tabulator-field="gain"],
+      #gbmEbmGainSummaryGrid .tabulator-cell[tabulator-field="gain_percent"],
+      #gbmEbmGainSummaryGrid .tabulator-col[tabulator-field="gain_percent"] {
+        justify-content: center;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+
       #gbmFeatureGrid .tabulator-cell[tabulator-field="include"] {
         justify-content: center;
       }

@@ -39,6 +39,14 @@ def tree_summary(store: GbmModelStore, model_id: str) -> dict[str, Any]:
     return {"model_id": model_id, "trees": rows}
 
 
+def ebm_gain_summary(store: GbmModelStore, model_id: str) -> dict[str, Any]:
+    manifest = store.manifest(model_id)
+    if str(manifest.get("training_mode") or "").strip().lower() != "ebm":
+        return {"model_id": model_id, "rows": []}
+    rows = ebm_gain_summary_from_table(store, model_id, manifest.get("best_iteration"))
+    return {"model_id": model_id, "rows": rows}
+
+
 def tree_detail(store: GbmModelStore, model_id: str, tree_index: int) -> dict[str, Any]:
     store.manifest(model_id)
     rows = tree_rows_from_table(store, model_id, tree_index)
@@ -82,6 +90,66 @@ ORDER BY tree_index, node_depth, node_index
         if gain_value is not None:
             item["gain"] += gain_value
     return [summary_row(item["tree"], item["features"], item["gain"]) for item in sorted(grouped.values(), key=lambda row: row["tree"])]
+
+
+def ebm_gain_summary_from_table(store: GbmModelStore, model_id: str, best_iteration: Any = None) -> list[dict[str, Any]]:
+    path = store.artifact_path(model_id, "tree_table")
+    if not path.exists():
+        return []
+    con = duckdb.connect(database=":memory:")
+    try:
+        try:
+            columns = parquet_columns(con, path)
+            if not {"tree_index", "split_feature", "split_gain"}.issubset(columns):
+                return []
+            best_iteration_value = count_int(best_iteration)
+            where_sql = "WHERE tree_index IS NOT NULL"
+            params: list[Any] = []
+            if best_iteration_value > 0:
+                where_sql += " AND tree_index < ?"
+                params.append(best_iteration_value)
+            records = con.execute(
+                f"""
+SELECT tree_index, split_feature, split_gain
+FROM read_parquet({sql_literal(str(path))})
+{where_sql}
+ORDER BY tree_index
+""",
+                params,
+            ).fetchall()
+        except duckdb.Error:
+            return []
+    finally:
+        con.close()
+
+    trees: dict[int, dict[str, Any]] = {}
+    for tree_index, split_feature, split_gain in records:
+        if tree_index is None:
+            continue
+        tree = int(tree_index)
+        item = trees.setdefault(tree, {"features": set(), "gain": 0.0})
+        feature = clean_feature_name(split_feature)
+        if feature:
+            item["features"].add(feature)
+        gain_value = finite_float(split_gain)
+        if gain_value is not None:
+            item["gain"] += gain_value
+
+    grouped: dict[tuple[str, ...], dict[str, Any]] = {}
+    for item in trees.values():
+        features = tuple(sorted(item["features"], key=lambda value: (value.lower(), value)))
+        if not features:
+            continue
+        row = grouped.setdefault(features, {"features": features, "trees": 0, "gain": 0.0})
+        row["trees"] += 1
+        row["gain"] += item["gain"]
+
+    total_gain = sum(float(row["gain"] or 0.0) for row in grouped.values())
+    rows = [
+        ebm_gain_summary_row(row["features"], row["trees"], row["gain"], total_gain)
+        for row in grouped.values()
+    ]
+    return sorted(rows, key=lambda row: (-float(row["gain"] or 0.0), str(row["tree_features"]).lower()))
 
 
 def tree_rows_from_table(store: GbmModelStore, model_id: str, tree_index: int) -> list[dict[str, Any]]:
@@ -426,4 +494,22 @@ def summary_row(tree: int, features: list[str], gain: float) -> dict[str, Any]:
     }
 
 
-__all__ = ["tree_detail", "tree_summary", "tree_summary_from_table"]
+def ebm_gain_summary_row(features: tuple[str, ...], trees: int, gain: float, total_gain: float) -> dict[str, Any]:
+    gain_value = float(gain or 0.0)
+    percent = gain_value / total_gain * 100 if total_gain > 0 else 0.0
+    return {
+        "tree_features": " x ".join(features),
+        "dim": len(features),
+        "trees": int(trees),
+        "gain": round(gain_value, 3),
+        "gain_percent": percent,
+    }
+
+
+__all__ = [
+    "ebm_gain_summary",
+    "ebm_gain_summary_from_table",
+    "tree_detail",
+    "tree_summary",
+    "tree_summary_from_table",
+]

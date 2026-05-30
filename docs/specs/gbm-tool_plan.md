@@ -63,6 +63,7 @@ Chosen defaults:
   - Feature type is displayed as muted right-aligned text inside the Feature cell, with categorical counts shown as `categorical (n)`.
   - Feature Specification groupings drive the interaction-constraint multi-select; constrained selected features show a lock marker in the Grouping column.
   - `Gain` displays `0.000` before any active model exists. `SHAP` displays mean absolute SHAP value to four decimals and is available only for features with saved SHAP rows.
+  - Active EBM models add an `EBM Gain` toggle option that shows a saved-tree-table summary by unique tree feature combination with tree count, summed gain, and percentage gain.
   - After training or active-model switching, the feature grid must mirror the active model's persisted feature config: `Use`, `Monotonicity`, importance metric, and sort order.
   - Objective and metric parameter rows are dropdowns containing supported single-response LightGBM options; other parameters remain editable text inputs.
   - Right side contains parameter grid, SHAP row-count selector, green Train GBM button, and ECharts evaluation plot.

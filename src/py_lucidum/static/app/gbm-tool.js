@@ -121,6 +121,10 @@ export function createGbmTool({
   let featureTable = null;
   let parameterTable = null;
   let modelTable = null;
+  let ebmGainSummaryTable = null;
+  let ebmGainSummaryRows = null;
+  let ebmGainSummaryModelId = "";
+  let ebmGainSummaryRequestSeq = 0;
   let activeTab = "features";
   let config = null;
   let activeDetail = null;
@@ -218,7 +222,7 @@ export function createGbmTool({
               <div class="gbm-section-header gbm-feature-section-header">
                 <h3 id="gbmFeatureSectionTitle" class="gbm-section-title">${escapeHtml(featureSectionTitle(data.features || []))}</h3>
                 <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
-                  ${featureMetricToggleHtml(data.features || [])}
+                  ${featureMetricToggleHtml(data.features || [], data)}
                   ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
                   ${featureScenarioSelectHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
                   <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Clear all features" title="Clear all">×</button>
@@ -227,6 +231,8 @@ export function createGbmTool({
               </div>
               <div id="gbmFeatureGrid" class="gbm-grid"></div>
               <div id="gbmFeatureFallback" class="gbm-fallback-table"></div>
+              <div id="gbmEbmGainSummaryGrid" class="gbm-grid gbm-ebm-gain-summary-grid hidden"></div>
+              <div id="gbmEbmGainSummaryFallback" class="gbm-fallback-table hidden"></div>
             </section>
             <section class="gbm-right-panel">
               <section class="gbm-panel-section gbm-parameter-section">
@@ -481,11 +487,17 @@ export function createGbmTool({
     const features = data.features || [];
     const modelId = featureMetricModelIdFromData(data);
     if (modelId !== featureMetricModelId) {
+      const previousModelId = featureMetricModelId;
       featureMetricModelId = modelId;
-      featureMetricMode = featureMetricToggleAvailable(features) ? "shap" : "gain";
+      ebmGainSummaryModelId = "";
+      ebmGainSummaryRows = null;
+      const modes = featureMetricModes(features, data);
+      featureMetricMode = previousModelId && modes.includes(featureMetricMode)
+        ? featureMetricMode
+        : defaultFeatureMetricMode(modes);
       return;
     }
-    featureMetricMode = normaliseFeatureMetricMode(featureMetricMode, features);
+    featureMetricMode = normaliseFeatureMetricMode(featureMetricMode, features, data);
   }
 
   function featureMetricModelIdFromData(data = {}) {
@@ -495,32 +507,64 @@ export function createGbmTool({
     return String(activeModel?.model_id || "");
   }
 
-  function featureMetricToggleAvailable(features = []) {
+  function activeModelFromData(data = config) {
+    const models = Array.isArray(data?.models) ? data.models : [];
+    const activeModelId = String(data?.active_model_id || "");
+    return models.find((model) => String(model?.model_id || "") === activeModelId) || models.find((model) => Boolean(model?.active)) || null;
+  }
+
+  function activeModelUsesEbm(data = config) {
+    const model = activeModelFromData(data);
+    return String(model?.training_mode || data?.training_mode || "").trim().toLowerCase() === "ebm" && Boolean(featureMetricModelIdFromData(data || {}));
+  }
+
+  function featureMetricModes(features = [], data = config) {
     const rows = Array.isArray(features) ? features : [];
     const hasGain = rows.some((feature) => featureNumber(feature?.gain) !== null);
     const hasShap = rows.some((feature) => featureMeanAbsShap(feature) !== null);
-    return hasGain && hasShap;
+    const modes = [];
+    if (hasGain && activeModelUsesEbm(data)) modes.push("gain_ebm");
+    if (hasGain) modes.push("gain");
+    if (hasGain && hasShap) modes.push("shap");
+    return modes;
   }
 
-  function normaliseFeatureMetricMode(value, features = config?.features || []) {
-    return String(value || "").toLowerCase() === "shap" && featureMetricToggleAvailable(features) ? "shap" : "gain";
+  function defaultFeatureMetricMode(modes = []) {
+    if (modes.includes("shap")) return "shap";
+    if (modes.includes("gain")) return "gain";
+    return modes[0] || "gain";
   }
 
-  function featureMetricToggleHtml(features = []) {
-    if (!featureMetricToggleAvailable(features)) return "";
-    const selected = normaliseFeatureMetricMode(featureMetricMode, features);
+  function featureMetricToggleAvailable(features = [], data = config) {
+    return featureMetricModes(features, data).length > 1;
+  }
+
+  function normaliseFeatureMetricMode(value, features = config?.features || [], data = config) {
+    const mode = String(value || "").toLowerCase();
+    const available = featureMetricModes(features, data);
+    return available.includes(mode) ? mode : defaultFeatureMetricMode(available);
+  }
+
+  function featureMetricToggleHtml(features = [], data = config) {
+    const modes = featureMetricModes(features, data);
+    if (modes.length < 2) return "";
+    const selected = normaliseFeatureMetricMode(featureMetricMode, features, data);
     return `
       <div id="gbmFeatureMetricToggle" class="gbm-feature-metric-toggle" role="radiogroup" aria-label="Feature table metric">
-        <label class="gbm-feature-metric-option${selected === "gain" ? " active" : ""}">
-          <input type="radio" name="gbmFeatureMetric" value="gain" ${selected === "gain" ? "checked" : ""} />
-          <span>Gain</span>
-        </label>
-        <label class="gbm-feature-metric-option${selected === "shap" ? " active" : ""}">
-          <input type="radio" name="gbmFeatureMetric" value="shap" ${selected === "shap" ? "checked" : ""} />
-          <span>SHAP</span>
-        </label>
+        ${modes.map((mode) => `
+          <label class="gbm-feature-metric-option${selected === mode ? " active" : ""}">
+            <input type="radio" name="gbmFeatureMetric" value="${escapeHtml(mode)}" ${selected === mode ? "checked" : ""} />
+            <span>${escapeHtml(featureMetricModeLabel(mode))}</span>
+          </label>
+        `).join("")}
       </div>
     `;
+  }
+
+  function featureMetricModeLabel(mode) {
+    if (mode === "shap") return "SHAP";
+    if (mode === "gain_ebm") return "EBM Gain";
+    return "Gain";
   }
 
   function bindFeatureMetricActions() {
@@ -536,7 +580,7 @@ export function createGbmTool({
     const features = currentFeatureRows();
     featureMetricMode = normaliseFeatureMetricMode(mode, features);
     syncFeatureMetricToggle();
-    updateFeatureMetricColumn(features);
+    updateFeatureMetricView(features);
   }
 
   function syncFeatureMetricToggle() {
@@ -546,13 +590,91 @@ export function createGbmTool({
     }
   }
 
-  function updateFeatureMetricColumn(features = currentFeatureRows()) {
+  function updateFeatureMetricView(features = currentFeatureRows(), options = {}) {
+    const useEbmGainSummary = featureMetricMode === "gain_ebm";
+    el("gbmFeatureGrid")?.classList.toggle("hidden", useEbmGainSummary);
+    el("gbmFeatureFallback")?.classList.toggle("hidden", useEbmGainSummary);
+    el("gbmEbmGainSummaryGrid")?.classList.toggle("hidden", !useEbmGainSummary);
+    el("gbmEbmGainSummaryFallback")?.classList.toggle("hidden", !useEbmGainSummary);
+    if (useEbmGainSummary) {
+      loadEbmGainSummary(features);
+      return;
+    }
     if (featureTable && typeof featureTable.setColumns === "function") {
-      featureTable.setColumns(featureTableColumns());
-      featureTable.setSort(featureTableInitialSort());
+      if (options.refreshColumns !== false) {
+        featureTable.setColumns(featureTableColumns());
+        featureTable.setSort(featureTableInitialSort());
+      }
       return;
     }
     renderFeatureFallback(features);
+  }
+
+  async function loadEbmGainSummary(features = currentFeatureRows()) {
+    const modelId = currentActiveModelId();
+    const modeFeatures = Array.isArray(features) && features.length ? features : (config?.features || []);
+    if (!modelId || !featureMetricModes(modeFeatures).includes("gain_ebm")) {
+      renderEbmGainSummaryRows([]);
+      return;
+    }
+    if (ebmGainSummaryModelId === modelId && Array.isArray(ebmGainSummaryRows)) {
+      renderEbmGainSummaryRows(ebmGainSummaryRows);
+      return;
+    }
+    const requestSeq = ebmGainSummaryRequestSeq + 1;
+    ebmGainSummaryRequestSeq = requestSeq;
+    ebmGainSummaryModelId = modelId;
+    ebmGainSummaryRows = null;
+    renderEbmGainSummaryLoading();
+    try {
+      const payload = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/ebm-gain-summary`, { method: "GET" });
+      if (requestSeq !== ebmGainSummaryRequestSeq || modelId !== currentActiveModelId()) return;
+      ebmGainSummaryRows = Array.isArray(payload?.rows) ? payload.rows : [];
+      renderEbmGainSummaryRows(ebmGainSummaryRows);
+    } catch (error) {
+      if (requestSeq !== ebmGainSummaryRequestSeq || modelId !== currentActiveModelId()) return;
+      ebmGainSummaryRows = [];
+      renderEbmGainSummaryRows([]);
+      setGbmNotice(error.message);
+    }
+  }
+
+  function renderEbmGainSummaryLoading() {
+    if (ebmGainSummaryTable && typeof ebmGainSummaryTable.setData === "function") {
+      setEbmGainSummaryTableRows([]);
+      return;
+    }
+    renderEbmGainSummaryFallback(null);
+  }
+
+  function renderEbmGainSummaryRows(rows) {
+    const summaryRows = Array.isArray(rows) ? rows : [];
+    if (ebmGainSummaryTable && typeof ebmGainSummaryTable.setData === "function") {
+      setEbmGainSummaryTableRows(summaryRows);
+      return;
+    }
+    renderEbmGainSummaryFallback(summaryRows);
+  }
+
+  function cachedEbmGainSummaryRowsForActiveModel() {
+    return ebmGainSummaryModelId === currentActiveModelId() && Array.isArray(ebmGainSummaryRows)
+      ? ebmGainSummaryRows
+      : [];
+  }
+
+  function setEbmGainSummaryTableRows(rows) {
+    const table = ebmGainSummaryTable;
+    if (!table || typeof table.setData !== "function") return;
+    const applyRows = () => {
+      if (table !== ebmGainSummaryTable) return;
+      table.setData(rows);
+    };
+    if (table.initialized) {
+      applyRows();
+      return;
+    }
+    if (typeof table.on === "function") table.on("tableBuilt", applyRows);
+    window.setTimeout(applyRows, 0);
   }
 
   function featureInteractionConstraintDropdownHtml(groupings, activeConstraints = null, features = []) {
@@ -1148,6 +1270,7 @@ export function createGbmTool({
     featureTable = null;
     parameterTable = null;
     modelTable = null;
+    ebmGainSummaryTable = null;
     const features = applyInteractionLocksToFeatures(data.features || []);
     const parameters = data.parameters || [];
     const models = modelRows(data.models || []);
@@ -1204,6 +1327,14 @@ export function createGbmTool({
           element.classList.toggle("gbm-feature-warning", isFeatureSelectable(data) && Boolean(data.high_cardinality));
         },
       });
+      ebmGainSummaryTable = new Tabulator("#gbmEbmGainSummaryGrid", {
+        data: cachedEbmGainSummaryRowsForActiveModel(),
+        height: "100%",
+        layout: "fitColumns",
+        placeholder: "No EBM gain summary available",
+        initialSort: [{ column: "gain", dir: "desc" }],
+        columns: ebmGainSummaryColumns(),
+      });
       parameterTable = new Tabulator("#gbmParameterGrid", {
         data: parameters,
         height: "100%",
@@ -1217,9 +1348,11 @@ export function createGbmTool({
     } catch (_) {
       renderModelFallback(models);
       renderFeatureFallback(features);
+      renderEbmGainSummaryFallback([]);
       renderParameterFallback(parameters);
     }
     syncFeatureInteractionControls();
+    updateFeatureMetricView(features, { refreshColumns: false });
   }
 
   function featureTableColumns() {
@@ -1253,6 +1386,16 @@ export function createGbmTool({
       cssClass: "gbm-feature-metric-cell",
       width: 125,
     };
+  }
+
+  function ebmGainSummaryColumns() {
+    return [
+      { title: "Tree features", field: "tree_features", sorter: "string", widthGrow: 3, headerSort: true },
+      { title: "Dim", field: "dim", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "center", headerHozAlign: "center", width: 70, headerSort: true },
+      { title: "Trees", field: "trees", sorter: "number", formatter: (cell) => escapeHtml(formatModelInteger(cell.getValue())), hozAlign: "center", headerHozAlign: "center", width: 82, headerSort: true },
+      { title: "Gain", field: "gain", sorter: "number", formatter: (cell) => escapeHtml(formatEbmSummaryGain(cell.getValue())), hozAlign: "center", headerHozAlign: "center", width: 96, headerSort: true },
+      { title: "% Gain", field: "gain_percent", sorter: "number", formatter: (cell) => escapeHtml(formatGainPercent(cell.getValue())), hozAlign: "center", headerHozAlign: "center", width: 96, headerSort: true },
+    ];
   }
 
   function featureTableInitialSort() {
@@ -1401,6 +1544,36 @@ export function createGbmTool({
       });
     }
     syncFeatureSectionTitle();
+  }
+
+  function renderEbmGainSummaryFallback(rows) {
+    const target = el("gbmEbmGainSummaryFallback");
+    if (!target) return;
+    if (rows === null) {
+      target.innerHTML = '<div class="gbm-empty-state">Loading EBM gain summary...</div>';
+      return;
+    }
+    const summaryRows = Array.isArray(rows) ? rows : [];
+    if (!summaryRows.length) {
+      target.innerHTML = '<div class="gbm-empty-state">No EBM gain summary available</div>';
+      return;
+    }
+    target.innerHTML = `
+      <table>
+        <thead><tr><th>Tree features</th><th>Dim</th><th>Trees</th><th>Gain</th><th>% Gain</th></tr></thead>
+        <tbody>
+          ${summaryRows.map((row) => `
+            <tr>
+              <td>${escapeHtml(row.tree_features || "")}</td>
+              <td class="numeric">${escapeHtml(formatModelInteger(row.dim))}</td>
+              <td class="numeric">${escapeHtml(formatModelInteger(row.trees))}</td>
+              <td class="numeric gbm-gain-cell">${escapeHtml(formatEbmSummaryGain(row.gain))}</td>
+              <td class="numeric gbm-gain-cell">${escapeHtml(formatGainPercent(row.gain_percent))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
   }
 
   function sortedFeatureRowsForMetric(features = []) {
@@ -2429,6 +2602,18 @@ export function createGbmTool({
     if (magnitude >= 1000) return Math.round(number).toLocaleString();
     if (magnitude >= 10) return number.toFixed(1);
     return number.toFixed(3);
+  }
+
+  function formatEbmSummaryGain(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0";
+    return Math.round(number).toLocaleString();
+  }
+
+  function formatGainPercent(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0.0%";
+    return `${number.toFixed(1)}%`;
   }
 
   function formatMeanAbsShap(value) {
