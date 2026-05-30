@@ -20,6 +20,7 @@ DEFAULT_OBJECTIVE = "poisson"
 DEFAULT_METRIC = "poisson"
 DEFAULT_TRAINING_MODE = "normal"
 TRAINING_MODES = ("normal", "ebm")
+DATA_SAMPLE_STRATEGIES = ("bagging", "goss")
 GBM_OBJECTIVES = (
     "regression",
     "regression_l1",
@@ -75,6 +76,7 @@ def default_parameters() -> list[dict[str, Any]]:
     return [
         {"name": "objective", "value": DEFAULT_OBJECTIVE, "important": True},
         {"name": "metric", "value": DEFAULT_METRIC, "important": True},
+        {"name": "data_sample_strategy", "value": "bagging", "important": True},
         {"name": "num_iterations", "value": 200, "important": True},
         {"name": "learning_rate", "value": 0.05, "important": True},
         {"name": "num_leaves", "value": 31, "important": True},
@@ -149,10 +151,105 @@ def parameter_option_errors(params: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     selected_objective = objective(params)
     selected_metric = metric(params)
+    selected_data_sample_strategy = str(params.get("data_sample_strategy") or "bagging").strip().lower()
     if selected_objective not in GBM_OBJECTIVES:
         errors.append(f"Choose a valid LightGBM objective: {selected_objective}")
     if selected_metric not in GBM_METRICS:
         errors.append(f"Choose a valid LightGBM metric: {selected_metric}")
+    if selected_data_sample_strategy not in DATA_SAMPLE_STRATEGIES:
+        errors.append(f"Choose a valid LightGBM data_sample_strategy: {selected_data_sample_strategy}")
+    return errors
+
+
+def parameter_compatibility_messages(params: dict[str, Any], payload: dict[str, Any]) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    errors.extend(parameter_numeric_constraint_errors(params))
+    if bool_parameter(params, "force_col_wise") and bool_parameter(params, "force_row_wise"):
+        errors.append("force_col_wise and force_row_wise cannot both be true")
+    if number_parameter(params, "path_smooth", 0.0) > 0 and integer_parameter(params, "min_data_in_leaf", 20) < 2:
+        errors.append("path_smooth greater than 0 requires min_data_in_leaf of at least 2")
+    if bool_parameter(params, "is_unbalance") and number_parameter(params, "scale_pos_weight", 1.0) != 1.0:
+        errors.append("is_unbalance cannot be used at the same time as scale_pos_weight")
+    if bool_parameter(params, "linear_tree") and shap_rows_requested(payload.get("shap_rows")):
+        errors.append("linear_tree=true cannot be used when SHAP rows are requested")
+    data_sample_strategy = str(params.get("data_sample_strategy") or "bagging").strip().lower()
+    if data_sample_strategy == "bagging":
+        bagging_freq = integer_parameter(params, "bagging_freq", 0)
+        bagging_fraction = number_parameter(params, "bagging_fraction", 1.0)
+        if bagging_freq <= 0 or bagging_fraction >= 1.0:
+            warnings.append("data_sample_strategy=bagging is only effective when bagging_freq > 0 and bagging_fraction < 1")
+    return errors, warnings
+
+
+def parameter_numeric_constraint_errors(params: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    int_min = {
+        "num_iterations": 0,
+        "min_data_in_leaf": 0,
+        "early_stopping_rounds": 0,
+        "bagging_freq": 0,
+        "max_drop": 0,
+    }
+    int_positive = {
+        "num_class",
+        "min_data_per_group",
+        "max_cat_threshold",
+        "max_cat_to_onehot",
+        "top_k",
+        "metric_freq",
+        "multi_error_top_k",
+        "num_machines",
+        "local_listen_port",
+        "time_out",
+        "num_gpu",
+    }
+    for name, minimum in int_min.items():
+        if name in params and integer_parameter(params, name, minimum) < minimum:
+            errors.append(f"{name} must be at least {minimum}")
+    for name in int_positive:
+        if name in params and integer_parameter(params, name, 1) <= 0:
+            errors.append(f"{name} must be greater than 0")
+    num_leaves = integer_parameter(params, "num_leaves", 31)
+    if num_leaves <= 1 or num_leaves > 131072:
+        errors.append("num_leaves must be greater than 1 and no more than 131072")
+    for name in ("learning_rate", "scale_pos_weight", "sigmoid", "alpha", "fair_c", "poisson_max_delta_step"):
+        if name in params and number_parameter(params, name, 1.0) <= 0:
+            errors.append(f"{name} must be greater than 0")
+    for name in (
+        "lambda_l1",
+        "lambda_l2",
+        "min_gain_to_split",
+        "min_sum_hessian_in_leaf",
+        "path_smooth",
+        "monotone_penalty",
+        "cegb_tradeoff",
+        "cegb_penalty_split",
+        "cat_l2",
+        "cat_smooth",
+        "lambdarank_position_bias_regularization",
+    ):
+        if name in params and number_parameter(params, name, 0.0) < 0:
+            errors.append(f"{name} must be at least 0")
+    for name in ("feature_fraction", "bagging_fraction", "pos_bagging_fraction", "neg_bagging_fraction"):
+        if name in params:
+            value = number_parameter(params, name, 1.0)
+            if value <= 0 or value > 1:
+                errors.append(f"{name} must be greater than 0 and no more than 1")
+    for name in ("top_rate", "other_rate", "drop_rate", "skip_drop", "refit_decay_rate"):
+        if name in params:
+            value = number_parameter(params, name, 0.0)
+            if value < 0 or value > 1:
+                errors.append(f"{name} must be between 0 and 1")
+    if "top_rate" in params or "other_rate" in params:
+        top_rate = number_parameter(params, "top_rate", 0.2)
+        other_rate = number_parameter(params, "other_rate", 0.1)
+        if top_rate + other_rate > 1:
+            errors.append("top_rate + other_rate must be no more than 1")
+    if "tweedie_variance_power" in params:
+        value = number_parameter(params, "tweedie_variance_power", 1.5)
+        if value < 1 or value >= 2:
+            errors.append("tweedie_variance_power must be at least 1 and less than 2")
     return errors
 
 
@@ -390,6 +487,9 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
         params = normalise_parameters(payload.get("parameters"))
         selected_objective = objective(params)
         errors.extend(parameter_option_errors(params))
+        parameter_errors, parameter_warnings = parameter_compatibility_messages(params, payload)
+        errors.extend(parameter_errors)
+        warnings.extend(parameter_warnings)
         selected_training_mode = normalise_training_mode(payload.get("training_mode"))
         if selected_training_mode not in TRAINING_MODES:
             errors.append(f"Choose a valid GBM training mode: {selected_training_mode}")
@@ -474,10 +574,37 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
 
 
 def integer_parameter(params: dict[str, Any], name: str, default: int) -> int:
+    value = params.get(name, default)
+    if value is None or str(value).strip() == "":
+        return default
     try:
-        return int(params.get(name, default) or default)
+        return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def number_parameter(params: dict[str, Any], name: str, default: float) -> float:
+    try:
+        return float(params.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def bool_parameter(params: dict[str, Any], name: str, default: bool = False) -> bool:
+    value = params.get(name, default)
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    if text in {"false", "0", "no", "n", "off", ""}:
+        return False
+    return default
+
+
+def shap_rows_requested(raw: Any) -> bool:
+    text = str(raw or "0").strip().lower()
+    return text not in {"", "0", "zero", "none", "no"}
 
 
 def response_objective_errors(dataset: Dataset, selected_objective: str, response_column: str = RESPONSE_COLUMN) -> list[str]:
@@ -532,6 +659,7 @@ __all__ = [
     "DEFAULT_METRIC",
     "DEFAULT_OBJECTIVE",
     "DEFAULT_TRAINING_MODE",
+    "DATA_SAMPLE_STRATEGIES",
     "GBM_METRICS",
     "GBM_OBJECTIVES",
     "OFFSET_COLUMN",

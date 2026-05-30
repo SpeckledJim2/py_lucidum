@@ -38,12 +38,18 @@ const GBM_PARAMETER_OPTIONS = {
     "kullback_leibler",
     "r2",
   ],
+  data_sample_strategy: [
+    "bagging",
+    "goss",
+  ],
 };
 
 const GBM_RUNNING_POLL_MS = 500;
 const GBM_QUEUED_POLL_MS = 1000;
+const GBM_MODEL_LIST_POLL_MS = 2000;
 const GBM_EVALUATION_DOWNSAMPLE_THRESHOLD = 2000;
 const GBM_EVALUATION_MAX_PLOT_POINTS = 1500;
+const GBM_GRID_SAMPLE_DEFAULT = 25;
 
 export function gbmShapSelectionValue(data = {}) {
   const models = Array.isArray(data?.models) ? data.models : [];
@@ -131,9 +137,13 @@ export function createGbmTool({
   let config = null;
   let activeDetail = null;
   let pollTimer = null;
+  let modelListRefreshSeq = 0;
+  let modelListLastRefreshAt = 0;
   let isTraining = false;
   let liveProgress = null;
   let liveEvaluationParameters = null;
+  let gridSampleValue = GBM_GRID_SAMPLE_DEFAULT;
+  let gridTrainingNotice = "";
   let evaluationChart = null;
   let evaluationResizeObserver = null;
   let evaluationViewMode = "all";
@@ -217,7 +227,7 @@ export function createGbmTool({
             <button class="tab ${activeTab === "shap" ? "active" : ""}" type="button" data-gbm-tab="shap">SHAP</button>
             <button class="tab ${activeTab === "stacked-shap" ? "active" : ""}" type="button" data-gbm-tab="stacked-shap">Stacked SHAP</button>
           </div>
-          <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${escapeHtml(liveProgress?.message || "")}</div>
+          <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${trainingStatusHtml(liveProgress)}</div>
         </div>
         <div class="gbm-tab-panel ${activeTab === "features" ? "" : "hidden"}" data-gbm-panel="features">
           <div class="gbm-feature-layout">
@@ -256,6 +266,7 @@ export function createGbmTool({
                           ${shapOptionsHtml(data.shap_options || [], gbmShapSelectionValue(data))}
                         </div>
                       </div>
+                      ${gridSampleHtml(data.parameters || [])}
                       ${data.ebm_available ? trainingModeHtml(data.training_mode) : ""}
                       ${shouldShowCreateSampleButton(data.sample) ? '<button id="gbmCreateSampleBtn" class="tab gbm-action-button gbm-sample-button" type="button">Create sample column</button>' : ""}
                     </div>
@@ -386,6 +397,31 @@ export function createGbmTool({
     `;
   }
 
+  function gridSampleHtml(parameters = []) {
+    const hidden = hasGridParameters(parameters) ? "" : " hidden";
+    return `
+      <label id="gbmGridSamples" class="gbm-grid-samples${hidden}">
+        <span class="gbm-shap-label">Grid samples</span>
+        <input id="gbmGridSampleInput" class="gbm-grid-sample-input" type="number" min="1" step="1" value="${escapeHtml(String(currentGridSampleValue()))}" aria-label="Grid samples" />
+      </label>
+    `;
+  }
+
+  function trainingStatusHtml(progress) {
+    if (!progress) return "";
+    return trainingStatusContentHtml(progress.message || "", trainingStatusDetail(progress));
+  }
+
+  function trainingStatusContentHtml(message, detail = "") {
+    const main = String(message || "");
+    const sub = String(detail || "");
+    if (!main && !sub) return "";
+    return `
+      <span class="gbm-training-status-main">${escapeHtml(main)}</span>
+      ${sub ? `<span class="gbm-training-status-detail">${escapeHtml(sub)}</span>` : ""}
+    `;
+  }
+
   function evaluationViewModeHtml() {
     const selected = normaliseEvaluationViewMode(evaluationViewMode);
     return `
@@ -469,8 +505,10 @@ export function createGbmTool({
     for (const button of mount.querySelectorAll("[data-gbm-tab]")) {
       button.addEventListener("click", () => {
         closeGbmFeatureContextMenu();
-        activeTab = button.dataset.gbmTab;
+        const nextTab = button.dataset.gbmTab;
+        activeTab = nextTab;
         render(config || {});
+        if (nextTab === "models") refreshModelList({ force: true });
       });
     }
   }
@@ -484,6 +522,7 @@ export function createGbmTool({
     el("gbmSelectFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(true));
     el("gbmCreateSampleBtn")?.addEventListener("click", createSampleColumn);
     el("gbmTrainBtn")?.addEventListener("click", train);
+    bindGridSampleInput();
     syncTrainingButton();
   }
 
@@ -1073,6 +1112,7 @@ export function createGbmTool({
   function setTrainingState(active) {
     isTraining = Boolean(active);
     syncTrainingButton();
+    syncModelActionButtons();
   }
 
   function syncTrainingButton() {
@@ -1110,13 +1150,14 @@ export function createGbmTool({
     notice.classList.toggle("hidden", !text);
   }
 
-  function setTrainingStatus(message, phase = "") {
+  function setTrainingStatus(message, phase = "", detail = "") {
     const status = el("gbmTrainingStatus");
     if (!status) return;
     const text = String(message || "");
-    status.textContent = text;
+    const detailText = String(detail || "");
+    status.innerHTML = trainingStatusContentHtml(text, detailText);
     status.dataset.phase = String(phase || "");
-    status.classList.toggle("hidden", !text);
+    status.classList.toggle("hidden", !text && !detailText);
   }
 
   function syncSidebarModelChooser(models, activeModelId) {
@@ -1277,10 +1318,10 @@ export function createGbmTool({
     ebmGainSummaryTable = null;
     const features = applyInteractionLocksToFeatures(data.features || []);
     const parameters = data.parameters || [];
-    const models = modelRows(data.models || []);
     try {
       const Tabulator = await loadTabulator();
       if (!config || data !== config) return;
+      const models = modelRows(config.models || data.models || []);
       const modelFallback = el("gbmModelFallback");
       if (modelFallback) modelFallback.innerHTML = "";
       modelTable = new Tabulator("#gbmModelGrid", {
@@ -1351,13 +1392,16 @@ export function createGbmTool({
           { title: "Value", field: "value", editor: "adaptable", editorParams: parameterValueEditorParams(), widthGrow: 1 },
         ],
       });
+      parameterTable.on("cellEdited", syncGridSampleControl);
     } catch (_) {
-      renderModelFallback(models);
+      renderModelFallback(modelRows(config?.models || data.models || []));
       renderFeatureFallback(features);
       renderEbmGainSummaryFallback([]);
       renderParameterFallback(parameters);
+      bindFallbackParameterGridSearchControls();
     }
     syncFeatureInteractionControls();
+    syncGridSampleControl();
     updateFeatureMetricView(features, { refreshColumns: false });
   }
 
@@ -1869,6 +1913,9 @@ export function createGbmTool({
     if (editor === "list") {
       return {
         values: parameterOptionsForName(rowData.name),
+        autocomplete: true,
+        freetext: true,
+        listOnEmpty: true,
         elementAttributes,
       };
     }
@@ -1890,6 +1937,48 @@ export function createGbmTool({
         ${options.map((option) => `<option value="${escapeHtml(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
       </select>
     `;
+  }
+
+  function bindGridSampleInput() {
+    const input = el("gbmGridSampleInput");
+    if (!input) return;
+    input.addEventListener("input", () => {
+      gridSampleValue = currentGridSampleValue();
+    });
+  }
+
+  function bindFallbackParameterGridSearchControls() {
+    for (const input of document.querySelectorAll("[data-gbm-parameter]")) {
+      input.addEventListener("input", syncGridSampleControl);
+      input.addEventListener("change", syncGridSampleControl);
+    }
+  }
+
+  function syncGridSampleControl() {
+    const root = el("gbmGridSamples");
+    const input = el("gbmGridSampleInput");
+    if (!root) return;
+    const show = hasGridParameters(currentParameters());
+    root.classList.toggle("hidden", !show);
+    if (input) input.value = String(currentGridSampleValue());
+  }
+
+  function hasGridParameters(parameters = []) {
+    return parameters.some((parameter) => isGridParameterValue(parameter?.value));
+  }
+
+  function isGridParameterValue(value) {
+    const text = String(value ?? "").trim();
+    return /^\{[^{}]+\}$/.test(text);
+  }
+
+  function currentGridSampleValue() {
+    const input = el("gbmGridSampleInput");
+    const source = input ? input.value : gridSampleValue;
+    const number = Number.parseInt(String(source ?? ""), 10);
+    const value = Number.isFinite(number) && number > 0 ? number : GBM_GRID_SAMPLE_DEFAULT;
+    gridSampleValue = value;
+    return value;
   }
 
   function modelRows(models) {
@@ -2097,12 +2186,85 @@ export function createGbmTool({
 
   function syncModelActionButtons() {
     const selectedCount = selectedModelIds().length;
+    const disableActions = isTraining;
     const rename = el("gbmRenameModelBtn");
     const activate = el("gbmActivateModelBtn");
     const del = el("gbmDeleteModelBtn");
-    if (rename) rename.disabled = selectedCount !== 1;
-    if (activate) activate.disabled = selectedCount !== 1;
-    if (del) del.disabled = selectedCount < 1;
+    if (rename) rename.disabled = disableActions || selectedCount !== 1;
+    if (activate) activate.disabled = disableActions || selectedCount !== 1;
+    if (del) del.disabled = disableActions || selectedCount < 1;
+  }
+
+  async function refreshModelList({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && now - modelListLastRefreshAt < GBM_MODEL_LIST_POLL_MS) return;
+    modelListLastRefreshAt = now;
+    const requestSeq = modelListRefreshSeq + 1;
+    modelListRefreshSeq = requestSeq;
+    try {
+      const payload = await api("/api/gbm/models", { method: "GET", clientTiming: true });
+      if (requestSeq !== modelListRefreshSeq) return;
+      await applyModelListPayload(payload);
+    } catch (error) {
+      if (force) setGbmNotice(error.message);
+    }
+  }
+
+  async function applyModelListPayload(payload = {}) {
+    const activeModelId = String(payload?.active_model_id || "");
+    const models = Array.isArray(payload?.models)
+      ? payload.models.map((model) => ({
+        ...model,
+        active: Boolean(model?.active) || String(model?.model_id || "") === activeModelId,
+      }))
+      : [];
+    config = config || {};
+    config.models = models;
+    config.active_model_id = activeModelId;
+    const cache = toolCache(tool);
+    if (cache?.data) {
+      cache.data = { ...cache.data, models, active_model_id: activeModelId };
+    }
+    syncSidebarModelChooser(models, activeModelId);
+    if (activeTab === "models") {
+      await refreshModelTableRows(modelRows(models));
+    }
+  }
+
+  async function refreshModelTableRows(rows) {
+    const selectedIds = selectedModelIds();
+    const availableIds = new Set(rows.map((row) => String(row?.model_id || "")).filter(Boolean));
+    const preservedIds = selectedIds.filter((id) => availableIds.has(id));
+    if (modelTable && typeof modelTable.replaceData === "function") {
+      await modelTable.replaceData(rows);
+      restoreModelSelection(preservedIds);
+      syncModelActionButtons();
+      return;
+    }
+    renderModelFallback(rows);
+    restoreModelSelection(preservedIds);
+    syncModelActionButtons();
+  }
+
+  function restoreModelSelection(ids) {
+    const selected = new Set((ids || []).map((id) => String(id || "")).filter(Boolean));
+    if (modelTable && typeof modelTable.getRows === "function") {
+      for (const row of modelTable.getRows()) {
+        const rowId = String(row.getData()?.model_id || "");
+        if (selected.has(rowId)) {
+          row.select();
+        } else {
+          row.deselect();
+        }
+      }
+      return;
+    }
+    for (const row of document.querySelectorAll("#gbmModelFallback [data-gbm-model-row]")) {
+      const rowId = String(row.dataset.gbmModelRow || "");
+      const active = selected.has(rowId);
+      row.classList.toggle("selected", active);
+      row.setAttribute("aria-selected", String(active));
+    }
   }
 
   function selectedModelIds() {
@@ -2165,6 +2327,7 @@ export function createGbmTool({
       sample_source: config?.sample?.source || "none",
       create_sample: false,
     };
+    if (hasGridParameters(payload.parameters)) payload.grid_samples = currentGridSampleValue();
     if (featureScenario) payload.feature_scenario = featureScenario;
     if (featureInteractionGroupings) payload.feature_interaction_groupings = featureInteractionGroupings;
     try {
@@ -2173,23 +2336,31 @@ export function createGbmTool({
         setGbmNotice(validation.errors.join("; "));
         return;
       }
+      gridTrainingNotice = gridValidationNotice(validation);
       setGbmNotice("");
       setGroupMeta(tool, "Training GBM...");
       startToolTiming(tool);
       setTrainingState(true);
+      modelListLastRefreshAt = 0;
       liveEvaluationParameters = payload.parameters;
       liveProgress = null;
-      setTrainingStatus("Training GBM...", "queued");
+      setTrainingStatus("Training GBM...", "queued", gridTrainingNotice);
       const job = await api("/api/gbm/train", { method: "POST", body: JSON.stringify(payload), clientTiming: true });
       applyJobProgress(job);
       pollJob(job.job_id, 0);
     } catch (error) {
       setTrainingState(false);
       liveEvaluationParameters = null;
+      gridTrainingNotice = "";
       setToolTimingFailed(tool);
       setTrainingStatus("");
       setGbmNotice(error.message);
     }
+  }
+
+  function gridValidationNotice(validation) {
+    const messages = Array.isArray(validation?.grid?.messages) ? validation.grid.messages : [];
+    return messages.join(" ");
   }
 
   function pollJob(jobId, delay = GBM_QUEUED_POLL_MS) {
@@ -2201,23 +2372,28 @@ export function createGbmTool({
         if (job.status === "queued" || job.status === "running") {
           if (!job.progress) {
             const fallback = job.status === "queued" ? "GBM queued..." : "Training GBM...";
-            setTrainingStatus(fallback, job.status);
+            setTrainingStatus(fallback, job.status, gridTrainingNotice);
             setGroupMeta(tool, fallback);
           }
+          if (activeTab === "models") refreshModelList();
           pollJob(jobId, job.status === "running" ? GBM_RUNNING_POLL_MS : GBM_QUEUED_POLL_MS);
           return;
         }
         if (job.status === "failed") {
+          modelListRefreshSeq += 1;
           setTrainingState(false);
           liveEvaluationParameters = null;
+          gridTrainingNotice = "";
           setToolTimingFailed(tool);
           if (!job.progress) setTrainingStatus("GBM failed", "failed");
           setGbmNotice(job.error || "GBM training failed");
           setGroupMeta(tool, "GBM failed");
           return;
         }
+        modelListRefreshSeq += 1;
         liveProgress = null;
         liveEvaluationParameters = null;
+        gridTrainingNotice = "";
         await reloadSchema(job.result?.sources?.predictions);
         const preserveProfile = clearCachesAfterGbmModelSourceChange();
         const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
@@ -2231,6 +2407,7 @@ export function createGbmTool({
       } catch (error) {
         setTrainingState(false);
         liveEvaluationParameters = null;
+        gridTrainingNotice = "";
         setToolTimingFailed(tool);
         setGbmNotice(error.message);
       }
@@ -2244,7 +2421,7 @@ export function createGbmTool({
 
   function renderLiveProgress(progress) {
     liveProgress = progress;
-    setTrainingStatus(progress.message || "", progress.phase || "");
+    setTrainingStatus(progress.message || "", progress.phase || "", trainingStatusDetail(progress));
     if (progress.message) setGroupMeta(tool, progress.message);
     if (progress.evaluation) {
       renderEvaluationChart({
@@ -2260,7 +2437,20 @@ export function createGbmTool({
     }
   }
 
+  function trainingStatusDetail(progress) {
+    const parts = [];
+    const gridMessages = Array.isArray(progress?.grid?.messages) ? progress.grid.messages : [];
+    if (gridMessages.length) parts.push(gridMessages.join(" "));
+    const parameters = Array.isArray(progress?.grid_parameters) ? progress.grid_parameters : [];
+    if (parameters.length) {
+      parts.push(parameters.map((row) => `${row.label || row.name}=${row.value}`).join(" · "));
+    }
+    if (!parts.length && gridTrainingNotice) parts.push(gridTrainingNotice);
+    return parts.join("  ");
+  }
+
   async function activateModel(modelId) {
+    if (isTraining) return;
     if (!modelId) return;
     try {
       const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/activate`, { method: "POST", body: "{}" });
@@ -2271,12 +2461,14 @@ export function createGbmTool({
   }
 
   async function activateSelectedModel() {
+    if (isTraining) return;
     const modelIds = selectedModelIds();
     if (modelIds.length !== 1) return;
     await activateModel(modelIds[0]);
   }
 
   async function renameActiveModel() {
+    if (isTraining) return;
     const [modelId] = selectedModelIds();
     if (!modelId) return;
     const newModelId = window.prompt("Rename GBM model", modelId);
@@ -2295,6 +2487,7 @@ export function createGbmTool({
   }
 
   async function deleteActiveModel() {
+    if (isTraining) return;
     const modelIds = selectedModelIds();
     if (!modelIds.length) return;
     const label = modelIds.length === 1 ? `GBM model "${modelIds[0]}"` : `${modelIds.length} GBM models`;

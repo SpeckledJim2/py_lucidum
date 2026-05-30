@@ -44,6 +44,7 @@ Chosen defaults:
 - "Create sample column" creates a reusable generated deterministic 60/20/20 training/test/validation assignment in `.lucidum/models/gbm/generated_sample.parquet`, not in the original dataset.
 - `training_mode` is persisted as `normal` or `ebm`, defaulting old models to `normal`. EBM is shown only for physical dataset `SAMPLE` splits with training and test rows, never for generated sidecars.
 - EBM starts with 2-leaf trees at learning rate `0.3`, advances to 3+ leaves via a LightGBM callback after `early_stopping_rounds` test-metric plateaus, restores the configured learning rate after the 2-leaf stage, and treats `num_iterations` as the total cap across all stages.
+- Parameter values support grid-search braces. Explicit sets such as `{200, 300, 400}` and inclusive ranges such as `{0.05, 0.3; 0.05}` are sampled deterministically without constructing the full hypergrid; sampled combinations are pre-validated, invalid combinations are skipped with a notice, valid combinations train sequentially in one background job, each model persists normal GBM artifacts plus `grid_search` metadata, and the best completed model is activated.
 - Feature validation disables unusable types, shows unreadable dataset columns as invalid disabled rows, flags high-cardinality categoricals, and allows monotonicity only for numeric features and compatible objectives.
 - Training reads only selected features plus required response, offset, and sample columns from the raw dataset. Prediction sources join back only readable source columns.
 - After training, persist LightGBM gain feature importance and use it to refresh the feature grid.
@@ -66,9 +67,10 @@ Chosen defaults:
   - Active EBM models add an `EBM Gain` toggle option that shows a saved-tree-table summary by unique tree feature combination with tree count, summed gain, and percentage gain.
   - After training or active-model switching, the feature grid must mirror the active model's persisted feature config: `Use`, `Monotonicity`, importance metric, and sort order.
   - Objective and metric parameter rows are dropdowns containing supported single-response LightGBM options; other parameters remain editable text inputs.
-  - Right side contains parameter grid, SHAP row-count selector, green Train GBM button, and ECharts evaluation plot.
+  - Right side contains parameter grid, SHAP row-count selector, conditional `Grid samples` numeric input, green Train GBM button, and ECharts evaluation plot.
   - When EBM is available, a Normal/EBM radio group sits below SHAP rows and includes a tooltip noting the 2-leaf `0.3` learning rate.
   - During training, a compact toolbar status shows the current iteration and latest metric while the evaluation plot updates from live job progress. The live x-axis stays fixed to `num_iterations`; completed and saved charts use the exact evaluation-log length and keep a tail-focused y-axis zoom when the initial metric drop is steep. The Evaluation Log header has an inline `All` / `Tail` control for full-history or late-window views. Evaluation histories over 2,000 points use render-only downsampling while persisted logs stay complete.
+  - Grid-search training status prefixes live progress with the current model count, for example `model 3/18`.
   - The ECharts evaluation title is a single line containing evaluation metric, test metric, and best iteration with the same font size.
 - **Model navigator** tab lists saved models, feature interaction constraints, key parameters, train/test metrics, timings, a green-dot active-model indicator, and selectable rows for rename/delete actions. Active-model switching remains in the sidebar model list.
 - **Tree viewer** tab provides a searchable tree summary table plus a graphical D3 tree from saved `tree_table.parquet` output. The diagram supports zoom, fit/reset, colour palettes, decoded categorical thresholds, edge labels, and default-branch highlighting.

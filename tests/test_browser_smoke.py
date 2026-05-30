@@ -2567,7 +2567,19 @@ COPY (
                 self.assertEqual(numeric_parameter_editor["inputValue"], "77")
                 self.assertFalse(numeric_parameter_editor["hasListEditor"])
                 self.assertFalse(numeric_parameter_editor["popupVisible"])
-                page.keyboard.press("Escape")
+                page.locator("#gbmParameterGrid .tabulator-cell[tabulator-field='value'].tabulator-editing input.gbm-parameter-input-editor").fill("{200, 300}")
+                page.keyboard.press("Enter")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const root = document.querySelector("#gbmGridSamples");
+                      const input = document.querySelector("#gbmGridSampleInput");
+                      const rect = root?.getBoundingClientRect();
+                      return Boolean(root && input && !root.classList.contains("hidden") && rect.width > 0 && rect.height > 0);
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 feature_state = page.evaluate(
                     """
                     () => {
@@ -2606,6 +2618,8 @@ COPY (
                         const shap = document.querySelector("#gbmShapRows");
                         const shapLabel = document.querySelector("#gbmShapRows .gbm-shap-label");
                         const shapOptions = document.querySelector(".gbm-shap-options");
+                        const gridSamples = document.querySelector("#gbmGridSamples");
+                        const gridSampleInput = document.querySelector("#gbmGridSampleInput");
                         const firstShapInput = document.querySelector("input[name='gbmShapRows']");
                         const checkedShapOption = document.querySelector(".gbm-shap-option:has(input:checked)");
                         const mode = document.querySelector("#gbmTrainingMode");
@@ -2646,6 +2660,11 @@ COPY (
                             shapLabels: [...document.querySelectorAll("#gbmShapRows .gbm-shap-option span")].map((node) => node.textContent.trim()),
                             shapOptionsDisplay: shapOptions ? getComputedStyle(shapOptions).display : "",
                             shapOptionsDirection: shapOptions ? getComputedStyle(shapOptions).flexDirection : "",
+                            gridSamplesVisible: Boolean(gridSamples && !gridSamples.classList.contains("hidden")),
+                            gridSampleValue: gridSampleInput ? gridSampleInput.value : "",
+                            gridSamplesTop: gridSamples ? Math.round(gridSamples.getBoundingClientRect().top) : 0,
+                            gridSampleInputMin: gridSampleInput ? gridSampleInput.getAttribute("min") : "",
+                            gridSampleInputStep: gridSampleInput ? gridSampleInput.getAttribute("step") : "",
                             shapInputOpacity: firstShapInput ? getComputedStyle(firstShapInput).opacity : "",
                             checkedShapBackground: checkedShapOption ? getComputedStyle(checkedShapOption).backgroundColor : "",
                             modeRadios: document.querySelectorAll("input[name='gbmTrainingMode']").length,
@@ -2720,6 +2739,10 @@ COPY (
                 self.assertEqual(layout["shapLabels"], ["0", "10k", "100k", "All"])
                 self.assertEqual(layout["shapOptionsDisplay"], "flex")
                 self.assertEqual(layout["shapOptionsDirection"], "row")
+                self.assertTrue(layout["gridSamplesVisible"])
+                self.assertEqual(layout["gridSampleValue"], "25")
+                self.assertEqual(layout["gridSampleInputMin"], "1")
+                self.assertEqual(layout["gridSampleInputStep"], "1")
                 self.assertEqual(layout["shapInputOpacity"], "0")
                 self.assertNotEqual(layout["checkedShapBackground"], layout["rowBackground"])
                 self.assertEqual(layout["modeRadios"], 2)
@@ -2755,6 +2778,7 @@ COPY (
                 self.assertLessEqual(abs(layout["trainTop"] - layout["parameterGridTop"]), 2)
                 self.assertLess(layout["trainTop"], layout["sampleTop"])
                 self.assertLess(layout["sampleTop"], layout["shapTop"])
+                self.assertLess(layout["shapTop"], layout["gridSamplesTop"])
                 self.assertGreaterEqual(layout["parameterGridHeight"], 260)
                 self.assertGreaterEqual(layout["evaluationChartHeight"], 220)
                 self.assertLess(layout["evaluationChartHeight"], layout["evaluationPanelHeight"])

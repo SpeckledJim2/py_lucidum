@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from py_lucidum.app.context import AppContext
 from py_lucidum.core import json_number, sql_literal
 
+from .grid import validate_grid_or_request
 from .jobs import GbmJobManager
 from .sample import SAMPLE_COLUMN, create_generated_sample, sample_metadata
 from .shap import shap_config, shap_plot, stacked_shap_plot
@@ -18,6 +19,7 @@ from .trees import ebm_gain_summary, tree_detail, tree_summary
 from .validation import (
     OFFSET_COLUMN,
     RESPONSE_COLUMN,
+    DATA_SAMPLE_STRATEGIES,
     GBM_METRICS,
     GBM_OBJECTIVES,
     DEFAULT_TRAINING_MODE,
@@ -26,7 +28,6 @@ from .validation import (
     ebm_available,
     feature_rows,
     normalise_training_mode,
-    validate_request,
 )
 
 
@@ -308,6 +309,7 @@ WHERE feature IS NOT NULL
             "parameter_options": {
                 "objective": sorted(GBM_OBJECTIVES),
                 "metric": sorted(GBM_METRICS),
+                "data_sample_strategy": list(DATA_SAMPLE_STRATEGIES),
             },
             "features": features,
             "feature_scenarios": scenarios,
@@ -347,7 +349,7 @@ WHERE feature IS NOT NULL
         context.check_token(request)
         payload = dict(await request.json())
         payload["feature_groupings"] = feature_groupings()
-        return validate_request(context.dataset, payload, generated_sample_path=store.generated_sample_path).as_payload()
+        return validate_grid_or_request(context.dataset, payload, generated_sample_path=store.generated_sample_path)
 
     @app.post("/api/gbm/sample")
     async def sample_endpoint(request: Request) -> dict[str, Any]:
@@ -364,9 +366,9 @@ WHERE feature IS NOT NULL
             gbm_dependencies()
             if payload.get("create_sample"):
                 create_generated_sample(context.dataset, store.generated_sample_path)
-            validation = validate_request(context.dataset, payload, generated_sample_path=store.generated_sample_path)
-            if not validation.ok:
-                raise ValueError("; ".join(validation.errors))
+            validation = validate_grid_or_request(context.dataset, payload, generated_sample_path=store.generated_sample_path)
+            if not validation["ok"]:
+                raise ValueError("; ".join(validation["errors"]))
             job = jobs.start(context.dataset, store, payload)
             return job.as_payload()
         except MissingGbmDependency as exc:

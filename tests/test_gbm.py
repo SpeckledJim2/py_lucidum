@@ -15,7 +15,8 @@ import duckdb
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.demo import demo_dataset_path
-from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager
+from py_lucidum.tools.gbm.grid import parse_parameter_grid, prepare_grid_run, sampled_combination_indexes, validate_grid_or_request
+from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager, best_grid_model
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.shap import shap_config, shap_plot, stacked_shap_plot
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
@@ -810,6 +811,178 @@ COPY (
         self.assertEqual(json.loads(body)["job_id"], "j1")
         self.assertEqual(captured["feature_groupings"], {"Age": "DRIVER", "Segment": "POSTCODE"})
         self.assertEqual(captured["feature_interaction_groupings"], ["POSTCODE"])
+
+    def test_parameter_grid_parses_ranges_sets_and_samples_indexes(self) -> None:
+        grid = parse_parameter_grid(
+            [
+                {"name": "num_iterations", "value": "{200, 300, 400}"},
+                {"name": "learning_rate", "value": "{0.05, 0.3; 0.05}"},
+                {"name": "data_sample_strategy", "value": "{bagging, goss}"},
+            ]
+        )
+
+        self.assertTrue(grid.enabled)
+        self.assertEqual(grid.total_combinations, 36)
+        self.assertEqual([row["value"] for row in grid.resolved_rows(0)], [200, 0.05, "bagging"])
+        self.assertEqual([row["value"] for row in grid.resolved_rows(5)], [200, 0.15, "goss"])
+        self.assertEqual(sampled_combination_indexes(36, 5, 2026), sampled_combination_indexes(36, 5, 2026))
+        self.assertEqual(sampled_combination_indexes(3, 99, 2026), [0, 1, 2])
+
+        with self.assertRaises(ValueError):
+            parse_parameter_grid([{"name": "learning_rate", "value": "{0.05, 0.3; -0.05}"}])
+
+    def test_grid_validation_runs_all_when_sample_request_exceeds_total_and_skips_invalid(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "features": self.request_features(),
+            "parameters": [
+                {"name": "objective", "value": "poisson"},
+                {"name": "metric", "value": "poisson"},
+                {"name": "num_iterations", "value": "{10, 20}"},
+                {"name": "data_sample_strategy", "value": "{bagging, nope}"},
+            ],
+            "sample_column": "SAMPLE",
+            "grid_samples": 99,
+        }
+
+        result = validate_grid_or_request(dataset, payload)
+
+        self.assertTrue(result["ok"], result["errors"])
+        self.assertEqual(result["grid"]["total_combinations"], 4)
+        self.assertEqual(result["grid"]["sampled_count"], 4)
+        self.assertEqual(result["grid"]["trainable_count"], 2)
+        self.assertEqual(result["grid"]["skipped_count"], 2)
+        self.assertIn("Grid has 4 combinations; running all 4.", result["grid"]["messages"])
+        self.assertIn("skipped 2 invalid", " ".join(result["grid"]["messages"]))
+
+    def test_lightgbm_parameter_compatibility_validation(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "features": self.request_features(),
+            "parameters": [
+                {"name": "objective", "value": "poisson"},
+                {"name": "metric", "value": "poisson"},
+                {"name": "data_sample_strategy", "value": "bad"},
+                {"name": "learning_rate", "value": 0},
+                {"name": "num_leaves", "value": 1},
+                {"name": "feature_fraction", "value": 1.5},
+                {"name": "force_col_wise", "value": True},
+                {"name": "force_row_wise", "value": True},
+                {"name": "path_smooth", "value": 0.1},
+                {"name": "min_data_in_leaf", "value": 1},
+                {"name": "is_unbalance", "value": True},
+                {"name": "scale_pos_weight", "value": 2},
+                {"name": "linear_tree", "value": True},
+            ],
+            "sample_column": "SAMPLE",
+            "shap_rows": "10k",
+        }
+
+        result = validate_request(dataset, payload)
+        errors = "; ".join(result.errors)
+
+        self.assertFalse(result.ok)
+        self.assertIn("data_sample_strategy", errors)
+        self.assertIn("learning_rate must be greater than 0", errors)
+        self.assertIn("num_leaves must be greater than 1", errors)
+        self.assertIn("feature_fraction must be greater than 0 and no more than 1", errors)
+        self.assertIn("force_col_wise and force_row_wise cannot both be true", errors)
+        self.assertIn("path_smooth greater than 0 requires min_data_in_leaf", errors)
+        self.assertIn("is_unbalance cannot be used", errors)
+        self.assertIn("linear_tree=true cannot be used", errors)
+
+    def test_grid_job_trains_sequentially_and_activates_best_model(self) -> None:
+        dataset = Dataset(self.data_path)
+        store = GbmModelStore(self.data_path)
+        manager = GbmJobManager()
+        progress_events: list[dict[str, Any]] = []
+        trained: list[dict[str, Any]] = []
+        models: dict[str, dict[str, Any]] = {}
+        original_update_progress = manager.update_progress
+
+        def recording_update_progress(job_id: str, progress: dict[str, Any]) -> None:
+            progress_events.append(dict(progress))
+            original_update_progress(job_id, progress)
+
+        def fake_train_model(
+            dataset_arg: Dataset,
+            store_arg: GbmModelStore,
+            payload: dict[str, Any],
+            progress_callback: Any = None,
+            *,
+            activate: bool = True,
+            grid_search: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            self.assertFalse(activate)
+            self.assertIsNotNone(grid_search)
+            model_id = f"grid-{len(trained) + 1}"
+            metric = 2.0 if not trained else 1.0
+            progress_callback({"phase": "training", "message": "training, tree 1/2", "iteration": 1})
+            model = {
+                "model_id": model_id,
+                "metric": "poisson",
+                "best_metrics": {"training": metric + 1.0, "test": metric},
+                "sources": {"predictions": f"gbm:{model_id}:predictions"},
+                "grid_search": grid_search,
+            }
+            trained.append(model)
+            models[model_id] = {**model, "active": True}
+            return model
+
+        def fake_activate_model(model_id: str) -> dict[str, Any]:
+            return models[model_id]
+
+        manager.update_progress = recording_update_progress  # type: ignore[method-assign]
+        store.activate_model = fake_activate_model  # type: ignore[method-assign]
+        payload = {
+            "label": "Grid test",
+            "features": self.request_features(),
+            "parameters": [
+                {"name": "objective", "value": "poisson"},
+                {"name": "metric", "value": "poisson"},
+                {"name": "num_iterations", "value": "{10, 20}"},
+            ],
+            "sample_column": "SAMPLE",
+            "grid_samples": 99,
+        }
+
+        with patch("py_lucidum.tools.gbm.jobs.train_model", side_effect=fake_train_model):
+            job = manager.start(dataset, store, payload)
+            for _ in range(100):
+                snapshot = manager.get(job.id)
+                if snapshot and snapshot.status == "succeeded":
+                    break
+                time.sleep(0.01)
+
+        snapshot = manager.get(job.id)
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.status, "succeeded")
+        self.assertEqual(snapshot.result["model_id"], "grid-2")
+        self.assertEqual(snapshot.result["grid_search_run"]["completed_count"], 2)
+        self.assertEqual([call["grid_search"]["model_number"] for call in trained], [1, 2])
+        self.assertTrue(any("model 1/2, training, tree 1/2" == event.get("message") for event in progress_events))
+        model_progress = next(event for event in progress_events if event.get("message") == "model 1/2, training, tree 1/2")
+        self.assertIn({"name": "num_iterations", "label": "iters", "value": "10"}, model_progress["grid_parameters"])
+
+    def test_best_grid_model_uses_higher_or_lower_metric_direction(self) -> None:
+        self.assertEqual(
+            best_grid_model(
+                [
+                    {"model_id": "a", "metric": "poisson", "best_metrics": {"test": 2.0}},
+                    {"model_id": "b", "metric": "poisson", "best_metrics": {"test": 1.0}},
+                ]
+            )["model_id"],
+            "b",
+        )
+        self.assertEqual(
+            best_grid_model(
+                [
+                    {"model_id": "a", "metric": "auc", "best_metrics": {"test": 0.7}},
+                    {"model_id": "b", "metric": "auc", "best_metrics": {"test": 0.8}},
+                ]
+            )["model_id"],
+            "b",
+        )
 
     def test_gbm_dependencies_reports_missing_lightgbm_runtime(self) -> None:
         real_import = builtins.__import__

@@ -281,6 +281,9 @@ def train_model(
     store: GbmModelStore,
     payload: dict[str, Any],
     progress_callback: ProgressCallback | None = None,
+    *,
+    activate: bool = True,
+    grid_search: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     lgb, np, pd = gbm_dependencies()
     started = time.perf_counter()
@@ -603,6 +606,8 @@ def train_model(
         manifest["feature_interaction_constraints"] = feature_interaction_constraints
     if ebm_metadata:
         manifest["ebm"] = ebm_metadata
+    if grid_search:
+        manifest["grid_search"] = grid_search
     store.write_json(store.artifact_path(model_id, "feature_config"), feature_config)
     store.write_json(store.artifact_path(model_id, "parameters"), stored_params)
     store.write_json(
@@ -610,8 +615,11 @@ def train_model(
         {"evaluation": evaluation_result, "warnings": validation.warnings, **({"ebm": ebm_metadata} if ebm_metadata else {})},
     )
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
-    store.activate_model(model_id)
-    manifest["active"] = True
+    if activate:
+        store.activate_model(model_id)
+        manifest["active"] = True
+    else:
+        manifest["active"] = False
     emit_progress(
         progress_callback,
         phase_progress_payload(
