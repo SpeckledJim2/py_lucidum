@@ -761,6 +761,57 @@ export function createLineBarTool({
     return { width: null, maxWidth: 18, categoryGap: "30%" };
   }
 
+  function tableNumber(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function transformTableSummaryValue(value, average) {
+    const number = tableNumber(value);
+    if (number === null) return null;
+    const transform = String(state.transform || "none");
+    try {
+      if (transform === "log") return number > 0 ? Math.log(number) : null;
+      if (transform === "exp") {
+        const transformed = Math.exp(number);
+        return Number.isFinite(transformed) ? transformed : null;
+      }
+      if (transform === "logit") return number > 0 && number < 1 ? Math.log(number / (1 - number)) : null;
+      if (transform === "zero") return average !== null ? number - average : null;
+      if (transform === "one") return average !== null && average !== 0 ? number / average : null;
+    } catch (_) {
+      return null;
+    }
+    return number;
+  }
+
+  function buildTableSummary(data) {
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    const responseCount = Array.isArray(data.responses) ? data.responses.length : 0;
+    const summary = {
+      volume: 0,
+      responses: [],
+    };
+    rows.forEach((row) => {
+      const volume = tableNumber(row.volume);
+      if (volume !== null) summary.volume += volume;
+    });
+    for (let index = 0; index < responseCount; index += 1) {
+      let numerator = 0;
+      let denominator = 0;
+      rows.forEach((row) => {
+        const rowNumerator = tableNumber(row[`resp${index}_num`]);
+        const rowDenominator = tableNumber(row[`resp${index}_den`]);
+        if (rowNumerator !== null) numerator += rowNumerator;
+        if (rowDenominator !== null) denominator += rowDenominator;
+      });
+      const average = denominator ? numerator / denominator : null;
+      summary.responses[index] = transformTableSummaryValue(average, average);
+    }
+    return summary;
+  }
+
   function renderTable(data) {
     const responseHeaders = data.responses.map((r, i) => `<th>${escapeHtml(r.label)}</th>`).join("");
     const weightLabel = data.denominator?.bar_label || "Weight";
@@ -775,6 +826,9 @@ export function createLineBarTool({
         return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
       })
       .join("");
+    const summary = buildTableSummary(data);
+    const summaryValues = summary.responses.map((value) => `<td>${formatLineValue(value)}</td>`).join("");
+    const footer = `<tfoot><tr class="line-bar-summary-row"><td>Total</td><td>${formatNumber(summary.volume)}</td>${summaryValues}</tr></tfoot>`;
     const pager = needsPagination
       ? `<div class="table-pagination">
           <span>${(start + 1).toLocaleString()}-${(start + pageRows.length).toLocaleString()} of ${data.rows.length.toLocaleString()} rows</span>
@@ -783,7 +837,7 @@ export function createLineBarTool({
           <button id="tableNextBtn" type="button"${state.tablePage === pageCount ? " disabled" : ""}>Next</button>
         </div>`
       : "";
-    el("tableWrap").innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>${escapeHtml(weightLabel)}</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody></table></div>${pager}`;
+    el("tableWrap").innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>${escapeHtml(weightLabel)}</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody>${footer}</table></div>${pager}`;
     if (needsPagination) {
       el("tablePrevBtn").addEventListener("click", () => {
         state.tablePage -= 1;

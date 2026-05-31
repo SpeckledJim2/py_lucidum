@@ -123,7 +123,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Date/datetime axes use calendar buckets.
 - Actual and Expected lines use a shared denominator. `Average row value` divides by valid row count; a numeric Weight column divides by `SUM(weight)`.
 - Low-weight grouping uses selected Weight total, not raw row count.
-- Table output renders directly up to 1,000 rows; larger results paginate client-side.
+- Table output renders directly up to 1,000 rows; larger results paginate client-side. The table footer is a client-computed `Total` row over all returned table rows, summing returned volume and recomposing response averages from per-row numerator/denominator components without a separate summary query.
 - Chart requests allow up to 10,000 x-axis groups before backend grouping limits apply.
 
 **UK mapping**

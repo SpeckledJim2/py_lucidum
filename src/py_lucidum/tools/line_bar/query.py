@@ -531,6 +531,8 @@ def apply_transform(
             "valid_folds": row.get("valid_folds"),
         }
         for index, _ in enumerate(responses):
+            out[f"resp{index}_num"] = row.get(f"resp{index}_num")
+            out[f"resp{index}_den"] = row.get(f"resp{index}_den")
             out[f"resp{index}"] = transform_value(row.get(f"resp{index}"), transform, averages[index])
             if row.get(f"resp{index}") is not None and out[f"resp{index}"] is None:
                 invalid_count += 1

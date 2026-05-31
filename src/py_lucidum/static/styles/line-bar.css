@@ -87,3 +87,9 @@
         width: 100%;
         height: 100%;
       }
+
+      #tableWrap .line-bar-summary-row td {
+        background: var(--panel);
+        border-top: 2px solid var(--line);
+        font-weight: 700;
+      }

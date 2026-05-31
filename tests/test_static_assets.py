@@ -1235,6 +1235,42 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("#visualArea:not(.profile-mode):not(.map-mode) .workspace-messages {\n        max-width: min(860px, calc(100% - 150px));", css)
         self.assertIn(".workspace-meta,\n      .chart-message {\n        color: var(--muted);\n        font-size: 10px;", css)
 
+    def test_line_bar_table_summary_row_is_client_computed(self) -> None:
+        js = self.app_js_contract()
+        css = self.app_css_contract()
+        script = f"""
+const state = {{ transform: "none" }};
+{self.js_function_source(js, "tableNumber")}
+{self.js_function_source(js, "transformTableSummaryValue")}
+{self.js_function_source(js, "buildTableSummary")}
+const data = {{
+  rows: [
+    {{ volume: 2, resp0_num: 700, resp0_den: 2, resp1_num: 700, resp1_den: 2 }},
+    {{ volume: 1, resp0_num: 200, resp0_den: 1, resp1_num: 210, resp1_den: 1 }},
+  ],
+  responses: [{{}}, {{}}],
+}};
+let summary = buildTableSummary(data);
+if (summary.volume !== 3) throw new Error("volume " + summary.volume);
+if (summary.responses[0] !== 300) throw new Error("actual summary " + summary.responses[0]);
+if (Math.abs(summary.responses[1] - 910 / 3) > 1e-12) throw new Error("expected summary " + summary.responses[1]);
+state.transform = "log";
+summary = buildTableSummary(data);
+if (Math.abs(summary.responses[0] - Math.log(300)) > 1e-12) throw new Error("log summary " + summary.responses[0]);
+state.transform = "zero";
+summary = buildTableSummary(data);
+if (summary.responses[0] !== 0) throw new Error("zero summary " + summary.responses[0]);
+summary = buildTableSummary({{ rows: [{{ volume: 0, resp0_num: null, resp0_den: 0 }}], responses: [{{}}] }});
+if (summary.responses[0] !== null) throw new Error("empty denominator summary " + summary.responses[0]);
+"""
+        self.run_node_script(script)
+
+        self.assertIn("function buildTableSummary(data)", js)
+        self.assertIn("const rowNumerator = tableNumber(row[`resp${index}_num`]);", js)
+        self.assertIn("const rowDenominator = tableNumber(row[`resp${index}_den`]);", js)
+        self.assertIn('const footer = `<tfoot><tr class="line-bar-summary-row"><td>Total</td><td>${formatNumber(summary.volume)}</td>${summaryValues}</tr></tfoot>`;', js)
+        self.assertIn("#tableWrap .line-bar-summary-row td {\n        background: var(--panel);\n        border-top: 2px solid var(--line);\n        font-weight: 700;", css)
+
     def test_stop_app_confirmation_uses_custom_favicon_dialog(self) -> None:
         css = self.app_css_contract()
         js = self.app_js_contract()
