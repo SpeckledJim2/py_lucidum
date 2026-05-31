@@ -2157,6 +2157,8 @@ COPY (
                                 "total_iterations": 10,
                                 "percent": 18,
                                 "metric": "gamma",
+                                "grid_model_number": 1,
+                                "grid_model_count": 25,
                                 "latest": [{"dataset": "test", "metric": "gamma", "value": 7.2}],
                                 "evaluation": {"training": {"gamma": [7.4, 7.3]}, "test": {"gamma": [7.35, 7.2]}},
                             },
@@ -2181,6 +2183,7 @@ COPY (
                 )
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmTrainingStatus").get_by_text("training, tree 2/10, test gamma 7.2").wait_for(timeout=10_000)
+                page.locator("#startupProgress.ready", has_text="Training GBM (1/25)...").wait_for(timeout=10_000)
                 self.assertEqual(
                     train_payload["value"]["feature_scenario"],
                     {"name": "scenario1", "features": ["Age", "Segment"]},
@@ -2202,6 +2205,7 @@ COPY (
                 )
                 live_job_succeed["value"] = True
                 page.locator("#gbmTrainBtn", has_text="Train GBM").wait_for(timeout=10_000)
+                page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
                 page.unroute("**/api/gbm/train", train_route)
                 page.unroute("**/api/gbm/jobs/live-job", job_route)
                 gbm_top_before = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")

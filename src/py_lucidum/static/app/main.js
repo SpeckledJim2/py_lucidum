@@ -277,6 +277,7 @@
         setGroupMeta,
         setRenderTiming,
         setStatus,
+        setAppReadyStatus: setReadyBadge,
         setToolTimingFailed,
         startToolTiming,
         state,
@@ -338,6 +339,10 @@
         node.classList.toggle("ready", stateClass === "ready");
         node.classList.toggle("error", stateClass === "error");
         node.classList.toggle("hidden", !message);
+      }
+
+      function setReadyBadge(message = "Ready") {
+        setStartupProgress(message || "Ready", "ready");
       }
 
       function currentTelemetryAction(snapshot) {

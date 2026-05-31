@@ -247,6 +247,18 @@ for (const [name, model, expected] of cases) {
 """
         self.run_node_script(script)
 
+    def test_gbm_training_ready_badge_label_reports_grid_progress(self) -> None:
+        js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
+        helpers = ["modelNumberOrNull", "formatTrainingBadgeCount", "gbmTrainingReadyBadgeLabel"]
+        script = "\n".join(self.js_function_source(js, name) for name in helpers) + """
+if (gbmTrainingReadyBadgeLabel() !== "Training GBM...") throw new Error("default label failed");
+const gridLabel = gbmTrainingReadyBadgeLabel({ grid_model_number: 2, grid_model_count: 25 });
+if (gridLabel !== "Training GBM (2/25)...") throw new Error(`grid label failed: ${gridLabel}`);
+const pendingGridLabel = gbmTrainingReadyBadgeLabel({ grid: { trainable_count: 25 } });
+if (pendingGridLabel !== "Training GBM...") throw new Error(`pending grid label failed: ${pendingGridLabel}`);
+"""
+        self.run_node_script(script)
+
     def test_gbm_mean_abs_shap_formatter_uses_four_decimal_places(self) -> None:
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
         script = "\n".join(self.js_function_source(js, name) for name in ["featureNumber", "formatMeanAbsShap"]) + """

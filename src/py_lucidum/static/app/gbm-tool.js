@@ -93,6 +93,19 @@ function modelNumberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function formatTrainingBadgeCount(value) {
+  const number = modelNumberOrNull(value);
+  if (number === null || number <= 0) return "";
+  return Math.trunc(number).toLocaleString();
+}
+
+export function gbmTrainingReadyBadgeLabel(progress = null) {
+  const current = formatTrainingBadgeCount(progress?.grid_model_number);
+  const total = formatTrainingBadgeCount(progress?.grid_model_count ?? progress?.grid?.trainable_count);
+  if (current && total) return `Training GBM (${current}/${total})...`;
+  return "Training GBM...";
+}
+
 function formatModelMetric(value) {
   const number = modelNumberOrNull(value);
   return number === null ? "--" : formatEvaluationValue(number) || "--";
@@ -119,6 +132,7 @@ export function createGbmTool({
   setGroupMeta,
   setRenderTiming,
   setStatus,
+  setAppReadyStatus = () => {},
   setToolTimingFailed,
   startToolTiming,
   state,
@@ -2348,6 +2362,7 @@ export function createGbmTool({
       setGroupMeta(tool, "Training GBM...");
       startToolTiming(tool);
       setTrainingState(true);
+      setAppReadyStatus(gbmTrainingReadyBadgeLabel());
       modelListLastRefreshAt = 0;
       liveEvaluationParameters = payload.parameters;
       liveProgress = null;
@@ -2357,6 +2372,7 @@ export function createGbmTool({
       pollJob(job.job_id, 0);
     } catch (error) {
       setTrainingState(false);
+      setAppReadyStatus("Ready");
       liveEvaluationParameters = null;
       gridTrainingNotice = "";
       setToolTimingFailed(tool);
@@ -2389,6 +2405,7 @@ export function createGbmTool({
         if (job.status === "failed") {
           modelListRefreshSeq += 1;
           setTrainingState(false);
+          setAppReadyStatus("Ready");
           liveEvaluationParameters = null;
           gridTrainingNotice = "";
           setToolTimingFailed(tool);
@@ -2408,11 +2425,13 @@ export function createGbmTool({
         cache.requestKey = stableConfigKey();
         cache.data = data;
         setTrainingState(false);
+        setAppReadyStatus("Ready");
         setTrainingStatus("");
         measureToolRender(tool, () => render(data));
         if (!preserveProfile) refreshActiveTool({ force: true });
       } catch (error) {
         setTrainingState(false);
+        setAppReadyStatus("Ready");
         liveEvaluationParameters = null;
         gridTrainingNotice = "";
         setToolTimingFailed(tool);
@@ -2428,6 +2447,7 @@ export function createGbmTool({
 
   function renderLiveProgress(progress) {
     liveProgress = progress;
+    setAppReadyStatus(gbmTrainingReadyBadgeLabel(progress));
     setTrainingStatus(progress.message || "", progress.phase || "", trainingStatusDetail(progress));
     if (progress.message) setGroupMeta(tool, progress.message);
     if (progress.evaluation) {
