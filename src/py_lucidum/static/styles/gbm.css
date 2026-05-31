@@ -731,7 +731,7 @@
 
       .gbm-right-panel {
         display: grid;
-        grid-template-rows: 300px minmax(0, 1fr);
+        grid-template-rows: 330px minmax(0, 1fr);
         gap: 10px;
       }
 

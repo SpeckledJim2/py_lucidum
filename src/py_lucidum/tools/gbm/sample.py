@@ -62,7 +62,7 @@ def sample_metadata(dataset: Dataset, generated_sample_path: Path) -> dict[str, 
                 "levels": counts["levels"],
                 "has_dataset_sample": False,
                 "has_generated_sample": True,
-                "warning": "A generated SAMPLE split is being reused for GBM training. For durable modelling, add a proper SAMPLE column to the original Parquet file.",
+                "warning": "Using generated SAMPLE for GBM training. Add a proper SAMPLE column for durable modelling",
             }
         warning = "No SAMPLE column was found. GBM training will use all valid rows without early stopping unless you create a generated SAMPLE split."
         if generated_sample_path.exists():

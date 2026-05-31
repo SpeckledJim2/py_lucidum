@@ -8,6 +8,10 @@ This file gives future coding agents the shortest reliable path into `py_lucidum
 - Read `DEVELOPMENT.md` before non-trivial changes. It is the durable maintainer context for architecture, behavior contracts, test commands, and commit rules.
 - GBM product notes live in `docs/specs/gbm-tool.md` and `docs/specs/gbm-tool_plan.md`.
 
+## Environment Notes
+
+- This repo is normally driven from Positron, not the Codex app. Do not try to use the Codex in-app Browser plugin here; it will not be available. For browser verification, use the repo's Playwright smoke tooling, local `curl` checks, or a manually launched local browser session.
+
 ## Shape Of The App
 
 - `py_lucidum` is a local-first FastAPI + DuckDB app with a static ES-module frontend.
