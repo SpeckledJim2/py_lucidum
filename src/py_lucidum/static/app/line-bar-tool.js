@@ -137,14 +137,62 @@ export function createLineBarTool({
     return JSON.stringify([state.source || "dataset", state.x || ""]);
   }
 
-  function autoBandWidthForSelectedColumn() {
-    const suggestion = selectedColumn()?.band_suggestion;
-    const formatted = formatBandWidth(suggestion);
-    return formatted === "0" ? "1" : formatted;
+  function fallbackBandWidthForSelectedColumn() {
+    return isNumericKind(selectedColumn()?.kind) ? "1" : "0";
+  }
+
+  function clearPendingBandSuggestion() {
+    state.bandSuggestionPendingKey = null;
+  }
+
+  async function requestBandSuggestionForSelectedColumn(bandFeatureKey = currentBandFeatureKey()) {
+    if (!state.schema || !state.x || state.bandSuggestionPendingKey === bandFeatureKey) return;
+    const column = selectedColumn();
+    if (!isNumericKind(column?.kind)) return;
+    const requestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
+    state.bandSuggestionRequestSeq = requestSeq;
+    state.bandSuggestionPendingKey = bandFeatureKey;
+    syncBandingControl();
+    try {
+      const data = await api("/api/banding/suggestion", {
+        method: "POST",
+        body: JSON.stringify({
+          source: state.source || "dataset",
+          feature: state.x,
+          filter: state.activeFilter,
+        }),
+      });
+      if (requestSeq !== state.bandSuggestionRequestSeq || state.bandSuggestionPendingKey !== bandFeatureKey) return;
+      if (currentBandFeatureKey() !== bandFeatureKey) return;
+      const formatted = formatBandWidth(data.band_suggestion);
+      state.bandWidth = formatted === "0" ? fallbackBandWidthForSelectedColumn() : formatted;
+      state.bandFeature = bandFeatureKey;
+      clearPendingBandSuggestion();
+      if (state.quantileMode === "quantile") {
+        normalizeBandWidthForQuantiles();
+      } else {
+        syncBandingControl();
+      }
+      if (state.tool === "line_bar") refreshChart({ force: true });
+    } catch (error) {
+      if (requestSeq !== state.bandSuggestionRequestSeq || state.bandSuggestionPendingKey !== bandFeatureKey) return;
+      if (currentBandFeatureKey() !== bandFeatureKey) return;
+      state.bandWidth = fallbackBandWidthForSelectedColumn();
+      state.bandFeature = bandFeatureKey;
+      clearPendingBandSuggestion();
+      syncBandingControl();
+      const warning = `Banding estimate failed; using ${state.bandWidth}. ${error.message}`;
+      if (state.tool === "line_bar") {
+        refreshChart({ force: true }).then(() => setStatus(warning, false));
+      } else {
+        setStatus(warning, false);
+      }
+    }
   }
 
   function stepBandWidth(direction) {
-    const current = Number(state.bandWidth) > 0 ? Number(state.bandWidth) : Number(autoBandWidthForSelectedColumn()) || 1;
+    clearPendingBandSuggestion();
+    const current = Number(state.bandWidth) > 0 ? Number(state.bandWidth) : Number(fallbackBandWidthForSelectedColumn()) || 1;
     let next = current;
     if (direction < 0) {
       const smallerSteps = bandSteps.filter((step) => step < current);
@@ -170,9 +218,8 @@ export function createLineBarTool({
     el("bandControl").classList.toggle("hidden", !isNumeric);
     el("quantileControl").classList.toggle("hidden", !isNumeric);
     const bandFeatureKey = currentBandFeatureKey();
-    if (isNumeric && state.bandFeature !== bandFeatureKey) {
-      state.bandWidth = autoBandWidthForSelectedColumn();
-      state.bandFeature = bandFeatureKey;
+    if (isNumeric && state.tool === "line_bar" && state.bandFeature !== bandFeatureKey) {
+      requestBandSuggestionForSelectedColumn(bandFeatureKey);
     }
     if (isNumeric && state.quantileMode === "quantile") {
       normalizeBandWidthForQuantiles();
@@ -191,6 +238,7 @@ export function createLineBarTool({
       state.bandWidth = "0";
       state.quantileMode = "off";
       state.bandFeature = bandFeatureKey;
+      clearPendingBandSuggestion();
       syncSegmented("bandWidth", "0");
     }
     syncBandingControl();
@@ -282,6 +330,15 @@ export function createLineBarTool({
     const kind = selectedColumn()?.kind;
     const isDate = kind === "date" || kind === "datetime";
     const isNumeric = isNumericKind(kind);
+    const bandFeatureKey = currentBandFeatureKey();
+    if (isNumeric && state.bandFeature !== bandFeatureKey) {
+      requestBandSuggestionForSelectedColumn(bandFeatureKey);
+      return null;
+    }
+    if (isNumeric && state.bandSuggestionPendingKey === bandFeatureKey) {
+      setGroupMeta("line_bar", "Estimating banding...");
+      return null;
+    }
     return {
       source: state.source || "dataset",
       x: state.x,
@@ -775,6 +832,7 @@ export function createLineBarTool({
           return;
         }
         if (group.dataset.control === "bandWidth") {
+          clearPendingBandSuggestion();
           state.bandFeature = currentBandFeatureKey();
           if (state.quantileMode === "quantile") {
             normalizeBandWidthForQuantiles();
@@ -784,6 +842,7 @@ export function createLineBarTool({
         }
         if (group.dataset.control === "quantileMode") {
           if (state.quantileMode === "quantile" && previousControlValue !== "quantile") {
+            clearPendingBandSuggestion();
             state.bandWidth = "10";
             state.bandFeature = currentBandFeatureKey();
             syncBandingControl();

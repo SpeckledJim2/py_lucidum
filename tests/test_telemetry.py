@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from py_lucidum.app import create_app
 from py_lucidum.app.servers import ServerStopError, list_lucidum_servers, stop_lucidum_server
+from py_lucidum.app.telemetry import TelemetryStore
 
 
 class FakeConnection:
@@ -140,6 +141,24 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(client["last_app_action"], "Load schema")
         self.assertEqual(client["last_status"], 200)
         self.assertGreaterEqual(client["last_duration_ms"], 0)
+
+    def test_in_flight_actions_include_elapsed_seconds(self) -> None:
+        store = TelemetryStore()
+        request = store.begin({
+            "type": "http",
+            "method": "GET",
+            "path": "/api/schema",
+            "headers": [(b"user-agent", b"Browser A")],
+            "client": ("127.0.0.1", 12345),
+        })
+        snapshot = store.snapshot()
+        client = snapshot["clients"][0]
+
+        self.assertEqual(client["current_action"], "Load schema")
+        self.assertIsNotNone(client["current_action_seconds"])
+        self.assertGreaterEqual(client["current_action_seconds"], 0)
+        self.assertEqual(client["in_flight"], 1)
+        store.finish(request, 200)
 
     def test_records_errors_and_recent_activity(self) -> None:
         app = create_app(self.data_path, token="")

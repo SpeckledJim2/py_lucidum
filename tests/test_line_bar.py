@@ -202,6 +202,85 @@ class LineBarToolTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["data_sources"][0]["id"], "dataset")
+        self.assertTrue(all(column["band_suggestion"] is None for column in payload["columns"]))
+        self.assertTrue(all(column["band_suggestion"] is None for column in payload["data_sources"][0]["columns"]))
+
+    def test_schema_does_not_calculate_eager_band_suggestions(self) -> None:
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        with patch.object(Dataset, "band_suggestions_for_relation", side_effect=AssertionError("eager banding")):
+            status, _, body = asgi_get(app, "/api/schema")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["columns"][0]["band_suggestion"], None)
+
+    def test_lazy_banding_suggestion_endpoint_respects_filters(self) -> None:
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/banding/suggestion", {"feature": "Actual"})
+        filtered_status, _, filtered_body = asgi_post_json(
+            app,
+            "/api/banding/suggestion",
+            {"feature": "Actual", "filter": "UseofVan = 'Business'"},
+        )
+
+        payload = json.loads(body)
+        filtered_payload = json.loads(filtered_body)
+        self.assertEqual(status, 200)
+        self.assertEqual(filtered_status, 200)
+        self.assertEqual(payload["source"], "dataset")
+        self.assertEqual(payload["feature"], "Actual")
+        self.assertGreater(payload["band_suggestion"], 1)
+        self.assertEqual(filtered_payload["band_suggestion"], 1)
+        self.assertIn("duckdb_ms", payload["timings"])
+
+    def test_lazy_banding_suggestion_errors_are_actionable(self) -> None:
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        source_status, _, source_body = asgi_post_json(
+            app,
+            "/api/banding/suggestion",
+            {"source": "missing", "feature": "Actual"},
+        )
+        feature_status, _, feature_body = asgi_post_json(app, "/api/banding/suggestion", {"feature": "Missing"})
+        kind_status, _, kind_body = asgi_post_json(app, "/api/banding/suggestion", {"feature": "UseofVan"})
+        filter_status, _, filter_body = asgi_post_json(
+            app,
+            "/api/banding/suggestion",
+            {"feature": "Actual", "filter": "Missing > 0"},
+        )
+
+        self.assertEqual(source_status, 400)
+        self.assertIn("valid data source", json.loads(source_body)["detail"])
+        self.assertEqual(feature_status, 400)
+        self.assertIn("valid feature", json.loads(feature_body)["detail"])
+        self.assertEqual(kind_status, 400)
+        self.assertIn("numeric feature", json.loads(kind_body)["detail"])
+        self.assertEqual(filter_status, 400)
+        self.assertIn("Invalid filter", json.loads(filter_body)["detail"])
+
+    def test_lazy_banding_suggestion_uses_bounded_sample(self) -> None:
+        path = self.root / "large.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT CASE WHEN i < 100000 THEN 1 ELSE 1000000 END AS Value
+  FROM range(100001) AS rows(i)
+) TO '{path}' (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        app = create_app(path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/banding/suggestion", {"feature": "Value"})
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["band_suggestion"], 1)
 
     def test_dataset_schema_excludes_and_reports_invalid_columns(self) -> None:
         original_probe = Dataset.probe_column_readable

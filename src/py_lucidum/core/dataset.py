@@ -107,22 +107,9 @@ class Dataset:
     def _ensure_schema(self) -> list[ColumnInfo]:
         if self._schema is None:
             rows = self.con.execute(f"DESCRIBE SELECT * FROM {self.relation_sql()}").fetchall()
-            base_schema = [
+            self._schema = [
                 ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
                 for row in rows
-            ]
-            try:
-                suggestions = self.band_suggestions(base_schema)
-            except duckdb.Error:
-                suggestions = {}
-            self._schema = [
-                ColumnInfo(
-                    name=col.name,
-                    duckdb_type=col.duckdb_type,
-                    kind=col.kind,
-                    band_suggestion=suggestions.get(col.name),
-                )
-                for col in base_schema
             ]
         return self._schema
 
@@ -205,25 +192,7 @@ class Dataset:
         source = self.normalise_source(source_id)
         if source == "dataset":
             return self.schema()
-        relation = self.relation_sql_for_source(source)
-        rows = self.con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
-        base_columns = [
-            ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
-            for row in rows
-        ]
-        try:
-            suggestions = self.band_suggestions_for_source(source, base_columns, relation)
-        except duckdb.Error:
-            suggestions = {}
-        columns = [
-            ColumnInfo(
-                name=col.name,
-                duckdb_type=col.duckdb_type,
-                kind=col.kind,
-                band_suggestion=suggestions.get(col.name),
-            )
-            for col in base_columns
-        ]
+        columns = self.schema_columns_for_source(source)
         return {
             "path": source,
             "file_size": None,
@@ -238,6 +207,59 @@ class Dataset:
                 for c in columns
             ],
         }
+
+    def schema_columns_for_source(self, source_id: Any = None) -> list[ColumnInfo]:
+        source = self.normalise_source(source_id)
+        if source == "dataset":
+            return self.valid_schema_columns()
+        relation = self.relation_sql_for_source(source)
+        rows = self.con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
+        return [
+            ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
+            for row in rows
+        ]
+
+    def band_suggestion_for_column(
+        self,
+        source_id: Any,
+        feature: Any,
+        filter_sql: str = "",
+        sample_limit: int = 100_000,
+    ) -> float | int | None:
+        source = self.normalise_source(source_id)
+        feature_name = str(feature or "").strip()
+        if not feature_name:
+            raise ValueError("Choose a numeric feature")
+        columns = {column.name: column for column in self.schema_columns_for_source(source)}
+        column = columns.get(feature_name)
+        if column is None:
+            raise ValueError("Choose a valid feature for the selected data source")
+        if not is_numeric_kind(column.kind):
+            raise ValueError("Choose a numeric feature for banding")
+        limit = max(1, min(int(sample_limit), 100_000))
+        where_sql = f"WHERE ({filter_sql})" if filter_sql else ""
+        raw = quote_ident(column.name)
+        sql = f"""
+WITH sample AS (
+  SELECT TRY_CAST({raw} AS DOUBLE) AS value
+  FROM {self.relation_sql_for_source(source)}
+  {where_sql}
+  LIMIT {limit}
+)
+SELECT
+  STDDEV_SAMP(value) AS std,
+  MIN(value) AS min_value,
+  MAX(value) AS max_value
+FROM sample
+"""
+        row = self.con.execute(sql).fetchone()
+        if not row:
+            return None
+        stddev, min_value, max_value = row
+        if column.kind == "integer" and min_value is not None and max_value is not None:
+            if max_value - min_value < 120:
+                return 1
+        return suggested_band_width(stddev)
 
     def band_suggestions(self, schema: list[ColumnInfo]) -> dict[str, float | int | None]:
         if self._band_suggestions is not None:
@@ -325,17 +347,9 @@ FROM sample
 
     def column_map_for_source(self, source_id: Any = None) -> dict[str, ColumnInfo]:
         source = self.normalise_source(source_id)
-        if source == "dataset":
-            return self.column_map()
-        schema = self.schema_for_source(source)
         return {
-            str(column["name"]): ColumnInfo(
-                name=str(column["name"]),
-                duckdb_type=str(column["duckdb_type"]),
-                kind=str(column["kind"]),
-                band_suggestion=column.get("band_suggestion"),
-            )
-            for column in schema["columns"]
+            column.name: column
+            for column in self.schema_columns_for_source(source)
         }
 
     def _schema_columns(self) -> list[ColumnInfo]:

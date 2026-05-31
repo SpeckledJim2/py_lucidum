@@ -284,6 +284,22 @@ for (const value of [4, 7, 12]) {
 """
         self.run_node_script(script)
 
+    def test_startup_progress_pill_reports_schema_phases(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        html = html_body.decode("utf-8")
+        css = self.app_css_contract()
+        js = self.app_js_contract()
+
+        self.assertIn('id="startupProgress"', html)
+        self.assertIn('class="startup-progress"', html)
+        self.assertIn(".startup-progress", css)
+        self.assertIn('setStartupProgress("Requesting schema")', js)
+        self.assertIn('setStartupProgress("Schema received")', js)
+        self.assertIn('setStartupProgress("Rendering controls")', js)
+        self.assertIn('setStartupProgress("Ready", "ready")', js)
+        self.assertIn('/api/telemetry', js)
+        self.assertIn("current_action_seconds", js)
+
     def test_gbm_shap_flame_option_uses_exact_domain_without_45_55(self) -> None:
         chart_path = Path(__file__).resolve().parents[1] / "src/py_lucidum/static/app/gbm-shap-chart.js"
         script = f"""
@@ -825,7 +841,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("background: var(--panel);\n        width: 100%;", css)
         self.assertIn(".gbm-shap-option input {\n        block-size: 1px;\n        inline-size: 1px;", css)
         self.assertIn("opacity: 0;\n        pointer-events: none;\n        position: absolute;", css)
-        self.assertIn("grid-template-rows: 300px minmax(0, 1fr)", css)
+        self.assertIn("grid-template-rows: 330px minmax(0, 1fr)", css)
         self.assertIn(".gbm-evaluation-chart {\n        min-height: 220px;\n        border: 1px solid var(--gbm-table-border);", css)
         self.assertIn(".gbm-evaluation-chart {\n        height: 100%;", css)
         self.assertIn(".gbm-tree-viewer {\n        display: grid;", css)
@@ -1724,14 +1740,32 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('<div class="segmented" data-control="quantileMode">', html)
         self.assertIn('<button data-value="off" class="active">-</button>', html)
         self.assertIn('<button data-value="quantile">Use quantiles</button>', html)
+        self.assertNotIn('data-value="auto"', html)
+        self.assertNotIn(">Auto<", html)
         self.assertIn('quantileMode: "off"', js)
         self.assertIn('el("bandLabel").textContent = state.quantileMode === "quantile" ? "Quantiles" : "Banding";', js)
         self.assertIn('el("quantileControl").classList.toggle("hidden", !isNumeric);', js)
         self.assertIn('quantileMode: isNumeric ? state.quantileMode : "off"', js)
+        self.assertIn('/api/banding/suggestion', js)
+        self.assertIn("requestBandSuggestionForSelectedColumn", js)
         self.assertIn('const previousControlValue = state[group.dataset.control];', js)
         self.assertIn('state.quantileMode === "quantile" && previousControlValue !== "quantile"', js)
         self.assertIn('state.bandWidth = "10";', js)
         self.assertIn('function normalizeBandWidthForQuantiles()', js)
+
+    def test_gbm_shap_banding_uses_lazy_suggestion_without_auto_control(self) -> None:
+        shap_js = self.assert_no_store("/static/app/gbm-shap-tool.js")[1].decode("utf-8")
+        stacked_js = self.assert_no_store("/static/app/gbm-stacked-shap-tool.js")[1].decode("utf-8")
+
+        self.assertIn('/api/banding/suggestion', shap_js)
+        self.assertIn("ensureBanding", shap_js)
+        self.assertIn("Estimating SHAP banding", shap_js)
+        self.assertNotIn(">Auto<", shap_js)
+        self.assertNotIn('data-gbm-shap-band-value="auto"', shap_js)
+        self.assertIn('/api/banding/suggestion', stacked_js)
+        self.assertIn("Estimating Stacked SHAP banding", stacked_js)
+        self.assertNotIn(">Auto<", stacked_js)
+        self.assertNotIn('data-gbm-stacked-shap-band-value="auto"', stacked_js)
 
     def test_london_map_button_icon_fills_button(self) -> None:
         css = self.app_css_contract()

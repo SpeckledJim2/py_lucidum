@@ -14,6 +14,7 @@ import psutil
 APP_ACTIONS = {
     ("GET", "/"): "Open app",
     ("GET", "/api/schema"): "Load schema",
+    ("POST", "/api/banding/suggestion"): "Band suggestion",
     ("POST", "/api/reload"): "Reload dataset",
     ("POST", "/api/shutdown"): "Stop app",
     ("POST", "/api/lucidum-servers/stop"): "Stop Lucidum server",
@@ -66,7 +67,7 @@ class ClientTelemetry:
     last_path: str = ""
     last_app_action: str | None = None
     last_app_path: str | None = None
-    current_actions: dict[int, str] = field(default_factory=dict)
+    current_actions: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -326,7 +327,7 @@ class TelemetryStore:
             client.request_count += 1
             client.last_seen = now
             client.last_path = path
-            client.current_actions[request_id] = action_label
+            client.current_actions[request_id] = {"label": action_label, "started_wall": now}
 
         return TelemetryRequest(
             request_id=request_id,
@@ -483,7 +484,18 @@ class TelemetryStore:
 
     def _client_snapshot(self, client: ClientTelemetry, now: float) -> dict[str, Any]:
         idle_seconds = max(0.0, now - client.last_seen)
-        current_action = next(reversed(client.current_actions.values()), None) if client.current_actions else None
+        current_action_entry = next(reversed(client.current_actions.values()), None) if client.current_actions else None
+        if isinstance(current_action_entry, dict):
+            current_action = current_action_entry.get("label")
+            action_started = current_action_entry.get("started_wall")
+        else:
+            current_action = current_action_entry
+            action_started = None
+        current_action_seconds = (
+            round(max(0.0, now - float(action_started)), 1)
+            if action_started is not None
+            else None
+        )
         return {
             "client_ip": client.client_ip,
             "user_agent": client.user_agent,
@@ -499,6 +511,7 @@ class TelemetryStore:
             "app_action_count": client.app_action_count,
             "error_count": client.error_count,
             "current_action": current_action,
+            "current_action_seconds": current_action_seconds,
             "last_app_action": client.last_app_action,
             "last_app_path": client.last_app_path,
             "last_path": client.last_path,

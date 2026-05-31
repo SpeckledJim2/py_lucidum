@@ -31,6 +31,12 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     search2: "",
     banding1: 1,
     banding2: 1,
+    bandingKey1: "",
+    bandingKey2: "",
+    bandingPendingKey1: "",
+    bandingPendingKey2: "",
+    bandingSeq1: 0,
+    bandingSeq2: 0,
     factor1: false,
     factor2: false,
     tailPercent: 1,
@@ -162,7 +168,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     }
     if (previous !== state[key]) {
       clearPendingLegendState();
-      state[`banding${index}`] = defaultBanding(selectedFeature(index));
+      resetBanding(index);
     }
     renderControlsAndLists();
     refreshPlot();
@@ -179,19 +185,22 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     state.search2 = "";
     if (changed) {
       clearPendingLegendState();
-      state.banding1 = defaultBanding(selectedFeature(1));
-      state.banding2 = defaultBanding(selectedFeature(2));
+      resetBanding(1);
+      resetBanding(2);
     }
   }
 
   function setBanding(index, value) {
-    state[`banding${index}`] = normaliseBanding(value, selectedFeature(index));
+    clearPendingBanding(index);
+    state[`banding${index}`] = normaliseBanding(value);
+    state[`bandingKey${index}`] = currentBandingKey(index);
     renderControls();
     refreshPlot();
   }
 
   function stepBanding(index, direction) {
-    const current = Number(state[`banding${index}`]) || defaultBanding(selectedFeature(index));
+    clearPendingBanding(index);
+    const current = Number(state[`banding${index}`]) || defaultBanding();
     const next = direction < 0
       ? [...BAND_STEPS].reverse().find((step) => step < current) || current
       : BAND_STEPS.find((step) => step > current) || current;
@@ -200,6 +209,9 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
 
   async function refreshPlot() {
     if (!config?.has_shap || !state.feature1) return;
+    const featureKey = `${state.feature1}\n${state.feature2 || ""}`;
+    const ensured = await Promise.all([ensureBanding(1), ensureBanding(2)]);
+    if (!ensured.every(Boolean) || featureKey !== `${state.feature1}\n${state.feature2 || ""}`) return;
     const seq = ++plotSeq;
     setMessage("Computing SHAP plot...");
     try {
@@ -359,9 +371,15 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       state.feature2 = "";
       featureFallback = true;
     }
-    state.banding1 = normaliseBanding(state.banding1, selectedFeature(1));
-    state.banding2 = normaliseBanding(state.banding2, selectedFeature(2));
+    state.banding1 = normaliseBanding(state.banding1);
+    state.banding2 = normaliseBanding(state.banding2);
     return { featureFallback };
+  }
+
+  function resetBanding(index) {
+    clearPendingBanding(index);
+    state[`banding${index}`] = defaultBanding();
+    state[`bandingKey${index}`] = "";
   }
 
   function firstFeatureNameForChooser(index) {
@@ -533,16 +551,57 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     return rows;
   }
 
-  function defaultBanding(feature) {
-    return normaliseBanding(feature?.band_suggestion, feature);
+  function defaultBanding() {
+    return normaliseBanding(null);
   }
 
-  function normaliseBanding(value, feature) {
+  function normaliseBanding(value) {
     const number = Number(value);
     if (Number.isFinite(number) && number > 0) return Number(number.toPrecision(12));
-    const fallback = Number(feature?.band_suggestion);
-    if (Number.isFinite(fallback) && fallback > 0) return Number(fallback.toPrecision(12));
     return 1;
+  }
+
+  function currentBandingKey(index) {
+    const feature = selectedFeature(index);
+    return feature && isNumericKind(feature.kind) ? `${modelId}:${feature.name}` : "";
+  }
+
+  function clearPendingBanding(index) {
+    state[`bandingPendingKey${index}`] = "";
+  }
+
+  async function ensureBanding(index) {
+    const feature = selectedFeature(index);
+    if (!feature || !isNumericKind(feature.kind)) return true;
+    const key = currentBandingKey(index);
+    if (!key || state[`bandingKey${index}`] === key) return true;
+    if (state[`bandingPendingKey${index}`] === key) return false;
+    const seqKey = `bandingSeq${index}`;
+    const seq = (state[seqKey] || 0) + 1;
+    state[seqKey] = seq;
+    state[`bandingPendingKey${index}`] = key;
+    renderControls();
+    setMessage("Estimating SHAP banding...");
+    try {
+      const data = await api("/api/banding/suggestion", {
+        method: "POST",
+        body: JSON.stringify({ source: "dataset", feature: feature.name }),
+      });
+      if (state[seqKey] !== seq || state[`bandingPendingKey${index}`] !== key || currentBandingKey(index) !== key) return false;
+      state[`banding${index}`] = normaliseBanding(data.band_suggestion);
+      state[`bandingKey${index}`] = key;
+      clearPendingBanding(index);
+      renderControls();
+      return true;
+    } catch (error) {
+      if (state[seqKey] !== seq || state[`bandingPendingKey${index}`] !== key || currentBandingKey(index) !== key) return false;
+      state[`banding${index}`] = defaultBanding();
+      state[`bandingKey${index}`] = key;
+      clearPendingBanding(index);
+      renderControls();
+      setMessage(`Banding estimate failed; using ${formatBanding(state[`banding${index}`])}. ${error.message}`);
+      return true;
+    }
   }
 
   function featureImportanceLabel(feature, rank) {

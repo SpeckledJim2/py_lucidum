@@ -108,6 +108,8 @@
         mapControlMoved: false,
         tablePage: 1,
         bandFeature: null,
+        bandSuggestionPendingKey: null,
+        bandSuggestionRequestSeq: 0,
         profileRequestSeq: 0,
         profileDetailRequestSeq: 0,
         chartRequestSeq: 0,
@@ -118,6 +120,8 @@
 
       const BAND_STEPS = makeBandSteps();
       let serverHeartbeatTimer = null;
+      let startupTelemetryTimer = null;
+      let startupProgressStartedAt = 0;
       let clipboardToastTimer = null;
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
@@ -320,6 +324,50 @@
         if (!serverHeartbeatTimer) return;
         window.clearInterval(serverHeartbeatTimer);
         serverHeartbeatTimer = null;
+      }
+
+      function startupElapsedSeconds() {
+        if (!startupProgressStartedAt) return 0;
+        return Math.max(0, Math.round((performance.now() - startupProgressStartedAt) / 1000));
+      }
+
+      function setStartupProgress(message, stateClass = "") {
+        const node = el("startupProgress");
+        if (!node) return;
+        node.textContent = message || "";
+        node.classList.toggle("ready", stateClass === "ready");
+        node.classList.toggle("error", stateClass === "error");
+        node.classList.toggle("hidden", !message);
+      }
+
+      function currentTelemetryAction(snapshot) {
+        const clients = Array.isArray(snapshot?.clients) ? snapshot.clients : [];
+        return clients.find((client) => client.current_action) || null;
+      }
+
+      function startStartupTelemetryPolling(fallbackLabel) {
+        stopStartupTelemetryPolling();
+        startupProgressStartedAt = performance.now();
+        startupTelemetryTimer = window.setInterval(async () => {
+          try {
+            const snapshot = await api("/api/telemetry", { method: "GET" });
+            const current = currentTelemetryAction(snapshot);
+            const elapsed = current?.current_action_seconds ?? startupElapsedSeconds();
+            if (current?.current_action) {
+              setStartupProgress(`${current.current_action} · ${Math.round(elapsed)}s`);
+            } else {
+              setStartupProgress(`${fallbackLabel} · ${startupElapsedSeconds()}s`);
+            }
+          } catch (_) {
+            setStartupProgress(`${fallbackLabel} · ${startupElapsedSeconds()}s`);
+          }
+        }, 1000);
+      }
+
+      function stopStartupTelemetryPolling() {
+        if (!startupTelemetryTimer) return;
+        window.clearInterval(startupTelemetryTimer);
+        startupTelemetryTimer = null;
       }
 
       async function cacheShutdownIcon() {
@@ -1940,6 +1988,8 @@
           state.schema = await api("/api/reload", { method: "POST" });
           const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
           state.bandFeature = null;
+          state.bandSuggestionPendingKey = null;
+          state.bandSuggestionRequestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
           clearToolCaches();
           setFilterRowMeta(state.schema.row_count);
           if (filtersUnchanged) {
@@ -1996,13 +2046,18 @@
         syncMonitorLink();
         cacheShutdownIcon();
         try {
+          setStartupProgress("Requesting schema");
+          startStartupTelemetryPolling("Requesting schema");
           state.schema = await api("/api/schema");
+          stopStartupTelemetryPolling();
+          setStartupProgress("Schema received");
           const path = state.schema.path.split(/[\\/]/).pop();
           const fileSize = formatFileSize(state.schema.file_size);
           const fileMeta = fileSize ? `${path} · ${fileSize}` : path;
           document.title = path ? `lucidum · ${path}` : "lucidum";
           el("datasetMeta").textContent = `${fileMeta} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
           setFilterRowMeta(state.schema.row_count);
+          setStartupProgress("Rendering controls");
           chooseDefaults();
           renderKpis();
           renderToolSelector();
@@ -2012,9 +2067,13 @@
           lineBarTool.renderFeatures();
           lineBarTool.updateAxisControls();
           setTool(state.tool, false);
+          setStartupProgress("Loading initial profile");
           await refreshActiveTool({ force: true });
+          setStartupProgress("Ready", "ready");
           startServerHeartbeat();
         } catch (error) {
+          stopStartupTelemetryPolling();
+          setStartupProgress("Startup failed", "error");
           el("datasetMeta").textContent = "Dataset failed to load";
           setStatus(error.message, true);
         }

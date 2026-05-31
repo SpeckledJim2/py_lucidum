@@ -3,15 +3,18 @@ from __future__ import annotations
 import html
 import os
 import threading
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import duckdb
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 
 from py_lucidum.core import (
     Dataset,
+    duckdb_error_message,
     load_features,
     load_kpis,
     load_saved_filters,
@@ -158,6 +161,29 @@ def create_app(
     def schema(request: Request) -> dict[str, Any]:
         check_token(request)
         return schema_payload()
+
+    @app.post("/api/banding/suggestion")
+    def banding_suggestion(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        check_token(request)
+        started = time.perf_counter()
+        dataset = app.state.dataset
+        try:
+            with dataset.lock:
+                source = dataset.normalise_source(payload.get("source"))
+                feature = str(payload.get("feature") or "").strip()
+                filter_sql = dataset.normalise_filter(payload.get("filter"), source_id=source)
+                suggestion = dataset.band_suggestion_for_column(source, feature, filter_sql)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except duckdb.Error as exc:
+            raise HTTPException(status_code=400, detail=duckdb_error_message(exc)) from exc
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        return {
+            "feature": feature,
+            "source": source,
+            "band_suggestion": suggestion,
+            "timings": {"duckdb_ms": elapsed_ms},
+        }
 
     @app.get("/api/health")
     def health(request: Request) -> dict[str, str]:

@@ -44,6 +44,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `py_lucidum.app.create_app(...)`
 - HTTP:
   - `GET /api/schema`
+  - `POST /api/banding/suggestion`
   - `GET /api/health`
   - `GET /api/lucidum-servers`
   - `POST /api/reload`
@@ -81,7 +82,9 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Other local files under `datasets/` remain ignored.
 - Parquet is the preferred working format for speed; CSV remains supported for convenience.
 - `GET /api/schema` includes `data_sources`. The default source is `dataset`; model outputs publish named tabular artifacts through this same contract.
+- `GET /api/schema` does not precompute numeric band suggestions. Column payloads keep `band_suggestion` for compatibility, normally as `null`; chart tools request initial numeric band estimates lazily through `POST /api/banding/suggestion`.
 - `GET /api/schema` excludes unreadable columns from `columns` and reports them as `invalid_columns` with sanitized errors. Normal tools should use the safe column maps; only diagnostics or choosers that explicitly report invalid columns should use the all-column map.
+- Prefer doing derived or convenience calculations on the fly when the user selects a tool, source, feature, or filter. Avoid startup-time pre-calculation unless it is specifically part of the desired startup behavior, such as Column Profile's initial landing view.
 - Line/Bar accepts a `source` request field and defaults it to `dataset`. Unknown sources are rejected before query execution.
 
 **Defaults, saved filters, KPIs, and feature specs**
@@ -115,6 +118,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 **Line and bar chart**
 
 - X-axis features can be integer, numeric, string/categorical, date, or datetime.
+- Numeric x-axis banding uses the existing visible controls only: concrete band widths, step buttons, and explicit `-` for no banding. The initial concrete width is estimated lazily from the selected source/filter when a numeric feature is selected, using a bounded sample of up to 100,000 rows.
 - Numeric banding floors values to the selected band width by default. With `quantileMode` enabled, the same banding value is rounded and clamped to `1..1000`, non-missing numeric values are grouped as `Q1`, `Q2`, etc., and missing x-axis values stay in a separate `Missing` group.
 - Date/datetime axes use calendar buckets.
 - Actual and Expected lines use a shared denominator. `Average row value` divides by valid row count; a numeric Weight column divides by `SUM(weight)`.

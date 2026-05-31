@@ -34,6 +34,9 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     tailPercent: 0,
     numFeatures: "all",
     banding: 1,
+    bandingKey: "",
+    bandingPendingKey: "",
+    bandingSeq: 0,
   };
 
   function shellHtml() {
@@ -142,7 +145,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     const previous = state.modelFeature;
     state.modelFeature = String(value || "");
     if (!state.modelFeature) state.modelFeature = config?.default_feature_1 || features()[0]?.name || "";
-    if (previous !== state.modelFeature) state.banding = defaultBanding(selectedFeature());
+    if (previous !== state.modelFeature) resetBanding();
     renderControlsAndLists();
     refreshPlot();
   }
@@ -152,17 +155,20 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     if (!nextFeature) return;
     const changed = state.modelFeature !== nextFeature;
     state.modelFeature = nextFeature;
-    if (changed) state.banding = defaultBanding(selectedFeature());
+    if (changed) resetBanding();
   }
 
   function setBanding(value) {
-    state.banding = normaliseBanding(value, selectedFeature());
+    clearPendingBanding();
+    state.banding = normaliseBanding(value);
+    state.bandingKey = currentBandingKey();
     renderControls();
     refreshPlot();
   }
 
   function stepBanding(direction) {
-    const current = Number(state.banding) || defaultBanding(selectedFeature());
+    clearPendingBanding();
+    const current = Number(state.banding) || defaultBanding();
     const next = direction < 0
       ? [...BAND_STEPS].reverse().find((step) => step < current) || current
       : BAND_STEPS.find((step) => step > current) || current;
@@ -171,6 +177,9 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
 
   async function refreshPlot() {
     if (!config?.has_shap || !state.modelFeature) return;
+    const featureKey = state.modelFeature;
+    const ensured = await ensureBanding();
+    if (!ensured || featureKey !== state.modelFeature) return;
     const seq = ++plotSeq;
     setMessage("Computing Stacked SHAP...");
     try {
@@ -246,7 +255,13 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
       state.numFeatures = "all";
     }
     if (!names.has(state.modelFeature)) state.modelFeature = config?.default_feature_1 || features()[0]?.name || "";
-    state.banding = normaliseBanding(state.banding, selectedFeature());
+    state.banding = normaliseBanding(state.banding);
+  }
+
+  function resetBanding() {
+    clearPendingBanding();
+    state.banding = defaultBanding();
+    state.bandingKey = "";
   }
 
   function renderLoading(message) {
@@ -402,16 +417,56 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     return features().find((feature) => feature.name === state.modelFeature) || null;
   }
 
-  function defaultBanding(feature) {
-    return normaliseBanding(feature?.band_suggestion, feature);
+  function defaultBanding() {
+    return normaliseBanding(null);
   }
 
-  function normaliseBanding(value, feature) {
+  function normaliseBanding(value) {
     const number = Number(value);
     if (Number.isFinite(number) && number > 0) return Number(number.toPrecision(12));
-    const fallback = Number(feature?.band_suggestion);
-    if (Number.isFinite(fallback) && fallback > 0) return Number(fallback.toPrecision(12));
     return 1;
+  }
+
+  function currentBandingKey() {
+    const feature = selectedFeature();
+    return feature && isNumericKind(feature.kind) ? `${modelId}:${feature.name}` : "";
+  }
+
+  function clearPendingBanding() {
+    state.bandingPendingKey = "";
+  }
+
+  async function ensureBanding() {
+    const feature = selectedFeature();
+    if (!feature || !isNumericKind(feature.kind)) return true;
+    const key = currentBandingKey();
+    if (!key || state.bandingKey === key) return true;
+    if (state.bandingPendingKey === key) return false;
+    const seq = (state.bandingSeq || 0) + 1;
+    state.bandingSeq = seq;
+    state.bandingPendingKey = key;
+    renderControls();
+    setMessage("Estimating Stacked SHAP banding...");
+    try {
+      const data = await api("/api/banding/suggestion", {
+        method: "POST",
+        body: JSON.stringify({ source: "dataset", feature: feature.name }),
+      });
+      if (state.bandingSeq !== seq || state.bandingPendingKey !== key || currentBandingKey() !== key) return false;
+      state.banding = normaliseBanding(data.band_suggestion);
+      state.bandingKey = key;
+      clearPendingBanding();
+      renderControls();
+      return true;
+    } catch (error) {
+      if (state.bandingSeq !== seq || state.bandingPendingKey !== key || currentBandingKey() !== key) return false;
+      state.banding = defaultBanding();
+      state.bandingKey = key;
+      clearPendingBanding();
+      renderControls();
+      setMessage(`Banding estimate failed; using ${formatBanding(state.banding)}. ${error.message}`);
+      return true;
+    }
   }
 
   function normaliseXSort(value) {

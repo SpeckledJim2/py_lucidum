@@ -2524,8 +2524,23 @@ COPY (
         self.assertIn("Segment", prediction_columns)
         self.assertIn("gbm_prediction", prediction_columns)
         prediction_columns_by_name = {column["name"]: column for column in prediction_source["columns"]}
-        self.assertEqual(prediction_columns_by_name["Age"]["band_suggestion"], 1)
-        self.assertGreater(prediction_columns_by_name["gbm_prediction"]["band_suggestion"], 0)
+        self.assertIsNone(prediction_columns_by_name["Age"]["band_suggestion"])
+        self.assertIsNone(prediction_columns_by_name["gbm_prediction"]["band_suggestion"])
+        with patch.object(Dataset, "row_count_for_source", side_effect=AssertionError("lazy suggestion counted rows")):
+            band_status, band_body = asgi_post_json(
+                app,
+                "/api/banding/suggestion",
+                {"source": "gbm:m1:predictions", "feature": "Age"},
+            )
+            prediction_band_status, prediction_band_body = asgi_post_json(
+                app,
+                "/api/banding/suggestion",
+                {"source": "gbm:m1:predictions", "feature": "gbm_prediction"},
+            )
+        self.assertEqual(band_status, 200)
+        self.assertEqual(json.loads(band_body)["band_suggestion"], 1)
+        self.assertEqual(prediction_band_status, 200)
+        self.assertGreater(json.loads(prediction_band_body)["band_suggestion"], 0)
 
         dataset = Dataset(self.data_path)
         dataset.register_data_source_provider(GbmSourceProvider(GbmModelStore(self.data_path)))
