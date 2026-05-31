@@ -1015,6 +1015,19 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("async function renameActiveModel() {\n    if (isTraining) return;", js)
         self.assertIn("async function deleteActiveModel() {\n    if (isTraining) return;", js)
 
+    def test_gbm_auto_training_label_uses_time_only(self) -> None:
+        js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
+        helper = self.js_function_source(js, "gbmAutoModelTimeLabel")
+
+        self.assertIn('label: `GBM ${gbmAutoModelTimeLabel()}`', js)
+        self.assertNotIn("toISOString().slice(11, 19)", js)
+        self.assertNotIn('label: `GBM ${new Date().toISOString().slice(0, 19).replace("T", " ")}`', js)
+
+        self.run_node_script(helper + """
+const label = gbmAutoModelTimeLabel(new Date(2026, 6, 1, 18, 12, 59));
+if (label !== "18:12:59") throw new Error(`expected local time label, got ${label}`);
+""")
+
     def test_monitor_page_disables_cache(self) -> None:
         headers, body = self.assert_no_store("/monitor")
         _, css_body = self.assert_no_store("/static/monitor.css")

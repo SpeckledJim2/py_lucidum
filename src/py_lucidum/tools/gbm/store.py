@@ -158,7 +158,7 @@ class GbmModelStore:
     def create_model_id(self, label: str | None = None) -> str:
         cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(label or "gbm").strip().lower()).strip("-")
         prefix = cleaned or "gbm"
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        timestamp = time.strftime("%H%M%S")
         return f"{prefix}-{timestamp}-{uuid4().hex[:8]}"
 
     def validate_model_id(self, model_id: str, *, for_new_name: bool = False) -> str:

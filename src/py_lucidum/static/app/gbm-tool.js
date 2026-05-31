@@ -51,6 +51,13 @@ const GBM_EVALUATION_DOWNSAMPLE_THRESHOLD = 2000;
 const GBM_EVALUATION_MAX_PLOT_POINTS = 1500;
 const GBM_GRID_SAMPLE_DEFAULT = 25;
 
+function gbmAutoModelTimeLabel(date = new Date()) {
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const second = String(date.getSeconds()).padStart(2, "0");
+  return `${hour}:${minute}:${second}`;
+}
+
 export function gbmShapSelectionValue(data = {}) {
   const models = Array.isArray(data?.models) ? data.models : [];
   const activeModelId = String(data?.active_model_id || "");
@@ -2316,7 +2323,7 @@ export function createGbmTool({
     const featureScenario = currentFeatureScenarioPayload();
     const featureInteractionGroupings = currentFeatureInteractionGroupingsPayload();
     const payload = {
-      label: `GBM ${new Date().toISOString().slice(0, 19).replace("T", " ")}`,
+      label: `GBM ${gbmAutoModelTimeLabel()}`,
       response: el("actualNumerator")?.value || "actualNumerator",
       offset: el("denominator")?.value || "denominator",
       features: currentFeatureRows(),

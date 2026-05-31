@@ -132,6 +132,17 @@ class GbmToolTests(unittest.TestCase):
             {"name": "Segment", "include": True, "monotonicity": ""},
         ]
 
+    def test_create_model_id_uses_time_only_timestamp_and_uuid_suffix(self) -> None:
+        store = GbmModelStore(self.data_path)
+
+        with patch("py_lucidum.tools.gbm.store.time.strftime", return_value="143211"):
+            with patch("py_lucidum.tools.gbm.store.uuid4") as fake_uuid4:
+                fake_uuid4.return_value.hex = "abcdef0123456789"
+                model_id = store.create_model_id("GBM 14:32:11")
+
+        self.assertEqual(model_id, "gbm-14-32-11-143211-abcdef01")
+        self.assertNotRegex(model_id, r"\d{8}-\d{6}")
+
     def write_shap_plot_model(self, model_id: str = "shap-model", *, with_shap: bool = True) -> GbmModelStore:
         store = GbmModelStore(self.data_path)
         model_dir = store.create_model_dir(model_id)
