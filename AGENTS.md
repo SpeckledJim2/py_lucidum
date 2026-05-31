@@ -63,7 +63,7 @@ node --check src/py_lucidum/static/app/gbm-shap-tool.js
 node --check src/py_lucidum/static/app/gbm-shap-chart.js
 node --check src/py_lucidum/static/app/gbm-tree-viewer.js
 node --check src/py_lucidum/static/app/model-tool-shell.js
-PY_LUCIDUM_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest
+.venv/bin/python scripts/run_browser_smoke.py
 git diff --check
 ```
 

@@ -62,7 +62,7 @@ Note that LightGBM accepts both objective (used for training) and metric (used f
 
 EBM means Explainable Boosting Machine. Normal mode trains the existing LightGBM as before. EBM mode starts with 2-leaf trees and uses learning rate `0.3` for that 2-leaf stage. When the selected test metric has not improved for `early_stopping_rounds`, the training callback switches to 3 leaves and restores the configured learning rate. The same stage-local early stopping process repeats for 4, 5, and later leaf counts until the configured `num_leaves` is reached. `num_iterations` is the total cap across all stages, not a per-stage cap.
 
-EBM mode requires a physical dataset `SAMPLE` column with `training` and `test` rows after denominator filtering. Generated sample sidecars do not enable this mode. Persist each model's training mode in the model metadata so switching saved models updates the radio button.
+EBM mode requires the active sample source, either a physical dataset `SAMPLE` column or the generated sidecar split, to have `training` and `test` rows after denominator filtering. Persist each model's training mode in the model metadata so switching saved models updates the radio button.
 
 ## Model navigator tab
 

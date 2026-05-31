@@ -295,7 +295,7 @@ WHERE feature IS NOT NULL
                 feature_groupings=current_feature_groupings,
             )
             sample_column = detect_sample_column(context.dataset)
-            can_use_ebm = ebm_available(context.dataset)
+            can_use_ebm = ebm_available(context.dataset, generated_sample_path=store.generated_sample_path)
         return {
             "tool": "gbm",
             "status": "ready",

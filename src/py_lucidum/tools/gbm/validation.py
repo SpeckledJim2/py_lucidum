@@ -253,12 +253,19 @@ def parameter_numeric_constraint_errors(params: dict[str, Any]) -> list[str]:
     return errors
 
 
-def ebm_available(dataset: Dataset, offset_column: str | None = OFFSET_COLUMN) -> bool:
+def ebm_available(dataset: Dataset, offset_column: str | None = OFFSET_COLUMN, generated_sample_path: Any = None) -> bool:
     columns = dataset.column_map()
-    if not dataset_sample_column(dataset):
-        return False
     checked_offset = offset_column if offset_column and offset_column in columns and is_numeric_kind(columns[offset_column].kind) else None
-    counts = dataset_training_sample_counts(dataset, checked_offset)
+    if dataset_sample_column(dataset):
+        counts = dataset_training_sample_counts(dataset, checked_offset)
+        return counts.get("training", 0) > 0 and counts.get("test", 0) > 0
+    if generated_sample_path and generated_sample_is_current(dataset, generated_sample_path):
+        counts = generated_training_sample_counts(dataset, generated_sample_path, checked_offset)
+        return counts.get("training", 0) > 0 and counts.get("test", 0) > 0
+    return False
+
+
+def _sample_counts_have_training_and_test(counts: dict[str, int]) -> bool:
     return counts.get("training", 0) > 0 and counts.get("test", 0) > 0
 
 
@@ -560,11 +567,14 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
         if selected_training_mode == "ebm":
             early_stopping_rounds = integer_parameter(params, "early_stopping_rounds", 0)
             num_leaves = integer_parameter(params, "num_leaves", 0)
-            if not sample_column:
-                errors.append("EBM mode requires a dataset SAMPLE column with training and test rows")
-            elif sample_column and (counts := dataset_training_sample_counts(dataset, offset_col)):
-                if counts.get("training", 0) == 0 or counts.get("test", 0) == 0:
+            if sample_column:
+                if not _sample_counts_have_training_and_test(dataset_training_sample_counts(dataset, offset_col)):
                     errors.append("EBM mode requires SAMPLE to contain training and test rows after denominator filtering")
+            elif has_generated_sample:
+                if not _sample_counts_have_training_and_test(generated_training_sample_counts(dataset, generated_sample_path, offset_col)):
+                    errors.append("EBM mode requires generated SAMPLE to contain training and test rows after denominator filtering")
+            else:
+                errors.append("EBM mode requires a dataset or generated SAMPLE split with training and test rows")
             if early_stopping_rounds <= 0:
                 errors.append("EBM mode requires early_stopping_rounds greater than 0")
             if num_leaves < 2:

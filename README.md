@@ -231,7 +231,7 @@ When a GBM is trained with feature interaction constraints, the model records th
 
 ### EBM mode
 
-When a physical dataset `SAMPLE` column has both `training` and `test` rows, the tool also shows an EBM mode. EBM starts with 2-leaf trees, uses learning rate `0.3` for that 2-leaf stage, then moves through 3, 4, and higher leaf counts up to `num_leaves` whenever the test metric has not improved for `early_stopping_rounds`. `num_iterations` remains the total cap across all EBM stages. Generated sample sidecars do not enable EBM mode.
+When the active sample source has both `training` and `test` rows, either from a physical dataset `SAMPLE` column or the generated sidecar split, the tool also shows an EBM mode. EBM starts with 2-leaf trees, uses learning rate `0.3` for that 2-leaf stage, then moves through 3, 4, and higher leaf counts up to `num_leaves` whenever the test metric has not improved for `early_stopping_rounds`. `num_iterations` remains the total cap across all EBM stages.
 
 ### Saved models
 

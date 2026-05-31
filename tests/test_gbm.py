@@ -720,6 +720,7 @@ COPY (
         self.assertEqual(second["source"], "generated")
         self.assertEqual(first_rows, second_rows)
         self.assertFalse(ebm_available(dataset))
+        self.assertTrue(ebm_available(dataset, generated_sample_path=store.generated_sample_path))
 
         result = validate_request(
             dataset,
@@ -728,6 +729,7 @@ COPY (
                 "offset": "denominator",
                 "features": [{"name": "Age", "include": True, "monotonicity": ""}],
                 "sample_column": "SAMPLE",
+                "training_mode": "ebm",
             },
             generated_sample_path=store.generated_sample_path,
         )
@@ -758,7 +760,7 @@ COPY (
         self.assertEqual(status, 200)
         self.assertEqual(payload["sample"]["source"], "generated")
         self.assertEqual(payload["config"]["sample"]["source"], "generated")
-        self.assertFalse(payload["config"]["ebm_available"])
+        self.assertTrue(payload["config"]["ebm_available"])
 
     def test_train_endpoint_reports_missing_optional_dependencies(self) -> None:
         app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
@@ -1199,7 +1201,7 @@ COPY (
         )
 
         self.assertFalse(result.ok)
-        self.assertIn("EBM mode requires a dataset SAMPLE column", "; ".join(result.errors))
+        self.assertIn("EBM mode requires a dataset or generated SAMPLE split", "; ".join(result.errors))
 
         no_test_after_filter_path = self.root / "ebm_no_test_after_filter.csv"
         no_test_after_filter_path.write_text(
