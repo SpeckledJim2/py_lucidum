@@ -1047,6 +1047,32 @@ export function createGbmTool({
     return locked;
   }
 
+  function renderedInteractionFeatureNames(features) {
+    const draft = featureDraftForData(config);
+    const selectedGroupings = new Set(
+      draft?.interactionGroupingsEdited
+        ? draft.interactionGroupings || []
+        : activeCurrentFeatureInteractionGroupings(config)
+    );
+    const trainedFeatures = new Set();
+    if (!draft?.interactionGroupingsEdited) {
+      for (const group of normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints).groups) {
+        if (group.status !== "current") {
+          for (const feature of group.features) trainedFeatures.add(feature);
+        }
+      }
+    }
+    const locked = new Set();
+    for (const feature of features || []) {
+      if (!feature?.include || !isFeatureSelectable(feature)) continue;
+      const grouping = String(feature.grouping || "").trim();
+      if ((grouping && selectedGroupings.has(grouping)) || trainedFeatures.has(feature.name)) {
+        locked.add(feature.name);
+      }
+    }
+    return locked;
+  }
+
   function trainedGroupInteractionFeatureNames() {
     if (!document.querySelector("[data-gbm-trained-interaction-row]")) return new Set();
     const active = normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints);
@@ -1070,14 +1096,13 @@ export function createGbmTool({
   }
 
   function applyInteractionLocksToFeatures(features) {
-    const groupLocked = selectedInteractionFeatureNames(features);
-    const featureLocked = selectedFeatureInteractionFeatureNames(features);
-    const activeFeatureLocked = activeFeatureInteractionFeatureNames();
-    const hasFeatureLockState = (features || []).some((feature) => Object.prototype.hasOwnProperty.call(feature || {}, "feature_interaction_locked"));
+    const draft = featureDraftForData(config);
+    const groupLocked = renderedInteractionFeatureNames(features);
+    const featureLocked = draft ? selectedFeatureInteractionFeatureNames(features) : activeFeatureInteractionFeatureNames();
     return (features || []).map((feature) => ({
       ...feature,
       interaction_locked: groupLocked.has(feature.name),
-      feature_interaction_locked: featureLocked.has(feature.name) || (!hasFeatureLockState && activeFeatureLocked.has(feature.name)),
+      feature_interaction_locked: featureLocked.has(feature.name),
     }));
   }
 
@@ -2913,14 +2938,18 @@ export function createGbmTool({
     const nextConfig = result.config || config || {};
     await reloadSchema(preferredModelSource(result, nextConfig));
     const preserveProfile = clearCachesAfterGbmModelSourceChange();
-    config = nextConfig;
+    const currentModelId = featureDraftModelId(config);
+    const nextModelId = featureDraftModelId(nextConfig);
+    if (currentModelId !== nextModelId) featureDraftState = null;
     activeDetail = null;
     setGbmNotice("");
     if (state.tool === tool) {
       measureToolRender(tool, () => render(nextConfig));
     } else if (preserveProfile) {
+      config = nextConfig;
       syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
     } else {
+      config = nextConfig;
       syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
       await refreshActiveTool({ force: true });
     }
