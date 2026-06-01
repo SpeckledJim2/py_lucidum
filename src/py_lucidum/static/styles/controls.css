@@ -875,6 +875,11 @@
         white-space: nowrap;
       }
 
+      .gbm-feature-context-menu-divider {
+        border-top: 1px solid var(--line);
+        margin: 3px 2px;
+      }
+
       .profile-context-menu-item:hover,
       .profile-context-menu-item:focus-visible,
       .gbm-feature-context-menu-item:hover,

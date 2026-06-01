@@ -25,6 +25,7 @@ from .validation import (
     feature_interaction_constraint_groups,
     metric,
     normalise_feature_grouping_map,
+    normalise_feature_interaction_features,
     normalise_feature_interaction_groupings,
     normalise_training_mode,
     objective,
@@ -318,6 +319,7 @@ def train_model(
         feature_names = [feature["name"] for feature in features]
         feature_grouping_map = normalise_feature_grouping_map(payload.get("feature_groupings"))
         selected_interaction_groupings = normalise_feature_interaction_groupings(payload.get("feature_interaction_groupings"))
+        selected_interaction_features = normalise_feature_interaction_features(payload.get("feature_interaction_features"))
         dataset_sample = dataset_sample_column(dataset)
         if not dataset_sample and payload.get("create_sample"):
             create_generated_sample(dataset, store.generated_sample_path)
@@ -354,12 +356,28 @@ def train_model(
     monotone_constraints = [int(feature["monotonicity"]) for feature in features]
     if any(monotone_constraints):
         params["monotone_constraints"] = monotone_constraints
-    interaction_groups = feature_interaction_constraint_groups(features, selected_interaction_groupings, feature_grouping_map)
+    interaction_groups = feature_interaction_constraint_groups(
+        features,
+        selected_interaction_groupings,
+        feature_grouping_map,
+        selected_interaction_features,
+    )
     interaction_constraints = lightgbm_interaction_constraints(feature_names, interaction_groups)
+    interaction_group_constraints = [
+        {"grouping": str(group["grouping"]), "features": group["features"]}
+        for group in interaction_groups
+        if group.get("kind") != "feature"
+    ]
+    interaction_feature_constraints = [
+        str(group["features"][0])
+        for group in interaction_groups
+        if group.get("kind") == "feature" and group.get("features")
+    ]
     feature_interaction_constraints = (
         {
-            "groupings": [str(group["grouping"]) for group in interaction_groups],
-            "groups": interaction_groups,
+            "groupings": [str(group["grouping"]) for group in interaction_group_constraints],
+            "features": interaction_feature_constraints,
+            "groups": interaction_group_constraints,
         }
         if interaction_constraints
         else None

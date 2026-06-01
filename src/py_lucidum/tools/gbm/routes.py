@@ -241,23 +241,25 @@ WHERE feature IS NOT NULL
         if not isinstance(stored, dict):
             return None
         groups = normalise_interaction_constraint_groups(stored.get("groups"))
-        if not groups:
+        features = scenario_feature_list(stored.get("features"))
+        if not groups and not features:
             return None
         current_grouping_set = set(valid_groupings)
         payload_groups: list[dict[str, Any]] = []
         for group in groups:
             grouping = group["grouping"]
-            features = group["features"]
-            payload: dict[str, Any] = {"grouping": grouping, "features": features}
+            group_features = group["features"]
+            payload: dict[str, Any] = {"grouping": grouping, "features": group_features}
             if grouping not in current_grouping_set:
                 payload["status"] = "missing"
-            elif any(current_groupings.get(feature, "") != grouping for feature in features):
+            elif any(current_groupings.get(feature, "") != grouping for feature in group_features):
                 payload["status"] = "stale"
             else:
                 payload["status"] = "current"
             payload_groups.append(payload)
         return {
             "groupings": [group["grouping"] for group in payload_groups],
+            "features": features,
             "groups": payload_groups,
         }
 

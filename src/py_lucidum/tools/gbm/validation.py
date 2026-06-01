@@ -421,6 +421,19 @@ def normalise_feature_interaction_groupings(raw: Any) -> list[str]:
     return groupings
 
 
+def normalise_feature_interaction_features(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    features: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        feature = str(item or "").strip()
+        if feature and feature not in seen:
+            features.append(feature)
+            seen.add(feature)
+    return features
+
+
 def available_feature_interaction_groupings(feature_groupings: dict[str, str]) -> list[str]:
     return sorted({grouping for grouping in feature_groupings.values() if grouping}, key=str.lower)
 
@@ -429,21 +442,34 @@ def feature_interaction_constraint_groups(
     features: list[dict[str, Any]],
     selected_groupings: list[str],
     feature_groupings: dict[str, str],
+    selected_features: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    if not features or not selected_groupings:
+    if not features:
         return []
+    selected_feature_set = set(selected_features or [])
+    groups: list[dict[str, Any]] = [
+        {"grouping": name, "features": [name], "kind": "feature"}
+        for feature in features
+        for name in [str(feature.get("name") or "").strip()]
+        if name and name in selected_feature_set
+    ]
+    if not selected_groupings:
+        return groups
     selected = set(selected_groupings)
     grouped: dict[str, list[str]] = {grouping: [] for grouping in selected_groupings}
     for feature in features:
         name = str(feature.get("name") or "").strip()
+        if name in selected_feature_set:
+            continue
         grouping = feature_groupings.get(name, "")
         if name and grouping in selected:
             grouped.setdefault(grouping, []).append(name)
-    return [
-        {"grouping": grouping, "features": names}
+    groups.extend(
+        {"grouping": grouping, "features": names, "kind": "group"}
         for grouping, names in grouped.items()
         if names
-    ]
+    )
+    return groups
 
 
 def normalise_monotonicity(raw: Any) -> int:
@@ -563,6 +589,14 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
         for grouping in normalise_feature_interaction_groupings(payload.get("feature_interaction_groupings")):
             if grouping not in valid_interaction_groupings:
                 errors.append(f"Choose a valid GBM feature interaction grouping: {grouping}")
+        for feature_name in normalise_feature_interaction_features(payload.get("feature_interaction_features")):
+            column = columns.get(feature_name)
+            if column is None:
+                errors.append(f"Choose a valid GBM feature interaction feature: {feature_name}")
+            elif not feature_usable(column):
+                errors.append(f"{feature_name} cannot be used as a LightGBM feature interaction constraint")
+            elif column.name == response_col or (offset_col and column.name == offset_col) or column.name in reserved_sample_names:
+                errors.append(f"{feature_name} is reserved and cannot use a feature interaction constraint")
 
         if selected_training_mode == "ebm":
             early_stopping_rounds = integer_parameter(params, "early_stopping_rounds", 0)
@@ -684,6 +718,7 @@ __all__ = [
     "feature_interaction_constraint_groups",
     "feature_rows",
     "normalise_feature_grouping_map",
+    "normalise_feature_interaction_features",
     "normalise_feature_interaction_groupings",
     "normalise_features",
     "normalise_parameters",

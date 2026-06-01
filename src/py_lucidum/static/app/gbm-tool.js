@@ -170,6 +170,8 @@ export function createGbmTool({
   let evaluationViewMode = "all";
   let featureMetricMode = "gain";
   let featureMetricModelId = "";
+  let featureToolbarOutsideClickBound = false;
+  let featureDraftState = null;
   const treeViewer = createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNotice });
   const shapTool = createGbmShapTool({ api, escapeHtml, setNotice: setGbmNotice });
   const stackedShapTool = createGbmStackedShapTool({ api, escapeHtml, setNotice: setGbmNotice });
@@ -256,7 +258,9 @@ export function createGbmTool({
   }
 
   function render(data = {}) {
-    config = data;
+    captureFeatureDraftStateForRender(data);
+    config = applyFeatureDraftStateToData(data);
+    data = config;
     syncFeatureMetricMode(data);
     const groupMeta = "";
     setGroupMeta(tool, groupMeta);
@@ -290,7 +294,7 @@ export function createGbmTool({
                 <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
                   ${featureMetricToggleHtml(data.features || [], data)}
                   ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
-                  ${featureScenarioSelectHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
+                  ${featureScenarioDropdownHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
                   <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Clear all features" title="Clear all">×</button>
                   <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Select all features" title="Select all">✓</button>
                 </div>
@@ -566,11 +570,80 @@ export function createGbmTool({
     }
   }
 
+  function featureDraftModelId(data = config) {
+    return featureMetricModelIdFromData(data || {}) || "__new_gbm__";
+  }
+
+  function captureFeatureDraftStateForRender(nextData = config) {
+    const mount = el("modelToolWrap");
+    if (!mount?.querySelector(".gbm-tool") || !config) {
+      if (featureDraftState && featureDraftState.modelId !== featureDraftModelId(nextData)) featureDraftState = null;
+      return;
+    }
+    const currentModelId = featureDraftModelId(config);
+    const nextModelId = featureDraftModelId(nextData);
+    if (currentModelId !== nextModelId) {
+      featureDraftState = null;
+      return;
+    }
+    const rows = currentFeatureRows();
+    if (!rows.length) return;
+    const interactionGroupings = currentFeatureInteractionGroupings();
+    const scenarioName = el("gbmFeatureScenarioDropdown")?.dataset.gbmSelectedFeatureScenario || "";
+    featureDraftState = {
+      modelId: currentModelId,
+      features: rows.map((feature) => ({
+        name: feature.name,
+        include: Boolean(feature.include),
+        monotonicity: feature.monotonicity || "",
+        feature_interaction_locked: Boolean(feature.feature_interaction_locked),
+      })),
+      interactionGroupings,
+      interactionGroupingsEdited: featureInteractionGroupingsEdited(interactionGroupings, config),
+      scenarioName,
+      scenarioEdited: featureScenarioSelectionEdited(scenarioName, config),
+    };
+  }
+
+  function featureDraftForData(data = config) {
+    return featureDraftState && featureDraftState.modelId === featureDraftModelId(data) ? featureDraftState : null;
+  }
+
+  function applyFeatureDraftStateToData(data = {}) {
+    const draft = featureDraftForData(data);
+    if (!draft) return data;
+    const draftFeatures = new Map(draft.features.map((feature) => [feature.name, feature]));
+    return {
+      ...data,
+      features: (data.features || []).map((feature) => {
+        const draftFeature = draftFeatures.get(feature.name);
+        return draftFeature
+          ? {
+              ...feature,
+              include: draftFeature.include,
+              monotonicity: draftFeature.monotonicity,
+              feature_interaction_locked: draftFeature.feature_interaction_locked,
+            }
+          : feature;
+      }),
+    };
+  }
+
+  function sameStringSet(leftValues = [], rightValues = []) {
+    const left = new Set(leftValues.map((value) => String(value || "").trim()).filter(Boolean));
+    const right = new Set(rightValues.map((value) => String(value || "").trim()).filter(Boolean));
+    if (left.size !== right.size) return false;
+    for (const value of left) {
+      if (!right.has(value)) return false;
+    }
+    return true;
+  }
+
   function bindFeatureActions() {
+    bindFeatureToolbarOutsideClicks();
     bindFeatureMetricActions();
     bindFeatureInteractionActions();
-    const scenarioSelect = el("gbmFeatureScenarioSelect");
-    scenarioSelect?.addEventListener("change", () => applyFeatureScenario(scenarioSelect.value));
+    bindFeatureScenarioActions();
     el("gbmClearFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(false));
     el("gbmSelectFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(true));
     el("gbmCreateSampleBtn")?.addEventListener("click", createSampleColumn);
@@ -776,22 +849,28 @@ export function createGbmTool({
   function featureInteractionConstraintDropdownHtml(groupings, activeConstraints = null, features = []) {
     const rows = featureInteractionGroupingRows(groupings);
     const active = normaliseActiveFeatureInteractionConstraints(activeConstraints);
+    const draft = featureDraftForData(config);
+    const draftGroupings = draft?.interactionGroupingsEdited ? new Set(draft.interactionGroupings || []) : null;
     const currentNames = new Set(rows.map((row) => row.name));
-    const selectedCurrent = new Set(
-      active.groups
-        .filter((group) => group.status === "current" && currentNames.has(group.grouping))
-        .map((group) => group.grouping)
-    );
-    const synthetic = active.groups.filter((group) => group.status !== "current" || !currentNames.has(group.grouping));
+    const selectedCurrent = draftGroupings
+      ? new Set(rows.filter((row) => draftGroupings.has(row.name)).map((row) => row.name))
+      : new Set(
+          active.groups
+            .filter((group) => group.status === "current" && currentNames.has(group.grouping))
+            .map((group) => group.grouping)
+        );
+    const synthetic = draftGroupings
+      ? []
+      : active.groups.filter((group) => group.status !== "current" || !currentNames.has(group.grouping));
     const counts = selectedFeatureCountsByGrouping(features);
     const hasOptions = rows.length || synthetic.length;
     const hidden = hasOptions ? "" : " hidden";
     const disabled = hasOptions ? "" : " disabled";
     const constraintClass = selectedCurrent.size + synthetic.length > 0 ? " has-constraints" : "";
     return `
-      <div id="gbmFeatureInteractionConstraintSelect" class="gbm-interaction-constraint-select${hidden}">
-        <button id="gbmFeatureInteractionConstraintButton" class="gbm-interaction-constraint-button${constraintClass}" type="button" aria-haspopup="true" aria-expanded="false"${disabled}>${escapeHtml(featureInteractionButtonLabel(selectedCurrent.size, synthetic.length))}</button>
-        <div id="gbmFeatureInteractionConstraintMenu" class="gbm-interaction-constraint-menu hidden" role="menu">
+      <div id="gbmFeatureInteractionConstraintSelect" class="gbm-interaction-constraint-select${hidden}" data-gbm-feature-menu-root>
+        <button id="gbmFeatureInteractionConstraintButton" class="gbm-feature-menu-button gbm-interaction-constraint-button${constraintClass}" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Interaction constraints" title="Constrain selected grouped features so they only interact within selected groups" data-gbm-feature-menu-button${disabled}>${escapeHtml(featureInteractionButtonLabel(selectedCurrent.size, synthetic.length))}</button>
+        <div id="gbmFeatureInteractionConstraintMenu" class="gbm-feature-menu gbm-interaction-constraint-menu hidden" role="menu" data-gbm-feature-menu>
           ${synthetic.map((group) => `
             <label class="gbm-interaction-constraint-row gbm-interaction-constraint-row-trained" data-gbm-trained-interaction-row="${escapeHtml(group.grouping)}">
               <input type="checkbox" checked disabled />
@@ -812,22 +891,9 @@ export function createGbmTool({
   function bindFeatureInteractionActions() {
     const root = el("gbmFeatureInteractionConstraintSelect");
     if (!root) return;
-    const button = el("gbmFeatureInteractionConstraintButton");
-    const menu = el("gbmFeatureInteractionConstraintMenu");
-    button?.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (!menu || button.disabled) return;
-      if (menu.classList.contains("hidden")) syncFeatureInteractionCounts(currentFeatureRows());
-      const hidden = menu.classList.toggle("hidden");
-      button.setAttribute("aria-expanded", hidden ? "false" : "true");
+    bindGbmFeatureToolbarMenu(root, {
+      beforeOpen: () => syncFeatureInteractionCounts(currentFeatureRows()),
     });
-    root.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape" || !menu) return;
-      menu.classList.add("hidden");
-      button?.setAttribute("aria-expanded", "false");
-      button?.focus();
-    });
-    menu?.addEventListener("click", (event) => event.stopPropagation());
     for (const checkbox of root.querySelectorAll("[data-gbm-interaction-grouping]")) {
       checkbox.addEventListener("change", () => {
         clearTrainedInteractionConstraintRows();
@@ -851,9 +917,10 @@ export function createGbmTool({
   }
 
   function normaliseActiveFeatureInteractionConstraints(activeConstraints) {
-    if (!activeConstraints || typeof activeConstraints !== "object") return { groups: [] };
+    if (!activeConstraints || typeof activeConstraints !== "object") return { groups: [], features: [] };
     const groups = Array.isArray(activeConstraints.groups) ? activeConstraints.groups : [];
     return {
+      features: scenarioFeatureList(activeConstraints.features),
       groups: groups
         .map((group) => {
           const grouping = String(group?.grouping || "").trim();
@@ -867,6 +934,26 @@ export function createGbmTool({
         })
         .filter((group) => group.grouping && group.features.length),
     };
+  }
+
+  function activeCurrentFeatureInteractionGroupings(data = config) {
+    const currentNames = new Set(featureInteractionGroupingRows(data?.feature_interaction_groupings || []).map((row) => row.name));
+    return normaliseActiveFeatureInteractionConstraints(data?.active_feature_interaction_constraints)
+      .groups
+      .filter((group) => group.status === "current" && currentNames.has(group.grouping))
+      .map((group) => group.grouping);
+  }
+
+  function hasSyntheticActiveFeatureInteractionConstraints(data = config) {
+    const currentNames = new Set(featureInteractionGroupingRows(data?.feature_interaction_groupings || []).map((row) => row.name));
+    return normaliseActiveFeatureInteractionConstraints(data?.active_feature_interaction_constraints)
+      .groups
+      .some((group) => group.status !== "current" || !currentNames.has(group.grouping));
+  }
+
+  function featureInteractionGroupingsEdited(groupings, data = config) {
+    if (!sameStringSet(groupings, activeCurrentFeatureInteractionGroupings(data))) return true;
+    return hasSyntheticActiveFeatureInteractionConstraints(data) && !document.querySelector("[data-gbm-trained-interaction-row]");
   }
 
   function trainedFeatureInteractionLabel(group) {
@@ -907,6 +994,14 @@ export function createGbmTool({
     return groupings.length ? groupings : null;
   }
 
+  function currentFeatureInteractionFeaturesPayload() {
+    const features = currentFeatureRows()
+      .filter((feature) => feature?.feature_interaction_locked && feature?.include && isFeatureSelectable(feature))
+      .map((feature) => String(feature.name || "").trim())
+      .filter(Boolean);
+    return features.length ? [...new Set(features)] : null;
+  }
+
   function clearTrainedInteractionConstraintRows() {
     for (const row of document.querySelectorAll("[data-gbm-trained-interaction-row]")) {
       row.remove();
@@ -940,7 +1035,7 @@ export function createGbmTool({
 
   function selectedInteractionFeatureNames(features) {
     const selectedGroupings = new Set(currentFeatureInteractionGroupings());
-    const trainedFeatures = trainedInteractionFeatureNames();
+    const trainedFeatures = trainedGroupInteractionFeatureNames();
     const locked = new Set();
     for (const feature of features || []) {
       if (!feature?.include || !isFeatureSelectable(feature)) continue;
@@ -952,7 +1047,7 @@ export function createGbmTool({
     return locked;
   }
 
-  function trainedInteractionFeatureNames() {
+  function trainedGroupInteractionFeatureNames() {
     if (!document.querySelector("[data-gbm-trained-interaction-row]")) return new Set();
     const active = normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints);
     const names = new Set();
@@ -962,19 +1057,42 @@ export function createGbmTool({
     return names;
   }
 
+  function activeFeatureInteractionFeatureNames() {
+    return new Set(normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints).features);
+  }
+
+  function selectedFeatureInteractionFeatureNames(features = currentFeatureRows()) {
+    const locked = new Set();
+    for (const feature of features || []) {
+      if (feature?.feature_interaction_locked) locked.add(feature.name);
+    }
+    return locked;
+  }
+
   function applyInteractionLocksToFeatures(features) {
-    const locked = selectedInteractionFeatureNames(features);
-    return (features || []).map((feature) => ({ ...feature, interaction_locked: locked.has(feature.name) }));
+    const groupLocked = selectedInteractionFeatureNames(features);
+    const featureLocked = selectedFeatureInteractionFeatureNames(features);
+    const activeFeatureLocked = activeFeatureInteractionFeatureNames();
+    const hasFeatureLockState = (features || []).some((feature) => Object.prototype.hasOwnProperty.call(feature || {}, "feature_interaction_locked"));
+    return (features || []).map((feature) => ({
+      ...feature,
+      interaction_locked: groupLocked.has(feature.name),
+      feature_interaction_locked: featureLocked.has(feature.name) || (!hasFeatureLockState && activeFeatureLocked.has(feature.name)),
+    }));
   }
 
   function syncFeatureInteractionLocks(features = currentFeatureRows()) {
-    const locked = selectedInteractionFeatureNames(features);
+    const groupLocked = selectedInteractionFeatureNames(features);
+    const featureLocked = selectedFeatureInteractionFeatureNames(features);
     if (featureTable) {
       for (const row of featureTable.getRows()) {
         const data = row.getData();
-        const interactionLocked = locked.has(data.name);
-        row.update({ interaction_locked: interactionLocked });
+        const interactionLocked = groupLocked.has(data.name);
+        const featureInteractionLocked = featureLocked.has(data.name);
+        row.update({ interaction_locked: interactionLocked, feature_interaction_locked: featureInteractionLocked });
+        const featureCell = typeof row.getCell === "function" ? row.getCell("name") : null;
         const groupingCell = typeof row.getCell === "function" ? row.getCell("grouping") : null;
+        if (featureCell) featureCell.getElement().innerHTML = featureNameHtml({ ...data, feature_interaction_locked: featureInteractionLocked });
         if (groupingCell) groupingCell.getElement().innerHTML = groupingHtml({ ...data, interaction_locked: interactionLocked });
       }
       return;
@@ -993,22 +1111,33 @@ export function createGbmTool({
     Promise.all(pending).then(syncFeatureInteractionControls, syncFeatureInteractionControls);
   }
 
-  function featureScenarioSelectHtml(scenarios, activeScenario = null) {
+  function featureScenarioDropdownHtml(scenarios, activeScenario = null) {
     const rows = featureScenarioRows(scenarios);
     const active = normaliseActiveFeatureScenario(activeScenario);
-    const selectedCurrent = active?.status === "current" && rows.some((scenario) => scenario.name === active.name);
-    const synthetic = active && !selectedCurrent
-      ? { value: trainedFeatureScenarioOptionValue(active), label: trainedFeatureScenarioLabel(active) }
+    const draft = featureDraftForData(config);
+    const hasScenarioDraft = Boolean(draft?.scenarioEdited);
+    const draftScenarioName = hasScenarioDraft ? String(draft.scenarioName || "") : null;
+    const activeSelectedCurrent = active?.status === "current" && rows.some((scenario) => scenario.name === active.name);
+    const draftSelectedCurrent = Boolean(draftScenarioName) && rows.some((scenario) => scenario.name === draftScenarioName);
+    const selectedCurrent = hasScenarioDraft ? draftSelectedCurrent : activeSelectedCurrent;
+    const synthetic = !hasScenarioDraft && active && !activeSelectedCurrent
+      ? { label: trainedFeatureScenarioLabel(active) }
       : null;
     const hasOptions = rows.length || synthetic;
     const hidden = hasOptions ? "" : " hidden";
     const disabled = hasOptions ? "" : " disabled";
+    const scenarioClass = selectedCurrent || synthetic ? " has-scenario" : "";
+    const selectedName = selectedCurrent ? (hasScenarioDraft ? draftScenarioName : active.name) : "";
     return `
-      <select id="gbmFeatureScenarioSelect" class="gbm-feature-scenario-select${hidden}" aria-label="Feature scenario"${disabled}>
-        <option value="">Feature scenario</option>
-        ${synthetic ? `<option value="${escapeHtml(synthetic.value)}" selected>${escapeHtml(synthetic.label)}</option>` : ""}
-        ${rows.map((scenario) => `<option value="${escapeHtml(scenario.name)}" ${selectedCurrent && scenario.name === active.name ? "selected" : ""}>${escapeHtml(scenario.name)}</option>`).join("")}
-      </select>
+      <div id="gbmFeatureScenarioDropdown" class="gbm-feature-scenario-select${hidden}" data-gbm-selected-feature-scenario="${escapeHtml(selectedName)}" data-gbm-feature-menu-root>
+        <button id="gbmFeatureScenarioButton" class="gbm-feature-menu-button gbm-feature-scenario-button${scenarioClass}" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Features" title="Apply a saved feature scenario to the Feature table" data-gbm-feature-menu-button${disabled}>Features</button>
+        <div id="gbmFeatureScenarioMenu" class="gbm-feature-menu gbm-feature-scenario-menu hidden" role="menu" data-gbm-feature-menu>
+          ${synthetic ? `<div class="gbm-feature-scenario-row gbm-feature-scenario-row-trained active" role="menuitem" aria-disabled="true" data-gbm-trained-feature-scenario-row>${escapeHtml(synthetic.label)}</div>` : ""}
+          ${rows.map((scenario) => `
+            <button class="gbm-feature-scenario-row${selectedCurrent && scenario.name === selectedName ? " active" : ""}" type="button" role="menuitemradio" aria-checked="${selectedCurrent && scenario.name === selectedName ? "true" : "false"}" data-gbm-feature-scenario="${escapeHtml(scenario.name)}">${escapeHtml(featureScenarioLabel(scenario))}</button>
+          `).join("")}
+        </div>
+      </div>
     `;
   }
 
@@ -1017,9 +1146,18 @@ export function createGbmTool({
     return scenarios
       .map((scenario) => ({
         name: String(scenario?.name || "").trim(),
-        features: Array.isArray(scenario?.features) ? scenario.features.map((feature) => String(feature)) : [],
+        features: scenarioFeatureList(scenario?.features),
       }))
       .filter((scenario) => scenario.name);
+  }
+
+  function scenarioFeatureList(features) {
+    if (!Array.isArray(features)) return [];
+    return features.map((feature) => String(feature || "").trim()).filter(Boolean);
+  }
+
+  function featureScenarioLabel(scenario) {
+    return `${scenario.name} (${scenario.features.length.toLocaleString()})`;
   }
 
   function normaliseActiveFeatureScenario(activeScenario) {
@@ -1028,17 +1166,36 @@ export function createGbmTool({
     if (!name) return null;
     const status = String(activeScenario.status || "").trim().toLowerCase();
     if (!["current", "stale", "missing"].includes(status)) return null;
-    return { name, status };
+    return {
+      name,
+      status,
+      features: scenarioFeatureList(activeScenario.features),
+      current_features: scenarioFeatureList(activeScenario.current_features),
+    };
   }
 
-  function trainedFeatureScenarioOptionValue(activeScenario) {
-    return `__trained_feature_scenario__:${activeScenario.status}:${activeScenario.name}`;
+  function activeCurrentFeatureScenarioName(data = config) {
+    const active = normaliseActiveFeatureScenario(data?.active_feature_scenario);
+    if (!active || active.status !== "current") return "";
+    return featureScenarioRows(data?.feature_scenarios || []).some((scenario) => scenario.name === active.name) ? active.name : "";
+  }
+
+  function hasSyntheticActiveFeatureScenario(data = config) {
+    const active = normaliseActiveFeatureScenario(data?.active_feature_scenario);
+    return Boolean(active && !activeCurrentFeatureScenarioName(data));
+  }
+
+  function featureScenarioSelectionEdited(name, data = config) {
+    const selected = String(name || "");
+    if (selected !== activeCurrentFeatureScenarioName(data)) return true;
+    return hasSyntheticActiveFeatureScenario(data) && !document.querySelector("[data-gbm-trained-feature-scenario-row]");
   }
 
   function trainedFeatureScenarioLabel(activeScenario) {
-    if (activeScenario.status === "stale") return `${activeScenario.name} (trained; spec changed)`;
-    if (activeScenario.status === "missing") return `${activeScenario.name} (trained; missing from spec)`;
-    return activeScenario.name;
+    const count = activeScenario.features.length.toLocaleString();
+    if (activeScenario.status === "stale") return `${activeScenario.name} (${count}; trained; spec changed)`;
+    if (activeScenario.status === "missing") return `${activeScenario.name} (${count}; trained; missing from spec)`;
+    return `${activeScenario.name} (${count})`;
   }
 
   function featureScenarioByName(name) {
@@ -1047,14 +1204,85 @@ export function createGbmTool({
   }
 
   function currentFeatureScenarioPayload() {
-    const selected = el("gbmFeatureScenarioSelect")?.value || "";
+    const selected = el("gbmFeatureScenarioDropdown")?.dataset.gbmSelectedFeatureScenario || "";
     const scenario = featureScenarioByName(selected);
     return scenario ? { name: scenario.name, features: scenario.features } : null;
   }
 
-  function resetFeatureScenarioSelect() {
-    const select = el("gbmFeatureScenarioSelect");
-    if (select) select.value = "";
+  function resetFeatureScenarioSelection() {
+    setFeatureScenarioSelection("");
+  }
+
+  function setFeatureScenarioSelection(name) {
+    const root = el("gbmFeatureScenarioDropdown");
+    if (!root) return;
+    const selected = String(name || "");
+    root.dataset.gbmSelectedFeatureScenario = selected;
+    const button = el("gbmFeatureScenarioButton");
+    button?.classList.toggle("has-scenario", Boolean(selected));
+    for (const row of root.querySelectorAll("[data-gbm-feature-scenario]")) {
+      const active = row.getAttribute("data-gbm-feature-scenario") === selected;
+      row.classList.toggle("active", active);
+      row.setAttribute("aria-checked", active ? "true" : "false");
+    }
+    for (const row of root.querySelectorAll("[data-gbm-trained-feature-scenario-row]")) {
+      row.classList.toggle("active", !selected);
+    }
+  }
+
+  function bindFeatureScenarioActions() {
+    const root = el("gbmFeatureScenarioDropdown");
+    if (!root) return;
+    bindGbmFeatureToolbarMenu(root);
+    for (const button of root.querySelectorAll("[data-gbm-feature-scenario]")) {
+      button.addEventListener("click", () => applyFeatureScenario(button.getAttribute("data-gbm-feature-scenario") || ""));
+    }
+  }
+
+  function bindFeatureToolbarOutsideClicks() {
+    if (featureToolbarOutsideClickBound) return;
+    document.addEventListener("click", () => closeGbmFeatureToolbarMenus());
+    featureToolbarOutsideClickBound = true;
+  }
+
+  function bindGbmFeatureToolbarMenu(root, { beforeOpen = null } = {}) {
+    const button = root.querySelector("[data-gbm-feature-menu-button]");
+    const menu = root.querySelector("[data-gbm-feature-menu]");
+    if (!button || !menu) return;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (button.disabled) return;
+      const opening = menu.classList.contains("hidden");
+      closeGbmFeatureToolbarMenus(root);
+      if (opening) {
+        if (beforeOpen) beforeOpen();
+        menu.classList.remove("hidden");
+        button.setAttribute("aria-expanded", "true");
+      } else {
+        closeGbmFeatureToolbarMenu(root);
+      }
+    });
+    root.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      closeGbmFeatureToolbarMenu(root, { focus: true });
+    });
+    menu.addEventListener("click", (event) => event.stopPropagation());
+  }
+
+  function closeGbmFeatureToolbarMenus(exceptRoot = null) {
+    for (const root of document.querySelectorAll("[data-gbm-feature-menu-root]")) {
+      if (exceptRoot && root === exceptRoot) continue;
+      closeGbmFeatureToolbarMenu(root);
+    }
+  }
+
+  function closeGbmFeatureToolbarMenu(root, { focus = false } = {}) {
+    const button = root?.querySelector("[data-gbm-feature-menu-button]");
+    const menu = root?.querySelector("[data-gbm-feature-menu]");
+    if (!button || !menu) return;
+    menu.classList.add("hidden");
+    button.setAttribute("aria-expanded", "false");
+    if (focus) button.focus();
   }
 
   function bindEvaluationViewModeActions() {
@@ -1094,7 +1322,7 @@ export function createGbmTool({
   }
 
   function setFeatureIncludes(include) {
-    resetFeatureScenarioSelect();
+    resetFeatureScenarioSelection();
     if (featureTable) {
       const updates = [];
       for (const row of featureTable.getRows()) {
@@ -1119,6 +1347,8 @@ export function createGbmTool({
   function applyFeatureScenario(name) {
     const scenario = featureScenarioByName(name);
     if (!scenario) return;
+    setFeatureScenarioSelection(scenario.name);
+    closeGbmFeatureToolbarMenu(el("gbmFeatureScenarioDropdown"));
     const selected = new Set(scenario.features);
     if (featureTable) {
       const updates = [];
@@ -1537,17 +1767,16 @@ export function createGbmTool({
   }
 
   function featureNameFormatter(cell) {
-    const feature = cell.getRow().getData();
-    return `
-      <span class="gbm-feature-name-main">${escapeHtml(feature.name)}</span>
-      <span class="gbm-feature-kind kind">${escapeHtml(featureTypeLabel(feature))}</span>
-    `;
+    return featureNameHtml(cell.getRow().getData());
   }
 
   function featureNameHtml(feature) {
+    const lock = feature?.feature_interaction_locked
+      ? `<span class="gbm-interaction-lock gbm-feature-interaction-lock" title="Feature isolated from all other features" aria-label="Feature isolated from all other features">&#128274;</span>`
+      : "";
     return `
       <span class="gbm-feature-name-line">
-        <span class="gbm-feature-name-main">${escapeHtml(feature.name)}</span>
+        <span class="gbm-feature-name-main">${escapeHtml(feature.name)}${lock}</span>
         <span class="gbm-feature-kind kind">${escapeHtml(featureTypeLabel(feature))}</span>
       </span>
     `;
@@ -1586,7 +1815,7 @@ export function createGbmTool({
     checkbox.setAttribute("aria-label", `Use ${rowData.name}`);
     checkbox.addEventListener("click", (event) => event.stopPropagation());
     checkbox.addEventListener("change", () => {
-      resetFeatureScenarioSelect();
+      resetFeatureScenarioSelection();
       const updates = [cell.getRow().update({ include: checkbox.checked })];
       syncFeatureSectionTitleAfter(updates);
       syncFeatureInteractionControlsAfter(updates);
@@ -1628,12 +1857,12 @@ export function createGbmTool({
         <thead><tr><th>Feature</th><th>Grouping</th><th>Use</th><th>Monotonicity</th><th>${metricTitle}</th></tr></thead>
         <tbody>
           ${sortedFeatureRowsForMetric(features).map((feature) => `
-            <tr class="${featureRowClasses(feature)}" data-gbm-feature-row data-gbm-feature-name="${escapeHtml(feature.name)}">
-              <td>${featureNameHtml(feature)}</td>
-              <td>${groupingHtml(feature)}</td>
-              <td class="gbm-use-cell">${isFeatureSelectable(feature) ? `<input type="checkbox" data-gbm-feature="${escapeHtml(feature.name)}" ${feature.include ? "checked" : ""} />` : ""}</td>
-              <td><input data-gbm-monotonicity="${escapeHtml(feature.name)}" value="${escapeHtml(feature.monotonicity || "")}" ${isFeatureSelectable(feature) ? "" : "disabled"} /></td>
-              <td class="numeric gbm-feature-metric-cell">${featureMetricDisplay(feature)}</td>
+            <tr class="${featureRowClasses(feature)}" data-gbm-feature-row data-gbm-feature-name="${escapeHtml(feature.name)}" data-gbm-feature-interaction-locked="${feature.feature_interaction_locked ? "true" : "false"}">
+              <td data-gbm-context-field="name">${featureNameHtml(feature)}</td>
+              <td data-gbm-context-field="grouping">${groupingHtml(feature)}</td>
+              <td class="gbm-use-cell" data-gbm-context-field="include">${isFeatureSelectable(feature) ? `<input type="checkbox" data-gbm-feature="${escapeHtml(feature.name)}" ${feature.include ? "checked" : ""} />` : ""}</td>
+              <td data-gbm-context-field="monotonicity"><input data-gbm-monotonicity="${escapeHtml(feature.name)}" value="${escapeHtml(feature.monotonicity || "")}" ${isFeatureSelectable(feature) ? "" : "disabled"} /></td>
+              <td class="numeric gbm-feature-metric-cell" data-gbm-context-field="${escapeHtml(featureMetricField())}">${featureMetricDisplay(feature)}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -1641,7 +1870,7 @@ export function createGbmTool({
     `;
     for (const checkbox of target.querySelectorAll("[data-gbm-feature]")) {
       checkbox.addEventListener("change", () => {
-        resetFeatureScenarioSelect();
+        resetFeatureScenarioSelection();
         syncFeatureSectionTitle();
         syncFeatureInteractionControls();
       });
@@ -1687,7 +1916,8 @@ export function createGbmTool({
 
   function openFeatureContextMenuForTabulatorRow(event, row) {
     const feature = row?.getData?.() || {};
-    openGbmFeatureContextMenu(event, { features: [feature.name] });
+    const field = event.target?.closest?.(".tabulator-cell")?.getAttribute("tabulator-field") || "";
+    openGbmFeatureContextMenu(event, { features: [feature.name], field });
   }
 
   function openEbmGainContextMenuForTabulatorRow(event, row) {
@@ -1696,7 +1926,8 @@ export function createGbmTool({
   }
 
   function openFeatureContextMenuForFallbackRow(event) {
-    openGbmFeatureContextMenu(event, { features: [event.currentTarget?.dataset?.gbmFeatureName || ""] });
+    const field = event.target?.closest?.("[data-gbm-context-field]")?.getAttribute("data-gbm-context-field") || "";
+    openGbmFeatureContextMenu(event, { features: [event.currentTarget?.dataset?.gbmFeatureName || ""], field });
   }
 
   function openEbmGainContextMenuForFallbackRow(event) {
@@ -1716,6 +1947,13 @@ export function createGbmTool({
     const menu = gbmFeatureContextMenu();
     menu.innerHTML = "";
     for (const action of actions) {
+      if (action.divider) {
+        const divider = document.createElement("div");
+        divider.className = "gbm-feature-context-menu-divider";
+        divider.setAttribute("role", "separator");
+        menu.append(divider);
+        continue;
+      }
       const button = document.createElement("button");
       button.className = "gbm-feature-context-menu-item";
       button.type = "button";
@@ -1763,15 +2001,110 @@ export function createGbmTool({
     }
     if (names.length !== 1) return [];
     const featureName = names[0];
-    const actions = [];
+    const field = String(context.field || "name");
+    const feature = featureByName(featureName);
+    if (field === "grouping") {
+      return feature?.grouping && isFeatureSelectable(feature)
+        ? [{ label: "Toggle group interaction constraint", run: () => toggleGroupInteractionConstraint(feature.grouping) }]
+        : [];
+    }
+    if (field === "monotonicity") {
+      return [{ label: "Clear all monotonicities", run: clearAllFeatureMonotonicities }];
+    }
+    if (field === featureMetricField()) {
+      return feature ? [{ label: "Copy importance value", run: () => copyFeatureImportanceValue(featureName) }] : [];
+    }
+    if (field !== "name") return [];
+    const navigationActions = [];
     if (canNavigateFeatureToLineBar(featureName)) {
-      actions.push({ label: "Go to Line and Bar", run: () => goToLineBarFeature(featureName) });
+      navigationActions.push({ label: "Go to Line and Bar", run: () => goToLineBarFeature(featureName) });
     }
     if (featuresHaveSavedShap([featureName])) {
-      actions.push({ label: "Go to SHAP", run: () => goToGbmShap([featureName]) });
-      actions.push({ label: "Go to Stacked SHAP", run: () => goToGbmStackedShap(featureName) });
+      navigationActions.push({ label: "Go to SHAP", run: () => goToGbmShap([featureName]) });
+      navigationActions.push({ label: "Go to Stacked SHAP", run: () => goToGbmStackedShap(featureName) });
     }
-    return actions;
+    if (!feature || !isFeatureSelectable(feature)) return navigationActions;
+    return [
+      { label: "Toggle interaction constraint", run: () => toggleFeatureInteractionConstraint(featureName) },
+      ...(navigationActions.length ? [{ divider: true }, ...navigationActions] : []),
+    ];
+  }
+
+  function toggleFeatureInteractionConstraint(featureName) {
+    if (!featureName) return;
+    if (featureTable) {
+      const row = featureTable.getRows().find((item) => item.getData()?.name === featureName);
+      if (!row) return;
+      const data = row.getData();
+      row.update({ feature_interaction_locked: !data.feature_interaction_locked }).then(
+        () => syncFeatureInteractionLocks(currentFeatureRows()),
+        () => syncFeatureInteractionLocks(currentFeatureRows())
+      );
+      return;
+    }
+    const row = document.querySelector(`[data-gbm-feature-row][data-gbm-feature-name="${cssEscape(featureName)}"]`);
+    if (!row) return;
+    const locked = row.dataset.gbmFeatureInteractionLocked !== "true";
+    row.dataset.gbmFeatureInteractionLocked = locked ? "true" : "false";
+    const feature = { ...(featureByName(featureName) || {}), feature_interaction_locked: locked };
+    const featureCell = row.querySelector('[data-gbm-context-field="name"]');
+    if (featureCell) featureCell.innerHTML = featureNameHtml(feature);
+    syncFeatureInteractionControls();
+  }
+
+  function toggleGroupInteractionConstraint(grouping) {
+    const name = String(grouping || "").trim();
+    if (!name) return;
+    const checkbox = document.querySelector(`[data-gbm-interaction-grouping="${cssEscape(name)}"]`);
+    if (!checkbox) return;
+    clearTrainedInteractionConstraintRows();
+    checkbox.checked = !checkbox.checked;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function clearAllFeatureMonotonicities() {
+    if (featureTable) {
+      const updates = featureTable.getRows().map((row) => row.update({ monotonicity: "" }));
+      Promise.all(updates).then(syncFeatureInteractionControls, syncFeatureInteractionControls);
+      return;
+    }
+    for (const input of document.querySelectorAll("[data-gbm-monotonicity]")) input.value = "";
+  }
+
+  function copyFeatureImportanceValue(featureName) {
+    const feature = featureByName(featureName);
+    if (!feature) return;
+    const metric = featureMetricMode === "shap" ? "SHAP" : "Gain";
+    const value = featureMetricDisplay(feature);
+    copyTextToClipboard(`${featureName}\t${metric}\t${value}`, "Copied importance value");
+  }
+
+  function copyTextToClipboard(text, successMessage) {
+    let copy;
+    try {
+      copy = navigator.clipboard?.writeText
+        ? navigator.clipboard.writeText(text)
+        : fallbackCopyTextToClipboard(text);
+    } catch (error) {
+      copy = Promise.reject(error);
+    }
+    Promise.resolve(copy).then(
+      () => setGbmNotice(successMessage),
+      () => setGbmNotice("Unable to copy importance value")
+    );
+  }
+
+  function fallbackCopyTextToClipboard(text) {
+    const input = document.createElement("textarea");
+    input.value = text;
+    input.setAttribute("readonly", "");
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    document.body.append(input);
+    input.select();
+    const copied = document.execCommand("copy");
+    input.remove();
+    if (!copied) throw new Error("copy failed");
   }
 
   function normaliseContextFeatureNames(features) {
@@ -2341,10 +2674,12 @@ export function createGbmTool({
     return (config?.features || []).map((feature) => {
       const checkbox = document.querySelector(`[data-gbm-feature="${cssEscape(feature.name)}"]`);
       const monotonicity = document.querySelector(`[data-gbm-monotonicity="${cssEscape(feature.name)}"]`);
+      const featureRow = document.querySelector(`[data-gbm-feature-row][data-gbm-feature-name="${cssEscape(feature.name)}"]`);
       return applyReserved({
         ...feature,
         include: checkbox ? checkbox.checked : feature.include,
         monotonicity: monotonicity ? monotonicity.value : feature.monotonicity,
+        feature_interaction_locked: featureRow ? featureRow.dataset.gbmFeatureInteractionLocked === "true" : Boolean(feature.feature_interaction_locked),
       });
     });
   }
@@ -2368,6 +2703,7 @@ export function createGbmTool({
     setChartMessage("");
     const featureScenario = currentFeatureScenarioPayload();
     const featureInteractionGroupings = currentFeatureInteractionGroupingsPayload();
+    const featureInteractionFeatures = currentFeatureInteractionFeaturesPayload();
     const payload = {
       label: `GBM ${gbmAutoModelTimeLabel()}`,
       response: el("actualNumerator")?.value || "actualNumerator",
@@ -2383,6 +2719,7 @@ export function createGbmTool({
     if (hasGridParameters(payload.parameters)) payload.grid_samples = currentGridSampleValue();
     if (featureScenario) payload.feature_scenario = featureScenario;
     if (featureInteractionGroupings) payload.feature_interaction_groupings = featureInteractionGroupings;
+    if (featureInteractionFeatures) payload.feature_interaction_features = featureInteractionFeatures;
     try {
       const validation = await api("/api/gbm/validate", { method: "POST", body: JSON.stringify(payload) });
       if (!validation.ok) {

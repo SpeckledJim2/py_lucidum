@@ -22,7 +22,7 @@ from py_lucidum.tools.gbm.shap import shap_config, shap_plot, stacked_shap_plot
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
-from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_groupings, normalise_parameters, validate_request
+from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
 
@@ -558,6 +558,7 @@ COPY (
         store = self.write_model_artifacts()
         stored_constraints = {
             "groupings": ["DRIVER", "POSTCODE", "OLD"],
+            "features": ["Age"],
             "groups": [
                 {"grouping": "DRIVER", "features": ["Age"]},
                 {"grouping": "POSTCODE", "features": ["Segment"]},
@@ -592,6 +593,7 @@ COPY (
             payload["active_feature_interaction_constraints"],
             {
                 "groupings": ["DRIVER", "POSTCODE", "OLD"],
+                "features": ["Age"],
                 "groups": [
                     {"grouping": "DRIVER", "features": ["Age"], "status": "current"},
                     {"grouping": "POSTCODE", "features": ["Segment"], "status": "missing"},
@@ -633,6 +635,7 @@ COPY (
             payload["active_feature_interaction_constraints"],
             {
                 "groupings": ["POSTCODE"],
+                "features": [],
                 "groups": [{"grouping": "POSTCODE", "features": ["Segment"], "status": "stale"}],
             },
         )
@@ -652,6 +655,7 @@ COPY (
 
         self.assertEqual(available_feature_interaction_groupings(grouping_map), ["DRIVER", "POSTCODE", "VEHICLE"])
         self.assertEqual(normalise_feature_interaction_groupings(["POSTCODE", "POSTCODE", "", "VEHICLE"]), ["POSTCODE", "VEHICLE"])
+        self.assertEqual(normalise_feature_interaction_features(["Age", "Age", "", "Segment"]), ["Age", "Segment"])
 
     def test_feature_interaction_constraint_groups_use_selected_features_only(self) -> None:
         features = [{"name": "Age"}, {"name": "Segment"}, {"name": "VehicleAge"}]
@@ -662,17 +666,32 @@ COPY (
         self.assertEqual(
             groups,
             [
-                {"grouping": "POSTCODE", "features": ["Segment"]},
-                {"grouping": "VEHICLE", "features": ["VehicleAge"]},
+                {"grouping": "POSTCODE", "features": ["Segment"], "kind": "group"},
+                {"grouping": "VEHICLE", "features": ["VehicleAge"], "kind": "group"},
+            ],
+        )
+
+    def test_feature_interaction_constraint_groups_allow_singletons_to_override_groups(self) -> None:
+        features = [{"name": "Age"}, {"name": "Segment"}, {"name": "VehicleAge"}]
+        grouping_map = {"Age": "DRIVER", "Segment": "POSTCODE", "VehicleAge": "VEHICLE"}
+
+        groups = feature_interaction_constraint_groups(features, ["POSTCODE", "VEHICLE"], grouping_map, ["Segment", "Age"])
+
+        self.assertEqual(
+            groups,
+            [
+                {"grouping": "Age", "features": ["Age"], "kind": "feature"},
+                {"grouping": "Segment", "features": ["Segment"], "kind": "feature"},
+                {"grouping": "VEHICLE", "features": ["VehicleAge"], "kind": "group"},
             ],
         )
 
     def test_lightgbm_interaction_constraints_add_remainder_group(self) -> None:
-        groups = [{"grouping": "POSTCODE", "features": ["Segment"]}, {"grouping": "VEHICLE", "features": ["VehicleAge"]}]
+        groups = [{"grouping": "POSTCODE", "features": ["Segment"]}, {"grouping": "Age", "features": ["Age"], "kind": "feature"}]
 
         constraints = lightgbm_interaction_constraints(["Age", "Segment", "VehicleAge", "Ncd"], groups)
 
-        self.assertEqual(constraints, [[1], [2], [0, 3]])
+        self.assertEqual(constraints, [[1], [0], [2, 3]])
         self.assertEqual(lightgbm_interaction_constraints(["Age"], [{"grouping": "DRIVER", "features": []}]), [])
 
     def test_validate_rejects_unknown_feature_interaction_grouping(self) -> None:
@@ -691,6 +710,22 @@ COPY (
 
         self.assertFalse(result.ok)
         self.assertIn("Choose a valid GBM feature interaction grouping: POSTCODE", result.errors)
+
+    def test_validate_rejects_unknown_feature_interaction_feature(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": [{"name": "Age", "include": True}],
+            "parameters": default_parameters(),
+            "sample_column": "SAMPLE",
+            "feature_interaction_features": ["Missing"],
+        }
+
+        result = validate_request(dataset, payload)
+
+        self.assertFalse(result.ok)
+        self.assertIn("Choose a valid GBM feature interaction feature: Missing", result.errors)
 
     def test_generated_sample_sidecar_is_reused_for_missing_sample_column(self) -> None:
         data_path = self.root / "no_sample.csv"
@@ -815,6 +850,7 @@ COPY (
             "parameters": [{"name": "objective", "value": "poisson"}, {"name": "metric", "value": "poisson"}],
             "sample_column": "SAMPLE",
             "feature_interaction_groupings": ["POSTCODE"],
+            "feature_interaction_features": ["Age"],
         }
 
         with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", return_value=(object(), object(), object())):
@@ -824,6 +860,7 @@ COPY (
         self.assertEqual(json.loads(body)["job_id"], "j1")
         self.assertEqual(captured["feature_groupings"], {"Age": "DRIVER", "Segment": "POSTCODE"})
         self.assertEqual(captured["feature_interaction_groupings"], ["POSTCODE"])
+        self.assertEqual(captured["feature_interaction_features"], ["Age"])
 
     def test_parameter_grid_parses_ranges_sets_and_samples_indexes(self) -> None:
         grid = parse_parameter_grid(
@@ -1730,6 +1767,7 @@ COPY (
                 "feature_scenario": {"name": "scenario1", "features": ["DRIVER_AGE", "LATITUDE"]},
                 "feature_groupings": {"DRIVER_AGE": "DRIVER", "LATITUDE": "POSTCODE"},
                 "feature_interaction_groupings": ["POSTCODE"],
+                "feature_interaction_features": ["DRIVER_AGE"],
             },
             progress_callback=progress.append,
         )
@@ -1742,7 +1780,7 @@ COPY (
         self.assertEqual(manifest["feature_scenario"], {"name": "scenario1", "features": ["DRIVER_AGE", "LATITUDE"]})
         self.assertEqual(
             manifest["feature_interaction_constraints"],
-            {"groupings": ["POSTCODE"], "groups": [{"grouping": "POSTCODE", "features": ["LATITUDE"]}]},
+            {"groupings": ["POSTCODE"], "features": ["DRIVER_AGE"], "groups": [{"grouping": "POSTCODE", "features": ["LATITUDE"]}]},
         )
         self.assertIsNotNone(result["best_metrics"]["training"])
         self.assertIsNone(result["best_metrics"]["test"])

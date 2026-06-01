@@ -619,43 +619,79 @@
         width: 28px;
       }
 
-      .gbm-interaction-constraint-select {
+      .gbm-interaction-constraint-select,
+      .gbm-feature-scenario-select {
         flex: 0 0 auto;
         position: relative;
       }
 
-      .gbm-interaction-constraint-button {
-        background: var(--panel);
-        border: 1px solid var(--line);
+      .gbm-feature-menu-button {
+        align-items: center;
+        background: linear-gradient(
+          to bottom,
+          color-mix(in srgb, var(--accent) 10%, var(--panel)),
+          color-mix(in srgb, var(--accent-2) 5%, var(--panel))
+        );
+        border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
         border-radius: 5px;
         color: var(--text);
         cursor: pointer;
+        display: inline-flex;
+        gap: 5px;
         font: inherit;
         font-size: 11px;
+        font-weight: 750;
         height: 22px;
+        justify-content: center;
         line-height: 20px;
         max-width: 150px;
-        min-width: 112px;
+        min-width: 0;
         overflow: hidden;
-        padding: 1px 6px;
+        padding: 1px 7px;
         text-align: left;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
-      .gbm-interaction-constraint-button.has-constraints {
-        background: color-mix(in srgb, #f59e0b 22%, var(--panel));
-        border-color: #f59e0b;
-        color: color-mix(in srgb, #92400e 82%, var(--text));
-        font-weight: 700;
+      .gbm-feature-menu-button::after {
+        border-left: 3.5px solid transparent;
+        border-right: 3.5px solid transparent;
+        border-top: 4.5px solid currentColor;
+        content: "";
+        flex: 0 0 auto;
+        opacity: 0.7;
       }
 
-      .gbm-interaction-constraint-button:disabled {
+      .gbm-feature-menu-button:hover,
+      .gbm-feature-menu-button:focus-visible,
+      .gbm-feature-menu-button[aria-expanded="true"] {
+        background: linear-gradient(
+          to bottom,
+          color-mix(in srgb, var(--accent) 18%, var(--panel)),
+          color-mix(in srgb, var(--accent-2) 10%, var(--panel))
+        );
+        border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+        outline: none;
+      }
+
+      .gbm-feature-menu-button.has-constraints,
+      .gbm-feature-menu-button.has-scenario {
+        background: linear-gradient(
+          to bottom,
+          color-mix(in srgb, var(--accent-2) 23%, var(--panel)),
+          color-mix(in srgb, var(--accent) 12%, var(--panel))
+        );
+        border-color: color-mix(in srgb, var(--accent-2) 68%, var(--line));
+        color: var(--text);
+        font-weight: 800;
+      }
+
+      .gbm-feature-menu-button:disabled {
         cursor: not-allowed;
         opacity: 0.55;
       }
 
-      .gbm-interaction-constraint-menu {
+      .gbm-feature-menu {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 5px;
@@ -672,7 +708,8 @@
         z-index: 30;
       }
 
-      .gbm-interaction-constraint-row {
+      .gbm-interaction-constraint-row,
+      .gbm-feature-scenario-row {
         align-items: center;
         color: var(--text);
         display: flex;
@@ -685,6 +722,22 @@
         white-space: nowrap;
       }
 
+      .gbm-feature-scenario-row {
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+        text-align: left;
+        width: 100%;
+      }
+
+      .gbm-feature-scenario-row:hover,
+      .gbm-feature-scenario-row.active {
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+      }
+
       .gbm-interaction-constraint-row input {
         accent-color: var(--accent);
         height: 12px;
@@ -692,22 +745,13 @@
         width: 12px;
       }
 
-      .gbm-interaction-constraint-row-trained {
+      .gbm-interaction-constraint-row-trained,
+      .gbm-feature-scenario-row-trained {
         color: var(--muted);
       }
 
-      .gbm-feature-scenario-select {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 5px;
-        color: var(--text);
-        font: inherit;
-        font-size: 11px;
-        height: 22px;
-        line-height: 20px;
-        max-width: 150px;
-        min-width: 124px;
-        padding: 1px 6px;
+      .gbm-feature-scenario-row-trained {
+        cursor: default;
       }
 
       .gbm-grouping-value {
@@ -955,10 +999,17 @@
       }
 
       .gbm-feature-name-main {
+        align-items: center;
+        display: inline-flex;
+        gap: 4px;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .gbm-feature-interaction-lock {
+        margin-left: 2px;
       }
 
       .gbm-feature-kind {

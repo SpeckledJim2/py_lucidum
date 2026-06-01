@@ -990,6 +990,28 @@ COPY (
                     timeout=10_000,
                 )
 
+            def feature_scenario_state() -> dict[str, object]:
+                return page.evaluate(
+                    """
+                    () => {
+                      const root = document.querySelector("#gbmFeatureScenarioDropdown");
+                      return {
+                        value: root?.dataset.gbmSelectedFeatureScenario || "",
+                        rows: [...document.querySelectorAll("#gbmFeatureScenarioMenu .gbm-feature-scenario-row")]
+                          .map((row) => row.textContent.trim()),
+                        activeRows: [...document.querySelectorAll("#gbmFeatureScenarioMenu .gbm-feature-scenario-row.active")]
+                          .map((row) => row.textContent.trim()),
+                        menuHidden: document.querySelector("#gbmFeatureScenarioMenu")?.classList.contains("hidden") ?? true,
+                        title: document.querySelector("#gbmFeatureScenarioButton")?.getAttribute("title") || "",
+                      };
+                    }
+                    """
+                )
+
+            def choose_feature_scenario(name: str) -> None:
+                page.locator("#gbmFeatureScenarioButton").click()
+                page.locator(f'[data-gbm-feature-scenario="{name}"]').click()
+
             try:
                 page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
                 page.get_by_text("Features and parameters").wait_for(timeout=10_000)
@@ -1030,18 +1052,40 @@ COPY (
                 self.assertNotIn("Gain", default_metric_state["headers"])
                 self.assertIn("lat", default_metric_state["firstRowText"])
                 self.assertEqual(default_metric_state["ageShap"], "0.1830")
-                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").click(button="right")
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
                 normal_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
                     "(items) => items.map((item) => item.textContent.trim())"
                 )
-                self.assertEqual(normal_context_labels, ["Go to Line and Bar", "Go to SHAP", "Go to Stacked SHAP"])
+                self.assertEqual(normal_context_labels, ["Toggle interaction constraint", "Go to Line and Bar", "Go to SHAP", "Go to Stacked SHAP"])
+                self.assertEqual(page.locator("#gbmFeatureContextMenu [role='separator']").count(), 1)
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle interaction constraint").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((item) => item.textContent.includes("Age"));
+                      return (row?.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent || "").includes("\\uD83D\\uDD12");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='mean_abs_shap']").click(button="right")
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Copy importance value").wait_for(timeout=10_000)
+                page.keyboard.press("Escape")
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='monotonicity']").click(button="right")
+                monotonicity_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
+                    "(items) => items.map((item) => item.textContent.trim())"
+                )
+                self.assertEqual(monotonicity_context_labels, ["Clear all monotonicities"])
+                page.keyboard.press("Escape")
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to Line and Bar").click()
                 page.locator("#lineBarTool.active").wait_for(timeout=10_000)
                 page.locator("#featureList .feature.active", has_text="Age").wait_for(timeout=10_000)
                 page.locator("#gbmTool").click()
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
-                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").click(button="right")
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST", timeout=10_000):
                     page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to SHAP").click()
                 page.wait_for_function(
@@ -1053,7 +1097,7 @@ COPY (
                 )
                 page.get_by_role("button", name="Features and parameters").click()
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
-                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").click(button="right")
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST", timeout=10_000):
                     page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to Stacked SHAP").click()
                 page.wait_for_function(
@@ -1064,12 +1108,12 @@ COPY (
                 )
                 page.get_by_role("button", name="Features and parameters").click()
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
-                page.locator("#gbmFeatureGrid .tabulator-row", has_text="PostcodeArea").click(button="right")
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="PostcodeArea").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
                 no_shap_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
                     "(items) => items.map((item) => item.textContent.trim())"
                 )
-                self.assertEqual(no_shap_context_labels, ["Go to Line and Bar"])
+                self.assertEqual(no_shap_context_labels, ["Toggle interaction constraint", "Go to Line and Bar"])
                 page.keyboard.press("Escape")
                 page.wait_for_function('() => document.querySelector("#gbmFeatureContextMenu")?.hidden === true')
                 page.get_by_role("button", name="SHAP", exact=True).click()
@@ -1133,19 +1177,11 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                initial_scenario = page.evaluate(
-                    """
-                    () => {
-                      const select = document.querySelector("#gbmFeatureScenarioSelect");
-                      return {
-                        value: select?.value || "",
-                        text: select?.selectedOptions?.[0]?.textContent?.trim() || "",
-                      };
-                    }
-                    """
-                )
-                self.assertIn("old_scenario", initial_scenario["value"])
-                self.assertEqual(initial_scenario["text"], "old_scenario (trained; missing from spec)")
+                initial_scenario = feature_scenario_state()
+                self.assertEqual(initial_scenario["value"], "")
+                self.assertIn("old_scenario (1; trained; missing from spec)", initial_scenario["rows"])
+                self.assertIn("old_scenario (1; trained; missing from spec)", initial_scenario["activeRows"])
+                self.assertIn("feature scenario", str(initial_scenario["title"]).lower())
                 initial_constraints = page.evaluate(
                     """
                     () => {
@@ -1154,6 +1190,7 @@ COPY (
                         .find((row) => row.textContent.includes("Age"));
                       return {
                         button: document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() || "",
+                        title: document.querySelector("#gbmFeatureInteractionConstraintButton")?.getAttribute("title") || "",
                         rows,
                         ageGrouping: ageRow?.querySelector(".tabulator-cell[tabulator-field='grouping']")?.textContent.trim() || "",
                       };
@@ -1161,6 +1198,7 @@ COPY (
                     """
                 )
                 self.assertEqual(initial_constraints["button"], "Trained constraints (1)")
+                self.assertIn("interact within selected groups", initial_constraints["title"])
                 self.assertIn("OLD (trained; missing from spec)", initial_constraints["rows"])
                 self.assertIn("\U0001f512", initial_constraints["ageGrouping"])
                 page.locator("#gbmFeatureInteractionConstraintButton").click()
@@ -1174,13 +1212,60 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#gbmFeatureInteractionConstraintButton").click()
-                page.locator("#gbmFeatureScenarioSelect").select_option("scenario1")
+                page.locator("#gbmFeatureSectionTitle").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmFeatureInteractionConstraintMenu")?.classList.contains("hidden")
+                      && document.querySelector("#gbmFeatureInteractionConstraintButton")?.getAttribute("aria-expanded") === "false"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='grouping']").click(button="right")
+                grouping_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
+                    "(items) => items.map((item) => item.textContent.trim())"
+                )
+                self.assertEqual(grouping_context_labels, ["Toggle group interaction constraint"])
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle group interaction constraint").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() === "Constraints (1)"
+                      && [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((row) => row.textContent.includes("Age"))
+                        ?.querySelector(".tabulator-cell[tabulator-field='grouping']")
+                        ?.textContent.includes("\\uD83D\\uDD12")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_text("Browser smoke model", exact=False).wait_for(timeout=10_000)
+                page.get_by_role("button", name="Features and parameters").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() === "Constraints (1)"
+                      && [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((row) => row.textContent.includes("Age"))
+                        ?.querySelector(".tabulator-cell[tabulator-field='grouping']")
+                        ?.textContent.includes("\\uD83D\\uDD12")
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureScenarioButton").click()
+                scenario_menu = feature_scenario_state()
+                self.assertIn("scenario1 (2)", scenario_menu["rows"])
+                page.locator("#gbmFeatureSectionTitle").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmFeatureScenarioMenu")?.classList.contains("hidden")
+                      && document.querySelector("#gbmFeatureScenarioButton")?.getAttribute("aria-expanded") === "false"
+                    """,
+                    timeout=10_000,
+                )
+                choose_feature_scenario("scenario1")
                 assert_feature_heading_matches_checked(2)
-                self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "scenario1")
+                self.assertEqual(feature_scenario_state()["value"], "scenario1")
                 page.locator("#gbmClearFeaturesBtn").click()
                 assert_feature_heading_matches_checked(0)
-                self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "")
+                self.assertEqual(feature_scenario_state()["value"], "")
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
                 page.get_by_role("button", name="SHAP", exact=True).click()
@@ -1873,7 +1958,7 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.22",
                 )
-                self.assertEqual(page.locator("#gbmFeatureScenarioSelect").input_value(), "scenario1")
+                self.assertEqual(feature_scenario_state()["value"], "scenario1")
                 self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraints (1)")
                 assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
@@ -2098,19 +2183,10 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.11",
                 )
-                restored_scenario = page.evaluate(
-                    """
-                    () => {
-                      const select = document.querySelector("#gbmFeatureScenarioSelect");
-                      return {
-                        value: select?.value || "",
-                        text: select?.selectedOptions?.[0]?.textContent?.trim() || "",
-                      };
-                    }
-                    """
-                )
-                self.assertIn("old_scenario", restored_scenario["value"])
-                self.assertEqual(restored_scenario["text"], "old_scenario (trained; missing from spec)")
+                restored_scenario = feature_scenario_state()
+                self.assertEqual(restored_scenario["value"], "")
+                self.assertIn("old_scenario (1; trained; missing from spec)", restored_scenario["rows"])
+                self.assertIn("old_scenario (1; trained; missing from spec)", restored_scenario["activeRows"])
                 assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='normal']").is_checked())
                 self.assertTrue(page.locator("input[name='gbmEvaluationViewMode'][value='tail']").is_checked())
@@ -2181,7 +2257,9 @@ COPY (
 
                 page.route("**/api/gbm/train", train_route)
                 page.route("**/api/gbm/jobs/live-job", job_route)
-                page.locator("#gbmFeatureScenarioSelect").select_option("scenario1")
+                choose_feature_scenario("scenario1")
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Segment").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle interaction constraint").click()
                 page.locator("#gbmFeatureInteractionConstraintButton").click()
                 page.locator('[data-gbm-interaction-grouping="VEHICLE"]').check()
                 self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraints (1)")
@@ -2190,7 +2268,8 @@ COPY (
                     () => {
                       const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
                         .find((item) => item.textContent.includes("Segment"));
-                      return (row?.querySelector(".tabulator-cell[tabulator-field='grouping']")?.textContent || "").includes("\\uD83D\\uDD12");
+                      return (row?.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent || "").includes("\\uD83D\\uDD12")
+                        && (row?.querySelector(".tabulator-cell[tabulator-field='grouping']")?.textContent || "").includes("\\uD83D\\uDD12");
                     }
                     """,
                     timeout=10_000,
@@ -2203,6 +2282,7 @@ COPY (
                     {"name": "scenario1", "features": ["Age", "Segment"]},
                 )
                 self.assertEqual(train_payload["value"]["feature_interaction_groupings"], ["VEHICLE"])
+                self.assertEqual(train_payload["value"]["feature_interaction_features"], ["Segment"])
                 page.wait_for_function(
                     """
                     () => {
