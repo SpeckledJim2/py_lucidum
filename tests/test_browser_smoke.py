@@ -1347,10 +1347,18 @@ COPY (
                       const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
                       const option = chart?.getOption();
                       const surface = option?.series?.find((series) => series.type === "surface");
+                      const grid3D = option?.grid3D?.[0] || {};
+                      const xAxis3D = option?.xAxis3D?.[0] || {};
                       return {
                         title: option?.title?.[0]?.text || "",
                         invalidZ: Boolean(surface?.data?.some((point) => Number.isNaN(point?.[2]) || point?.[2] == null)),
                         visualMapHover: option?.visualMap?.[0]?.formatter?.(0.123456) || "",
+                        gridTop: grid3D.top,
+                        gridBottom: grid3D.bottom,
+                        boxWidth: grid3D.boxWidth,
+                        boxDepth: grid3D.boxDepth,
+                        axisLabelFontSize: xAxis3D.axisLabel?.fontSize,
+                        axisNameFontSize: xAxis3D.nameTextStyle?.fontSize,
                         noticeHidden: Boolean(document.querySelector("#gbmNotice")?.classList.contains("hidden")),
                         noticeText: document.querySelector("#gbmNotice")?.textContent || "",
                       };
@@ -1360,6 +1368,12 @@ COPY (
                 self.assertIn("SHAP surface plot: Age x lat", surface_state["title"])
                 self.assertTrue(surface_state["invalidZ"])
                 self.assertEqual(surface_state["visualMapHover"], "0.1235")
+                self.assertEqual(surface_state["gridTop"], 34)
+                self.assertEqual(surface_state["gridBottom"], 54)
+                self.assertEqual(surface_state["boxWidth"], 100)
+                self.assertEqual(surface_state["boxDepth"], 74)
+                self.assertEqual(surface_state["axisLabelFontSize"], 10)
+                self.assertEqual(surface_state["axisNameFontSize"], 11)
                 self.assertTrue(surface_state["noticeHidden"])
                 self.assertNotIn("undefined is not an object", surface_state["noticeText"])
                 page.locator('[data-gbm-shap-factor="1"]').check()

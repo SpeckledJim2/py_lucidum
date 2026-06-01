@@ -9,6 +9,10 @@ const SHAP_RED_RIBBONS = [
 ];
 const LINE_COLORS = ["#4fb99f", "#ff7f50", "#8aa1d6", "#b779d6", "#e7b84b", "#5aa2d6", "#d96a8a", "#84b547"];
 const AXIS_TARGET_INTERVALS = 6;
+const SURFACE_AXIS_LABEL_FONT_SIZE = 10;
+const SURFACE_AXIS_NAME_FONT_SIZE = 11;
+const SURFACE_BOX_WIDTH = 100;
+const SURFACE_BOX_DEPTH = 74;
 let echartsGlPromise = null;
 
 export async function ensureShapChartLibraries(plotType) {
@@ -169,12 +173,12 @@ function surfaceOption(payload, common, theme) {
       textStyle: { color: theme.text || "#334155" },
     },
     grid3D: {
-      top: 52,
+      top: 34,
       left: 0,
       right: 0,
-      bottom: 0,
-      boxWidth: 120,
-      boxDepth: 90,
+      bottom: 54,
+      boxWidth: SURFACE_BOX_WIDTH,
+      boxDepth: SURFACE_BOX_DEPTH,
       viewControl: { projection: "perspective", autoRotate: false },
       axisPointer: { show: true },
       splitLine: { lineStyle: { color: theme.line || "#e2e8f0" } },
@@ -308,8 +312,8 @@ function axis3D(name, theme, domain = null) {
   const axis = {
     type: "value",
     name,
-    nameTextStyle: { color: theme.text || "#334155", fontWeight: 700 },
-    axisLabel: { color: theme.text || "#334155", formatter: compactNumber },
+    nameTextStyle: { color: theme.text || "#334155", fontWeight: 700, fontSize: SURFACE_AXIS_NAME_FONT_SIZE },
+    axisLabel: { color: theme.text || "#334155", fontSize: SURFACE_AXIS_LABEL_FONT_SIZE, formatter: compactNumber },
     axisLine: { lineStyle: { color: theme.line || "#cbd5e1" } },
     splitLine: { lineStyle: { color: theme.grid || "#e5e7eb" } },
   };
