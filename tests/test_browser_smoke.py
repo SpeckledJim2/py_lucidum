@@ -2607,6 +2607,49 @@ COPY (
                 self.assertFalse(feature_state["segment"]["checked"])
                 self.assertEqual(feature_state["age"]["monotonicity"], "Increasing")
                 self.assertEqual(feature_state["age"]["metric"], "5.000" if feature_state["metricField"] == "gain" else "0.1830")
+                page.evaluate(
+                    """
+                    () => {
+                      const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((item) => item.textContent.includes("Segment"));
+                      const checkbox = row?.querySelector(".gbm-use-checkbox");
+                      if (!checkbox) throw new Error("Segment feature checkbox not found");
+                      checkbox.checked = true;
+                      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((item) => item.textContent.includes("Segment"));
+                      const checked = document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox:checked").length;
+                      return Boolean(row?.querySelector(".gbm-use-checkbox")?.checked)
+                        && document.querySelector("#gbmFeatureSectionTitle")?.textContent.trim() === `Features (${checked})`;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#lineBarTool").click()
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#gbmTool").click()
+                page.locator("#gbmTool.active").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const segmentRow = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((item) => item.textContent.includes("Segment"));
+                      const parameterRow = [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                        .find((item) => item.textContent.includes("num_iterations"));
+                      const checked = document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox:checked").length;
+                      return Boolean(segmentRow?.querySelector(".gbm-use-checkbox")?.checked)
+                        && parameterRow?.querySelector(".tabulator-cell[tabulator-field='value']")?.textContent.trim() === "{200, 300}"
+                        && document.querySelector("#gbmFeatureSectionTitle")?.textContent.trim() === `Features (${checked})`;
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 layout = page.evaluate(
                     """
                     () => {

@@ -211,8 +211,40 @@ export function createGbmTool({
 
   function useCached(cache) {
     measureToolRender(tool, () => {
+      if (canReuseRenderedGbmShell(cache?.data)) {
+        config = cache.data;
+        syncFeatureMetricMode(cache.data);
+        closeGbmFeatureContextMenu();
+        syncSidebarModelChooser(config.models || [], config.active_model_id);
+        applyPresentation();
+        scheduleGbmTableRedraws();
+        return;
+      }
       render(cache.data);
       applyPresentation();
+    });
+  }
+
+  function canReuseRenderedGbmShell(data) {
+    const mount = el("modelToolWrap");
+    return Boolean(
+      data
+      && data.tool === tool
+      && config
+      && mount?.querySelector(".gbm-tool")
+      && featureMetricModelIdFromData(data) === featureMetricModelIdFromData(config)
+    );
+  }
+
+  function scheduleGbmTableRedraws() {
+    const redraw = () => {
+      for (const table of [featureTable, parameterTable, modelTable, ebmGainSummaryTable]) {
+        if (table && typeof table.redraw === "function") table.redraw(true);
+      }
+    };
+    requestAnimationFrame(() => {
+      redraw();
+      requestAnimationFrame(redraw);
     });
   }
 
