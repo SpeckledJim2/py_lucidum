@@ -207,6 +207,7 @@ if (monitor.textContent !== "DuckDB: 2ms, JSON: 3ms, Chart render: 12ms, Total: 
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
         script = self.js_function_source(js, "gbmShapSelectionValue") + """
 const cases = [
+  ["startup", { active_model_id: "", models: [] }, "100k"],
   ["zero", { active_model_id: "m0", models: [{ model_id: "m0", active: true, shap_rows: 0, scored_rows: 50000 }] }, "0"],
   ["ten-k", { active_model_id: "m10", models: [{ model_id: "m10", active: true, shap_rows: 10000, scored_rows: 50000 }] }, "10k"],
   ["hundred-k", { active_model_id: "m100", models: [{ model_id: "m100", active: true, shap_rows: 100000, scored_rows: 500000 }] }, "100k"],
@@ -743,7 +744,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('class="gbm-shap-options"', js)
         self.assertIn('type="radio" name="gbmShapRows"', js)
         self.assertIn('{ value: "100k", label: "100k" }', js)
-        self.assertIn('document.querySelector("input[name=\'gbmShapRows\']:checked")?.value || "0"', js)
+        self.assertIn('document.querySelector("input[name=\'gbmShapRows\']:checked")?.value || "100k"', js)
         self.assertIn('id="gbmTrainingMode" class="gbm-shap-rows gbm-mode-rows"', js)
         self.assertIn('role="radiogroup" aria-label="Training mode"', js)
         self.assertIn('type="radio" name="gbmTrainingMode" value="ebm"', js)

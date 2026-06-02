@@ -59,7 +59,7 @@ GBM_METRICS = (
 LOG_LINK_OBJECTIVES = {"poisson", "gamma", "tweedie"}
 MONOTONE_OBJECTIVES = {"regression", "regression_l1", "huber", "fair", "poisson", "gamma", "tweedie", "binary"}
 CROSS_ENTROPY_OBJECTIVES = {"cross_entropy", "cross_entropy_lambda"}
-HIGH_CARDINALITY_THRESHOLD = 100
+HIGH_CARDINALITY_THRESHOLD = 20
 
 
 @dataclass(frozen=True)
@@ -77,12 +77,12 @@ def default_parameters() -> list[dict[str, Any]]:
         {"name": "objective", "value": DEFAULT_OBJECTIVE, "important": True},
         {"name": "metric", "value": DEFAULT_METRIC, "important": True},
         {"name": "data_sample_strategy", "value": "bagging", "important": True},
-        {"name": "num_iterations", "value": 200, "important": True},
-        {"name": "learning_rate", "value": 0.05, "important": True},
-        {"name": "num_leaves", "value": 31, "important": True},
+        {"name": "num_iterations", "value": 1000, "important": True},
+        {"name": "learning_rate", "value": 0.3, "important": True},
+        {"name": "num_leaves", "value": 5, "important": True},
         {"name": "max_depth", "value": -1, "important": True},
-        {"name": "min_data_in_leaf", "value": 20, "important": True},
-        {"name": "early_stopping_rounds", "value": 25, "important": True},
+        {"name": "min_data_in_leaf", "value": 50, "important": True},
+        {"name": "early_stopping_rounds", "value": 50, "important": True},
         {"name": "feature_fraction", "value": 1.0, "important": False},
         {"name": "bagging_fraction", "value": 1.0, "important": False},
         {"name": "bagging_freq", "value": 0, "important": False},
@@ -90,8 +90,9 @@ def default_parameters() -> list[dict[str, Any]]:
         {"name": "lambda_l2", "value": 0.0, "important": False},
         {"name": "min_gain_to_split", "value": 0.0, "important": False},
         {"name": "max_bin", "value": 255, "important": False},
+        {"name": "num_threads", "value": 0, "important": False},
         {"name": "verbosity", "value": -1, "important": False},
-        {"name": "seed", "value": 2026, "important": False},
+        {"name": "seed", "value": 42, "important": False},
     ]
 
 
@@ -184,6 +185,9 @@ def parameter_compatibility_messages(params: dict[str, Any], payload: dict[str, 
 
 def parameter_numeric_constraint_errors(params: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    num_threads = non_negative_integer_parameter(params, "num_threads", 0)
+    if num_threads is None:
+        errors.append("num_threads must be an integer at least 0")
     int_min = {
         "num_iterations": 0,
         "min_data_in_leaf": 0,
@@ -625,6 +629,31 @@ def integer_parameter(params: dict[str, Any], name: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def non_negative_integer_parameter(params: dict[str, Any], name: str, default: int) -> int | None:
+    value = params.get(name, default)
+    if value is None or str(value).strip() == "":
+        value = default
+    if isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, float):
+            if not value.is_integer():
+                return None
+            parsed = int(value)
+        else:
+            text = str(value).strip()
+            if "." in text:
+                number = float(text)
+                if not number.is_integer():
+                    return None
+                parsed = int(number)
+            else:
+                parsed = int(text)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def number_parameter(params: dict[str, Any], name: str, default: float) -> float:

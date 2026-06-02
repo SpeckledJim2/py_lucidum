@@ -244,8 +244,16 @@ COPY (
             {level["name"]: level["row_count"] for level in payload["sample"]["levels"]},
             {"training": 2, "test": 1, "validation": 0},
         )
-        self.assertEqual(next(row["value"] for row in payload["parameters"] if row["name"] == "objective"), "poisson")
-        self.assertEqual(next(row["value"] for row in payload["parameters"] if row["name"] == "metric"), "poisson")
+        parameters = {row["name"]: row["value"] for row in payload["parameters"]}
+        self.assertEqual(parameters["objective"], "poisson")
+        self.assertEqual(parameters["metric"], "poisson")
+        self.assertEqual(parameters["num_iterations"], 1000)
+        self.assertEqual(parameters["learning_rate"], 0.3)
+        self.assertEqual(parameters["num_leaves"], 5)
+        self.assertEqual(parameters["min_data_in_leaf"], 50)
+        self.assertEqual(parameters["early_stopping_rounds"], 50)
+        self.assertEqual(parameters["num_threads"], 0)
+        self.assertEqual(parameters["seed"], 42)
         self.assertEqual(payload["parameter_options"]["objective"], sorted(GBM_OBJECTIVES))
         self.assertEqual(payload["parameter_options"]["metric"], sorted(GBM_METRICS))
         self.assertEqual(
@@ -923,6 +931,7 @@ COPY (
                 {"name": "is_unbalance", "value": True},
                 {"name": "scale_pos_weight", "value": 2},
                 {"name": "linear_tree", "value": True},
+                {"name": "num_threads", "value": -1},
             ],
             "sample_column": "SAMPLE",
             "shap_rows": "10k",
@@ -940,6 +949,27 @@ COPY (
         self.assertIn("path_smooth greater than 0 requires min_data_in_leaf", errors)
         self.assertIn("is_unbalance cannot be used", errors)
         self.assertIn("linear_tree=true cannot be used", errors)
+        self.assertIn("num_threads must be an integer at least 0", errors)
+
+    def test_num_threads_rejects_non_integer_values(self) -> None:
+        dataset = Dataset(self.data_path)
+        for value in ("abc", 1.5):
+            with self.subTest(value=value):
+                result = validate_request(
+                    dataset,
+                    {
+                        "features": self.request_features(),
+                        "parameters": [
+                            {"name": "objective", "value": "poisson"},
+                            {"name": "metric", "value": "poisson"},
+                            {"name": "num_threads", "value": value},
+                        ],
+                        "sample_column": "SAMPLE",
+                    },
+                )
+
+                self.assertFalse(result.ok)
+                self.assertIn("num_threads must be an integer at least 0", "; ".join(result.errors))
 
     def test_grid_job_trains_sequentially_and_activates_best_model(self) -> None:
         dataset = Dataset(self.data_path)
@@ -1299,6 +1329,22 @@ COPY (
         self.assertEqual(rows[1]["name"], "Segment")
         self.assertEqual(rows[1]["gain"], 1.5)
         self.assertEqual(next(row for row in rows if row["name"] == "SAMPLE")["gain"], 0.0)
+
+    def test_high_cardinality_threshold_flags_more_than_twenty_distinct_values(self) -> None:
+        data_path = self.root / "high_cardinality.csv"
+        rows = ["actualNumerator,denominator,cat20,cat21,SAMPLE"]
+        for index in range(42):
+            sample = "training" if index < 30 else "test"
+            rows.append(f"{index + 1},1,c{index % 20},c{index % 21},{sample}")
+        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        dataset = Dataset(data_path)
+
+        by_name = {row["name"]: row for row in feature_rows(dataset)}
+
+        self.assertEqual(by_name["cat20"]["distinct_count"], 20)
+        self.assertFalse(by_name["cat20"]["high_cardinality"])
+        self.assertEqual(by_name["cat21"]["distinct_count"], 21)
+        self.assertTrue(by_name["cat21"]["high_cardinality"])
 
     def test_feature_rows_include_invalid_columns_without_counting_them(self) -> None:
         original_probe = Dataset.probe_column_readable

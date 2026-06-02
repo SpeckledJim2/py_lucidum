@@ -62,7 +62,7 @@ export function gbmShapSelectionValue(data = {}) {
   const models = Array.isArray(data?.models) ? data.models : [];
   const activeModelId = String(data?.active_model_id || "");
   const model = models.find((item) => String(item?.model_id || "") === activeModelId) || models.find((item) => Boolean(item?.active));
-  if (!model) return "0";
+  if (!model) return "100k";
   const shapRows = Number(model?.shap_rows);
   const scoredRows = Number(model?.scored_rows);
   if (!Number.isFinite(shapRows) || shapRows <= 0) return "0";
@@ -415,15 +415,15 @@ export function createGbmTool({
     saveToolPresentation(tool, { groupMeta, chartMessage: "" });
   }
 
-  function shapOptionsHtml(options, selectedValue = "0") {
+  function shapOptionsHtml(options, selectedValue = "100k") {
     const rows = options.length ? options : [
       { value: "0", label: "0" },
       { value: "10k", label: "10k" },
       { value: "100k", label: "100k" },
       { value: "all", label: "All" },
     ];
-    const selected = String(selectedValue || "0").trim().toLowerCase();
-    const selectedRowValue = rows.some((row) => String(row.value || "").trim().toLowerCase() === selected) ? selected : "0";
+    const selected = String(selectedValue || "100k").trim().toLowerCase();
+    const selectedRowValue = rows.some((row) => String(row.value || "").trim().toLowerCase() === selected) ? selected : "100k";
     return rows.map((row) => {
       const value = String(row.value || "");
       const checked = value.trim().toLowerCase() === selectedRowValue ? "checked" : "";
@@ -2762,7 +2762,7 @@ export function createGbmTool({
       offset: el("denominator")?.value || "denominator",
       features: currentFeatureRows(),
       parameters: currentParameters(),
-      shap_rows: document.querySelector("input[name='gbmShapRows']:checked")?.value || "0",
+      shap_rows: document.querySelector("input[name='gbmShapRows']:checked")?.value || "100k",
       training_mode: currentTrainingMode(),
       sample_column: config?.sample?.column || config?.sample_column || "",
       sample_source: config?.sample?.source || "none",
