@@ -125,6 +125,8 @@
       let clipboardToastTimer = null;
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
+      let datasetMetaBase = "";
+      let datasetGbmCount = null;
       const el = (id) => document.getElementById(id);
       const api = createApiClient({ token });
       const {
@@ -288,6 +290,7 @@
         toolCache,
         updateAxisControls: () => lineBarTool.updateAxisControls(),
         refreshActiveTool,
+        setDatasetGbmCount,
         reloadSchema: async (preferredSource) => {
           state.schema = await api("/api/schema");
           if (preferredSource) state.source = preferredSource;
@@ -725,6 +728,58 @@
         el("glmTool").classList.toggle("hidden", !glmEnabled);
         el("gbmTool").classList.toggle("hidden", !gbmEnabled);
         el("toolSelectorSection").classList.toggle("hidden", !(profileEnabled || lineBarEnabled || ukMapEnabled || glmEnabled || gbmEnabled));
+      }
+
+      function schemaFileMeta() {
+        const path = state.schema?.path?.split(/[\\/]/).pop() || "";
+        const fileSize = formatFileSize(state.schema?.file_size);
+        return fileSize ? `${path} · ${fileSize}` : path;
+      }
+
+      function renderDatasetMeta(fileMeta = datasetMetaBase, gbmCount = datasetGbmCount) {
+        datasetMetaBase = String(fileMeta || "");
+        const numericCount = Number(gbmCount);
+        datasetGbmCount = Number.isFinite(numericCount) && numericCount >= 0 ? Math.trunc(numericCount) : null;
+        const target = el("datasetMeta");
+        const rows = Number(state.schema?.row_count || 0).toLocaleString();
+        const columns = Number(state.schema?.columns?.length || 0).toLocaleString();
+        target.textContent = "";
+        target.append(document.createTextNode(`${datasetMetaBase} · ${rows} rows · ${columns} columns`));
+        if (datasetGbmCount === null || !toolEnabled("gbm")) return;
+        target.append(document.createTextNode(" · "));
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "dataset-meta-gbm-link";
+        button.textContent = `GBMs (${datasetGbmCount.toLocaleString()})`;
+        button.title = "Open GBM Model navigator";
+        button.setAttribute("aria-label", `Open saved GBMs, ${datasetGbmCount.toLocaleString()} models`);
+        button.addEventListener("click", openGbmModelNavigator);
+        target.append(button);
+      }
+
+      async function refreshDatasetGbmCount() {
+        if (!toolEnabled("gbm")) {
+          renderDatasetMeta(datasetMetaBase, null);
+          return;
+        }
+        try {
+          const payload = await api("/api/gbm/models", { method: "GET" });
+          const models = Array.isArray(payload?.models) ? payload.models : [];
+          renderDatasetMeta(datasetMetaBase, models.length);
+        } catch (_) {
+          renderDatasetMeta(datasetMetaBase, null);
+        }
+      }
+
+      function setDatasetGbmCount(count) {
+        if (!toolEnabled("gbm")) return;
+        renderDatasetMeta(datasetMetaBase, count);
+      }
+
+      function openGbmModelNavigator() {
+        if (!toolEnabled("gbm")) return;
+        gbmTool.openModelNavigator();
+        setTool("gbm");
       }
 
       function setTool(tool, refresh = true) {
@@ -1996,6 +2051,8 @@
           state.bandSuggestionPendingKey = null;
           state.bandSuggestionRequestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
           clearToolCaches();
+          renderDatasetMeta(schemaFileMeta(), datasetGbmCount);
+          refreshDatasetGbmCount();
           setFilterRowMeta(state.schema.row_count);
           if (filtersUnchanged) {
             state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
@@ -2057,15 +2114,15 @@
           stopStartupTelemetryPolling();
           setStartupProgress("Schema received");
           const path = state.schema.path.split(/[\\/]/).pop();
-          const fileSize = formatFileSize(state.schema.file_size);
-          const fileMeta = fileSize ? `${path} · ${fileSize}` : path;
+          const fileMeta = schemaFileMeta();
           document.title = path ? `lucidum · ${path}` : "lucidum";
-          el("datasetMeta").textContent = `${fileMeta} · ${state.schema.row_count.toLocaleString()} rows · ${state.schema.columns.length} columns`;
           setFilterRowMeta(state.schema.row_count);
           setStartupProgress("Rendering controls");
           chooseDefaults();
           renderKpis();
           renderToolSelector();
+          renderDatasetMeta(fileMeta);
+          refreshDatasetGbmCount();
           state.tool = chooseDefaultTool();
           renderSavedFilters();
           lineBarTool.renderExpectedNumerators();

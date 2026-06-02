@@ -134,6 +134,7 @@ export function createGbmTool({
   setStatus,
   setAppReadyStatus = () => {},
   setToolTimingFailed,
+  setDatasetGbmCount = () => {},
   startToolTiming,
   state,
   canNavigateToLineBarFeature,
@@ -197,6 +198,7 @@ export function createGbmTool({
       const cache = toolCache(tool);
       cache.requestKey = requestKey;
       cache.data = data;
+      setDatasetGbmCount(Array.isArray(data?.models) ? data.models.length : null);
       syncDuckDbTimingFromData(tool, data);
       syncClientTimingFromData(tool, data);
       measureToolRender(tool, () => render(data));
@@ -568,6 +570,14 @@ export function createGbmTool({
         if (nextTab === "models") refreshModelList({ force: true });
       });
     }
+  }
+
+  function openModelNavigator() {
+    closeGbmFeatureContextMenu();
+    activeTab = "models";
+    const cachedData = config || toolCache(tool)?.data || null;
+    if (cachedData) render(cachedData);
+    refreshModelList({ force: true });
   }
 
   function featureDraftModelId(data = config) {
@@ -2632,6 +2642,7 @@ export function createGbmTool({
     config = config || {};
     config.models = models;
     config.active_model_id = activeModelId;
+    setDatasetGbmCount(models.length);
     const cache = toolCache(tool);
     if (cache?.data) {
       cache.data = { ...cache.data, models, active_model_id: activeModelId };
@@ -3498,6 +3509,7 @@ export function createGbmTool({
   return {
     buildRequest,
     fetchData,
+    openModelNavigator,
     render,
     refreshTheme() {
       if (liveProgress?.evaluation) {

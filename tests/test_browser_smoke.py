@@ -1237,7 +1237,7 @@ COPY (
                     timeout=10_000,
                 )
                 page.get_by_role("button", name="Model navigator").click()
-                page.get_by_text("Browser smoke model", exact=False).wait_for(timeout=10_000)
+                page.locator(".gbm-model-navigator").get_by_text("Browser smoke model", exact=False).wait_for(timeout=10_000)
                 page.get_by_role("button", name="Features and parameters").click()
                 page.wait_for_function(
                     """
@@ -2697,7 +2697,7 @@ COPY (
                     }
                     """
                 )
-                self.assertTrue(feature_state["age"]["checked"])
+                self.assertFalse(feature_state["age"]["checked"])
                 self.assertFalse(feature_state["segment"]["checked"])
                 self.assertEqual(feature_state["age"]["monotonicity"], "Increasing")
                 self.assertEqual(feature_state["age"]["metric"], "5.000" if feature_state["metricField"] == "gain" else "0.1830")

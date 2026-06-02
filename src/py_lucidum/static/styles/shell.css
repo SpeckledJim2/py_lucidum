@@ -28,8 +28,8 @@
       }
 
       .mark {
-        width: 42px;
-        height: 42px;
+        width: 48px;
+        height: 48px;
         object-fit: contain;
         display: block;
       }
@@ -149,10 +149,25 @@
 
       .meta {
         color: var(--muted);
-        font-size: 12px;
+        font-size: 16px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .dataset-meta-gbm-link {
+        border: 0;
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        font: inherit;
+        padding: 0;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .dataset-meta-gbm-link:hover {
+        color: var(--accent-2);
       }
 
       .spacer {
