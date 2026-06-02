@@ -932,6 +932,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".gbm-model-active-dot", css)
         self.assertNotIn("gbm-model-active-row", css)
         self.assertIn("#gbmModelFallback {\n        flex: 1 1 auto;", css)
+        self.assertIn("function syncRenderedTab(mount, nextTab)", js)
+        self.assertIn("syncRenderedTab(mount, activeTab);\n      scheduleGbmTableRedraws();\n      refreshModelList({ force: true });\n      return;", js)
         self.assertIn(".gbm-model-table {\n        font-size: 11px;\n        line-height: 1.15;", css)
         self.assertIn("min-width: 1620px;", css)
         self.assertIn(".gbm-model-table td {\n        border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent);", css)

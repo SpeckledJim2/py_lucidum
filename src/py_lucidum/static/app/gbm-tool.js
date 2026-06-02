@@ -572,9 +572,25 @@ export function createGbmTool({
     }
   }
 
+  function syncRenderedTab(mount, nextTab) {
+    for (const button of mount.querySelectorAll("[data-gbm-tab]")) {
+      button.classList.toggle("active", button.dataset.gbmTab === nextTab);
+    }
+    for (const panel of mount.querySelectorAll("[data-gbm-panel]")) {
+      panel.classList.toggle("hidden", panel.dataset.gbmPanel !== nextTab);
+    }
+  }
+
   function openModelNavigator() {
     closeGbmFeatureContextMenu();
     activeTab = "models";
+    const mount = el("modelToolWrap");
+    if (mount?.querySelector(".gbm-tool")) {
+      syncRenderedTab(mount, activeTab);
+      scheduleGbmTableRedraws();
+      refreshModelList({ force: true });
+      return;
+    }
     const cachedData = config || toolCache(tool)?.data || null;
     if (cachedData) render(cachedData);
     refreshModelList({ force: true });

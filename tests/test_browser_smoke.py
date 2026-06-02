@@ -2515,6 +2515,8 @@ COPY (
                         fontSize: cell ? getComputedStyle(cell).fontSize : "",
                         lineHeight: cell ? getComputedStyle(cell).lineHeight : "",
                         wrapped: Boolean(document.querySelector(".gbm-model-navigator")),
+                        activeTab: document.querySelector("[data-gbm-tab].active")?.textContent.trim() || "",
+                        fallbackRows: document.querySelectorAll("#gbmModelFallback [data-gbm-model-row]").length,
                         hasDeletedModel: document.body.textContent.includes("renamed-smoke-model"),
                       };
                     }
@@ -2542,7 +2544,30 @@ COPY (
                 self.assertIn("25", navigator_state["firstCells"])
                 self.assertIn("1.2s", navigator_state["firstCells"])
                 self.assertTrue(navigator_state["wrapped"])
+                self.assertEqual(navigator_state["activeTab"], "Model navigator")
+                self.assertEqual(navigator_state["fallbackRows"], 0)
                 self.assertFalse(navigator_state["hasDeletedModel"])
+                page.locator(".dataset-meta-gbm-link").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("[data-gbm-tab].active")?.textContent.trim() === "Model navigator"
+                      && document.querySelectorAll("#gbmModelGrid .tabulator-row").length === 1
+                      && document.querySelectorAll("#gbmModelFallback [data-gbm-model-row]").length === 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#lineBarTool").click()
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator(".dataset-meta-gbm-link").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmTool.active")
+                      && document.querySelector("[data-gbm-tab].active")?.textContent.trim() === "Model navigator"
+                      && document.querySelectorAll("#gbmModelGrid .tabulator-row").length === 1
+                      && document.querySelectorAll("#gbmModelFallback [data-gbm-model-row]").length === 0
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
                 page.wait_for_function(
                     """
