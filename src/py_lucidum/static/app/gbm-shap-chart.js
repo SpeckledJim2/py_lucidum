@@ -107,7 +107,7 @@ function flameOption(payload, common, theme) {
     symbol: "none",
     itemStyle: { color: SHAP_RED },
     lineStyle: { color: SHAP_RED, width: 2, type: "dashed" },
-    markLine: zeroMarkLine(theme),
+    markLine: referenceMarkLine(theme, referenceLineValue(payload)),
   });
   return {
     ...common,
@@ -129,7 +129,7 @@ function boxOption(payload, common, theme) {
     grid: { ...common.grid, top: 56 },
     tooltip: { trigger: "item", confine: true, formatter: (params) => boxTooltip(params, rows, feature) },
     xAxis: categoryAxis(labels, payload.x_feature, theme, feature, { axis: "x" }),
-    yAxis: valueAxis(payload.y_label || "SHAP", theme),
+    yAxis: valueAxis(payload.y_label || "SHAP", theme, payload.y_domain),
     dataZoom: labels.length > 60 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
     series: [
       {
@@ -137,7 +137,7 @@ function boxOption(payload, common, theme) {
         type: "boxplot",
         data: rows.map((row) => [row.p0, row.p25, row.p50, row.p75, row.p100]),
         itemStyle: { borderColor: SHAP_RED, color: "rgba(209, 63, 63, 0.16)" },
-        markLine: zeroMarkLine(theme),
+        markLine: referenceMarkLine(theme, referenceLineValue(payload)),
       },
       {
         name: "Mean",
@@ -216,7 +216,7 @@ function linesOption(payload, common, theme) {
       data,
       symbol: "none",
       lineStyle: { width: 2 },
-      markLine: name === [...seriesRows.keys()][0] ? zeroMarkLine(theme) : undefined,
+      markLine: name === [...seriesRows.keys()][0] ? referenceMarkLine(theme, referenceLineValue(payload)) : undefined,
     })),
   };
 }
@@ -452,10 +452,14 @@ function formatTooltipRange(low, high) {
   return `${formatTooltipNumber(low)} to ${formatTooltipNumber(high)}`;
 }
 
-function zeroMarkLine(theme) {
+function referenceLineValue(payload) {
+  return payload?.rescale?.mode === "1" ? 1 : 0;
+}
+
+function referenceMarkLine(theme, value) {
   return {
     symbol: "none",
-    data: [{ yAxis: 0 }],
+    data: [{ yAxis: value }],
     lineStyle: { color: theme.zero || "#334155", width: 1, opacity: 0.75 },
     label: { show: false },
   };

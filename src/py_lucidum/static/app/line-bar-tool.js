@@ -348,6 +348,7 @@ export function createLineBarTool({
       quantileMode: isNumeric ? state.quantileMode : "off",
       dateBucket: isDate ? state.dateBucket : "none",
       transform: state.transform,
+      base: selectedFeatureBase(),
       sigma: Number(state.sigma),
       filter: state.activeFilter,
       denominator: el("denominator").value,
@@ -568,6 +569,10 @@ export function createLineBarTool({
     return `${labelTarget} hidden as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories.`;
   }
 
+  function selectedFeatureBase() {
+    return String(state.schema?.feature_bases?.[state.x] || "").trim();
+  }
+
   function formatChartTooltip(params, weightLabel) {
     const items = Array.isArray(params) ? params : [params];
     if (!items.length) return "";
@@ -767,7 +772,7 @@ export function createLineBarTool({
     return Number.isFinite(number) ? number : null;
   }
 
-  function transformTableSummaryValue(value, average) {
+  function transformTableSummaryValue(value, reference) {
     const number = tableNumber(value);
     if (number === null) return null;
     const transform = String(state.transform || "none");
@@ -778,8 +783,8 @@ export function createLineBarTool({
         return Number.isFinite(transformed) ? transformed : null;
       }
       if (transform === "logit") return number > 0 && number < 1 ? Math.log(number / (1 - number)) : null;
-      if (transform === "zero") return average !== null ? number - average : null;
-      if (transform === "one") return average !== null && average !== 0 ? number / average : null;
+      if (transform === "zero") return reference !== null ? number - reference : null;
+      if (transform === "one") return reference !== null && reference !== 0 ? number / reference : null;
     } catch (_) {
       return null;
     }
@@ -789,6 +794,7 @@ export function createLineBarTool({
   function buildTableSummary(data) {
     const rows = Array.isArray(data.rows) ? data.rows : [];
     const responseCount = Array.isArray(data.responses) ? data.responses.length : 0;
+    const transformReferences = Array.isArray(data.transform?.values) ? data.transform.values : [];
     const summary = {
       volume: 0,
       responses: [],
@@ -807,7 +813,8 @@ export function createLineBarTool({
         if (rowDenominator !== null) denominator += rowDenominator;
       });
       const average = denominator ? numerator / denominator : null;
-      summary.responses[index] = transformTableSummaryValue(average, average);
+      const reference = tableNumber(transformReferences[index]);
+      summary.responses[index] = transformTableSummaryValue(average, reference !== null ? reference : average);
     }
     return summary;
   }

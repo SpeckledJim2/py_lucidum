@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
+import math
 import time
 import unittest
 from pathlib import Path
@@ -274,9 +275,9 @@ COPY (
     def test_gbm_config_includes_feature_groupings_and_scenarios(self) -> None:
         features_path = self.root / "feature_spec.csv"
         features_path.write_text(
-            "Feature,Grouping,scenario1,scenario2\n"
-            "Age,DRIVER,FEATURE,\n"
-            "Segment,POSTCODE,,selected feature\n",
+            "Feature,Grouping,Base,scenario1,scenario2\n"
+            "Age,DRIVER,40,FEATURE,\n"
+            "Segment,POSTCODE,B,,selected feature\n",
             encoding="utf-8",
         )
         app = create_app(
@@ -310,13 +311,15 @@ COPY (
         store = self.write_shap_plot_model()
         dataset = Dataset(self.data_path)
 
-        payload = shap_config(dataset, store, "shap-model")
+        payload = shap_config(dataset, store, "shap-model", feature_bases={"Age": "40", "Segment": "B"})
 
         self.assertTrue(payload["has_shap"])
         self.assertEqual(payload["row_count"], 3)
         self.assertEqual([feature["name"] for feature in payload["features"]], ["lat", "Age", "Segment"])
         self.assertEqual(payload["default_feature_1"], "lat")
         self.assertEqual([feature.get("mean_abs_shap") for feature in payload["features"]], [1.333, 0.233, 0.117])
+        self.assertEqual(next(feature for feature in payload["features"] if feature["name"] == "Age")["base"], "40")
+        self.assertEqual(next(feature for feature in payload["features"] if feature["name"] == "Segment")["base"], "B")
 
     def test_shap_config_handles_models_without_saved_shap_rows(self) -> None:
         store = self.write_shap_plot_model("no-shap", with_shap=False)
@@ -366,6 +369,9 @@ COPY (
         self.assertAlmostEqual(first["contributions"]["Segment"], 0.1)
         self.assertAlmostEqual(sum(first["contributions"].values()), first["total_shap"])
         self.assertAlmostEqual(first["total_shap"], 1.3)
+        self.assertNotIn("rescale", payload)
+        self.assertFalse(any("offset" in row for row in payload["rows"]))
+        self.assertEqual(payload["y_domain"], [-1.0, 2.0])
 
     def test_stacked_shap_descending_top_n_adds_other_to_reconcile_total(self) -> None:
         store = self.write_shap_plot_model()
@@ -395,6 +401,35 @@ COPY (
         self.assertEqual([row["x"] for row in payload["rows"]], ["A", "B", "C"])
         self.assertAlmostEqual(payload["rows"][2]["total_shap"], -0.85)
 
+    def test_stacked_shap_ignores_rescale_request(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = stacked_shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {
+                "model_feature": "Age",
+                "banding": 10,
+                "tail_percent": 0,
+                "num_features": "all",
+                "x_sort": "alpha",
+                "rescale": "1",
+                "feature_bases": {"Age": "40"},
+            },
+        )
+        by_x = {row["x"]: row for row in payload["rows"]}
+
+        self.assertNotIn("rescale", payload)
+        self.assertFalse(any("offset" in row for row in payload["rows"]))
+        self.assertAlmostEqual(by_x[40]["total_shap"], 1.4)
+        self.assertAlmostEqual(by_x[40]["contributions"]["lat"], 2.0)
+        self.assertAlmostEqual(by_x[40]["contributions"]["Age"], -0.4)
+        self.assertAlmostEqual(by_x[40]["contributions"]["Segment"], -0.2)
+        self.assertAlmostEqual(sum(by_x[40]["contributions"].values()), by_x[40]["total_shap"])
+        self.assertEqual(payload["y_domain"], [-1.0, 2.0])
+
     def test_shap_plot_builds_flame_percentiles_for_numeric_feature(self) -> None:
         store = self.write_shap_plot_model()
         dataset = Dataset(self.data_path)
@@ -410,6 +445,45 @@ COPY (
         self.assertAlmostEqual(by_x[40]["p50"], -0.4)
         self.assertNotIn("p45", by_x[30])
         self.assertNotIn("p55", by_x[30])
+
+    def test_shap_flame_zero_rescale_uses_median_at_numeric_base_band(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {"feature_1": "Age", "banding_1": 10, "tail_percent": 0, "rescale": "0", "feature_bases": {"Age": "40"}},
+        )
+        by_x = {row["x"]: row for row in payload["rows"]}
+
+        self.assertEqual(payload["rescale"], {"mode": "0", "reference": -0.4, "base": "Age=40"})
+        self.assertAlmostEqual(payload["y_domain"][0], 0)
+        self.assertAlmostEqual(payload["y_domain"][1], 0.6)
+        self.assertAlmostEqual(by_x[40]["p50"], 0)
+        self.assertAlmostEqual(by_x[30]["p50"], 0.6)
+        self.assertAlmostEqual(by_x[50]["p50"], 0.5)
+
+    def test_shap_flame_one_rescale_exponentiates_before_scaling(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {"feature_1": "Age", "banding_1": 10, "tail_percent": 0, "rescale": "1", "feature_bases": {"Age": "40"}},
+        )
+        by_x = {row["x"]: row for row in payload["rows"]}
+
+        self.assertEqual(payload["rescale"]["mode"], "1")
+        self.assertEqual(payload["rescale"]["base"], "Age=40")
+        self.assertAlmostEqual(payload["rescale"]["reference"], math.exp(-0.4))
+        self.assertAlmostEqual(payload["rescale"]["linear_reference"], -0.4)
+        self.assertAlmostEqual(by_x[40]["p50"], 1)
+        self.assertAlmostEqual(by_x[30]["p50"], math.exp(0.2) / math.exp(-0.4))
+        self.assertAlmostEqual(by_x[50]["p50"], math.exp(0.1) / math.exp(-0.4))
 
     def test_shap_plot_numeric_treat_as_factor_uses_natural_band_order(self) -> None:
         store = self.write_shap_plot_model()
@@ -429,6 +503,26 @@ COPY (
         self.assertEqual(payload["plot_type"], "box")
         self.assertEqual([row["level"] for row in payload["rows"]], ["A", "C", "B"])
         self.assertAlmostEqual(payload["rows"][0]["p50"], 0.1)
+
+    def test_shap_box_one_rescale_uses_box_median_at_categorical_base(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {"feature_1": "Segment", "rescale": "1", "feature_bases": {"Segment": "B"}},
+        )
+        by_level = {row["level"]: row for row in payload["rows"]}
+
+        self.assertEqual(payload["rescale"]["mode"], "1")
+        self.assertEqual(payload["rescale"]["base"], "Segment=B")
+        self.assertAlmostEqual(payload["rescale"]["reference"], math.exp(-0.2))
+        self.assertAlmostEqual(payload["rescale"]["linear_reference"], -0.2)
+        self.assertAlmostEqual(by_level["B"]["p50"], 1)
+        self.assertAlmostEqual(by_level["A"]["p50"], math.exp(0.1) / math.exp(-0.2))
+        self.assertAlmostEqual(by_level["C"]["p50"], math.exp(0.05) / math.exp(-0.2))
 
     def test_shap_plot_two_numeric_features_uses_sum_for_surface(self) -> None:
         store = self.write_shap_plot_model()
@@ -466,6 +560,31 @@ COPY (
         self.assertEqual(payload["series_feature"], "Segment")
         self.assertEqual({row["series"] for row in payload["rows"]}, {"A", "B", "C"})
         self.assertAlmostEqual(next(row for row in payload["rows"] if row["series"] == "A")["y"], 0.3)
+
+    def test_shap_lines_zero_rescale_uses_base_factor_line_reference(self) -> None:
+        store = self.write_shap_plot_model()
+        dataset = Dataset(self.data_path)
+
+        payload = shap_plot(
+            dataset,
+            store,
+            "shap-model",
+            {
+                "feature_1": "Age",
+                "feature_2": "Segment",
+                "banding_1": 10,
+                "tail_percent": 0,
+                "rescale": "0",
+                "feature_bases": {"Age": "40", "Segment": "B"},
+            },
+        )
+
+        self.assertEqual(payload["rescale"]["mode"], "0")
+        self.assertEqual(payload["rescale"]["base"], "Age=40, Segment=B")
+        self.assertAlmostEqual(payload["rescale"]["reference"], -0.6)
+        self.assertAlmostEqual(next(row for row in payload["rows"] if row["x"] == 40 and row["series"] == "B")["y"], 0)
+        self.assertAlmostEqual(next(row for row in payload["rows"] if row["x"] == 30 and row["series"] == "A")["y"], 0.9)
+        self.assertAlmostEqual(next(row for row in payload["rows"] if row["x"] == 50 and row["series"] == "C")["y"], 0.75)
 
     def test_shap_plot_builds_heatmap_for_two_factor_features(self) -> None:
         store = self.write_shap_plot_model()

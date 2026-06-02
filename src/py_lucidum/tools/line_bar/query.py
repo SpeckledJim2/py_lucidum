@@ -75,7 +75,16 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         transform = str(request.get("transform") or "none")
         warnings: list[str] = []
         warnings.extend(denominator_warnings(denominator, denominator_summary))
-        display_rows = apply_transform(sorted_rows, responses, transform, sigma_multiplier, warnings)
+        display_rows, transform_metadata = apply_transform(
+            sorted_rows,
+            responses,
+            transform,
+            sigma_multiplier,
+            warnings,
+            x_kind=x_group_kind,
+            base=request.get("base"),
+            band_width=request.get("bandWidth"),
+        )
 
         return {
             "x": x_col,
@@ -101,6 +110,7 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             "response_summaries": response_summaries,
             "rows": display_rows,
             "warnings": warnings,
+            "transform": transform_metadata,
         }
 
 
@@ -514,12 +524,17 @@ def apply_transform(
     transform: str,
     sigma_multiplier: float,
     warnings: list[str],
-) -> list[dict[str, Any]]:
+    *,
+    x_kind: str = "",
+    base: Any = None,
+    band_width: Any = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     averages: dict[int, float | None] = {}
     for index, _ in enumerate(responses):
         num = sum(float(row.get(f"resp{index}_num") or 0) for row in rows)
         den = sum(float(row.get(f"resp{index}_den") or 0) for row in rows)
         averages[index] = num / den if den else None
+    references = transform_references(rows, responses, transform, averages, warnings, x_kind=x_kind, base=base, band_width=band_width)
 
     display: list[dict[str, Any]] = []
     invalid_count = 0
@@ -533,19 +548,104 @@ def apply_transform(
         for index, _ in enumerate(responses):
             out[f"resp{index}_num"] = row.get(f"resp{index}_num")
             out[f"resp{index}_den"] = row.get(f"resp{index}_den")
-            out[f"resp{index}"] = transform_value(row.get(f"resp{index}"), transform, averages[index])
+            out[f"resp{index}"] = transform_value(row.get(f"resp{index}"), transform, references["values"][index])
             if row.get(f"resp{index}") is not None and out[f"resp{index}"] is None:
                 invalid_count += 1
         if sigma_multiplier > 0 and len(responses) >= 2 and row.get("sigma_se") is not None and row.get("resp1") is not None:
             se = float(row["sigma_se"])
             expected = float(row["resp1"])
-            out["resp1_low"] = transform_value(expected - sigma_multiplier * se, transform, averages[1])
-            out["resp1_high"] = transform_value(expected + sigma_multiplier * se, transform, averages[1])
+            out["resp1_low"] = transform_value(expected - sigma_multiplier * se, transform, references["values"][1])
+            out["resp1_high"] = transform_value(expected + sigma_multiplier * se, transform, references["values"][1])
         display.append(out)
 
     if invalid_count:
         warnings.append(f"{invalid_count} response values could not be shown because they are outside the {transform} transform domain.")
-    return display
+    return display, references["metadata"]
+
+
+def transform_references(
+    rows: list[dict[str, Any]],
+    responses: list[dict[str, str]],
+    transform: str,
+    averages: dict[int, float | None],
+    warnings: list[str],
+    *,
+    x_kind: str,
+    base: Any,
+    band_width: Any,
+) -> dict[str, Any]:
+    base_text = str(base or "").strip()
+    metadata: dict[str, Any] = {
+        "mode": transform,
+        "base": base_text,
+        "reference": "overall_average",
+        "base_x": None,
+        "values": [json_number(averages.get(index)) for index, _ in enumerate(responses)],
+    }
+    if transform not in {"zero", "one"} or not base_text:
+        return {"values": averages, "metadata": metadata}
+
+    base_row = base_reference_row(rows, x_kind=x_kind, base=base_text, band_width=band_width)
+    if base_row is None:
+        warnings.append(f"Base value {base_text} could not be matched on the x-axis; using overall response averages for the {transform} transform.")
+        return {"values": averages, "metadata": metadata}
+
+    values: dict[int, float | None] = {}
+    failed_indexes: list[int] = []
+    for index, _ in enumerate(responses):
+        reference = json_number(base_row.get(f"resp{index}"))
+        if reference is None or (transform == "one" and reference == 0):
+            values[index] = averages.get(index)
+            failed_indexes.append(index)
+        else:
+            values[index] = float(reference)
+    if failed_indexes:
+        labels = ", ".join(responses[index]["label"] for index in failed_indexes)
+        warnings.append(f"Base value {base_text} has no usable {labels} response reference; using overall response averages for those {transform} transforms.")
+
+    metadata.update(
+        {
+            "reference": "base",
+            "base_x": base_row.get("x"),
+            "values": [json_number(values.get(index)) for index, _ in enumerate(responses)],
+            "fallback_responses": failed_indexes,
+        }
+    )
+    return {"values": values, "metadata": metadata}
+
+
+def base_reference_row(rows: list[dict[str, Any]], *, x_kind: str, base: str, band_width: Any) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    if x_kind in {"integer", "numeric"}:
+        return numeric_base_reference_row(rows, base=base, band_width=band_width)
+    if x_kind == "quantile":
+        return None
+    target = base.strip().lower()
+    return next((row for row in rows if str(row.get("x") or "").strip().lower() == target), None)
+
+
+def numeric_base_reference_row(rows: list[dict[str, Any]], *, base: str, band_width: Any) -> dict[str, Any] | None:
+    base_number = json_number(base)
+    if base_number is None:
+        return None
+    candidates = [row for row in rows if not row.get("is_tail") and json_number(row.get("x_sort")) is not None]
+    if not candidates:
+        candidates = [row for row in rows if json_number(row.get("x_sort")) is not None]
+    if not candidates:
+        return None
+    width = parse_positive_float(band_width)
+    if width:
+        for row in candidates:
+            start = json_number(row.get("x_sort"))
+            if start is None:
+                continue
+            if float(start) <= float(base_number) < float(start) + width:
+                return row
+    exact = next((row for row in candidates if json_number(row.get("x_sort")) == base_number), None)
+    if exact:
+        return exact
+    return min(candidates, key=lambda row: abs(float(json_number(row.get("x_sort")) or 0) - float(base_number)))
 
 
 def transform_value(value: Any, transform: str, average: float | None) -> float | int | None:

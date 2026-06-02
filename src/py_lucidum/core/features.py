@@ -6,6 +6,7 @@ from typing import Any
 
 
 FEATURE_SPEC_REQUIRED_COLUMNS = ["Feature", "Grouping"]
+FEATURE_SPEC_BASE_COLUMN = "Base"
 
 
 def resolve_features_path(features_path: str | Path | None, use_features: bool = True) -> Path | None:
@@ -32,7 +33,8 @@ def load_features(features_path: str | Path | None, use_features: bool = True) -
         fieldnames = list(reader.fieldnames or [])
         if fieldnames[:2] != FEATURE_SPEC_REQUIRED_COLUMNS:
             raise ValueError("feature_spec.csv must start with these columns: Feature,Grouping")
-        scenario_names = fieldnames[2:]
+        has_base_column = len(fieldnames) > 2 and fieldnames[2] == FEATURE_SPEC_BASE_COLUMN
+        scenario_names = fieldnames[3:] if has_base_column else fieldnames[2:]
         rows: list[dict[str, Any]] = []
         scenario_features: dict[str, list[str]] = {name: [] for name in scenario_names}
         for row in reader:
@@ -40,13 +42,17 @@ def load_features(features_path: str | Path | None, use_features: bool = True) -
             if not feature:
                 continue
             grouping = str(row.get("Grouping") or "").strip()
+            base = str(row.get(FEATURE_SPEC_BASE_COLUMN) or "").strip() if has_base_column else ""
             scenarios: dict[str, bool] = {}
             for scenario_name in scenario_names:
                 selected = "feature" in str(row.get(scenario_name) or "").strip().lower()
                 scenarios[scenario_name] = selected
                 if selected:
                     scenario_features[scenario_name].append(feature)
-            rows.append({"feature": feature, "grouping": grouping, "scenarios": scenarios})
+            row_payload = {"feature": feature, "grouping": grouping, "scenarios": scenarios}
+            if has_base_column:
+                row_payload["base"] = base
+            rows.append(row_payload)
         return {
             "rows": rows,
             "scenarios": [

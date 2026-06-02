@@ -7,7 +7,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 ## Current Tools
 
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
-- **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, tables, transforms, and sigma bars.
+- **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, tables, Base-aware transforms, and sigma bars.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, or postcode units when unit and coordinate columns are available.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, and SHAP plotting when SHAP rows are saved during training.
 - **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios/interaction constraints.
@@ -96,7 +96,7 @@ Parquet is recommended for normal use because DuckDB can read it efficiently.
 - `--x`, `--actual`, `--expected`, and `--denominator` set initial Line/Bar selections.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
-- `--features` points to a Feature Specification CSV for GBM feature scenarios and interaction constraints. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
+- `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, and optional Base metadata used by chart rescaling. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
 - `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `gbm` after installing the `gbm` extra to train LightGBM models.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
@@ -183,16 +183,16 @@ FINANCIAL,Premium,PREMIUM,N,2,currency
 
 ## Feature Specs
 
-Feature Specification CSV files drive GBM feature scenarios and interaction-constraint groups. They must start with these columns, followed by any number of scenario columns:
+Feature Specification CSV files drive GBM feature scenarios, interaction-constraint groups, and optional chart Base metadata. The current format starts with these columns, followed by any number of scenario columns:
 
 ```csv
-Feature,Grouping,scenario1,scenario2,scenario3
-DRIVER_AGE,DRIVER,feature,feature,feature
-NCD_YEARS,DRIVER,feature,,feature
-POSTCODE_AREA,POSTCODE,,feature,feature
+Feature,Grouping,Base,scenario1,scenario2,scenario3
+DRIVER_AGE,DRIVER,40,feature,feature,feature
+NCD_YEARS,DRIVER,10,feature,,feature
+POSTCODE_AREA,POSTCODE,B,,feature,feature
 ```
 
-`Feature` must match a dataset column name exactly. `Grouping` is optional metadata shown in the GBM Feature table and, when present, is also used to offer GBM feature interaction constraints. Each additional column becomes a scenario in the GBM scenario dropdown; if a scenario cell contains the word `feature`, case-insensitive, that row is selected when the scenario is chosen.
+`Feature` must match a dataset column name exactly. `Grouping` is optional metadata shown in the GBM Feature table and, when present, is also used to offer GBM feature interaction constraints. `Base` is optional metadata used to anchor Line/Bar and GBM SHAP chart rescaling to `0` or `1`; it is not a scenario. Older specs without the `Base` column are still accepted, in which case every column after `Grouping` is treated as a scenario. Each scenario column appears in the GBM scenario dropdown; if a scenario cell contains the word `feature`, case-insensitive, that row is selected when the scenario is chosen.
 
 ## GBM Models
 
@@ -249,7 +249,7 @@ The SHAP tab is available for GBMs trained with a nonzero SHAP row option. It li
 
 Switching active models preserves the selected SHAP features when they exist in the next model, and preserves matching plot legend visibility when the same SHAP plot can still be shown; unavailable Feature 2 selections fall back to `None`, and unavailable Feature 1 selections fall back to the first item in the current Feature 1 sort order.
 
-One-feature plots show numeric percentile ribbons around the median or factor box plots, with flame plot x-axes fitted to the plotted data range; when a numeric feature is treated as a factor, its bands keep their natural numeric order. Two-feature plots show a dense-grid 3D surface for two continuous features, line plots for continuous-by-factor selections, and heatmaps for two factor-style selections. Two-feature plots use the sum of the two selected SHAP contributions.
+One-feature plots show numeric percentile ribbons around the median or factor box plots, with flame plot x-axes fitted to the plotted data range; when a numeric feature is treated as a factor, its bands keep their natural numeric order. Two-feature plots show a dense-grid 3D surface for two continuous features, line plots for continuous-by-factor selections, and heatmaps for two factor-style selections. Two-feature plots use the sum of the two selected SHAP contributions. The SHAP tab includes a `-` / `0` / `1` rescale control that uses Feature Specification `Base` metadata when present. SHAP `1` rescaling exponentiates values first, then scales to the base response value. Stacked SHAP stays on the linear predictor contribution scale.
 
 Once a model is active, its predictions and SHAP outputs also appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
 

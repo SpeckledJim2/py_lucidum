@@ -291,24 +291,38 @@
 
       .gbm-shap-controls {
         display: grid;
-        grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr);
+        grid-template-columns: repeat(4, max-content);
         gap: 6px 12px;
+        justify-content: flex-start;
         min-width: 0;
+        overflow-x: auto;
       }
 
       .gbm-shap-controls .control {
         align-items: flex-start;
+        justify-self: start;
         min-width: 0;
       }
 
       .gbm-shap-controls .gbm-shap-feature2-control {
-        align-items: flex-end;
-        text-align: right;
+        align-items: flex-start;
+        grid-column: 2;
+        grid-row: 1;
+        text-align: left;
       }
 
       .gbm-shap-controls .gbm-shap-tail-control {
-        align-items: center;
-        text-align: center;
+        align-items: flex-start;
+        grid-column: 3;
+        grid-row: 1;
+        text-align: left;
+      }
+
+      .gbm-shap-controls .gbm-shap-rescale-control {
+        align-items: flex-start;
+        grid-column: 4;
+        grid-row: 1;
+        text-align: left;
       }
 
       .gbm-shap-controls .control h3 {
@@ -322,11 +336,15 @@
       }
 
       .gbm-shap-feature2-control .segmented {
-        justify-content: flex-end;
+        justify-content: flex-start;
       }
 
       .gbm-shap-tail-control .segmented {
-        justify-content: center;
+        justify-content: flex-start;
+      }
+
+      .gbm-shap-rescale-control .segmented {
+        justify-content: flex-start;
       }
 
       .gbm-shap-banding-control.disabled {
@@ -345,9 +363,17 @@
         white-space: nowrap;
       }
 
+      .gbm-shap-feature1-factor {
+        grid-column: 1;
+        grid-row: 2;
+        justify-self: start;
+      }
+
       .gbm-shap-feature2-factor {
-        justify-self: end;
-        text-align: right;
+        grid-column: 2;
+        grid-row: 2;
+        justify-self: start;
+        text-align: left;
       }
 
       .gbm-shap-factor-control.disabled {

@@ -165,6 +165,16 @@ WHERE feature IS NOT NULL
             if isinstance(row, dict) and row.get("feature")
         }
 
+    def feature_bases() -> dict[str, str]:
+        rows = feature_spec_payload().get("rows", [])
+        if not isinstance(rows, list):
+            return {}
+        return {
+            str(row.get("feature")): str(row.get("base") or "").strip()
+            for row in rows
+            if isinstance(row, dict) and row.get("feature") and str(row.get("base") or "").strip()
+        }
+
     def feature_interaction_groupings(current_groupings: dict[str, str] | None = None) -> list[str]:
         values = (current_groupings if current_groupings is not None else feature_groupings()).values()
         return sorted({str(grouping).strip() for grouping in values if str(grouping).strip()}, key=str.lower)
@@ -414,7 +424,7 @@ WHERE feature IS NOT NULL
     async def model_shap_config_endpoint(request: Request, model_id: str) -> dict[str, Any]:
         context.check_token(request)
         try:
-            return shap_config(context.dataset, store, model_id)
+            return shap_config(context.dataset, store, model_id, feature_bases=feature_bases())
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -422,6 +432,7 @@ WHERE feature IS NOT NULL
     async def model_shap_plot_endpoint(request: Request, model_id: str) -> dict[str, Any]:
         context.check_token(request)
         payload = dict(await request.json())
+        payload["feature_bases"] = feature_bases()
         try:
             return shap_plot(context.dataset, store, model_id, payload)
         except ValueError as exc:

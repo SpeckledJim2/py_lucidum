@@ -15,7 +15,7 @@ from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, load_kpis, load_saved_filters
 from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
-from py_lucidum.tools.line_bar.query import chart, normalise_quantile_count
+from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count
 
 
 def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
@@ -177,6 +177,145 @@ class LineBarToolTests(unittest.TestCase):
         self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
         self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
+
+    def test_schema_exposes_feature_bases_from_feature_spec(self) -> None:
+        self.features_path.write_text(
+            "Feature,Grouping,Base,scenario1\n"
+            "YoungestDriverAge,DRIVER,40,feature\n"
+            "UseofVan,VEHICLE,Business,\n",
+            encoding="utf-8",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+            features_path=self.features_path,
+        )
+
+        status, _, body = asgi_get(app, "/api/schema")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["feature_bases"], {"YoungestDriverAge": "40", "UseofVan": "Business"})
+
+    def test_line_bar_zero_transform_uses_categorical_base_for_actual_and_expected(self) -> None:
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        request = self.request()
+        request.update({"transform": "zero", "base": "Business"})
+
+        status, _, body = asgi_post_json(app, "/api/chart", request)
+        payload = json.loads(body)
+        by_x = {row["x"]: row for row in payload["rows"]}
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["transform"]["reference"], "base")
+        self.assertEqual(payload["transform"]["base_x"], "Business")
+        self.assertEqual(payload["transform"]["values"], [350, 350])
+        self.assertAlmostEqual(by_x["Business"]["resp0"], 0)
+        self.assertAlmostEqual(by_x["Business"]["resp1"], 0)
+        self.assertAlmostEqual(by_x["Social"]["resp0"], -200)
+        self.assertAlmostEqual(by_x["Social"]["resp1"], -200)
+
+    def test_line_bar_one_transform_uses_numeric_band_containing_base(self) -> None:
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        request = self.request()
+        request.update({"x": "YoungestDriverAge", "bandWidth": "10", "transform": "one", "base": "40"})
+
+        status, _, body = asgi_post_json(app, "/api/chart", request)
+        payload = json.loads(body)
+        by_x = {row["x"]: row for row in payload["rows"]}
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["transform"]["reference"], "base")
+        self.assertEqual(payload["transform"]["base_x"], "40")
+        self.assertEqual(payload["transform"]["values"], [200, 210])
+        self.assertAlmostEqual(by_x["40"]["resp0"], 1)
+        self.assertAlmostEqual(by_x["40"]["resp1"], 1)
+        self.assertAlmostEqual(by_x["30"]["resp0"], 0.5)
+        self.assertAlmostEqual(by_x["30"]["resp1"], 90 / 210)
+        self.assertAlmostEqual(by_x["50"]["resp0"], 300 / 200)
+        self.assertAlmostEqual(by_x["50"]["resp1"], 290 / 210)
+        self.assertAlmostEqual(by_x["60"]["resp0"], 400 / 200)
+        self.assertAlmostEqual(by_x["60"]["resp1"], 410 / 210)
+
+    def test_line_bar_base_transform_uses_expected_reference_for_sigma_bounds(self) -> None:
+        rows = [
+            {
+                "x": "Base",
+                "x_sort": "Base",
+                "volume": 1,
+                "resp0": 100,
+                "resp0_num": 100,
+                "resp0_den": 1,
+                "resp1": 50,
+                "resp1_num": 50,
+                "resp1_den": 1,
+                "sigma_se": 5,
+                "valid_folds": 3,
+            },
+            {
+                "x": "Other",
+                "x_sort": "Other",
+                "volume": 1,
+                "resp0": 150,
+                "resp0_num": 150,
+                "resp0_den": 1,
+                "resp1": 40,
+                "resp1_num": 40,
+                "resp1_den": 1,
+                "sigma_se": 2,
+                "valid_folds": 3,
+            },
+        ]
+        warnings: list[str] = []
+
+        display, metadata = apply_transform(
+            rows,
+            [{"label": "Actual", "numerator": "Actual"}, {"label": "Expected", "numerator": "Expected"}],
+            "zero",
+            2,
+            warnings,
+            x_kind="categorical",
+            base="Base",
+            band_width="0",
+        )
+        by_x = {row["x"]: row for row in display}
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(metadata["values"], [100, 50])
+        self.assertAlmostEqual(by_x["Base"]["resp0"], 0)
+        self.assertAlmostEqual(by_x["Base"]["resp1"], 0)
+        self.assertAlmostEqual(by_x["Base"]["resp1_low"], -10)
+        self.assertAlmostEqual(by_x["Base"]["resp1_high"], 10)
+        self.assertAlmostEqual(by_x["Other"]["resp0"], 50)
+        self.assertAlmostEqual(by_x["Other"]["resp1"], -10)
+        self.assertAlmostEqual(by_x["Other"]["resp1_low"], -14)
+        self.assertAlmostEqual(by_x["Other"]["resp1_high"], -6)
+
+    def test_line_bar_declared_base_falls_back_to_average_when_unusable(self) -> None:
+        rows = [
+            {"x": "Base", "x_sort": "Base", "volume": 1, "resp0": 0, "resp0_num": 0, "resp0_den": 1},
+            {"x": "Other", "x_sort": "Other", "volume": 1, "resp0": 4, "resp0_num": 4, "resp0_den": 1},
+        ]
+        warnings: list[str] = []
+
+        display, metadata = apply_transform(
+            rows,
+            [{"label": "Actual", "numerator": "Actual"}],
+            "one",
+            0,
+            warnings,
+            x_kind="categorical",
+            base="Base",
+            band_width="0",
+        )
+
+        self.assertEqual(metadata["values"], [2])
+        self.assertEqual(display[0]["resp0"], 0)
+        self.assertEqual(display[1]["resp0"], 2)
+        self.assertIn("no usable Actual response reference", warnings[0])
 
     def test_dataset_exposes_default_data_source_contract(self) -> None:
         dataset = Dataset(self.data_path)

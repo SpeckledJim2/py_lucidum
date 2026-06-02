@@ -339,6 +339,46 @@ const seriesNames = option.series.map((series) => series.name);
 if (seriesNames.includes("45-55")) throw new Error("45-55 series should not be rendered");
 const tooltip = option.tooltip.formatter([{{ axisValue: 18, value: [18, 0.16] }}]);
 if (tooltip.includes("45-55")) throw new Error("45-55 tooltip row should not be rendered");
+const responseOption = globalThis.__shapChartOption({{
+  plot_type: "flame",
+  title: "SHAP flame plot: Age",
+  x_feature: "Age",
+  y_label: "SHAP",
+  x_domain: [18, 83],
+  y_domain: [-0.2, 1.2],
+  rescale: {{ mode: "1" }},
+  rows,
+}}, {{}});
+const median = responseOption.series.find((series) => series.name === "Median");
+if (!median?.markLine?.data || median.markLine.data[0].yAxis !== 1) {{
+  throw new Error("rescale=1 SHAP mark line should be drawn at 1");
+}}
+"""
+        self.run_node_script(script)
+
+    def test_gbm_stacked_shap_uses_native_bar_stack_without_rescale(self) -> None:
+        chart_path = Path(__file__).resolve().parents[1] / "src/py_lucidum/static/app/gbm-stacked-shap-chart.js"
+        script = f"""
+import fs from "node:fs";
+const source = fs.readFileSync({str(chart_path)!r}, "utf8").replaceAll("export ", "");
+eval(source + "\\nglobalThis.__stackedShapChartOption = stackedShapChartOption;");
+const option = globalThis.__stackedShapChartOption({{
+  plot_type: "stacked_shap",
+  title: "Stacked SHAP",
+  model_feature: {{ name: "Age" }},
+  display_features: ["A", "B"],
+  y_domain: [-0.1, 0.2],
+  rows: [
+    {{ x: 40, row_count: 10, total_shap: 0.1, contributions: {{ A: 0.2, B: -0.1 }} }},
+  ],
+}}, {{}});
+const aSeries = option.series.find((series) => series.name === "A");
+const bSeries = option.series.find((series) => series.name === "B");
+if (aSeries?.type !== "bar" || bSeries?.type !== "bar") throw new Error("stack segments should use native bars");
+if (aSeries.stack !== "shap" || bSeries.stack !== "shap") throw new Error("stack segments should share the shap stack");
+if (aSeries.markLine.data[0].yAxis !== 0) throw new Error("stacked mark line should be drawn at 0");
+if (aSeries.data[0] !== 0.2 || bSeries.data[0] !== -0.1) throw new Error("stacked values should stay on the linear SHAP scale");
+if (option.yAxis.name !== "SHAP Contribution (Linear Predictor Scale)") throw new Error(`unexpected y axis title: ${{option.yAxis.name}}`);
 """
         self.run_node_script(script)
 
@@ -497,6 +537,29 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('`/api/gbm/models/${encodeURIComponent(modelId)}/shap/config`', js)
         self.assertIn('`/api/gbm/models/${encodeURIComponent(modelId)}/shap/plot`', js)
         self.assertIn('"/static/vendor/tabulator/tabulator.min.js"', js)
+        self.assertIn('data-gbm-shap-rescale="${value}"', js)
+        self.assertNotIn('data-gbm-stacked-shap-rescale="${value}"', js)
+        self.assertIn("rescale: state.rescale", js)
+        self.assertIn("referenceLineValue(payload)", js)
+        shap_control_order = [
+            "${bandingControlHtml(1, feature1)}",
+            "${bandingControlHtml(2, feature2)}",
+            "${tailControlHtml()}",
+            "${rescaleControlHtml()}",
+            "${factorControlHtml(1, feature1)}",
+            "${factorControlHtml(2, feature2)}",
+        ]
+        shap_control_positions = [js.index(item) for item in shap_control_order]
+        self.assertEqual(shap_control_positions, sorted(shap_control_positions))
+        tab_order = [
+            'data-gbm-tab="features">Features and parameters',
+            'data-gbm-tab="models">Model navigator',
+            'data-gbm-tab="shap">SHAP',
+            'data-gbm-tab="stacked-shap">Stacked SHAP',
+            'data-gbm-tab="trees">Tree viewer',
+        ]
+        tab_positions = [js.index(item) for item in tab_order]
+        self.assertEqual(tab_positions, sorted(tab_positions))
         self.assertIn('const D3_SRC = "/static/vendor/d3/d3.min.js";', js)
         self.assertIn('"/static/vendor/echarts-gl/echarts-gl.min.js"', js)
         self.assertIn("function flameRibbonSeries", js)
@@ -511,14 +574,24 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("function featureImportanceLabel(feature, rank)", js)
         self.assertIn("formatMeanAbsShap(feature.mean_abs_shap)", js)
         self.assertIn("return features().some((feature) => featureNumber(feature.mean_abs_shap) !== null)", js)
+        self.assertIn("Treat Feature ${index} as factor", js)
         self.assertIn('? "shap"', js)
         self.assertIn("`Rank ${rank}`", js)
         self.assertNotIn("function featureKindLabel", js)
         self.assertIn(".gbm-shap-chart-shell", css)
         self.assertIn(".gbm-shap-message {\n        background:", css)
         self.assertIn("position: absolute;\n        right: 12px;\n        top: 12px;", css)
-        self.assertIn(".gbm-shap-controls .gbm-shap-tail-control {\n        align-items: center;\n        text-align: center;", css)
-        self.assertIn(".gbm-shap-tail-control .segmented {\n        justify-content: center;", css)
+        self.assertIn(".gbm-shap-controls {\n        display: grid;\n        grid-template-columns: repeat(4, max-content);\n        gap: 6px 12px;\n        justify-content: flex-start;", css)
+        self.assertIn(".gbm-shap-controls .gbm-shap-feature2-control {\n        align-items: flex-start;\n        grid-column: 2;\n        grid-row: 1;\n        text-align: left;", css)
+        self.assertIn(".gbm-shap-controls .gbm-shap-tail-control {\n        align-items: flex-start;\n        grid-column: 3;\n        grid-row: 1;\n        text-align: left;", css)
+        self.assertIn(".gbm-shap-controls .gbm-shap-rescale-control {\n        align-items: flex-start;\n        grid-column: 4;\n        grid-row: 1;\n        text-align: left;", css)
+        self.assertIn(".gbm-shap-feature2-control .segmented {\n        justify-content: flex-start;", css)
+        self.assertIn(".gbm-shap-tail-control .segmented {\n        justify-content: flex-start;", css)
+        self.assertIn(".gbm-shap-rescale-control .segmented {\n        justify-content: flex-start;", css)
+        self.assertIn(".gbm-shap-feature1-factor {\n        grid-column: 1;\n        grid-row: 2;\n        justify-self: start;", css)
+        self.assertIn(".gbm-shap-feature2-factor {\n        grid-column: 2;\n        grid-row: 2;\n        justify-self: start;\n        text-align: left;", css)
+        self.assertIn(".gbm-stacked-shap-banding-control {\n        align-items: flex-start;\n        text-align: left;", css)
+        self.assertNotIn(".gbm-stacked-shap-rescale-control", css)
         self.assertIn(".gbm-shap-chart {\n        background: var(--panel);", css)
         self.assertIn("height: 100%;", css)
         self.assertIn("maximumFractionDigits: 4", js)
@@ -1312,6 +1385,10 @@ if (Math.abs(summary.responses[0] - Math.log(300)) > 1e-12) throw new Error("log
 state.transform = "zero";
 summary = buildTableSummary(data);
 if (summary.responses[0] !== 0) throw new Error("zero summary " + summary.responses[0]);
+data.transform = {{ values: [250, 260] }};
+summary = buildTableSummary(data);
+if (summary.responses[0] !== 50) throw new Error("base zero summary " + summary.responses[0]);
+if (Math.abs(summary.responses[1] - (910 / 3 - 260)) > 1e-12) throw new Error("base expected summary " + summary.responses[1]);
 summary = buildTableSummary({{ rows: [{{ volume: 0, resp0_num: null, resp0_den: 0 }}], responses: [{{}}] }});
 if (summary.responses[0] !== null) throw new Error("empty denominator summary " + summary.responses[0]);
 """

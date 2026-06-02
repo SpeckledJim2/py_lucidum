@@ -1,20 +1,20 @@
-Feature,Grouping,scenario1,scenario2,scenario3
-ANNUAL_MILEAGE,VEHICLE,feature,feature,feature
-CAR_VALUE,VEHICLE,feature,feature,
-DRIVER_AGE,DRIVER,feature,feature,feature
-FUEL_TYPE,VEHICLE,,feature,feature
-LATITUDE,POSTCODE,,feature,feature
-LICENCE_TYPE,DRIVER,feature,feature,
-LONGITUDE,POSTCODE,,feature,feature
-MAKE,VEHICLE,,feature,
-NCD_YEARS,DRIVER,feature,,feature
-OVERNIGHT_LOCATION,POLICY,feature,feature,feature
-POSTCODE_AREA,POSTCODE,,feature,feature
-POSTCODE_CATEGORY,POSTCODE,feature,feature,feature
-POSTCODE_SECTOR,POSTCODE,,feature,
-PRIOR_CLAIMS,DRIVER,feature,,feature
-VEHICLE_AGE,VEHICLE,feature,feature,feature
-VEHICLE_CATEGORY,VEHICLE,feature,,feature
-VEHICLE_USAGE,VEHICLE,feature,feature,feature
-YEARS_LICENCE_HELD,DRIVER,,feature,feature
-YEARS_OWNED_VEHICLE,VEHICLE,feature,,feature
+Feature,Grouping,Base,scenario1,scenario2,scenario3
+ANNUAL_MILEAGE,VEHICLE,5000,feature,feature,feature
+CAR_VALUE,VEHICLE,1000,feature,feature,
+DRIVER_AGE,DRIVER,40,feature,feature,feature
+FUEL_TYPE,VEHICLE,Petrol,,feature,feature
+LATITUDE,POSTCODE,52.5,,feature,feature
+LICENCE_TYPE,DRIVER,Full UK,feature,feature,
+LONGITUDE,POSTCODE,-1.5,,feature,feature
+MAKE,VEHICLE,FORD,,feature,
+NCD_YEARS,DRIVER,10,feature,,feature
+OVERNIGHT_LOCATION,POLICY,Driveway,feature,feature,feature
+POSTCODE_AREA,POSTCODE,B,,feature,feature
+POSTCODE_CATEGORY,POSTCODE,10,feature,feature,feature
+POSTCODE_SECTOR,POSTCODE,LE5 1,,feature,
+PRIOR_CLAIMS,DRIVER,0,feature,,feature
+VEHICLE_AGE,VEHICLE,10,feature,feature,feature
+VEHICLE_CATEGORY,VEHICLE,10,feature,,feature
+VEHICLE_USAGE,VEHICLE,Social only,feature,feature,feature
+YEARS_LICENCE_HELD,DRIVER,20,,feature,feature
+YEARS_OWNED_VEHICLE,VEHICLE,0,feature,,feature

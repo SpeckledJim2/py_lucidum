@@ -282,9 +282,9 @@ export function createGbmTool({
           <div class="gbm-tabs tabs workspace-tabs">
             <button class="tab ${activeTab === "features" ? "active" : ""}" type="button" data-gbm-tab="features">Features and parameters</button>
             <button class="tab ${activeTab === "models" ? "active" : ""}" type="button" data-gbm-tab="models">Model navigator</button>
-            <button class="tab ${activeTab === "trees" ? "active" : ""}" type="button" data-gbm-tab="trees">Tree viewer</button>
             <button class="tab ${activeTab === "shap" ? "active" : ""}" type="button" data-gbm-tab="shap">SHAP</button>
             <button class="tab ${activeTab === "stacked-shap" ? "active" : ""}" type="button" data-gbm-tab="stacked-shap">Stacked SHAP</button>
+            <button class="tab ${activeTab === "trees" ? "active" : ""}" type="button" data-gbm-tab="trees">Tree viewer</button>
           </div>
           <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${trainingStatusHtml(liveProgress)}</div>
         </div>

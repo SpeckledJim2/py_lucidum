@@ -68,6 +68,19 @@ def monitor_html(dataset_name: str) -> str:
     return html_text.replace("<title>lucidum monitor</title>", f"<title>{title}</title>", 1)
 
 
+def feature_bases_payload(feature_spec: Any) -> dict[str, str]:
+    if not isinstance(feature_spec, dict):
+        return {}
+    rows = feature_spec.get("rows", [])
+    if not isinstance(rows, list):
+        return {}
+    return {
+        str(row.get("feature")): str(row.get("base") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and row.get("feature") and str(row.get("base") or "").strip()
+    }
+
+
 def create_app(
     dataset_path: str | Path,
     token: str | None = None,
@@ -135,6 +148,7 @@ def create_app(
         payload["defaults"] = app.state.defaults
         payload["filters"] = app.state.saved_filters
         payload["kpis"] = app.state.kpis
+        payload["feature_bases"] = feature_bases_payload(app.state.feature_spec)
         payload["tools"] = tool_payload(app.state.enabled_tools)
         payload["data_sources"] = app.state.dataset.data_sources()
         return payload

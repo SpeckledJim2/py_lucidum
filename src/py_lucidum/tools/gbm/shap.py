@@ -19,9 +19,9 @@ MAX_HEATMAP_CELLS = 40000
 STACKED_OTHER_LABEL = "Other"
 
 
-def shap_config(dataset: Dataset, store: GbmModelStore, model_id: str) -> dict[str, Any]:
+def shap_config(dataset: Dataset, store: GbmModelStore, model_id: str, *, feature_bases: dict[str, Any] | None = None) -> dict[str, Any]:
     manifest = store.manifest(model_id)
-    features = model_features(dataset, store, model_id)
+    features = model_features(dataset, store, model_id, feature_bases=feature_bases)
     shap_path = store.artifact_path(model_id, "shap_long")
     warnings: list[str] = []
     if not shap_path.exists():
@@ -55,7 +55,8 @@ def shap_config(dataset: Dataset, store: GbmModelStore, model_id: str) -> dict[s
 
 
 def shap_plot(dataset: Dataset, store: GbmModelStore, model_id: str, request: dict[str, Any]) -> dict[str, Any]:
-    config = shap_config(dataset, store, model_id)
+    feature_bases = normalise_feature_base_map(request.get("feature_bases"))
+    config = shap_config(dataset, store, model_id, feature_bases=feature_bases)
     if not config["has_shap"]:
         raise ValueError("This GBM was trained without saved SHAP rows")
     features = {feature["name"]: feature for feature in config["features"]}
@@ -71,6 +72,7 @@ def shap_plot(dataset: Dataset, store: GbmModelStore, model_id: str, request: di
     banding_1 = normalise_banding(request.get("banding_1"), features[feature_1].get("band_suggestion"))
     banding_2 = normalise_banding(request.get("banding_2"), features[feature_2].get("band_suggestion") if feature_2 else None)
     tail_fraction = normalise_tail_fraction(request.get("tail_percent"))
+    rescale = normalise_rescale(request.get("rescale"))
 
     with dataset.lock:
         if not feature_2:
@@ -92,6 +94,7 @@ def shap_plot(dataset: Dataset, store: GbmModelStore, model_id: str, request: di
             "tail_percent": tail_fraction * 100,
         }
     )
+    apply_shap_rescale(payload, features, rescale=rescale)
     return payload
 
 
@@ -352,10 +355,11 @@ def normalise_num_features(value: Any) -> int | None:
     return number if number > 0 else None
 
 
-def model_features(dataset: Dataset, store: GbmModelStore, model_id: str) -> list[dict[str, Any]]:
+def model_features(dataset: Dataset, store: GbmModelStore, model_id: str, *, feature_bases: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     raw_features = store.read_json(store.artifact_path(model_id, "feature_config"), [])
     if not isinstance(raw_features, list):
         raw_features = []
+    base_map = normalise_feature_base_map(feature_bases)
     shap_importance = shap_summary_importance(dataset, store, model_id)
     try:
         dataset_columns = dataset.column_map()
@@ -382,6 +386,9 @@ def model_features(dataset: Dataset, store: GbmModelStore, model_id: str) -> lis
             "gain": round(gain, 3),
             "band_suggestion": column.band_suggestion if column else None,
         }
+        base = str(base_map.get(name) or item.get("base") or "").strip()
+        if base:
+            row["base"] = base
         if mean_abs_shap is not None:
             row["mean_abs_shap"] = mean_abs_shap
         rows.append(row)
@@ -877,7 +884,268 @@ def feature_payload(feature: dict[str, Any], banding: float, factor: bool) -> di
     mean_abs_shap = finite_float(feature.get("mean_abs_shap"))
     if mean_abs_shap is not None:
         payload["mean_abs_shap"] = mean_abs_shap
+    base = str(feature.get("base") or "").strip()
+    if base:
+        payload["base"] = base
     return payload
+
+
+def apply_shap_rescale(payload: dict[str, Any], features: dict[str, dict[str, Any]], *, rescale: str) -> None:
+    payload["rescale"] = {"mode": rescale, "reference": None, "base": ""}
+    if rescale == "-":
+        return
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        add_rescale_warning(payload, "No SHAP rows are available for rescaling.")
+        return
+
+    plot_type = str(payload.get("plot_type") or "")
+    reference: float | None = None
+    base_description = ""
+    invalid_values = 0
+    if plot_type == "flame":
+        feature = features.get(str(payload.get("x_feature") or ""))
+        base_row = match_base_row(rows, feature, value_key="x", banding=payload.get("banding"))
+        reference = json_number(base_row.get("p50")) if base_row else None
+        base_description = base_label(feature)
+        if reference_is_usable(rescale, reference):
+            invalid_values += rescale_row_keys(rows, [percentile_key(percentile) for percentile in FLAME_PERCENTILES], rescale, float(reference))
+            payload["y_domain"] = numeric_domain(rows, [percentile_key(percentile) for percentile in FLAME_PERCENTILES])
+    elif plot_type == "box":
+        feature = features.get(str(payload.get("x_feature") or ""))
+        feature_payload_value = feature_info_for_payload(payload, str(payload.get("x_feature") or ""))
+        base_row = match_base_row(rows, feature, value_key="level", sort_key="sort_value", banding=feature_payload_value.get("banding"))
+        reference = json_number(base_row.get("p50")) if base_row else None
+        base_description = base_label(feature)
+        if reference_is_usable(rescale, reference):
+            invalid_values += rescale_row_keys(rows, ["mean", *[percentile_key(percentile) for percentile in BOX_PERCENTILES]], rescale, float(reference))
+            payload["y_domain"] = numeric_domain(rows, ["mean", *[percentile_key(percentile) for percentile in BOX_PERCENTILES]])
+    elif plot_type == "lines":
+        reference_row = line_rescale_reference_row(payload, rows, features)
+        reference = json_number(reference_row.get("y")) if reference_row else None
+        base_description = line_rescale_base_label(payload, features)
+        if reference_is_usable(rescale, reference):
+            invalid_values += rescale_row_keys(rows, ["y"], rescale, float(reference))
+            payload["y_domain"] = numeric_domain(rows, ["y"])
+    elif plot_type == "surface":
+        x_feature = features.get(str(payload.get("x_feature") or ""))
+        y_feature = features.get(str(payload.get("y_feature") or ""))
+        candidates = match_base_rows(rows, x_feature, value_key="x", banding=feature_info_for_payload(payload, str(payload.get("x_feature") or "")).get("banding"), require_data=True)
+        candidates = match_base_rows(candidates, y_feature, value_key="y", banding=feature_info_for_payload(payload, str(payload.get("y_feature") or "")).get("banding"), require_data=True)
+        reference_row = candidates[0] if candidates else None
+        reference = json_number(reference_row.get("z")) if reference_row else None
+        base_description = two_feature_base_label(x_feature, y_feature)
+        if reference_is_usable(rescale, reference):
+            invalid_values += rescale_row_keys(rows, ["z"], rescale, float(reference))
+    elif plot_type == "heatmap":
+        x_feature = features.get(str(payload.get("x_feature") or ""))
+        y_feature = features.get(str(payload.get("y_feature") or ""))
+        candidates = match_base_rows(rows, x_feature, value_key="x", sort_key="x_sort", banding=feature_info_for_payload(payload, str(payload.get("x_feature") or "")).get("banding"))
+        candidates = match_base_rows(candidates, y_feature, value_key="y", sort_key="y_sort", banding=feature_info_for_payload(payload, str(payload.get("y_feature") or "")).get("banding"))
+        reference_row = candidates[0] if candidates else None
+        reference = json_number(reference_row.get("z")) if reference_row else None
+        base_description = two_feature_base_label(x_feature, y_feature)
+        if reference_is_usable(rescale, reference):
+            invalid_values += rescale_row_keys(rows, ["z"], rescale, float(reference))
+
+    if not reference_is_usable(rescale, reference):
+        add_rescale_warning(payload, f"Base {base_description or 'value'} could not be used for SHAP rescaling.")
+        return
+    if invalid_values:
+        add_rescale_warning(payload, f"{invalid_values} SHAP values could not be shown because they are outside the response-scale transform domain.")
+    include_rescale_reference_in_y_domain(payload, rescale)
+    payload["rescale"] = rescale_metadata(rescale, float(reference), base_description)
+
+
+def rescale_row_keys(rows: list[dict[str, Any]], keys: list[str], rescale: str, reference: float) -> int:
+    invalid_count = 0
+    for row in rows:
+        for key in keys:
+            if key in row:
+                value = json_number(row.get(key))
+                row[key] = rescale_number(value, rescale, reference)
+                if value is not None and row[key] is None:
+                    invalid_count += 1
+    return invalid_count
+
+
+def rescale_number(value: Any, rescale: str, reference: float) -> float | int | None:
+    number = json_number(value)
+    if number is None:
+        return None
+    if rescale == "0":
+        return json_number(float(number) - reference)
+    if rescale == "1":
+        divisor = exp_json_number(reference)
+        response_value = exp_json_number(number)
+        if divisor in (None, 0) or response_value is None:
+            return None
+        return json_number(float(response_value) / float(divisor))
+    return number
+
+
+def reference_is_usable(rescale: str, reference: Any) -> bool:
+    linear_reference = json_number(reference)
+    if linear_reference is None:
+        return False
+    if rescale == "1":
+        response_reference = exp_json_number(linear_reference)
+        return response_reference not in (None, 0)
+    return True
+
+
+def rescale_metadata(rescale: str, reference: float, base: str) -> dict[str, Any]:
+    if rescale == "1":
+        return {
+            "mode": rescale,
+            "reference": exp_json_number(reference),
+            "linear_reference": json_number(reference),
+            "base": base,
+        }
+    return {"mode": rescale, "reference": json_number(reference), "base": base}
+
+
+def include_rescale_reference_in_y_domain(payload: dict[str, Any], rescale: str) -> None:
+    reference = 1.0 if rescale == "1" else 0.0
+    domain = payload.get("y_domain")
+    if not isinstance(domain, list):
+        return
+    payload["y_domain"] = numeric_domain_from_values([*domain, reference])
+
+
+def exp_json_number(value: Any) -> float | int | None:
+    number = json_number(value)
+    if number is None:
+        return None
+    try:
+        return json_number(math.exp(float(number)))
+    except (OverflowError, ValueError):
+        return None
+
+
+def line_rescale_reference_row(payload: dict[str, Any], rows: list[dict[str, Any]], features: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    x_feature = features.get(str(payload.get("x_feature") or ""))
+    series_feature = features.get(str(payload.get("series_feature") or ""))
+    x_matches = match_base_rows(rows, x_feature, value_key="x", banding=feature_info_for_payload(payload, str(payload.get("x_feature") or "")).get("banding"))
+    series_base = str((series_feature or {}).get("base") or "").strip()
+    if series_base:
+        series_matches = [
+            row for row in x_matches
+            if str(row.get("series") or "").strip().lower() == series_base.lower()
+        ]
+        if series_matches:
+            return series_matches[0]
+    return x_matches[0] if x_matches else None
+
+
+def match_base_row(
+    rows: list[dict[str, Any]],
+    feature: dict[str, Any] | None,
+    *,
+    value_key: str,
+    sort_key: str | None = None,
+    banding: Any = None,
+    require_data: bool = False,
+) -> dict[str, Any] | None:
+    matches = match_base_rows(rows, feature, value_key=value_key, sort_key=sort_key, banding=banding, require_data=require_data)
+    return matches[0] if matches else None
+
+
+def match_base_rows(
+    rows: list[dict[str, Any]],
+    feature: dict[str, Any] | None,
+    *,
+    value_key: str,
+    sort_key: str | None = None,
+    banding: Any = None,
+    require_data: bool = False,
+) -> list[dict[str, Any]]:
+    base = str((feature or {}).get("base") or "").strip()
+    source_rows = [row for row in rows if not require_data or row.get("has_data") is not False]
+    if not base or not source_rows:
+        return []
+    if feature_is_numeric(feature or {}):
+        return match_numeric_base_rows(source_rows, base=base, value_key=value_key, sort_key=sort_key, banding=banding)
+    target = base.lower()
+    return [row for row in source_rows if str(row.get(value_key) or "").strip().lower() == target]
+
+
+def match_numeric_base_rows(rows: list[dict[str, Any]], *, base: str, value_key: str, sort_key: str | None, banding: Any) -> list[dict[str, Any]]:
+    base_number = json_number(base)
+    if base_number is None:
+        return []
+    key = sort_key or value_key
+    numeric_rows = [
+        row for row in rows
+        if json_number(row.get(key)) is not None
+    ]
+    if not numeric_rows:
+        return []
+    band = parse_positive_float(banding)
+    if band:
+        contained = [
+            row for row in numeric_rows
+            if (start := json_number(row.get(key))) is not None and float(start) <= float(base_number) < float(start) + band
+        ]
+        if contained:
+            return contained
+    exact = [row for row in numeric_rows if json_number(row.get(key)) == base_number]
+    if exact:
+        return exact
+    nearest = min(abs(float(json_number(row.get(key)) or 0.0) - float(base_number)) for row in numeric_rows)
+    return [
+        row for row in numeric_rows
+        if abs(float(json_number(row.get(key)) or 0.0) - float(base_number)) == nearest
+    ]
+
+
+def feature_info_for_payload(payload: dict[str, Any], name: str) -> dict[str, Any]:
+    for key in ("feature_1", "feature_2", "model_feature"):
+        feature = payload.get(key)
+        if isinstance(feature, dict) and feature.get("name") == name:
+            return feature
+    return {}
+
+
+def add_rescale_warning(payload: dict[str, Any], message: str) -> None:
+    warnings = payload.setdefault("warnings", [])
+    if isinstance(warnings, list):
+        warnings.append(message)
+
+
+def base_label(feature: dict[str, Any] | None) -> str:
+    if not feature:
+        return ""
+    base = str(feature.get("base") or "").strip()
+    return f"{feature.get('name')}={base}" if base else ""
+
+
+def two_feature_base_label(first: dict[str, Any] | None, second: dict[str, Any] | None) -> str:
+    labels = [label for label in (base_label(first), base_label(second)) if label]
+    return ", ".join(labels)
+
+
+def line_rescale_base_label(payload: dict[str, Any], features: dict[str, dict[str, Any]]) -> str:
+    return two_feature_base_label(features.get(str(payload.get("x_feature") or "")), features.get(str(payload.get("series_feature") or "")))
+
+
+def normalise_feature_base_map(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(feature).strip(): str(base or "").strip()
+        for feature, base in raw.items()
+        if str(feature or "").strip() and str(base or "").strip()
+    }
+
+
+def normalise_rescale(value: Any) -> str:
+    text = str(value if value is not None else "-").strip().lower()
+    if text in {"0", "zero"}:
+        return "0"
+    if text in {"1", "one"}:
+        return "1"
+    return "-"
 
 
 def normalise_feature_name(value: Any, *, allow_none: bool = False) -> str:

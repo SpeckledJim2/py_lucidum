@@ -40,6 +40,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     factor1: false,
     factor2: false,
     tailPercent: 1,
+    rescale: "-",
   };
 
   function shellHtml() {
@@ -138,6 +139,12 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       state.tailPercent = Number(button.dataset.gbmShapTail);
       renderControls();
       refreshPlot();
+      return;
+    }
+    if (button.dataset.gbmShapRescale !== undefined) {
+      state.rescale = normaliseRescale(button.dataset.gbmShapRescale);
+      renderControls();
+      refreshPlot();
     }
   }
 
@@ -225,6 +232,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
           tail_percent: Number(state.tailPercent),
           factor_1: Boolean(state.factor1),
           factor_2: Boolean(state.factor2),
+          rescale: state.rescale,
         }),
       });
       if (seq !== plotSeq) return;
@@ -302,10 +310,10 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const feature2 = selectedFeature(2);
     target.innerHTML = `
       ${bandingControlHtml(1, feature1)}
-      ${tailControlHtml()}
       ${bandingControlHtml(2, feature2)}
+      ${tailControlHtml()}
+      ${rescaleControlHtml()}
       ${factorControlHtml(1, feature1)}
-      <div></div>
       ${factorControlHtml(2, feature2)}
     `;
   }
@@ -507,8 +515,21 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     return `
       <label class="gbm-shap-factor-control gbm-shap-feature${index}-factor ${disabled ? "disabled" : ""}">
         <input type="checkbox" data-gbm-shap-factor="${index}" ${state[`factor${index}`] ? "checked" : ""}${disabled} />
-        <span>Treat as factor</span>
+        <span>Treat Feature ${index} as factor</span>
       </label>
+    `;
+  }
+
+  function rescaleControlHtml() {
+    return `
+      <div class="control gbm-shap-rescale-control">
+        <h3>Rescale</h3>
+        <div class="segmented" role="group" aria-label="SHAP rescale">
+          ${["-", "0", "1"].map((value) => `
+            <button type="button" data-gbm-shap-rescale="${value}" class="${state.rescale === value ? "active" : ""}">${value}</button>
+          `).join("")}
+        </div>
+      </div>
     `;
   }
 
@@ -559,6 +580,11 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const number = Number(value);
     if (Number.isFinite(number) && number > 0) return Number(number.toPrecision(12));
     return 1;
+  }
+
+  function normaliseRescale(value) {
+    const text = String(value || "-").trim();
+    return text === "0" || text === "1" ? text : "-";
   }
 
   function currentBandingKey(index) {

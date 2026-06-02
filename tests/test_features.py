@@ -38,6 +38,35 @@ class FeatureSpecTests(unittest.TestCase):
             ],
         )
 
+    def test_feature_spec_parses_optional_base_without_treating_it_as_a_scenario(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "feature_spec.csv"
+            path.write_text(
+                "Feature,Grouping,Base,scenario1,scenario two\n"
+                "Age,DRIVER,40,Feature,\n"
+                "Segment,POSTCODE,B,,use as FEATURE\n"
+                "Mileage,VEHICLE,5000,,\n",
+                encoding="utf-8",
+            )
+
+            spec = load_features(path)
+
+        self.assertEqual(
+            spec["rows"],
+            [
+                {"feature": "Age", "grouping": "DRIVER", "base": "40", "scenarios": {"scenario1": True, "scenario two": False}},
+                {"feature": "Segment", "grouping": "POSTCODE", "base": "B", "scenarios": {"scenario1": False, "scenario two": True}},
+                {"feature": "Mileage", "grouping": "VEHICLE", "base": "5000", "scenarios": {"scenario1": False, "scenario two": False}},
+            ],
+        )
+        self.assertEqual(
+            spec["scenarios"],
+            [
+                {"name": "scenario1", "features": ["Age"]},
+                {"name": "scenario two", "features": ["Segment"]},
+            ],
+        )
+
     def test_default_feature_spec_falls_back_to_specs_directory(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

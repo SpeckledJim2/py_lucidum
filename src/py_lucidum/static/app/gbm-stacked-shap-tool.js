@@ -138,6 +138,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     }
     if (button.dataset.gbmStackedShapBandValue) {
       setBanding(Number(button.dataset.gbmStackedShapBandValue));
+      return;
     }
   }
 

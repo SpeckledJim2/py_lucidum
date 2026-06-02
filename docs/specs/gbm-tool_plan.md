@@ -29,7 +29,7 @@ Chosen defaults:
 - Add GBM routes for config, validation, training, job polling, model listing/loading, and active-model selection.
 - Job polling responses include transient progress snapshots with current phase, iteration, train/test metric values, and live evaluation history.
 - Add GBM tree routes for model tree lists and selected tree detail.
-- Add GBM SHAP routes for trained-feature config and compact plot-ready aggregation payloads, including explicit numeric domains and dense numeric/numeric surface grids.
+- Add GBM SHAP routes for trained-feature config and compact plot-ready aggregation payloads, including explicit numeric domains, dense numeric/numeric surface grids, and `-` / `0` / `1` Base-aware rescale requests for ordinary SHAP plots.
 - Extend the shared data-source contract with:
   - `gbm:<model_id>:predictions`
   - `gbm:<model_id>:shap_long`
@@ -46,11 +46,12 @@ Chosen defaults:
 - EBM starts with 2-leaf trees at learning rate `0.3`, advances to 3+ leaves via a LightGBM callback after `early_stopping_rounds` test-metric plateaus, restores the configured learning rate after the 2-leaf stage, and treats `num_iterations` as the total cap across all stages.
 - Parameter values support grid-search braces. Explicit sets such as `{200, 300, 400}` and inclusive ranges such as `{0.05, 0.3; 0.05}` are sampled deterministically without constructing the full hypergrid; sampled combinations are pre-validated, invalid combinations are skipped with a notice, valid combinations train sequentially in one background job, each model persists normal GBM artifacts plus `grid_search` metadata, and the best completed model is activated.
 - Feature validation disables unusable types, shows unreadable dataset columns as invalid disabled rows, flags high-cardinality categoricals, and allows monotonicity only for numeric features and compatible objectives.
+- Feature Specification `Base` values are metadata used by Line/Bar, SHAP, and Stacked SHAP chart rescaling. They are excluded from feature scenarios.
 - Training reads only selected features plus required response, offset, and sample columns from the raw dataset. Prediction sources join back only readable source columns.
 - After training, persist LightGBM gain feature importance and use it to refresh the feature grid.
 - During training, a LightGBM callback updates the in-memory job with current iteration and metric values so the browser can update status text and the evaluation chart before the model is persisted.
 - SHAP row options are `0`, `10k`, `100k`, and `all`. Bounded options save a deterministic random sample from all scored rows using the model seed. SHAP values are stored as a wide artifact keyed by `__lucidum_row_id`, with one numeric column per selected feature; the summary artifact remains one row per feature.
-- SHAP plots read only saved SHAP rows joined to trained feature values by `__lucidum_row_id`; one-feature plots use that feature's SHAP, while two-feature plots use the sum of the two selected SHAP contributions.
+- SHAP plots read only saved SHAP rows joined to trained feature values by `__lucidum_row_id`; one-feature plots use that feature's SHAP, while two-feature plots use the sum of the two selected SHAP contributions. Rescale `0` and `1` use Feature Specification Base metadata with one shared reference per plot, not a separate reference per line. Rescale `1` exponentiates values first, then scales to the base response value.
 
 ## UI
 
@@ -59,7 +60,7 @@ Chosen defaults:
 - Sidebar while GBM is active keeps the KPI/response controls visible, hides filter controls, and includes an active-model selector.
 - **Features and parameters** tab:
   - Left feature grid columns: feature name, include checkbox, monotonicity, and one importance metric column: `Gain`, or `SHAP` when the active model has saved mean absolute SHAP values.
-  - If a Feature Specification is loaded, show its `Grouping` column between feature name and include checkbox, then show an interaction-constraint multi-select followed by a scenario dropdown immediately before `Clear all`.
+  - If a Feature Specification is loaded, show its `Grouping` column between feature name and include checkbox, then show an interaction-constraint multi-select followed by a scenario dropdown immediately before `Clear all`. `Base` is rescaling metadata and is not displayed as a scenario.
   - Selecting a feature scenario selects only usable, non-reserved features whose scenario cell contains `feature`, case-insensitive; manual checkbox edits, `Clear all`, and `Select all` clear the scenario dropdown.
   - Feature type is displayed as muted right-aligned text inside the Feature cell, with categorical counts shown as `categorical (n)`.
   - Feature Specification groupings drive the interaction-constraint multi-select; constrained selected features show a lock marker in the Grouping column.
@@ -73,8 +74,9 @@ Chosen defaults:
   - Grid-search training status prefixes live progress with the current model count, for example `model 3/18`.
   - The ECharts evaluation title is a single line containing evaluation metric, test metric, and best iteration with the same font size.
 - **Model navigator** tab lists saved models, feature interaction constraints, key parameters, train/test metrics, timings, a green-dot active-model indicator, and selectable rows for rename/delete actions. Active-model switching remains in the sidebar model list.
+- **SHAP** tab provides two trained-feature choosers sorted by Importance or A-Z, a highlighted `None` option for Feature 2, banding/tail/factor controls, `-` / `0` / `1` rescale controls, numeric percentile ribbons, factor box plots, numeric/numeric ECharts GL surfaces, continuous-by-factor line plots, and factor/factor heatmaps.
+- **Stacked SHAP** tab provides a selected-feature contribution stack with banding, top-feature count, and sort controls on the linear predictor contribution scale.
 - **Tree viewer** tab provides a searchable tree summary table plus a graphical D3 tree from saved `tree_table.parquet` output. The diagram supports zoom, fit/reset, colour palettes, decoded categorical thresholds, edge labels, and default-branch highlighting.
-- **SHAP** tab provides two trained-feature choosers sorted by Importance or A-Z, a highlighted `None` option for Feature 2, banding/tail/factor controls, numeric percentile ribbons, factor box plots, numeric/numeric ECharts GL surfaces, continuous-by-factor line plots, and factor/factor heatmaps.
 - Keep the existing dense, utilitarian app visual style.
 
 ## Test Plan
@@ -91,9 +93,10 @@ Chosen defaults:
   - Feature importance Gain is persisted, returned in model detail/config responses, defaults to `0.000`, and sorts descending after training. Mean absolute SHAP is also persisted when SHAP rows are saved.
   - Tree summary/detail routes read saved artifacts and do not import LightGBM.
   - SHAP config/plot routes read saved artifacts and do not import LightGBM, pandas, or numpy.
+  - Feature Specification Base parsing excludes Base from scenarios, and Line/Bar plus ordinary SHAP rescale paths use the declared Base when available.
 - Backend modelling tests should target `training.py`, `validation.py`, `store.py`, and `sources.py` directly without browser/UI involvement.
 - Frontend/static tests:
-  - GBM tabs, hidden filter controls, active-model selector, train button, feature importance column, active-model feature/parameter refresh, SHAP controls, tree viewer controls, and source switching are present.
+  - GBM tabs, hidden filter controls, active-model selector, train button, feature importance column, active-model feature/parameter refresh, SHAP controls, Stacked SHAP controls, tree viewer controls, and source switching are present.
   - Tabulator, D3, and ECharts GL assets are lazy-loaded only for the GBM views that need them.
 - Optional integration test behind `PY_LUCIDUM_RUN_GBM_TESTS=1`: train a small LightGBM, write artifacts, reload app, activate model, verify importance ordering, and plot predictions in Line/Bar.
 - Standard checks: `unittest`, `compileall`, JS `node --check`, `git diff --check`, and browser smoke tests.
