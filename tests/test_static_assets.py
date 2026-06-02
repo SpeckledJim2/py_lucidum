@@ -383,6 +383,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".mark {\n        width: 48px;\n        height: 48px;", css)
         self.assertIn(".meta {\n        color: var(--muted);\n        font-size: 16px;", css)
         self.assertIn(".dataset-meta-gbm-link {", css)
+        self.assertIn("text-decoration-skip-ink: none;", css)
         self.assertIn("function renderDatasetMeta(", js)
         self.assertIn('const payload = await api("/api/gbm/models", { method: "GET" });', js)
         self.assertIn("button.textContent = `GBMs (${datasetGbmCount.toLocaleString()})`;", js)

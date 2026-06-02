@@ -163,6 +163,7 @@
         font: inherit;
         padding: 0;
         text-decoration: underline;
+        text-decoration-skip-ink: none;
         text-underline-offset: 2px;
       }
 
