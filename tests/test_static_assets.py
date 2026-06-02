@@ -1038,6 +1038,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("function isModelPredictionColumn(column)", js)
         self.assertIn('return ["gbm_prediction", "glm_prediction"].includes(String(column?.name || ""));', js)
         self.assertIn("function expectedDisplayColumns()", js)
+        self.assertIn('numericColumns().filter((column) => column.source_role !== "gbm_shap_value")', js)
         self.assertIn("const predictionColumns = columns.filter(isModelPredictionColumn);", js)
         self.assertIn("return [...predictionColumns, ...otherColumns];", js)
         self.assertIn("for (const col of expectedDisplayColumns())", js)
@@ -1593,6 +1594,22 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn('el("kpiCollapseBtn").addEventListener("click", () => setKpiCollapsed(!state.kpiCollapsed));', js)
         self.assertIn('el("gbmModelCollapseBtn").addEventListener("click", () => setGbmModelCollapsed(!state.gbmModelCollapsed));', js)
         self.assertIn("syncKpiSelectionFromMetrics();", js)
+
+    def test_actual_selector_groups_dataset_predictions_and_shap_values(self) -> None:
+        js = self.app_js_contract()
+
+        self.assertIn("function fillActualMetricSelect(select)", js)
+        self.assertIn('"Dataset features"', js)
+        self.assertIn('"Model predictions"', js)
+        self.assertIn('"SHAP values"', js)
+        self.assertIn('"No trained models"', js)
+        self.assertIn('"No predictions for selected model"', js)
+        self.assertIn('"No SHAP values for selected model"', js)
+        self.assertIn("option.dataset.sourceId = sourceId;", js)
+        self.assertIn("option.dataset.metricKind = kind;", js)
+        self.assertIn('column?.source_role === "gbm_shap_value"', js)
+        self.assertIn('String(column?.name || "").startsWith("SHAP__")', js)
+        self.assertIn("function syncActualSourceFromSelection()", js)
 
     def test_filter_footer_and_sidebar_filter_controls_contract(self) -> None:
         _, html_body = self.assert_no_store("/")

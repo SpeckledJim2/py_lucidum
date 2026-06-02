@@ -456,10 +456,14 @@ COPY (
                 "sample_column": "SAMPLE",
                 "sample_source": "dataset",
                 "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
-                "sources": {"predictions": store.source_id(model_id, "predictions")},
+                "sources": {
+                    "predictions": store.source_id(model_id, "predictions"),
+                    "shap_long": store.source_id(model_id, "shap_long"),
+                    "shap_summary": store.source_id(model_id, "shap_summary"),
+                },
             },
         )
-        store.write_json(model_dir / "feature_config.json", [{"name": "Age", "kind": "integer", "include": True, "gain": 1.0}])
+        store.write_json(model_dir / "feature_config.json", [{"name": "Age", "kind": "integer", "include": True, "gain": 1.0, "mean_abs_shap": 0.2}])
         store.write_json(model_dir / "parameters.json", {"objective": "gamma", "metric": "gamma", "num_iterations": len(predictions)})
         store.write_json(
             model_dir / "training_log.json",
@@ -476,6 +480,24 @@ COPY (
 COPY (
   {prediction_rows}
 ) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            shap_rows = "\n  UNION ALL\n  ".join(
+                f"SELECT {index + 1} AS __lucidum_row_id, {float(value) / 10.0} AS Age"
+                for index, value in enumerate(predictions)
+            )
+            con.execute(
+                f"""
+COPY (
+  {shap_rows}
+) TO {sql_literal(str(model_dir / "shap_values.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 'Age' AS feature, 0.2 AS mean_abs_shap, 0.2 AS mean_shap, {len(predictions)} AS row_count
+) TO {sql_literal(str(model_dir / "shap_summary.parquet"))} (FORMAT PARQUET)
 """
             )
         finally:
@@ -743,6 +765,60 @@ COPY (
                 self.assertEqual(request_body["source"], "gbm:browser-smoke-model-2:predictions")
                 self.assertEqual(request_body["responses"][0]["numerator"], "gbm_prediction")
                 self.assertEqual(request_body["denominator"], "denominator")
+
+                shap_url = (
+                    f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model-2%3Ashap_long"
+                    "&x=Age&actual=SHAP__Age&denominator=denominator"
+                )
+                page.goto(shap_url, wait_until="domcontentloaded")
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    timeout=10_000,
+                )
+                actual_state = page.evaluate(
+                    """
+                    () => {
+                      const select = document.querySelector("#actualNumerator");
+                      return {
+                        value: select.value,
+                        selectedSource: select.selectedOptions[0]?.dataset.sourceId || "",
+                        groups: [...select.querySelectorAll("optgroup")].map((group) => ({
+                          label: group.label,
+                          options: [...group.querySelectorAll("option")].map((option) => ({
+                            text: option.textContent,
+                            value: option.value,
+                            source: option.dataset.sourceId || "",
+                            disabled: option.disabled,
+                          })),
+                        })),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual([group["label"] for group in actual_state["groups"]], ["Dataset features", "Model predictions", "SHAP values"])
+                self.assertEqual(actual_state["value"], "SHAP__Age")
+                self.assertEqual(actual_state["selectedSource"], "gbm:browser-smoke-model-2:shap_long")
+                shap_options = next(group for group in actual_state["groups"] if group["label"] == "SHAP values")["options"]
+                self.assertEqual([option["source"] for option in shap_options if not option["disabled"]], ["gbm:browser-smoke-model-2:shap_long"])
+                self.assertIn("Age", [option["text"] for option in shap_options])
+                expected_options = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll("#expectedList .feature")]
+                      .map((button) => button.textContent || "")
+                    """
+                )
+                self.assertTrue(any("gbm_prediction" in option for option in expected_options))
+                self.assertFalse(any("SHAP__" in option for option in expected_options))
+
+                chart_requests_before = chart_requests
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as shap_request_info:
+                    page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
+                shap_request_body = json.loads(shap_request_info.value.post_data or "{}")
+                page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
+                self.assertGreater(chart_requests, chart_requests_before)
+                self.assertEqual(shap_request_body["source"], "gbm:browser-smoke-model:shap_long")
+                self.assertEqual(shap_request_body["responses"][0]["numerator"], "SHAP__Age")
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()

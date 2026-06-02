@@ -2991,10 +2991,19 @@ export function createGbmTool({
   }
 
   function preferredModelSource(result, data) {
-    const direct = result?.deleted_model_id ? "" : result?.model?.sources?.predictions;
+    const currentKind = dataSourceById(state.source)?.kind || "";
+    const configActiveModel = (data?.models || []).find((item) => item.active);
+    const activeModel = result?.deleted_model_id
+      ? null
+      : (result?.model || configActiveModel);
+    const shapSource = activeModel?.sources?.shap_long || configActiveModel?.sources?.shap_long || "";
+    const predictionSource = activeModel?.sources?.predictions || configActiveModel?.sources?.predictions || "";
+    if (currentKind === "gbm_shap_long" && shapSource) return shapSource;
+    if (currentKind === "gbm_predictions" && predictionSource) return predictionSource;
+    const direct = predictionSource || "";
     if (direct) return direct;
-    const activeModel = (data?.models || []).find((item) => item.active);
-    return activeModel?.sources?.predictions || "dataset";
+    const fallbackModel = (data?.models || []).find((item) => item.active);
+    return fallbackModel?.sources?.predictions || "dataset";
   }
 
   async function loadModelDetail(modelId) {

@@ -301,7 +301,9 @@
           fillMetricSelect(el("actualNumerator"));
           fillMetricSelect(el("expectedNumerator"), true);
           fillDenominatorSelect(el("denominator"));
-          el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
+          if (!setActualSelection(previousActual, state.source)) {
+            el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
+          }
           el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";
           el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
           lineBarTool.renderExpectedNumerators();
@@ -960,6 +962,10 @@
       }
 
       function fillMetricSelect(select, includeNone = false) {
+        if (select.id === "actualNumerator" && !includeNone) {
+          fillActualMetricSelect(select);
+          return;
+        }
         select.innerHTML = "";
         if (includeNone) {
           select.append(new Option("None", ""));
@@ -967,6 +973,96 @@
         for (const col of numericColumns()) {
           select.append(new Option(col.name, col.name));
         }
+      }
+
+      function fillActualMetricSelect(select) {
+        select.innerHTML = "";
+        appendActualMetricGroup(select, "Dataset features", numericColumnsForSource("dataset"), "dataset", "dataset", "No numeric dataset features");
+        const predictionSource = activeModelSource("gbm_predictions");
+        const trainedModels = gbmModelSourcesExist();
+        const predictionColumns = predictionSource
+          ? numericColumnsForSource(predictionSource.id).filter(isModelPredictionColumn)
+          : [];
+        appendActualMetricGroup(
+          select,
+          "Model predictions",
+          predictionColumns,
+          predictionSource?.id || "",
+          "prediction",
+          trainedModels ? "No predictions for selected model" : "No trained models",
+        );
+        const shapSource = activeModelSource("gbm_shap_long");
+        const shapColumns = shapSource
+          ? numericColumnsForSource(shapSource.id).filter(isGbmShapValueColumn)
+          : [];
+        appendActualMetricGroup(
+          select,
+          "SHAP values",
+          shapColumns,
+          shapSource?.id || "",
+          "shap",
+          trainedModels ? "No SHAP values for selected model" : "No trained models",
+        );
+      }
+
+      function appendActualMetricGroup(select, label, columns, sourceId, kind, emptyLabel) {
+        const group = document.createElement("optgroup");
+        group.label = label;
+        if (!columns.length) {
+          const option = new Option(emptyLabel, "");
+          option.disabled = true;
+          group.append(option);
+        } else {
+          for (const column of columns) {
+            const option = new Option(metricColumnLabel(column), column.name);
+            option.dataset.sourceId = sourceId;
+            option.dataset.metricKind = kind;
+            group.append(option);
+          }
+        }
+        select.append(group);
+      }
+
+      function activeModelSource(kind) {
+        return (state.schema?.data_sources || []).find((source) => source.kind === kind && source.active) || null;
+      }
+
+      function gbmModelSourcesExist() {
+        return (state.schema?.data_sources || []).some((source) => source.kind === "gbm_predictions");
+      }
+
+      function numericColumnsForSource(sourceId) {
+        return dataSourceColumns(sourceId).filter((c) => isNumericKind(c.kind));
+      }
+
+      function isGbmShapValueColumn(column) {
+        return column?.source_role === "gbm_shap_value" || String(column?.name || "").startsWith("SHAP__");
+      }
+
+      function metricColumnLabel(column) {
+        return String(column?.label || column?.name || "");
+      }
+
+      function setActualSelection(value, sourceId = "") {
+        const select = el("actualNumerator");
+        const name = String(value || "");
+        if (!name) return false;
+        const options = Array.from(select.options);
+        const option = options.find((item) => (
+          !item.disabled &&
+          item.value === name &&
+          (!sourceId || item.dataset.sourceId === sourceId)
+        )) || options.find((item) => !item.disabled && item.value === name);
+        if (!option) return false;
+        option.selected = true;
+        return true;
+      }
+
+      function chooseFirstActualSelection() {
+        const option = Array.from(el("actualNumerator").options).find((item) => !item.disabled && item.value);
+        if (!option) return "";
+        option.selected = true;
+        return option.value;
       }
 
       function fillDenominatorSelect(select) {
@@ -983,6 +1079,32 @@
 
       function numericColumnExists(name) {
         return Boolean(name && numericColumns().some((col) => col.name === name));
+      }
+
+      function actualSelectionSourceId() {
+        return el("actualNumerator").selectedOptions[0]?.dataset.sourceId || "";
+      }
+
+      function syncActualSourceFromSelection() {
+        const targetSource = actualSelectionSourceId();
+        if (!targetSource || targetSource === state.source) return false;
+        state.source = targetSource;
+        return true;
+      }
+
+      function syncControlsForSourceChange({ actualValue = "", actualSource = "" } = {}) {
+        const previousExpected = el("expectedNumerator").value;
+        const previousDenominator = el("denominator").value;
+        if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
+        fillMetricSelect(el("actualNumerator"));
+        if (actualValue) setActualSelection(actualValue, actualSource);
+        fillMetricSelect(el("expectedNumerator"), true);
+        fillDenominatorSelect(el("denominator"));
+        el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";
+        el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
+        lineBarTool.renderExpectedNumerators();
+        lineBarTool.renderFeatures();
+        lineBarTool.updateAxisControls();
       }
 
       function requestedDefault(name) {
@@ -1357,7 +1479,10 @@
         const requestedActual = requestedDefault("actual");
         const requestedExpected = requestedDefault("expected");
         const requestedDenominator = requestedDefault("denominator");
-        el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
+        if (!setActualSelection(requestedActual, state.source)) {
+          el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
+        }
+        if (!el("actualNumerator").value) chooseFirstActualSelection();
         el("expectedNumerator").value = numericColumnExists(requestedExpected) ? requestedExpected : "";
         el("denominator").value = numericColumnExists(requestedDenominator) ? requestedDenominator : "__none__";
         applyInitialKpiDefault();
@@ -2003,11 +2128,18 @@
             }
           });
         });
-        ["actualNumerator", "denominator"].forEach((id) => {
-          el(id).addEventListener("change", () => {
-            syncKpiSelectionFromMetrics();
-            refreshActiveTool();
-          });
+        el("actualNumerator").addEventListener("change", () => {
+          const actualValue = el("actualNumerator").value;
+          const actualSource = actualSelectionSourceId();
+          if (syncActualSourceFromSelection()) {
+            syncControlsForSourceChange({ actualValue, actualSource });
+          }
+          syncKpiSelectionFromMetrics();
+          refreshActiveTool();
+        });
+        el("denominator").addEventListener("change", () => {
+          syncKpiSelectionFromMetrics();
+          refreshActiveTool();
         });
         el("filterApplyBtn").addEventListener("click", applyFilter);
         el("filterClearBtn").addEventListener("click", clearFilter);

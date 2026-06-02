@@ -562,6 +562,7 @@ def train_model(
             shap_mode=shap_mode,
             shap_seed=shap_sampling_seed(params.get("seed")),
             best_iteration=best_iteration,
+            shap_interaction_groups=interaction_group_constraints,
         )
         shap_written_rows = int(len(shap_frame))
         write_dataframe_parquet(shap_frame, store.artifact_path(model_id, "shap_long"))
@@ -1036,7 +1037,9 @@ def shap_dataframes(
     shap_mode: str,
     shap_seed: int,
     best_iteration: int,
+    shap_interaction_groups: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, Any]:
+    group_columns = shap_interaction_group_columns(shap_interaction_groups or [], feature_names)
     positions = shap_sample_positions(np, mode=shap_mode, row_count=len(feature_frame), seed=shap_seed)
     if len(positions) == 0:
         return (
@@ -1044,6 +1047,7 @@ def shap_dataframes(
                 {
                     "__lucidum_row_id": pd.Series(dtype="int64"),
                     **{feature_name: pd.Series(dtype="float64") for feature_name in feature_names},
+                    **{group["name"]: pd.Series(dtype="float64") for group in group_columns},
                 }
             ),
             pd.DataFrame(columns=["gbm_model_id", "feature", "mean_abs_shap", "mean_shap", "row_count"]),
@@ -1065,6 +1069,8 @@ def shap_dataframes(
             },
         }
     )
+    for group in group_columns:
+        shap_frame[group["name"]] = shap_frame[group["features"]].sum(axis=1)
     if shap_frame.empty:
         summary = pd.DataFrame(columns=["gbm_model_id", "feature", "mean_abs_shap", "mean_shap", "row_count"])
     else:
@@ -1082,6 +1088,40 @@ def shap_dataframes(
         )
         summary = summary.sort_values("mean_abs_shap", ascending=False)
     return shap_frame, summary
+
+
+def shap_interaction_group_columns(groups: list[dict[str, Any]], feature_names: list[str]) -> list[dict[str, Any]]:
+    feature_set = set(feature_names)
+    used_names = {"__lucidum_row_id", *feature_names}
+    columns: list[dict[str, Any]] = []
+    for group in groups:
+        grouping = str(group.get("grouping") or "").strip()
+        raw_features = group.get("features")
+        if not grouping or not isinstance(raw_features, list):
+            continue
+        features: list[str] = []
+        seen_features: set[str] = set()
+        for raw_feature in raw_features:
+            feature = str(raw_feature or "").strip()
+            if feature and feature in feature_set and feature not in seen_features:
+                features.append(feature)
+                seen_features.add(feature)
+        if not features:
+            continue
+        column_name = unique_shap_group_column_name(f"{grouping}_INTERACTION_GROUP", used_names)
+        columns.append({"name": column_name, "grouping": grouping, "features": features})
+    return columns
+
+
+def unique_shap_group_column_name(base_name: str, used_names: set[str]) -> str:
+    base = str(base_name or "INTERACTION_GROUP").strip() or "INTERACTION_GROUP"
+    candidate = base
+    suffix = 2
+    while candidate in used_names:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used_names.add(candidate)
+    return candidate
 
 
 def feature_config_with_mean_abs_shap(
@@ -1111,6 +1151,7 @@ __all__ = [
     "feature_config_with_mean_abs_shap",
     "normalise_feature_scenario",
     "should_use_offset_init_score",
+    "shap_interaction_group_columns",
     "train_model",
     "training_projection_columns",
     "training_select_sql",

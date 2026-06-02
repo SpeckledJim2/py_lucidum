@@ -96,6 +96,7 @@ I need this tool to be persistent. It's OK to hold interim results in RAM if fas
 - LightGBM .txt file output
 - model predictions as a parquet and a way to attach them back to original .parquet for queries (attach might not be the right word - I need to be able to plot A vs E charts for the model using the Line and Bar tool - so I need the original parquet as it contains the model features and the reponse, and I need the response parquet for the GBM fitted values - but they must tie up)
 - SHAP values and a way to attach them back to original .parquet for queries
+- when feature interaction constraint groups are selected, grouped SHAP contribution columns in `shap_values.parquet` named `<Grouping>_INTERACTION_GROUP`; singleton feature constraints do not create grouped SHAP columns
 - aggregated SHAP plot payloads from saved sidecars for the GBM SHAP tab
 - evaluation log (used to drive the evaluation chart) - this records the model metric (on train and test) after each round of training
 - how long it took to train the model and calculate the SHAP values
@@ -106,6 +107,8 @@ I need this tool to be persistent. It's OK to hold interim results in RAM if fas
 I need the model predictions and SHAP values to be available to the line and bar chart as I want to plot them.
 
 I'd like the tool to treat the predictions "as if" they were just another column in the original parquet, available to be plotted like any other column.
+
+The Line and Bar Actual chooser separates numeric choices into Dataset features, Model predictions, and SHAP values. Model prediction and SHAP options are limited to the currently active GBM model.
 
 ## UI Notes
 

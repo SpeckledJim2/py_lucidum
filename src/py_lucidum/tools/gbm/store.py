@@ -123,8 +123,35 @@ def dedupe_columns(columns: list[str]) -> list[str]:
     return projected
 
 
+def unique_output_column_name(base_name: str, used_names: set[str]) -> str:
+    base = str(base_name or "column").strip() or "column"
+    candidate = base
+    suffix = 2
+    while candidate in used_names:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used_names.add(candidate)
+    return candidate
+
+
 def prediction_source_select_sql(source_columns: list[str]) -> str:
     return ",\n  ".join(f"base.{quote_ident(name)}" for name in source_columns)
+
+
+def shap_source_select_sql(
+    source_columns: list[str],
+    shap_columns: list[dict[str, str]],
+    *,
+    include_prediction: bool = False,
+) -> str:
+    parts = [f"base.{quote_ident(name)}" for name in source_columns]
+    if include_prediction:
+        parts.append("prediction.gbm_prediction")
+    parts.extend(
+        f"shap.{quote_ident(column['artifact_column'])} AS {quote_ident(column['name'])}"
+        for column in shap_columns
+    )
+    return ",\n  ".join(parts)
 
 
 def row_number_source_projection_sql(source_columns: list[str]) -> str:
@@ -219,10 +246,22 @@ class GbmModelStore:
         item.setdefault("training_mode", DEFAULT_TRAINING_MODE)
         model_id = str(item.get("model_id") or path.name)
         item["model_id"] = model_id
+        item["sources"] = self.model_sources(model_id, item.get("sources"))
         item["parameters"] = self.model_parameters(model_id)
         item["best_metrics"] = self.model_best_metrics(model_id, item)
         item["active"] = model_id == active_model_id
         return item
+
+    def model_sources(self, model_id: str, raw_sources: Any = None) -> dict[str, str]:
+        sources = {
+            str(kind): str(value)
+            for kind, value in (raw_sources.items() if isinstance(raw_sources, dict) else [])
+            if str(kind) in SOURCE_KINDS and isinstance(value, str) and value
+        }
+        for source_kind in SOURCE_KINDS:
+            if self.source_path(model_id, source_kind).exists():
+                sources[source_kind] = self.source_id(model_id, source_kind)
+        return sources
 
     def model_parameters(self, model_id: str) -> dict[str, Any]:
         parameters = self.read_json(self.artifact_path(model_id, "parameters"), {})
@@ -353,11 +392,33 @@ COPY (
     def source_id(self, model_id: str, source_kind: str) -> str:
         return f"gbm:{model_id}:{source_kind}"
 
+    def parquet_columns(self, path: Path) -> list[str]:
+        con = duckdb.connect(database=":memory:")
+        try:
+            rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(path))})").fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            con.close()
+
+    def shap_value_columns(self, model_id: str, manifest: dict[str, Any] | None = None) -> list[dict[str, str]]:
+        manifest = manifest or self.manifest(model_id)
+        used_names = set(self.source_columns(manifest))
+        used_names.add("__lucidum_row_id")
+        columns: list[dict[str, str]] = []
+        for artifact_column in self.parquet_columns(self.artifact_path(model_id, "shap_long")):
+            if artifact_column == "__lucidum_row_id":
+                continue
+            alias = unique_output_column_name(f"SHAP__{artifact_column}", used_names)
+            columns.append({"artifact_column": artifact_column, "name": alias, "label": artifact_column})
+        return columns
+
     def relation_sql(self, source_id: str) -> str:
         ref = self.source_ref(source_id)
         if not ref:
             raise ValueError("Choose a valid data source")
         source_path = self.source_path(ref.model_id, ref.source_kind)
+        if ref.source_kind == "shap_long":
+            return self.shap_relation_sql(ref.model_id, source_path)
         if ref.source_kind != "predictions":
             return f"read_parquet({sql_literal(str(source_path))})"
         manifest = self.manifest(ref.model_id)
@@ -381,6 +442,38 @@ FROM (
   {where_sql}
 ) base
 INNER JOIN read_parquet({sql_literal(str(source_path))}) prediction USING (__lucidum_row_id)
+)"""
+
+    def shap_relation_sql(self, model_id: str, source_path: Path) -> str:
+        manifest = self.manifest(model_id)
+        offset_col = str(manifest.get("offset_column") or "").strip()
+        where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
+        source_columns = self.source_columns(manifest)
+        shap_columns = self.shap_value_columns(model_id, manifest)
+        prediction_path = self.source_path(model_id, "predictions")
+        include_prediction = prediction_path.exists()
+        select_sql = shap_source_select_sql(source_columns, shap_columns, include_prediction=include_prediction)
+        base_projection_sql = row_number_source_projection_sql(source_columns)
+        prediction_join_sql = (
+            f"\nLEFT JOIN read_parquet({sql_literal(str(prediction_path))}) prediction USING (__lucidum_row_id)"
+            if include_prediction
+            else ""
+        )
+        return f"""(
+SELECT
+  {select_sql}
+FROM (
+  SELECT
+    *
+  FROM (
+    SELECT
+      {base_projection_sql}
+    FROM {self.dataset_relation_sql()}
+  ) dataset_rows
+  {where_sql}
+) base
+INNER JOIN read_parquet({sql_literal(str(source_path))}) shap USING (__lucidum_row_id)
+{prediction_join_sql}
 )"""
 
     def source_columns(self, manifest: dict[str, Any]) -> list[str]:
@@ -438,6 +531,27 @@ class GbmSourceProvider:
         sources: list[dict[str, Any]] = []
         for model, source_id, info in self.store.source_manifest_entries():
             schema = dataset.schema_for_source(source_id)
+            columns = schema["columns"]
+            if info["kind"] == "gbm_shap_long":
+                shap_labels = {
+                    column["name"]: column["label"]
+                    for column in self.store.shap_value_columns(str(model.get("model_id") or ""), model)
+                }
+                columns = [
+                    {
+                        **column,
+                        **(
+                            {
+                                "label": shap_labels[column["name"]],
+                                "artifact_column": shap_labels[column["name"]],
+                                "source_role": "gbm_shap_value",
+                            }
+                            if column["name"] in shap_labels
+                            else {}
+                        ),
+                    }
+                    for column in columns
+                ]
             label = f"{model.get('label') or model.get('model_id')} - {info['label']}"
             sources.append(
                 {
@@ -455,7 +569,7 @@ class GbmSourceProvider:
                     "best_iteration": model.get("best_iteration"),
                     "best_metrics": model.get("best_metrics"),
                     "row_count": schema["row_count"],
-                    "columns": schema["columns"],
+                    "columns": columns,
                 }
             )
         return sources

@@ -87,7 +87,7 @@ export function createLineBarTool({
   }
 
   function expectedDisplayColumns() {
-    const columns = [...numericColumns()];
+    const columns = numericColumns().filter((column) => column.source_role !== "gbm_shap_value");
     if (state.expectedSort === "alpha") {
       columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     }

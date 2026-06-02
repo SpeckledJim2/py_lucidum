@@ -21,7 +21,7 @@ from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.shap import shap_config, shap_plot, stacked_shap_plot
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_parameters, validate_request
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
@@ -2163,6 +2163,84 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         self.assertTrue(str(artifact_columns[0][1]).startswith("BIGINT"))
         self.assertTrue(str(artifact_columns[1][1]).startswith("DOUBLE"))
 
+    def test_shap_values_include_interaction_group_columns_without_summary_rows(self) -> None:
+        try:
+            import numpy as np
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class Booster:
+            def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
+                return np.array([[0.2, -0.1, 0.4, 0.0], [0.5, 0.3, -0.2, 0.0]])
+
+        groups = [
+            {"grouping": "POSTCODE", "features": ["Age", "Segment"]},
+            {"grouping": "DRIVER", "features": ["Age"]},
+        ]
+        group_columns = shap_interaction_group_columns(groups, ["Age", "Segment", "POSTCODE_INTERACTION_GROUP"])
+
+        self.assertEqual(
+            group_columns,
+            [
+                {"name": "POSTCODE_INTERACTION_GROUP_2", "grouping": "POSTCODE", "features": ["Age", "Segment"]},
+                {"name": "DRIVER_INTERACTION_GROUP", "grouping": "DRIVER", "features": ["Age"]},
+            ],
+        )
+
+        shap_frame, summary = shap_dataframes(
+            np=np,
+            pd=pd,
+            booster=Booster(),
+            feature_frame=pd.DataFrame({"Age": [30, 40], "Segment": ["A", "B"], "POSTCODE_INTERACTION_GROUP": [1, 2]}),
+            score_frame=pd.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40], "Segment": ["A", "B"], "POSTCODE_INTERACTION_GROUP": [1, 2]}),
+            feature_names=["Age", "Segment", "POSTCODE_INTERACTION_GROUP"],
+            model_id="m1",
+            shap_mode="all",
+            shap_seed=2026,
+            best_iteration=3,
+            shap_interaction_groups=groups,
+        )
+
+        self.assertEqual(
+            list(shap_frame.columns),
+            ["__lucidum_row_id", "Age", "Segment", "POSTCODE_INTERACTION_GROUP", "POSTCODE_INTERACTION_GROUP_2", "DRIVER_INTERACTION_GROUP"],
+        )
+        self.assertAlmostEqual(shap_frame["POSTCODE_INTERACTION_GROUP_2"].iloc[0], 0.1)
+        self.assertAlmostEqual(shap_frame["POSTCODE_INTERACTION_GROUP_2"].iloc[1], 0.8)
+        self.assertEqual(shap_frame["DRIVER_INTERACTION_GROUP"].tolist(), [0.2, 0.5])
+        self.assertEqual(set(summary["feature"]), {"Age", "Segment", "POSTCODE_INTERACTION_GROUP"})
+        self.assertNotIn("POSTCODE_INTERACTION_GROUP_2", set(summary["feature"]))
+
+    def test_empty_shap_values_include_interaction_group_columns(self) -> None:
+        try:
+            import numpy as np
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class UnexpectedBooster:
+            def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
+                raise AssertionError("zero SHAP rows should not call LightGBM predict")
+
+        shap_frame, summary = shap_dataframes(
+            np=np,
+            pd=pd,
+            booster=UnexpectedBooster(),
+            feature_frame=pd.DataFrame({"Age": [30, 40]}),
+            score_frame=pd.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40]}),
+            feature_names=["Age"],
+            model_id="m1",
+            shap_mode="0",
+            shap_seed=2026,
+            best_iteration=3,
+            shap_interaction_groups=[{"grouping": "DRIVER", "features": ["Age"]}],
+        )
+
+        self.assertEqual(list(shap_frame.columns), ["__lucidum_row_id", "Age", "DRIVER_INTERACTION_GROUP"])
+        self.assertTrue(shap_frame.empty)
+        self.assertTrue(summary.empty)
+
     def test_feature_config_with_mean_abs_shap_persists_training_summary_metric(self) -> None:
         features = [
             {"name": "Age", "gain": 9.0},
@@ -2621,6 +2699,16 @@ COPY (
         prediction_columns_by_name = {column["name"]: column for column in prediction_source["columns"]}
         self.assertIsNone(prediction_columns_by_name["Age"]["band_suggestion"])
         self.assertIsNone(prediction_columns_by_name["gbm_prediction"]["band_suggestion"])
+        shap_source = next(source for source in schema["data_sources"] if source["id"] == "gbm:m1:shap_long")
+        shap_columns_by_name = {column["name"]: column for column in shap_source["columns"]}
+        self.assertIn("Age", shap_columns_by_name)
+        self.assertIn("Segment", shap_columns_by_name)
+        self.assertIn("gbm_prediction", shap_columns_by_name)
+        self.assertIn("SHAP__Age", shap_columns_by_name)
+        self.assertIn("SHAP__Segment", shap_columns_by_name)
+        self.assertEqual(shap_columns_by_name["SHAP__Age"]["label"], "Age")
+        self.assertEqual(shap_columns_by_name["SHAP__Age"]["artifact_column"], "Age")
+        self.assertEqual(shap_columns_by_name["SHAP__Age"]["source_role"], "gbm_shap_value")
         with patch.object(Dataset, "row_count_for_source", side_effect=AssertionError("lazy suggestion counted rows")):
             band_status, band_body = asgi_post_json(
                 app,
@@ -2658,6 +2746,31 @@ COPY (
 
         self.assertEqual(result["source"], "gbm:m1:predictions")
         self.assertEqual([row["x"] for row in result["rows"]], ["A", "B"])
+
+        shap_result = chart(
+            dataset,
+            {
+                "source": "gbm:m1:shap_long",
+                "x": "Segment",
+                "responses": [
+                    {"label": "Age SHAP", "numerator": "SHAP__Age"},
+                    {"label": "GBM", "numerator": "gbm_prediction"},
+                ],
+                "denominator": "__none__",
+                "filter": "",
+                "bandWidth": 0,
+                "dateBucket": "none",
+                "lowGroup": "0",
+                "sort": "alpha",
+                "sigma": 0,
+                "transform": "none",
+            },
+        )
+
+        self.assertEqual(shap_result["source"], "gbm:m1:shap_long")
+        self.assertEqual([row["x"] for row in shap_result["rows"]], ["A"])
+        self.assertAlmostEqual(shap_result["rows"][0]["resp0"], 0.2)
+        self.assertAlmostEqual(shap_result["rows"][0]["resp1"], 11.5)
 
     def test_prediction_source_relation_uses_safe_explicit_projection(self) -> None:
         store = self.write_model_artifacts()
