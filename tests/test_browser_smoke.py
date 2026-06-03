@@ -20,6 +20,7 @@ import uvicorn
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.tools.gbm.store import GbmModelStore
+from py_lucidum.tools.glm.store import GlmModelStore
 
 
 try:
@@ -250,7 +251,23 @@ COPY (
                 [0.41, 0.51, 0.61],
             )
             store.activate_model("browser-smoke-model")
-            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "gbm"])
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "browser-smoke-glm",
+                "Browser smoke GLM",
+                "2026-05-25T00:00:02Z",
+                [0.15, 0.25, 0.35],
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "browser-smoke-glm-2",
+                "Second smoke GLM",
+                "2026-05-25T00:00:03Z",
+                [0.45, 0.55, 0.65],
+            )
+            glm_store.activate_model("browser-smoke-glm")
+            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "glm", "gbm"])
             try:
                 self.exercise_gbm_profile_cache_and_model_chart_refresh(base_url)
             finally:
@@ -498,6 +515,53 @@ COPY (
 COPY (
   SELECT 'Age' AS feature, 0.2 AS mean_abs_shap, 0.2 AS mean_shap, {len(predictions)} AS row_count
 ) TO {sql_literal(str(model_dir / "shap_summary.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+
+    @staticmethod
+    def write_glm_prediction_model(
+        store: GlmModelStore,
+        model_id: str,
+        label: str,
+        created_at: str,
+        predictions: list[float],
+    ) -> None:
+        model_dir = store.create_model_dir(model_id)
+        diagnostics = {"aic": 123.45, "deviance": 67.89, "dispersion": 1.2, "na_in_fitted": 0}
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": label,
+                "created_at": created_at,
+                "family": "tweedie",
+                "link": "auto",
+                "family_parameter": 1.5,
+                "response_column": "actualNumerator",
+                "denominator_column": "denominator",
+                "training_scope": "all",
+                "training_rows": 2,
+                "scored_rows": len(predictions),
+                "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
+                "sources": {"predictions": store.source_id(model_id)},
+                "diagnostics": diagnostics,
+            },
+        )
+        store.write_json(model_dir / "diagnostics.json", diagnostics)
+        (model_dir / "formula.txt").write_text("actualNumerator ~ 1 + Age + Segment", encoding="utf-8")
+        prediction_rows = "\n  UNION ALL\n  ".join(
+            f"SELECT {index + 1} AS __lucidum_row_id, {float(value)} AS glm_prediction"
+            for index, value in enumerate(predictions)
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  {prediction_rows}
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
 """
             )
         finally:
@@ -765,6 +829,87 @@ COPY (
                 self.assertEqual(request_body["source"], "gbm:browser-smoke-model-2:predictions")
                 self.assertEqual(request_body["responses"][0]["numerator"], "gbm_prediction")
                 self.assertEqual(request_body["denominator"], "denominator")
+
+                mixed_expected_url = (
+                    f"{base_url}/?tool=line_bar&source=glm%3Abrowser-smoke-glm%3Apredictions"
+                    "&x=Age&actual=actualNumerator&expected=glm_prediction&denominator=denominator"
+                )
+                page.goto(mixed_expected_url, wait_until="domcontentloaded")
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    timeout=10_000,
+                )
+                expected_state = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll("#expectedList .feature")]
+                      .map((button) => ({
+                        text: button.textContent || "",
+                        source: button.dataset.sourceId || "",
+                        active: button.classList.contains("active"),
+                      }))
+                    """
+                )
+                self.assertIn(
+                    {"text": "glm_predictionnumeric", "source": "glm:browser-smoke-glm:predictions", "active": True},
+                    expected_state,
+                )
+                self.assertIn(
+                    {"text": "gbm_predictionnumeric", "source": "gbm:browser-smoke-model-2:predictions", "active": False},
+                    expected_state,
+                )
+
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_expected_info:
+                    page.locator(
+                        '#expectedList .feature[data-source-id="gbm:browser-smoke-model-2:predictions"]',
+                        has_text="gbm_prediction",
+                    ).click()
+                gbm_expected_body = json.loads(gbm_expected_info.value.post_data or "{}")
+                self.assertEqual(gbm_expected_body["source"], "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(gbm_expected_body["responses"][0]["numerator"], "actualNumerator")
+                self.assertEqual(gbm_expected_body["responses"][1]["numerator"], "gbm_prediction")
+
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_expected_info:
+                    page.locator(
+                        '#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"]',
+                        has_text="glm_prediction",
+                    ).click()
+                glm_expected_body = json.loads(glm_expected_info.value.post_data or "{}")
+                self.assertEqual(glm_expected_body["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(glm_expected_body["responses"][0]["numerator"], "actualNumerator")
+                self.assertEqual(glm_expected_body["responses"][1]["numerator"], "glm_prediction")
+
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_to_glm_info:
+                    page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm-2"]').click()
+                glm_to_glm_body = json.loads(glm_to_glm_info.value.post_data or "{}")
+                page.locator("#glmModelSelectedMeta", has_text="Second smoke GLM").wait_for(timeout=10_000)
+                self.assertEqual(glm_to_glm_body["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(glm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
+                self.assertEqual(glm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
+
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_to_gbm_info:
+                    page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
+                glm_to_gbm_body = json.loads(glm_to_gbm_info.value.post_data or "{}")
+                page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
+                self.assertEqual(glm_to_gbm_body["source"], "gbm:browser-smoke-model:predictions")
+                self.assertEqual(glm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
+                self.assertEqual(glm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
+
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_to_gbm_info:
+                    page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
+                gbm_to_gbm_body = json.loads(gbm_to_gbm_info.value.post_data or "{}")
+                page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
+                self.assertEqual(gbm_to_gbm_body["source"], "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(gbm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
+                self.assertEqual(gbm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
+
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_to_glm_info:
+                    page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm"]').click()
+                gbm_to_glm_body = json.loads(gbm_to_glm_info.value.post_data or "{}")
+                page.locator("#glmModelSelectedMeta", has_text="Browser smoke GLM").wait_for(timeout=10_000)
+                self.assertEqual(gbm_to_glm_body["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(gbm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
+                self.assertEqual(gbm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
 
                 shap_url = (
                     f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model-2%3Ashap_long"

@@ -209,10 +209,12 @@
         saveToolPresentation,
         toolCache,
         sourceColumns,
+        expectedColumns,
         selectedColumn,
         numericColumns,
         dataSourceForId,
         dataSourceHasColumn,
+        syncExpectedSourceFromSelection,
         toolEnabled,
         setTool,
         renderMetricTitle,
@@ -1028,12 +1030,29 @@
           fillActualMetricSelect(select);
           return;
         }
+        if (select.id === "expectedNumerator") {
+          fillExpectedMetricSelect(select, includeNone);
+          return;
+        }
         select.innerHTML = "";
         if (includeNone) {
           select.append(new Option("None", ""));
         }
         for (const col of numericColumns()) {
           select.append(new Option(col.name, col.name));
+        }
+      }
+
+      function fillExpectedMetricSelect(select, includeNone = false) {
+        select.innerHTML = "";
+        if (includeNone) {
+          select.append(new Option("None", ""));
+        }
+        for (const col of expectedColumns()) {
+          const option = new Option(metricColumnLabel(col), col.name);
+          option.dataset.sourceId = col.source_id || state.source || "dataset";
+          option.dataset.metricKind = isModelPredictionColumn(col) ? "prediction" : "metric";
+          select.append(option);
         }
       }
 
@@ -1098,6 +1117,29 @@
         ));
       }
 
+      function expectedPredictionColumns() {
+        return activeModelSources(["glm_predictions", "gbm_predictions"]).flatMap((source) => (
+          numericColumnsForSource(source.id)
+            .filter(isModelPredictionColumn)
+            .map((column) => ({
+              ...column,
+              label: metricColumnLabel(column),
+              source_id: source.id,
+            }))
+        ));
+      }
+
+      function expectedColumns() {
+        const predictionColumns = expectedPredictionColumns();
+        const currentSourceColumns = numericColumns()
+          .filter((column) => column.source_role !== "gbm_shap_value" && !isModelPredictionColumn(column))
+          .map((column) => ({
+            ...column,
+            source_id: state.source || "dataset",
+          }));
+        return [...predictionColumns, ...currentSourceColumns];
+      }
+
       function activeModelSources(kinds) {
         const desiredKinds = new Set(kinds);
         return (state.schema?.data_sources || []).filter((source) => desiredKinds.has(source.kind) && source.active);
@@ -1138,6 +1180,25 @@
         return true;
       }
 
+      function setExpectedSelection(value, sourceId = "", options = {}) {
+        const select = el("expectedNumerator");
+        const name = String(value || "");
+        if (!name) {
+          select.value = "";
+          return true;
+        }
+        const allowAnySource = options.allowAnySource !== false;
+        const selectOptions = Array.from(select.options);
+        const option = selectOptions.find((item) => (
+          !item.disabled &&
+          item.value === name &&
+          (!sourceId || item.dataset.sourceId === sourceId)
+        )) || (allowAnySource ? selectOptions.find((item) => !item.disabled && item.value === name) : null);
+        if (!option) return false;
+        option.selected = true;
+        return true;
+      }
+
       function chooseFirstActualSelection() {
         const option = Array.from(el("actualNumerator").options).find((item) => !item.disabled && item.value);
         if (!option) return "";
@@ -1161,6 +1222,33 @@
         return Boolean(name && numericColumns().some((col) => col.name === name));
       }
 
+      function selectedExpectedIsPrediction() {
+        return el("expectedNumerator").selectedOptions[0]?.dataset.metricKind === "prediction";
+      }
+
+      function expectedSelectionSourceId() {
+        return el("expectedNumerator").selectedOptions[0]?.dataset.sourceId || "";
+      }
+
+      function predictionColumnNameForModelKind(modelKind) {
+        if (modelKind === "glm") return "glm_prediction";
+        if (modelKind === "gbm") return "gbm_prediction";
+        return "";
+      }
+
+      function activePredictionSourceForModelKind(modelKind) {
+        if (modelKind === "glm") return activeModelSource("glm_predictions");
+        if (modelKind === "gbm") return activeModelSource("gbm_predictions");
+        return null;
+      }
+
+      function setExpectedPredictionSelectionForModelKind(modelKind) {
+        const predictionColumn = predictionColumnNameForModelKind(modelKind);
+        const predictionSource = activePredictionSourceForModelKind(modelKind);
+        if (!predictionColumn || !predictionSource?.id) return false;
+        return setExpectedSelection(predictionColumn, predictionSource.id, { allowAnySource: false });
+      }
+
       function actualSelectionSourceId() {
         return el("actualNumerator").selectedOptions[0]?.dataset.sourceId || "";
       }
@@ -1172,27 +1260,51 @@
         return true;
       }
 
-      function syncControlsForSourceChange({ actualValue = "", actualSource = "" } = {}) {
-        const previousExpected = el("expectedNumerator").value;
+      function syncExpectedSourceFromSelection({ expectedValue = "", expectedSource = "" } = {}) {
+        const targetSource = expectedSource || expectedSelectionSourceId();
+        if (!targetSource || targetSource === state.source) return false;
+        const selectedExpected = expectedValue || el("expectedNumerator").value;
+        state.source = targetSource;
+        syncControlsForSourceChange({
+          expectedValue: selectedExpected,
+          expectedSource: targetSource,
+          expectedIsPrediction: true,
+        });
+        return true;
+      }
+
+      function syncControlsForSourceChange({ actualValue = "", actualSource = "", expectedValue = "", expectedSource = "", expectedIsPrediction = null } = {}) {
+        const previousActual = actualValue || el("actualNumerator").value;
+        const previousActualSource = actualSource || actualSelectionSourceId();
+        const previousExpected = expectedValue || el("expectedNumerator").value;
+        const previousExpectedSource = expectedSource || expectedSelectionSourceId();
+        const previousExpectedIsPrediction = expectedIsPrediction === null ? selectedExpectedIsPrediction() : Boolean(expectedIsPrediction);
         const previousDenominator = el("denominator").value;
         if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
         fillMetricSelect(el("actualNumerator"));
-        if (actualValue) setActualSelection(actualValue, actualSource);
+        if (previousActual && !setActualSelection(previousActual, previousActualSource)) {
+          el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
+        }
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
-        el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";
+        if (!setExpectedSelection(previousExpected, previousExpectedSource, { allowAnySource: !previousExpectedIsPrediction })) {
+          el("expectedNumerator").value = "";
+        }
         el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
       }
 
-      async function reloadSchemaAfterModelMutation(preferredSource) {
+      async function reloadSchemaAfterModelMutation(preferredSource, options = {}) {
         state.schema = await api("/api/schema");
+        const modelKind = String(options?.modelKind || "");
         if (preferredSource) state.source = preferredSource;
         if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
         const previousActual = el("actualNumerator").value;
         const previousExpected = el("expectedNumerator").value;
+        const previousExpectedSource = expectedSelectionSourceId();
+        const previousExpectedIsPrediction = selectedExpectedIsPrediction();
         const previousDenominator = el("denominator").value;
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
@@ -1200,7 +1312,11 @@
         if (!setActualSelection(previousActual, state.source)) {
           el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
         }
-        el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";
+        if (previousExpectedIsPrediction && modelKind) {
+          if (!setExpectedPredictionSelectionForModelKind(modelKind)) el("expectedNumerator").value = "";
+        } else if (!setExpectedSelection(previousExpected, previousExpectedSource, { allowAnySource: !previousExpectedIsPrediction })) {
+          el("expectedNumerator").value = "";
+        }
         el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
@@ -1583,7 +1699,7 @@
           el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
         }
         if (!el("actualNumerator").value) chooseFirstActualSelection();
-        el("expectedNumerator").value = numericColumnExists(requestedExpected) ? requestedExpected : "";
+        if (!setExpectedSelection(requestedExpected)) el("expectedNumerator").value = "";
         el("denominator").value = numericColumnExists(requestedDenominator) ? requestedDenominator : "__none__";
         applyInitialKpiDefault();
       }

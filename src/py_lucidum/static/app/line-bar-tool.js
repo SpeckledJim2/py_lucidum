@@ -25,10 +25,12 @@ export function createLineBarTool({
   saveToolPresentation,
   toolCache,
   sourceColumns,
+  expectedColumns = numericColumns,
   selectedColumn,
   numericColumns,
   dataSourceForId,
   dataSourceHasColumn,
+  syncExpectedSourceFromSelection = () => false,
   toolEnabled,
   setTool,
   renderMetricTitle,
@@ -87,7 +89,7 @@ export function createLineBarTool({
   }
 
   function expectedDisplayColumns() {
-    const columns = numericColumns().filter((column) => column.source_role !== "gbm_shap_value");
+    const columns = expectedColumns().filter((column) => column.source_role !== "gbm_shap_value");
     if (state.expectedSort === "alpha") {
       columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     }
@@ -251,28 +253,35 @@ export function createLineBarTool({
     const list = el("expectedList");
     list.innerHTML = "";
 
-    function addExpectedButton(label, value, kind, extraClass = "") {
+    function addExpectedButton(label, value, kind, sourceId = "", extraClass = "") {
       const button = document.createElement("button");
       button.type = "button";
       button.className = `feature ${extraClass} ${value === select.value ? "active" : ""}`.trim();
+      if (sourceId) button.dataset.sourceId = sourceId;
       button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
       button.addEventListener("click", () => {
         const changed = select.value !== value;
         select.value = value;
-        renderExpectedNumerators();
-        updateAxisControls();
-        if (changed) refreshChart();
+        const sourceChanged = syncExpectedSourceFromSelection({
+          expectedValue: value,
+          expectedSource: sourceId,
+        });
+        if (!sourceChanged) {
+          renderExpectedNumerators();
+          updateAxisControls();
+        }
+        if (changed || sourceChanged) refreshChart({ force: sourceChanged });
       });
       list.append(button);
     }
 
     if (!query || "none".includes(query) || "no expected line".includes(query) || "off".includes(query)) {
-      addExpectedButton("No expected line", "", "off", "expected-none-option");
+      addExpectedButton("No expected line", "", "off", "", "expected-none-option");
     }
 
     for (const col of expectedDisplayColumns()) {
       if (query && !col.name.toLowerCase().includes(query)) continue;
-      addExpectedButton(col.name, col.name, col.kind);
+      addExpectedButton(col.name, col.name, col.kind, col.source_id || state.source || "dataset");
     }
   }
 
@@ -918,9 +927,12 @@ export function createLineBarTool({
       });
     });
     el("expectedNumerator").addEventListener("change", () => {
-      renderExpectedNumerators();
-      updateAxisControls();
-      refreshChart();
+      const sourceChanged = syncExpectedSourceFromSelection();
+      if (!sourceChanged) {
+        renderExpectedNumerators();
+        updateAxisControls();
+      }
+      refreshChart({ force: sourceChanged });
     });
     el("expectedSearch").addEventListener("input", renderExpectedNumerators);
     el("featureSearch").addEventListener("input", renderFeatures);

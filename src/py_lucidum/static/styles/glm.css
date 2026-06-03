@@ -125,6 +125,16 @@
 
       .glm-build-status[data-phase="failed"] {
         color: var(--danger);
+        line-height: 1.25;
+        max-width: min(820px, 70%);
+        overflow: visible;
+      }
+
+      .glm-build-status[data-phase="failed"] .glm-build-status-main {
+        overflow: visible;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+        white-space: normal;
       }
 
       .glm-build-status[data-phase="succeeded"] {

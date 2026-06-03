@@ -527,11 +527,11 @@ export function createGlmTool({
     const payload = buildPayload();
     const familyError = validateFamilyParameter(payload.family, payload.family_parameter);
     if (familyError) {
-      setGlmNotice(familyError);
+      setBuildFailure(familyError);
       return;
     }
     if (!payload.response_column && !String(payload.formula || "").includes("~")) {
-      setGlmNotice("Choose an Actual metric or enter a full response ~ terms formula");
+      setBuildFailure("Choose an Actual metric or enter a full response ~ terms formula");
       return;
     }
     isBuilding = true;
@@ -542,11 +542,19 @@ export function createGlmTool({
       const job = await api("/api/glm/build", { method: "POST", body: JSON.stringify(payload) });
       pollBuildJob(job.job_id);
     } catch (error) {
-      isBuilding = false;
-      liveProgress = { phase: "failed", message: error.message };
-      renderLiveProgress(liveProgress);
-      setGlmNotice(error.message);
+      setBuildFailure(error.message);
     }
+  }
+
+  function setBuildFailure(message) {
+    if (pollTimer) {
+      window.clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    isBuilding = false;
+    liveProgress = { phase: "failed", message: String(message || "GLM build failed") };
+    renderLiveProgress(liveProgress);
+    setGlmNotice("");
   }
 
   function validateFamilyParameter(family, rawValue) {
@@ -564,7 +572,8 @@ export function createGlmTool({
     const poll = async () => {
       try {
         const job = await api(`/api/glm/jobs/${encodeURIComponent(jobId)}`, { method: "GET" });
-        liveProgress = job.progress || { phase: job.status, message: job.status };
+        const progress = job.progress || { phase: job.status, message: job.status };
+        liveProgress = progress;
         renderLiveProgress(liveProgress);
         if (job.status === "queued" || job.status === "running") {
           pollTimer = window.setTimeout(poll, job.status === "queued" ? GLM_QUEUED_POLL_MS : GLM_RUNNING_POLL_MS);
@@ -577,14 +586,10 @@ export function createGlmTool({
           await applyModelMutationResult({ model: job.result, config: latest });
           setAppReadyStatus("GLM built");
         } else {
-          setGlmNotice(job.error || "GLM build failed");
+          setBuildFailure(job.error || progress.message || "GLM build failed");
         }
       } catch (error) {
-        pollTimer = null;
-        isBuilding = false;
-        liveProgress = { phase: "failed", message: error.message };
-        renderLiveProgress(liveProgress);
-        setGlmNotice(error.message);
+        setBuildFailure(error.message);
       }
     };
     poll();
@@ -938,7 +943,7 @@ export function createGlmTool({
 
   async function applyModelMutationResult(result) {
     const nextConfig = result.config || config || {};
-    await reloadSchema(preferredModelSource(result, nextConfig));
+    await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "glm" });
     const preserveProfile = clearCachesAfterGlmModelSourceChange();
     activeDetail = null;
     coefficientRows = [];

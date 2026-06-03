@@ -588,6 +588,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('label: `GLM ${glmAutoModelTimeLabel()}`', glm_js)
         self.assertNotIn('label: `GLM ${actual} ${glmAutoModelTimeLabel()}`', glm_js)
         self.assertIn("function validateFamilyParameter(family, rawValue)", glm_js)
+        self.assertIn("function setBuildFailure(message)", glm_js)
+        self.assertIn('setBuildFailure(job.error || progress.message || "GLM build failed");', glm_js)
+        self.assertNotIn('setGlmNotice(job.error || "GLM build failed");', glm_js)
         self.assertIn("function syncBuilderFromModelDetail(detail = {})", glm_js)
         self.assertIn("syncBuilderFromModelDetail(activeDetail);", glm_js)
         self.assertIn('class="glm-model-active-dot"', glm_js)
@@ -606,6 +609,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".glm-coefficient-panel", css)
         self.assertIn(".glm-panel-title {\n        color: var(--text);\n        flex: 0 0 auto;\n        font-size: 13px;", css)
         self.assertIn(".glm-builder-resizer", css)
+        self.assertIn('.glm-build-status[data-phase="failed"] .glm-build-status-main', css)
+        self.assertIn("overflow-wrap: anywhere;", css)
         self.assertIn(".glm-coefficient-actions {\n        position: absolute;", css)
         self.assertIn(".glm-coefficient-meta {\n        color: var(--muted);\n        display: flex;\n        flex-direction: column;", css)
         self.assertIn("font-weight: 500;", css)
@@ -674,6 +679,55 @@ if (localStorage.getItem("py_lucidum_glm_formula") !== "Age + C(Segment)") throw
 if (localStorage.getItem("py_lucidum_glm_family") !== "tweedie") throw new Error("family storage failed");
 if (localStorage.getItem("py_lucidum_glm_family_parameter_tweedie") !== "1.3") throw new Error("parameter storage failed");
 if (localStorage.getItem("py_lucidum_glm_training_scope") !== "training") throw new Error("scope storage failed");
+"""
+        self.run_node_script(script)
+
+    def test_glm_build_failure_unlocks_button_and_uses_inline_status(self) -> None:
+        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        helpers = ["buildStatusHtml", "renderLiveProgress", "setBuildFailure"]
+        script = "\n".join(self.js_function_source(js, name) for name in helpers) + r"""
+let isBuilding = true;
+let liveProgress = null;
+let pollTimer = 17;
+let clearedTimer = null;
+let noticeText = null;
+const window = {
+  clearTimeout: (value) => { clearedTimer = value; },
+};
+function escapeHtml(value) {
+  return String(value || "");
+}
+function makeClassList() {
+  const values = new Set();
+  return {
+    values,
+    toggle: (name, enabled) => {
+      if (enabled) values.add(name);
+      else values.delete(name);
+    },
+  };
+}
+const status = { innerHTML: "", dataset: {}, classList: makeClassList() };
+const button = { disabled: true, textContent: "Building...", classList: makeClassList() };
+function el(id) {
+  if (id === "glmBuildStatus") return status;
+  if (id === "glmBuildBtn") return button;
+  return null;
+}
+function setGlmNotice(text) {
+  noticeText = text;
+}
+setBuildFailure("Unable to evaluate factor bs(BAD, df=2)");
+if (clearedTimer !== 17) throw new Error(`timer not cleared: ${clearedTimer}`);
+if (pollTimer !== null) throw new Error(`poll timer not reset: ${pollTimer}`);
+if (isBuilding) throw new Error("building flag still set");
+if (button.disabled) throw new Error("button still disabled");
+if (button.textContent !== "Build GLM") throw new Error(`button text ${button.textContent}`);
+if (button.classList.values.has("building")) throw new Error("button still has building class");
+if (status.dataset.phase !== "failed") throw new Error(`phase ${status.dataset.phase}`);
+if (status.classList.values.has("hidden")) throw new Error("inline status hidden");
+if (!status.innerHTML.includes("Unable to evaluate factor")) throw new Error(status.innerHTML);
+if (noticeText !== "") throw new Error(`notice should be cleared, got ${noticeText}`);
 """
         self.run_node_script(script)
 
@@ -1280,10 +1334,19 @@ if (localStorage.getItem("py_lucidum_glm_training_scope") !== "training") throw 
         self.assertIn("function sourceColumns()", js)
         self.assertIn("function isModelPredictionColumn(column)", js)
         self.assertIn('return ["gbm_prediction", "glm_prediction"].includes(String(column?.name || ""));', js)
+        self.assertIn("function expectedColumns()", js)
+        self.assertIn("function expectedPredictionColumns()", js)
+        self.assertIn("option.dataset.sourceId = col.source_id || state.source || \"dataset\";", js)
+        self.assertIn("option.dataset.metricKind = isModelPredictionColumn(col) ? \"prediction\" : \"metric\";", js)
+        self.assertIn("function setExpectedSelection(value, sourceId = \"\", options = {})", js)
+        self.assertIn("function syncExpectedSourceFromSelection({ expectedValue = \"\", expectedSource = \"\" } = {})", js)
+        self.assertIn("syncControlsForSourceChange({", js)
         self.assertIn("function expectedDisplayColumns()", js)
-        self.assertIn('numericColumns().filter((column) => column.source_role !== "gbm_shap_value")', js)
+        self.assertIn('expectedColumns().filter((column) => column.source_role !== "gbm_shap_value")', js)
         self.assertIn("const predictionColumns = columns.filter(isModelPredictionColumn);", js)
         self.assertIn("return [...predictionColumns, ...otherColumns];", js)
+        self.assertIn("button.dataset.sourceId = sourceId;", js)
+        self.assertIn("const sourceChanged = syncExpectedSourceFromSelection({", js)
         self.assertIn("for (const col of expectedDisplayColumns())", js)
         self.assertIn("function preferredStartupSource(availableSources, requestedSource)", js)
         self.assertIn('const activePredictionSource = availableSources.find((source) => ["glm_predictions", "gbm_predictions"].includes(source.kind) && source.active);', js)
@@ -1291,8 +1354,9 @@ if (localStorage.getItem("py_lucidum_glm_training_scope") !== "training") throw 
         self.assertIn("state.source = preferredStartupSource(availableSources, requestedSource);", js)
         self.assertIn('source: state.source || "dataset"', js)
         self.assertIn('const previousExpected = el("expectedNumerator").value;', js)
+        self.assertIn('const previousExpectedSource = expectedSelectionSourceId();', js)
         self.assertIn('fillMetricSelect(el("expectedNumerator"), true);', js)
-        self.assertIn('el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";', js)
+        self.assertIn('setExpectedSelection(previousExpected, previousExpectedSource, { allowAnySource: !previousExpectedIsPrediction })', js)
 
     def test_gbm_model_navigator_incremental_refresh_contract(self) -> None:
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")

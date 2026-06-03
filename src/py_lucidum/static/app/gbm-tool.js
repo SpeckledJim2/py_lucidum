@@ -2839,7 +2839,7 @@ export function createGbmTool({
         liveProgress = null;
         liveEvaluationParameters = null;
         gridTrainingNotice = "";
-        await reloadSchema(job.result?.sources?.predictions);
+        await reloadSchema(job.result?.sources?.predictions, { modelKind: "gbm" });
         const preserveProfile = clearCachesAfterGbmModelSourceChange();
         const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
         const cache = toolCache(tool);
@@ -2963,7 +2963,7 @@ export function createGbmTool({
 
   async function applyModelMutationResult(result) {
     const nextConfig = result.config || config || {};
-    await reloadSchema(preferredModelSource(result, nextConfig));
+    await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "gbm" });
     const preserveProfile = clearCachesAfterGbmModelSourceChange();
     const currentModelId = featureDraftModelId(config);
     const nextModelId = featureDraftModelId(nextConfig);
