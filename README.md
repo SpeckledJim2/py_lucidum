@@ -204,7 +204,9 @@ The GLM tool is opt-in. Column Profile remains enabled and opens first:
 
 The Formula builder accepts either a full `response ~ terms` Formulaic formula, or RHS-only `terms` that use the sidebar Actual metric as the response. Lines can include `#` comments; comments are stored with the model but stripped before fitting. The formula context includes `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms.
 
-Families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`, with `link="auto"` in the first implementation. If a sidebar Weight is selected, GLM fits `Actual / Weight` with `sample_weight=Weight` and stores `glm_prediction` back on the original Actual scale. Saved models live beside the dataset under `.lucidum/models/glm/`, and the active model publishes a `glm:<model_id>:predictions` data source.
+Families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`, with `link="auto"` in the first implementation. Tweedie power and negative-binomial theta can be set from the family parameter input. If a sidebar Weight is selected, GLM fits `Actual / Weight` with `sample_weight=Weight` and stores `glm_prediction` back on the original Actual scale. Saved models live beside the dataset under `.lucidum/models/glm/`, and the active model publishes a `glm:<model_id>:predictions` data source.
+
+The Penalty selector defaults to `None` for the existing unregularized fit. `Auto` uses glum cross-validation over ridge, elastic net, and lasso mixes; `Manual` exposes a compact mix and alpha control. Penalized models show coefficient estimates but suppress coefficient standard errors and p-values because regularized inference is not equivalent to the unpenalized GLM table.
 
 `All` fits all valid rows. `Training` fits only rows where a physical `SAMPLE` column equals `training`, case-insensitively; GLM does not create generated sample splits.
 

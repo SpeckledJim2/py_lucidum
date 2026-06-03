@@ -189,6 +189,8 @@ class GlmToolTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["sample"]["available"], True)
         self.assertIn("tweedie", [row["value"] for row in payload["families"]])
+        self.assertIn("regularization", payload)
+        self.assertEqual(payload["regularization"]["auto_l1_ratio"], [0.0, 0.5, 1.0])
 
     def test_glm_build_reports_actionable_missing_dependency(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
@@ -246,6 +248,35 @@ class GlmToolTests(unittest.TestCase):
         self.assertFalse(unsafe["ok"])
         self.assertIn("unsafe", unsafe["errors"][0])
 
+    def test_regularization_validation_defaults_and_rejects_invalid_manual_values(self) -> None:
+        dataset = Dataset(self.data_path)
+        base_payload = {
+            "formula": "Age",
+            "response_column": "actualNumerator",
+            "family": "normal",
+            "training_scope": "all",
+        }
+
+        default = validate_request(dataset, base_payload)
+        auto = validate_request(dataset, {**base_payload, "regularization": {"mode": "auto"}})
+        manual = validate_request(dataset, {**base_payload, "regularization": {"mode": "manual", "alpha": "0.25", "l1_ratio": "1"}})
+        bad_alpha = validate_request(dataset, {**base_payload, "regularization": {"mode": "manual", "alpha": "0", "l1_ratio": "0.5"}})
+        bad_mix = validate_request(dataset, {**base_payload, "regularization": {"mode": "manual", "alpha": "0.1", "l1_ratio": "1.5"}})
+
+        self.assertTrue(default["ok"], default)
+        self.assertEqual(default["regularization"]["mode"], "none")
+        self.assertEqual(default["regularization"]["alpha"], 0.0)
+        self.assertTrue(auto["ok"], auto)
+        self.assertEqual(auto["regularization"]["mode"], "auto")
+        self.assertEqual(auto["regularization"]["l1_ratio"], [0.0, 0.5, 1.0])
+        self.assertTrue(manual["ok"], manual)
+        self.assertEqual(manual["regularization"]["alpha"], 0.25)
+        self.assertEqual(manual["regularization"]["l1_ratio"], 1.0)
+        self.assertFalse(bad_alpha["ok"])
+        self.assertIn("positive", "; ".join(bad_alpha["errors"]))
+        self.assertFalse(bad_mix["ok"])
+        self.assertIn("mix", "; ".join(bad_mix["errors"]))
+
     def test_training_scope_requires_physical_sample_column(self) -> None:
         no_sample_path = self.root / "no_sample.csv"
         no_sample_path.write_text("actualNumerator,Age\n1,10\n2,20\n", encoding="utf-8")
@@ -282,6 +313,7 @@ class GlmToolTests(unittest.TestCase):
         self.assertEqual(manifest["response_column"], "actualNumerator")
         self.assertEqual(manifest["denominator_column"], "denominator")
         self.assertEqual(manifest["training_scope"], "training")
+        self.assertEqual(manifest["regularization"]["mode"], "none")
         self.assertEqual(manifest["diagnostics"]["training_rows"], 4)
         self.assertIn("deviance", manifest["diagnostics"])
         self.assertTrue(store.artifact_path(model_id, "formula").exists())
@@ -307,6 +339,57 @@ class GlmToolTests(unittest.TestCase):
         with dataset.lock:
             row = dataset.con.execute(f"SELECT COUNT(*), COUNT(glm_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
         self.assertEqual(row, (6, 6))
+
+    def test_glm_auto_regularization_stores_selected_penalty(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "Age + C(Segment)",
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "auto"},
+            },
+        )
+        manifest = store.manifest(result["model_id"])
+        regularization = manifest["regularization"]
+
+        self.assertEqual(regularization["mode"], "auto")
+        self.assertIsNotNone(regularization["selected_alpha"])
+        self.assertIn(regularization["selected_l1_ratio"], [0.0, 0.5, 1.0])
+        self.assertTrue(regularization["scale_predictors"])
+        self.assertGreaterEqual(regularization["nonzero_coefficients"], 0)
+
+    def test_glm_manual_lasso_omits_penalized_inference_columns(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "Age + ifelse(Segment == 'Z', 1, 0)",
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 1.0, "l1_ratio": 1.0},
+            },
+        )
+        manifest = store.manifest(result["model_id"])
+        coefficients = result["coefficients"]
+
+        self.assertEqual(manifest["regularization"]["mode"], "manual")
+        self.assertEqual(manifest["regularization"]["selected_l1_ratio"], 1.0)
+        self.assertTrue(manifest["regularization"]["scale_predictors"])
+        self.assertTrue(any(row["estimate"] == 0 for row in coefficients if row["term"] != "(Intercept)"))
+        self.assertTrue(all(row["std_error"] is None for row in coefficients))
+        self.assertTrue(all(row["p_value"] is None for row in coefficients))
 
     def test_glm_model_store_can_activate_rename_and_delete_models(self) -> None:
         self.require_glm_dependencies()

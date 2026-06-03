@@ -143,6 +143,9 @@ export function createGlmTool({
   let editorFontSize = Number(localStorage.getItem("py_lucidum_glm_font_size")) || 14;
   let selectedFamily = localStorage.getItem("py_lucidum_glm_family") || "normal";
   let selectedTrainingScope = localStorage.getItem("py_lucidum_glm_training_scope") || "all";
+  let selectedRegularizationMode = localStorage.getItem("py_lucidum_glm_regularization_mode") || "none";
+  let selectedRegularizationMix = localStorage.getItem("py_lucidum_glm_regularization_mix") || "0.5";
+  let selectedRegularizationAlpha = localStorage.getItem("py_lucidum_glm_regularization_alpha") || "0.01";
   let formulaDraft = localStorage.getItem("py_lucidum_glm_formula")
     || "# GLM formula\n# Enter RHS terms, or response ~ terms\n";
 
@@ -230,7 +233,8 @@ export function createGlmTool({
     const sample = data.sample || {};
     const trainingDisabled = !sample.available || !Number(sample.training_rows || 0);
     if (trainingDisabled && selectedTrainingScope === "training" && !data.active_model_id) selectedTrainingScope = "all";
-    const diagnostics = diagnosticsForActiveModel(data.active_model_id);
+    const activeModel = modelForActiveModel(data.active_model_id);
+    const diagnostics = activeModel?.diagnostics || activeModel?.metrics || {};
     const splitStyle = savedBuilderSplitWidthStyle();
     return `
       <div class="glm-tool">
@@ -246,22 +250,37 @@ export function createGlmTool({
           <div class="glm-builder-layout"${splitStyle ? ` style="${splitStyle}"` : ""}>
             <section class="glm-formula-panel">
               <div class="glm-panel-header">
-                <h3 class="glm-panel-title">Formula and family</h3>
+                <h3 class="glm-panel-title">GLM formula</h3>
                 <div class="glm-builder-actions">
                   <button id="glmClearFormulaBtn" class="tab glm-inline-action-button" type="button" title="Clear formula">× clear</button>
                   <button id="glmFontSmallerBtn" class="tab glm-icon-action-button" type="button" aria-label="Decrease formula font size" title="Decrease font size">A-</button>
                   <button id="glmFontLargerBtn" class="tab glm-icon-action-button" type="button" aria-label="Increase formula font size" title="Increase font size">A+</button>
+                  <div class="segmented glm-scope-control glm-header-scope-control" role="group" aria-label="Rows to fit">
+                    <button type="button" data-glm-scope="all" class="${selectedTrainingScope === "all" ? "active" : ""}">All</button>
+                    <button type="button" data-glm-scope="training" class="${selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
+                  </div>
                   <button id="glmBuildBtn" class="tab glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
               </div>
-              <div class="glm-builder-control-row">
-                <div class="segmented glm-scope-control" role="group" aria-label="Rows to fit">
-                  <button type="button" data-glm-scope="all" class="${selectedTrainingScope === "all" ? "active" : ""}">All</button>
-                  <button type="button" data-glm-scope="training" class="${selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
+              <div class="glm-builder-control-row glm-builder-control-stack">
+                <div class="glm-control-line">
+                  <div class="glm-family-row">
+                    <label class="glm-control-label" for="glmFamilySelect">Family</label>
+                    <select id="glmFamilySelect" aria-label="GLM family">${familyOptionsHtml(data.families || [])}</select>
+                    <input id="glmFamilyParameter" class="glm-family-parameter" type="text" inputmode="decimal" placeholder="tweedie.var.power" value="${escapeHtml(String(familyParameterDefault(data.families || [])))}" aria-label="GLM family parameter" />
+                  </div>
                 </div>
-                <div class="glm-family-row">
-                  <input id="glmFamilyParameter" class="glm-family-parameter" type="text" inputmode="decimal" value="${escapeHtml(String(familyParameterDefault(data.families || [])))}" aria-label="GLM family parameter" />
-                  <select id="glmFamilySelect" aria-label="GLM family">${familyOptionsHtml(data.families || [])}</select>
+                <div class="glm-control-line">
+                  <div class="glm-penalty-row">
+                    <label class="glm-control-label" for="glmRegularizationMode">Penalty</label>
+                    <select id="glmRegularizationMode" class="glm-penalty-mode" aria-label="GLM penalty">${regularizationModeOptionsHtml(data.regularization)}</select>
+                    <div id="glmRegularizationManualControls" class="glm-penalty-manual ${selectedRegularizationMode === "manual" ? "" : "disabled"}">
+                      <label class="glm-control-label" for="glmRegularizationMix">Mix</label>
+                      <select id="glmRegularizationMix" class="glm-penalty-mix" aria-label="GLM penalty mix">${regularizationMixOptionsHtml(data.regularization)}</select>
+                      <label class="glm-control-label" for="glmRegularizationAlpha">Alpha</label>
+                      <input id="glmRegularizationAlpha" class="glm-penalty-alpha" type="text" inputmode="decimal" value="${escapeHtml(selectedRegularizationAlpha)}" aria-label="GLM penalty alpha" />
+                    </div>
+                  </div>
                 </div>
               </div>
               <div class="glm-editor-shell">
@@ -274,7 +293,7 @@ export function createGlmTool({
               <div class="glm-panel-header glm-coefficient-header">
                 <div>
                   <h3 class="glm-panel-title">Coefficients</h3>
-                  <div id="glmCoefficientMeta" class="glm-coefficient-meta">${diagnosticsHtml(diagnostics)}</div>
+                  <div id="glmCoefficientMeta" class="glm-coefficient-meta">${diagnosticsHtml(diagnostics, activeModel)}</div>
                 </div>
                 <div class="glm-coefficient-actions">
                   <button id="glmCopyCoefficientsBtn" class="tab glm-inline-action-button" type="button">Copy</button>
@@ -327,9 +346,12 @@ export function createGlmTool({
   }
 
   function familyParameterConfig(familyValue, families = config?.families || []) {
-    if (String(familyValue || "").trim() !== "tweedie") return null;
-    const family = (families || []).find((row) => row.value === "tweedie");
-    return family?.parameter || { label: "Tweedie power", default: "1.5" };
+    const value = String(familyValue || "").trim();
+    const family = (families || []).find((row) => row.value === value);
+    if (family?.parameter) return family.parameter;
+    if (value === "tweedie") return { label: "var.power", default: "1.5", min: 1, max: 2 };
+    if (value === "negative.binomial") return { label: "theta", default: "1", min: 0.000001 };
+    return null;
   }
 
   function syncFamilyParameterControl() {
@@ -338,8 +360,43 @@ export function createGlmTool({
     if (!select || !input) return;
     const parameter = familyParameterConfig(select.value);
     input.disabled = !parameter;
-    input.placeholder = parameter ? (parameter.label || "Tweedie power") : "";
+    input.placeholder = "tweedie.var.power";
     input.value = parameter ? (localStorage.getItem(`py_lucidum_glm_family_parameter_${select.value}`) || parameter.default || "") : "";
+  }
+
+  function regularizationModeOptionsHtml(regularization = {}) {
+    const rows = Array.isArray(regularization?.modes) && regularization.modes.length
+      ? regularization.modes
+      : [
+        { value: "none", label: "None" },
+        { value: "auto", label: "Auto" },
+        { value: "manual", label: "Manual" },
+      ];
+    if (!rows.some((row) => row.value === selectedRegularizationMode)) selectedRegularizationMode = "none";
+    return rows.map((row) => `<option value="${escapeHtml(row.value)}" ${row.value === selectedRegularizationMode ? "selected" : ""}>${escapeHtml(row.label || row.value)}</option>`).join("");
+  }
+
+  function regularizationMixOptionsHtml(regularization = {}) {
+    const rows = Array.isArray(regularization?.mixes) && regularization.mixes.length
+      ? regularization.mixes
+      : [
+        { value: "0", label: "Ridge" },
+        { value: "0.5", label: "Elastic net" },
+        { value: "1", label: "Lasso" },
+      ];
+    if (!rows.some((row) => String(row.value) === String(selectedRegularizationMix))) selectedRegularizationMix = "0.5";
+    return rows.map((row) => `<option value="${escapeHtml(row.value)}" ${String(row.value) === String(selectedRegularizationMix) ? "selected" : ""}>${escapeHtml(row.label || row.value)}</option>`).join("");
+  }
+
+  function syncRegularizationControls() {
+    const mode = el("glmRegularizationMode");
+    const manual = el("glmRegularizationManualControls");
+    const mix = el("glmRegularizationMix");
+    const alpha = el("glmRegularizationAlpha");
+    const isManual = (mode?.value || selectedRegularizationMode) === "manual";
+    if (manual) manual.classList.toggle("disabled", !isManual);
+    if (mix) mix.disabled = !isManual;
+    if (alpha) alpha.disabled = !isManual;
   }
 
   function bindTabs(mount) {
@@ -355,13 +412,27 @@ export function createGlmTool({
 
   function bindBuilderControls() {
     syncFamilyParameterControl();
+    syncRegularizationControls();
     el("glmFamilySelect")?.addEventListener("change", (event) => {
       selectedFamily = event.target.value;
       localStorage.setItem("py_lucidum_glm_family", selectedFamily);
       syncFamilyParameterControl();
     });
     el("glmFamilyParameter")?.addEventListener("change", (event) => {
-      if (selectedFamily === "tweedie") localStorage.setItem(`py_lucidum_glm_family_parameter_${selectedFamily}`, event.target.value.trim());
+      if (familyParameterConfig(selectedFamily)) localStorage.setItem(`py_lucidum_glm_family_parameter_${selectedFamily}`, event.target.value.trim());
+    });
+    el("glmRegularizationMode")?.addEventListener("change", (event) => {
+      selectedRegularizationMode = event.target.value || "none";
+      localStorage.setItem("py_lucidum_glm_regularization_mode", selectedRegularizationMode);
+      syncRegularizationControls();
+    });
+    el("glmRegularizationMix")?.addEventListener("change", (event) => {
+      selectedRegularizationMix = event.target.value || "0.5";
+      localStorage.setItem("py_lucidum_glm_regularization_mix", selectedRegularizationMix);
+    });
+    el("glmRegularizationAlpha")?.addEventListener("change", (event) => {
+      selectedRegularizationAlpha = event.target.value.trim() || "0.01";
+      localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
     });
     document.querySelectorAll("[data-glm-scope]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -439,6 +510,21 @@ export function createGlmTool({
     updateModelActionButtons();
   }
 
+  function syncAceGutterWidth() {
+    if (!aceEditor?.session || !aceEditor?.container) return;
+    const lineCount = Math.max(1, aceEditor.session.getLength());
+    const digits = String(lineCount).length;
+    const width = Math.max(24, Math.ceil((digits * editorFontSize * 0.62) + 10));
+    const value = `${width}px`;
+    const container = aceEditor.container;
+    container.style.setProperty("--glm-ace-gutter-width", value);
+    const gutter = container.querySelector(".ace_gutter");
+    const scroller = container.querySelector(".ace_scroller");
+    if (gutter) gutter.style.width = value;
+    if (scroller) scroller.style.left = value;
+    aceEditor.resize();
+  }
+
   async function initEditor() {
     const mount = el("glmFormulaEditor");
     const fallback = el("glmFormulaText");
@@ -461,9 +547,11 @@ export function createGlmTool({
         wrap: true,
       });
       aceEditor.setValue(formulaDraft, -1);
+      syncAceGutterWidth();
       aceEditor.session.on("change", () => {
         formulaDraft = aceEditor.getValue();
         localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
+        syncAceGutterWidth();
       });
       fallback.classList.add("hidden");
       mount.classList.remove("fallback");
@@ -500,6 +588,7 @@ export function createGlmTool({
     localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
     if (aceEditor) {
       aceEditor.setValue(formulaDraft, -1);
+      syncAceGutterWidth();
     }
     if (el("glmFormulaText")) el("glmFormulaText").value = formulaDraft;
   }
@@ -507,7 +596,10 @@ export function createGlmTool({
   function adjustFontSize(delta) {
     editorFontSize = Math.max(10, Math.min(24, editorFontSize + delta));
     localStorage.setItem("py_lucidum_glm_font_size", String(editorFontSize));
-    if (aceEditor) aceEditor.setFontSize(`${editorFontSize}px`);
+    if (aceEditor) {
+      aceEditor.setFontSize(`${editorFontSize}px`);
+      syncAceGutterWidth();
+    }
     if (el("glmFormulaText")) el("glmFormulaText").style.fontSize = `${editorFontSize}px`;
   }
 
@@ -515,15 +607,27 @@ export function createGlmTool({
     const actual = el("actualNumerator")?.value || "";
     const denominator = el("denominator")?.value || "__none__";
     const family = el("glmFamilySelect")?.value || selectedFamily || "normal";
+    const familyParameter = familyParameterConfig(family) ? (el("glmFamilyParameter")?.value.trim() || "") : "";
     return {
       formula: getFormulaText(),
       family,
-      family_parameter: family === "tweedie" ? (el("glmFamilyParameter")?.value.trim() || "") : "",
+      family_parameter: familyParameter,
+      regularization: buildRegularizationPayload(),
       training_scope: selectedTrainingScope,
       response_column: actual,
       denominator_column: denominator === "__none__" ? "" : denominator,
       label: `GLM ${glmAutoModelTimeLabel()}`,
     };
+  }
+
+  function buildRegularizationPayload() {
+    const mode = el("glmRegularizationMode")?.value || selectedRegularizationMode || "none";
+    const payload = { mode };
+    if (mode === "manual") {
+      payload.l1_ratio = Number(el("glmRegularizationMix")?.value || selectedRegularizationMix || 0.5);
+      payload.alpha = el("glmRegularizationAlpha")?.value.trim() || selectedRegularizationAlpha || "";
+    }
+    return payload;
   }
 
   async function buildModel() {
@@ -532,6 +636,11 @@ export function createGlmTool({
     const familyError = validateFamilyParameter(payload.family, payload.family_parameter);
     if (familyError) {
       setBuildFailure(familyError);
+      return;
+    }
+    const regularizationError = validateRegularizationParameter(payload.regularization);
+    if (regularizationError) {
+      setBuildFailure(regularizationError);
       return;
     }
     if (!payload.response_column && !String(payload.formula || "").includes("~")) {
@@ -562,11 +671,30 @@ export function createGlmTool({
   }
 
   function validateFamilyParameter(family, rawValue) {
-    if (family !== "tweedie") return "";
+    const parameter = familyParameterConfig(family);
+    if (!parameter) return "";
     const text = String(rawValue || "").trim();
     const value = Number(text);
-    if (!text || !Number.isFinite(value) || value < 1 || value > 2) {
-      return "Choose a Tweedie power from 1 to 2";
+    const min = Number(parameter.min);
+    const max = Number(parameter.max);
+    if (!text || !Number.isFinite(value) || (Number.isFinite(min) && value < min) || (Number.isFinite(max) && value > max)) {
+      const label = parameter.label || "family parameter";
+      if (Number.isFinite(min) && Number.isFinite(max)) return `Choose ${label} from ${min} to ${max}`;
+      if (Number.isFinite(min)) return `Choose ${label} of at least ${min}`;
+      return `Choose a numeric ${label}`;
+    }
+    return "";
+  }
+
+  function validateRegularizationParameter(regularization = {}) {
+    if (regularization.mode !== "manual") return "";
+    const alpha = Number(regularization.alpha);
+    const l1Ratio = Number(regularization.l1_ratio);
+    if (!Number.isFinite(alpha) || alpha <= 0) {
+      return "Choose a positive GLM regularization alpha";
+    }
+    if (!Number.isFinite(l1Ratio) || l1Ratio < 0 || l1Ratio > 1) {
+      return "Choose a GLM regularization mix from 0 to 1";
     }
     return "";
   }
@@ -624,20 +752,67 @@ export function createGlmTool({
   }
 
   function diagnosticsForActiveModel(activeModelId) {
-    const active = modelRows.find((model) => model.model_id === activeModelId) || modelRows.find((model) => model.active);
+    const active = modelForActiveModel(activeModelId);
     return active?.diagnostics || active?.metrics || {};
   }
 
-  function diagnosticsHtml(diagnostics = {}) {
+  function modelForActiveModel(activeModelId) {
+    if (activeDetail?.manifest && (!activeModelId || activeDetail.manifest.model_id === activeModelId)) return activeDetail.manifest;
+    return modelRows.find((model) => model.model_id === activeModelId) || modelRows.find((model) => model.active) || null;
+  }
+
+  function activeModelIsPenalized() {
+    const model = modelForActiveModel(config?.active_model_id);
+    return regularizationMode(model?.regularization) !== "none";
+  }
+
+  function regularizationMode(regularization = {}) {
+    return String(regularization?.mode || "none").trim().toLowerCase() || "none";
+  }
+
+  function regularizationMixLabel(value) {
+    const number = modelNumberOrNull(value);
+    if (number === null) return "";
+    if (number === 0) return "ridge";
+    if (number === 1) return "lasso";
+    return "elastic net";
+  }
+
+  function regularizationLabel(regularization = {}) {
+    const mode = regularizationMode(regularization);
+    if (mode === "none") return "";
+    const alpha = modelNumberOrNull(regularization.selected_alpha ?? regularization.alpha);
+    const l1Ratio = regularization.selected_l1_ratio ?? regularization.l1_ratio;
+    const mix = Array.isArray(l1Ratio) ? "" : regularizationMixLabel(l1Ratio);
+    return [mode, mix, alpha === null ? "" : `alpha=${formatModelMetric(alpha)}`].filter(Boolean).join(" ");
+  }
+
+  function nonzeroCoefficientLabel(regularization = {}, diagnostics = {}) {
+    const nonzero = modelNumberOrNull(regularization.nonzero_coefficients ?? diagnostics.nonzero_coefficients);
+    const total = modelNumberOrNull(regularization.coefficient_count ?? diagnostics.coefficient_count);
+    if (nonzero === null) return "";
+    return total === null ? String(nonzero) : `${nonzero.toLocaleString()} / ${total.toLocaleString()}`;
+  }
+
+  function diagnosticsHtml(diagnostics = {}, model = {}) {
+    const regularization = model?.regularization || {};
+    const penalty = regularizationLabel(regularization);
+    const nonzero = nonzeroCoefficientLabel(regularization, diagnostics);
     const primary = [
       ["Deviance", diagnostics.deviance],
       ["AIC", diagnostics.aic],
       ["Dispersion", diagnostics.dispersion],
     ].filter(([, value]) => value !== undefined && value !== null && value !== "");
     const secondary = [
+      ["Penalty", penalty],
+      ["Nonzero", nonzero],
       ["NAs in fitted", diagnostics.fitted_na_rows],
     ].filter(([, value]) => value !== undefined && value !== null && value !== "");
-    const itemHtml = ([label, value]) => `<span><strong>${escapeHtml(label)}:</strong> ${escapeHtml(formatModelMetric(value))}</span>`;
+    const itemValue = (value) => {
+      const number = modelNumberOrNull(value);
+      return number === null ? String(value) : formatModelMetric(number);
+    };
+    const itemHtml = ([label, value]) => `<span><strong>${escapeHtml(label)}:</strong> ${escapeHtml(itemValue(value))}</span>`;
     if (!primary.length && !secondary.length) return "No active model";
     return [
       primary.length ? `<span class="glm-coefficient-meta-row">${primary.map(itemHtml).join("")}</span>` : "",
@@ -659,7 +834,7 @@ export function createGlmTool({
     }
 
     const familyParameter = manifest.family_parameter;
-    if (family === "tweedie" && familyParameter !== undefined && familyParameter !== null && String(familyParameter).trim() !== "") {
+    if (familyParameterConfig(family) && familyParameter !== undefined && familyParameter !== null && String(familyParameter).trim() !== "") {
       localStorage.setItem(`py_lucidum_glm_family_parameter_${family}`, String(familyParameter));
     }
     syncFamilyParameterControl();
@@ -676,6 +851,28 @@ export function createGlmTool({
         button.classList.toggle("active", button.dataset.glmScope === selectedTrainingScope);
       });
     }
+
+    const regularization = manifest.regularization || {};
+    const regularizationMode = String(regularization.mode || "none").trim().toLowerCase();
+    if (["none", "auto", "manual"].includes(regularizationMode)) {
+      selectedRegularizationMode = regularizationMode;
+      localStorage.setItem("py_lucidum_glm_regularization_mode", selectedRegularizationMode);
+      const mode = el("glmRegularizationMode");
+      if (mode) mode.value = selectedRegularizationMode;
+    }
+    if (regularization.l1_ratio !== undefined && regularization.l1_ratio !== null && !Array.isArray(regularization.l1_ratio)) {
+      selectedRegularizationMix = String(regularization.l1_ratio);
+      localStorage.setItem("py_lucidum_glm_regularization_mix", selectedRegularizationMix);
+      const mix = el("glmRegularizationMix");
+      if (mix) mix.value = selectedRegularizationMix;
+    }
+    if (regularization.alpha !== undefined && regularization.alpha !== null && String(regularization.alpha).trim() !== "") {
+      selectedRegularizationAlpha = String(regularization.alpha);
+      localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
+      const alpha = el("glmRegularizationAlpha");
+      if (alpha) alpha.value = selectedRegularizationAlpha;
+    }
+    syncRegularizationControls();
   }
 
   function coefficientRowsForActiveModel(activeModelId) {
@@ -688,6 +885,7 @@ export function createGlmTool({
     coefficientRows = rows;
     const table = el("glmCoefficientTable");
     if (!table) return;
+    const penalized = activeModelIsPenalized();
     const query = String(el("glmCoefficientSearch")?.value || "").trim().toLowerCase();
     const filtered = query
       ? rows.filter((row) => Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(query)))
@@ -707,11 +905,11 @@ export function createGlmTool({
       </thead>
       <tbody>
         ${filtered.map((row) => `
-          <tr class="${glmCoefficientPValueClass(row.p_value)}">
+          <tr class="${penalized ? "" : glmCoefficientPValueClass(row.p_value)}">
             <td>${escapeHtml(row.term)}</td>
             <td class="numeric">${escapeHtml(formatModelMetric(row.estimate))}</td>
-            <td class="numeric">${escapeHtml(formatModelMetric(row.std_error))}</td>
-            <td class="numeric">${escapeHtml(formatPValue(row.p_value))}</td>
+            <td class="numeric">${penalized ? "" : escapeHtml(formatModelMetric(row.std_error))}</td>
+            <td class="numeric">${penalized ? "" : escapeHtml(formatPValue(row.p_value))}</td>
           </tr>
         `).join("")}
       </tbody>
@@ -757,7 +955,7 @@ export function createGlmTool({
       syncBuilderFromModelDetail(activeDetail);
       const diagnostics = activeDetail?.diagnostics || activeDetail?.manifest?.diagnostics || {};
       const meta = el("glmCoefficientMeta");
-      if (meta) meta.innerHTML = diagnosticsHtml(diagnostics);
+      if (meta) meta.innerHTML = diagnosticsHtml(diagnostics, activeDetail?.manifest || {});
       renderCoefficientTable(Array.isArray(activeDetail?.coefficients) ? activeDetail.coefficients : []);
     } catch (error) {
       activeDetail = null;
@@ -1116,6 +1314,7 @@ export function createGlmTool({
         training_scope: String(model?.training_scope || "all"),
         training_rows: Number(model?.training_rows || model?.diagnostics?.training_rows || 0),
         diagnostics: model?.diagnostics || model?.metrics || {},
+        regularization: model?.regularization || { mode: "none" },
         sources: model?.sources || {},
         created_at: String(model?.created_at || ""),
         active: Boolean(model?.active),

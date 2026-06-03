@@ -46,16 +46,18 @@ class MissingGlmDependency(RuntimeError):
         self.hint = hint
 
 
-def glm_dependencies() -> tuple[Any, Any, Any, Any]:
+def glm_dependencies() -> tuple[Any, Any, Any, Any, Any]:
     global _GLUM_FIRST_IMPORT_SAW_LIGHTGBM
     missing: list[str] = []
     lightgbm_loaded = "lightgbm" in sys.modules
     try:
         import glum  # type: ignore[import-not-found]
         from glum import GeneralizedLinearRegressor  # type: ignore[import-not-found]
+        from glum import GeneralizedLinearRegressorCV  # type: ignore[import-not-found]
     except ImportError:
         glum = None
         GeneralizedLinearRegressor = None
+        GeneralizedLinearRegressorCV = None
         missing.append("glum")
     try:
         import numpy as np  # type: ignore[import-not-found]
@@ -71,7 +73,7 @@ def glm_dependencies() -> tuple[Any, Any, Any, Any]:
         raise MissingGlmDependency(", ".join(missing))
     if _GLUM_FIRST_IMPORT_SAW_LIGHTGBM is None:
         _GLUM_FIRST_IMPORT_SAW_LIGHTGBM = lightgbm_loaded
-    return glum, GeneralizedLinearRegressor, np, pd
+    return glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd
 
 
 def should_isolate_glm_fit() -> bool:
@@ -140,19 +142,19 @@ def formula_context(np: Any) -> dict[str, Any]:
     from formulaic import transforms  # type: ignore[import-not-found]
 
     def ifelse(condition: Any, yes: Any, no: Any) -> Any:
-        return np.where(condition, yes, no)
+        return np.asarray(np.where(condition, yes, no), dtype=float)
 
     def pmin(*values: Any) -> Any:
         arrays = [np.asarray(value) for value in values]
         if not arrays:
             raise ValueError("pmin requires at least one argument")
-        return np.minimum.reduce(np.broadcast_arrays(*arrays))
+        return np.asarray(np.minimum.reduce(np.broadcast_arrays(*arrays)), dtype=float)
 
     def pmax(*values: Any) -> Any:
         arrays = [np.asarray(value) for value in values]
         if not arrays:
             raise ValueError("pmax requires at least one argument")
-        return np.maximum.reduce(np.broadcast_arrays(*arrays))
+        return np.asarray(np.maximum.reduce(np.broadcast_arrays(*arrays)), dtype=float)
 
     return {
         "np": np,
@@ -227,11 +229,23 @@ def jsonable(value: Any, np: Any, pd: Any) -> Any:
     return value
 
 
-def coefficient_rows(model: Any, fit_frame: Any, y_fit: Any, fit_weight: Any, context: dict[str, Any], np: Any, pd: Any) -> list[dict[str, Any]]:
-    try:
-        table = model.coef_table(fit_frame, y_fit, sample_weight=fit_weight, context=context)
-    except Exception:
-        table = None
+def coefficient_rows(
+    model: Any,
+    fit_frame: Any,
+    y_fit: Any,
+    fit_weight: Any,
+    context: dict[str, Any],
+    np: Any,
+    pd: Any,
+    *,
+    include_inference: bool = True,
+) -> list[dict[str, Any]]:
+    table = None
+    if include_inference:
+        try:
+            table = model.coef_table(fit_frame, y_fit, sample_weight=fit_weight, context=context)
+        except Exception:
+            table = None
     if table is not None:
         rows: list[dict[str, Any]] = []
         for term, row in table.iterrows():
@@ -284,9 +298,9 @@ def diagnostics_payload(model: Any, fit_frame: Any, y_fit: Any, fit_weight: Any,
     return {
         "deviance": deviance,
         "null_deviance": null_deviance,
-        "aic": safe_metric(model.aic, fit_frame, y_fit, fit_weight, context=context),
-        "aicc": safe_metric(model.aicc, fit_frame, y_fit, fit_weight, context=context),
-        "bic": safe_metric(model.bic, fit_frame, y_fit, fit_weight, context=context),
+        "aic": safe_metric(getattr(model, "aic", None), fit_frame, y_fit, fit_weight, context=context),
+        "aicc": safe_metric(getattr(model, "aicc", None), fit_frame, y_fit, fit_weight, context=context),
+        "bic": safe_metric(getattr(model, "bic", None), fit_frame, y_fit, fit_weight, context=context),
         "dispersion": dispersion,
     }
 
@@ -314,6 +328,18 @@ def build_predictions_frame(frame: Any, model: Any, denominator_column: str, con
     return output, scored_rows, fitted_na_rows
 
 
+def regularization_summary(model: Any, regularization: dict[str, Any], np: Any) -> dict[str, Any]:
+    summary = dict(regularization)
+    mode = str(summary.get("mode") or "none")
+    if mode == "auto":
+        summary["selected_alpha"] = getattr(model, "alpha_", None)
+        summary["selected_l1_ratio"] = getattr(model, "l1_ratio_", None)
+    coefficients = np.asarray(getattr(model, "coef_", []), dtype=float)
+    summary["nonzero_coefficients"] = int(np.count_nonzero(np.abs(coefficients) > 1e-10))
+    summary["coefficient_count"] = int(coefficients.size)
+    return summary
+
+
 def train_model(
     dataset: Dataset,
     store: GlmModelStore,
@@ -336,7 +362,7 @@ def _train_model_impl(
     progress_callback: ProgressCallback | None = None,
     activate: bool = True,
 ) -> dict[str, Any]:
-    glum, GeneralizedLinearRegressor, np, pd = glm_dependencies()
+    glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd = glm_dependencies()
     validation = validate_request(dataset, payload)
     if not validation["ok"]:
         raise ValueError("; ".join(validation["errors"]))
@@ -351,6 +377,9 @@ def _train_model_impl(
     training_scope = str(validation["training_scope"])
     family = str(validation["family"])
     family_param = validation.get("family_parameter")
+    regularization = dict(validation.get("regularization") or {"mode": "none", "alpha": 0.0, "l1_ratio": 0.0, "scale_predictors": False})
+    regularization_mode = str(regularization.get("mode") or "none")
+    is_penalized = regularization_mode != "none"
     formula = validation["formula"]
     context = formula_context(np)
 
@@ -385,27 +414,55 @@ def _train_model_impl(
     fit_weight_values = fit_weight.loc[fit_mask].astype(float).to_numpy() if fit_weight is not None else None
 
     progress({"phase": "fitting", "message": "Fitting GLM", "percent": 35, "training_rows": int(fit_mask.sum())})
-    estimator = GeneralizedLinearRegressor(
-        family=glum_family(glum, family, float(family_param) if family_param is not None else None),
-        link="auto",
-        alpha=0,
-        fit_intercept=True,
-        formula=str(formula["fitted"]),
-        drop_first=False,
-        robust=True,
-    )
+    estimator_kwargs = {
+        "family": glum_family(glum, family, float(family_param) if family_param is not None else None),
+        "link": "auto",
+        "fit_intercept": True,
+        "formula": str(formula["fitted"]),
+        "drop_first": False,
+        "robust": True,
+        "scale_predictors": bool(regularization.get("scale_predictors")),
+    }
+    if regularization_mode == "auto":
+        estimator = GeneralizedLinearRegressorCV(
+            l1_ratio=regularization.get("l1_ratio") or [0.0, 0.5, 1.0],
+            n_alphas=int(regularization.get("n_alphas") or 50),
+            cv=min(5, int(fit_mask.sum())),
+            **estimator_kwargs,
+        )
+    elif regularization_mode == "manual":
+        estimator = GeneralizedLinearRegressor(
+            alpha=float(regularization.get("alpha")),
+            l1_ratio=float(regularization.get("l1_ratio")),
+            **estimator_kwargs,
+        )
+    else:
+        estimator = GeneralizedLinearRegressor(
+            alpha=0,
+            **estimator_kwargs,
+        )
     with _suppress_tabmat_mixed_dtype_warning():
         estimator.fit(
             fit_frame,
             sample_weight=fit_weight_values,
-            store_covariance_matrix=True,
+            store_covariance_matrix=not is_penalized,
             context=context,
         )
+    regularization = regularization_summary(estimator, regularization, np)
 
     progress({"phase": "scoring", "message": "Scoring GLM predictions", "percent": 70})
     with _suppress_tabmat_mixed_dtype_warning():
         predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pd)
-        coefficients = coefficient_rows(estimator, fit_frame, y_fit.to_numpy(dtype=float), fit_weight_values, context, np, pd)
+        coefficients = coefficient_rows(
+            estimator,
+            fit_frame,
+            y_fit.to_numpy(dtype=float),
+            fit_weight_values,
+            context,
+            np,
+            pd,
+            include_inference=not is_penalized,
+        )
         diagnostics = diagnostics_payload(estimator, fit_frame, y_fit.to_numpy(dtype=float), fit_weight_values, context, np, len(coefficients))
     diagnostics.update(
         {
@@ -414,6 +471,7 @@ def _train_model_impl(
             "scored_rows": scored_rows,
             "fitted_na_rows": fitted_na_rows,
             "coefficient_count": len(coefficients),
+            "nonzero_coefficients": regularization.get("nonzero_coefficients"),
         }
     )
 
@@ -428,6 +486,7 @@ def _train_model_impl(
         "family": family,
         "link": "auto",
         "family_parameter": jsonable(family_param, np, pd),
+        "regularization": jsonable(regularization, np, pd),
         "response_column": response_column,
         "denominator_column": denominator_column,
         "offset_column": denominator_column,

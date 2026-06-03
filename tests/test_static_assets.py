@@ -268,15 +268,28 @@ if (actual !== "gamma · AIC 747,117.3116") throw new Error(actual);
 """
         self.run_node_script(script)
 
-    def test_glm_tweedie_family_parameter_guard(self) -> None:
+    def test_glm_family_parameter_guard(self) -> None:
         js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
-        script = self.js_function_source(js, "validateFamilyParameter") + """
+        script = "const config = { families: [] };\n" + "\n".join(self.js_function_source(js, name) for name in ["familyParameterConfig", "validateFamilyParameter"]) + """
 if (validateFamilyParameter("normal", "") !== "") throw new Error("normal should not validate parameter");
 if (validateFamilyParameter("tweedie", "1") !== "") throw new Error("lower bound failed");
 if (validateFamilyParameter("tweedie", "2") !== "") throw new Error("upper bound failed");
 if (!validateFamilyParameter("tweedie", "0.99")) throw new Error("low invalid failed");
 if (!validateFamilyParameter("tweedie", "2.01")) throw new Error("high invalid failed");
 if (!validateFamilyParameter("tweedie", "abc")) throw new Error("non-numeric invalid failed");
+if (validateFamilyParameter("negative.binomial", "1") !== "") throw new Error("negative binomial valid failed");
+if (!validateFamilyParameter("negative.binomial", "0")) throw new Error("negative binomial invalid failed");
+"""
+        self.run_node_script(script)
+
+    def test_glm_regularization_parameter_guard(self) -> None:
+        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        script = self.js_function_source(js, "validateRegularizationParameter") + """
+if (validateRegularizationParameter({ mode: "none" }) !== "") throw new Error("none should not validate parameter");
+if (validateRegularizationParameter({ mode: "auto" }) !== "") throw new Error("auto should not validate parameter");
+if (validateRegularizationParameter({ mode: "manual", alpha: "0.1", l1_ratio: 0.5 }) !== "") throw new Error("manual valid failed");
+if (!validateRegularizationParameter({ mode: "manual", alpha: "0", l1_ratio: 0.5 })) throw new Error("alpha invalid failed");
+if (!validateRegularizationParameter({ mode: "manual", alpha: "0.1", l1_ratio: 1.5 })) throw new Error("mix invalid failed");
 """
         self.run_node_script(script)
 
@@ -286,7 +299,8 @@ if (!validateFamilyParameter("tweedie", "abc")) throw new Error("non-numeric inv
         self.assertIn('<th class="numeric">estimate</th>', js)
         self.assertIn('<th class="numeric">std.error</th>', js)
         self.assertIn('<th class="numeric">p.value</th>', js)
-        self.assertIn('class="${glmCoefficientPValueClass(row.p_value)}"', js)
+        self.assertIn('class="${penalized ? "" : glmCoefficientPValueClass(row.p_value)}"', js)
+        self.assertIn('${penalized ? "" : escapeHtml(formatModelMetric(row.std_error))}', js)
         self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-low", css)
         self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-medium", css)
         self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-high", css)
@@ -605,11 +619,26 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('aceEditor.session.setMode("ace/mode/r");', js)
         self.assertIn('data-glm-tab="builder">Formula builder', js)
         self.assertIn('data-glm-tab="models">Model navigator', js)
+        self.assertIn('<h3 class="glm-panel-title">GLM formula</h3>', js)
+        self.assertNotIn("Formula and family", js)
         self.assertIn('id="glmFormulaEditor"', js)
         self.assertIn('id="glmFamilySelect"', js)
         self.assertIn('id="glmFamilyParameter"', js)
+        self.assertIn('for="glmFamilySelect">Family</label>', js)
+        self.assertIn('placeholder="tweedie.var.power"', js)
+        self.assertIn('input.placeholder = "tweedie.var.power";', glm_js)
+        self.assertIn('id="glmRegularizationMode"', js)
+        self.assertIn('id="glmRegularizationMix"', js)
+        self.assertIn('id="glmRegularizationAlpha"', js)
+        self.assertIn('class="glm-penalty-manual ${selectedRegularizationMode === "manual" ? "" : "disabled"}"', glm_js)
+        self.assertIn('manual.classList.toggle("disabled", !isManual);', glm_js)
+        self.assertNotIn('manual.classList.toggle("hidden", !isManual);', glm_js)
         self.assertIn('type="text" inputmode="decimal"', glm_js)
-        self.assertIn('class="glm-builder-control-row"', glm_js)
+        self.assertIn("function syncAceGutterWidth()", glm_js)
+        self.assertIn('container.style.setProperty("--glm-ace-gutter-width", value);', glm_js)
+        self.assertIn('class="glm-builder-control-row glm-builder-control-stack"', glm_js)
+        self.assertIn('class="glm-control-line"', glm_js)
+        self.assertIn("glm-header-scope-control", glm_js)
         self.assertIn('id="glmBuilderResizer" class="glm-builder-resizer"', glm_js)
         self.assertIn("function bindBuilderResizer()", glm_js)
         self.assertIn('data-glm-scope="training"', js)
@@ -621,6 +650,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('label: `GLM ${glmAutoModelTimeLabel()}`', glm_js)
         self.assertNotIn('label: `GLM ${actual} ${glmAutoModelTimeLabel()}`', glm_js)
         self.assertIn("function validateFamilyParameter(family, rawValue)", glm_js)
+        self.assertIn("function validateRegularizationParameter(regularization = {})", glm_js)
+        self.assertIn("function regularizationLabel(regularization = {})", glm_js)
+        self.assertIn("regularization: buildRegularizationPayload()", glm_js)
         self.assertIn("function setBuildFailure(message)", glm_js)
         self.assertIn('setBuildFailure(job.error || progress.message || "GLM build failed");', glm_js)
         self.assertIn('setAppReadyStatus("Ready");', glm_js)
@@ -649,6 +681,21 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".glm-builder-layout", css)
         self.assertIn(".glm-formula-editor", css)
         self.assertIn(".glm-coefficient-panel", css)
+        self.assertIn(".glm-builder-control-stack", css)
+        self.assertIn(".glm-control-line", css)
+        self.assertIn(".glm-control-label", css)
+        self.assertIn(".glm-family-row > .glm-control-label,\n      .glm-penalty-row > .glm-control-label", css)
+        self.assertIn("flex: 0 0 42px;", css)
+        self.assertIn("height: 21px;", css)
+        self.assertIn("line-height: 19px;", css)
+        self.assertIn("padding: 0 5px;", css)
+        self.assertIn(".glm-family-parameter {\n        flex: 0 0 132px;\n        width: 132px;", css)
+        self.assertIn(".glm-header-scope-control", css)
+        self.assertIn(".glm-penalty-row", css)
+        self.assertIn(".glm-penalty-alpha", css)
+        self.assertIn(".glm-penalty-manual.disabled", css)
+        self.assertIn(".glm-formula-editor .ace_gutter", css)
+        self.assertIn(".glm-formula-editor .ace_scroller", css)
         self.assertIn(".glm-panel-title {\n        color: var(--text);\n        flex: 0 0 auto;\n        font-size: 13px;", css)
         self.assertIn(".glm-builder-resizer", css)
         self.assertIn('.glm-build-status[data-phase="failed"] .glm-build-status-main', css)
@@ -666,10 +713,13 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_glm_active_model_detail_syncs_builder_controls(self) -> None:
         js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
-        script = self.js_function_source(js, "syncBuilderFromModelDetail") + r"""
+        script = "const config = { families: [] };\n" + "\n".join(self.js_function_source(js, name) for name in ["familyParameterConfig", "syncRegularizationControls", "syncBuilderFromModelDetail"]) + r"""
 let formulaText = "";
 let selectedFamily = "";
 let selectedTrainingScope = "";
+let selectedRegularizationMode = "none";
+let selectedRegularizationMix = "0.5";
+let selectedRegularizationAlpha = "0.01";
 const storage = new Map();
 const localStorage = {
   getItem: (key) => storage.get(key) || null,
@@ -678,6 +728,10 @@ const localStorage = {
 const nodes = {
   glmFamilySelect: { value: "normal" },
   glmFamilyParameter: { disabled: false, value: "" },
+  glmRegularizationMode: { value: "none" },
+  glmRegularizationMix: { disabled: false, value: "0.5" },
+  glmRegularizationAlpha: { disabled: false, value: "0.01" },
+  glmRegularizationManualControls: { disabledClass: false, hidden: false, classList: { toggle: (name, active) => { if (name === "disabled") nodes.glmRegularizationManualControls.disabledClass = Boolean(active); if (name === "hidden") nodes.glmRegularizationManualControls.hidden = Boolean(active); } } },
 };
 function el(id) {
   return nodes[id] || null;
@@ -719,6 +773,10 @@ if (nodes.glmFamilySelect.value !== "tweedie") throw new Error(`select ${nodes.g
 if (nodes.glmFamilyParameter.value !== "1.3") throw new Error(`parameter ${nodes.glmFamilyParameter.value}`);
 if (selectedTrainingScope !== "training") throw new Error(`scope ${selectedTrainingScope}`);
 if (allButton.active || !trainingButton.active) throw new Error("scope buttons not synced");
+if (!nodes.glmRegularizationMix.disabled) throw new Error("mix should be disabled outside manual");
+if (!nodes.glmRegularizationAlpha.disabled) throw new Error("alpha should be disabled outside manual");
+if (!nodes.glmRegularizationManualControls.disabledClass) throw new Error("manual controls should be muted outside manual");
+if (nodes.glmRegularizationManualControls.hidden) throw new Error("manual controls should remain visible");
 if (localStorage.getItem("py_lucidum_glm_formula") !== "Age + C(Segment)") throw new Error("formula storage failed");
 if (localStorage.getItem("py_lucidum_glm_family") !== "tweedie") throw new Error("family storage failed");
 if (localStorage.getItem("py_lucidum_glm_family_parameter_tweedie") !== "1.3") throw new Error("parameter storage failed");

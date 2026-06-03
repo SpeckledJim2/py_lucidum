@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +35,15 @@ FAMILY_PARAMETER_DEFAULTS = {
     "negative.binomial": 1.0,
 }
 TRAINING_SCOPES = ("all", "training")
+REGULARIZATION_MODES = ("none", "auto", "manual")
+REGULARIZATION_MIXES = {
+    "ridge": 0.0,
+    "elastic": 0.5,
+    "elastic.net": 0.5,
+    "elastic_net": 0.5,
+    "elastic net": 0.5,
+    "lasso": 1.0,
+}
 DENOMINATOR_EMPTY = {"", "__none__", "none", "n", "average row value", "average"}
 UNSAFE_PATTERN = re.compile(
     r"__(?:\w*)|(?:^|[^\w])(import|eval|exec|open|compile|globals|locals|subprocess|socket)(?:[^\w]|$)",
@@ -82,6 +92,23 @@ def family_options_payload() -> list[dict[str, Any]]:
     return rows
 
 
+def regularization_options_payload() -> dict[str, Any]:
+    return {
+        "modes": [
+            {"value": "none", "label": "None"},
+            {"value": "auto", "label": "Auto"},
+            {"value": "manual", "label": "Manual"},
+        ],
+        "mixes": [
+            {"value": "0", "label": "Ridge", "l1_ratio": 0.0},
+            {"value": "0.5", "label": "Elastic net", "l1_ratio": 0.5},
+            {"value": "1", "label": "Lasso", "l1_ratio": 1.0},
+        ],
+        "auto_l1_ratio": [0.0, 0.5, 1.0],
+        "auto_n_alphas": 50,
+    }
+
+
 def clean_identifier(value: Any) -> str:
     return str(value or "").strip()
 
@@ -121,6 +148,87 @@ def normalise_training_scope(value: Any) -> str:
 def normalise_denominator(value: Any) -> str:
     text = str(value or "").strip()
     return "" if text.lower() in DENOMINATOR_EMPTY else text
+
+
+def normalise_regularization_mode(value: Any) -> str:
+    mode = str(value or "none").strip().lower().replace("-", "_")
+    aliases = {
+        "": "none",
+        "off": "none",
+        "unpenalized": "none",
+        "unpenalised": "none",
+        "cv": "auto",
+        "cross_validation": "auto",
+        "cross.validation": "auto",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in REGULARIZATION_MODES:
+        raise ValueError("Choose a valid GLM regularization mode")
+    return mode
+
+
+def regularization_payload_source(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get("regularization")
+    return raw if isinstance(raw, dict) else {}
+
+
+def regularization_number(raw: Any, label: str) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Choose a numeric GLM regularization {label}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"Choose a finite GLM regularization {label}")
+    return value
+
+
+def regularization_l1_ratio(raw: Any) -> float:
+    text = str(raw or "").strip().lower()
+    if text in REGULARIZATION_MIXES:
+        return REGULARIZATION_MIXES[text]
+    value = regularization_number(raw, "mix")
+    if not (0.0 <= value <= 1.0):
+        raise ValueError("Choose a GLM regularization mix from 0 to 1")
+    return value
+
+
+def regularization_config(payload: dict[str, Any]) -> dict[str, Any]:
+    source = regularization_payload_source(payload)
+    mode = normalise_regularization_mode(source.get("mode", payload.get("regularization_mode", payload.get("penalty_mode"))))
+    if mode == "none":
+        return {
+            "mode": "none",
+            "alpha": 0.0,
+            "l1_ratio": 0.0,
+            "selected_alpha": None,
+            "selected_l1_ratio": None,
+            "scale_predictors": False,
+            "nonzero_coefficients": None,
+        }
+    if mode == "auto":
+        return {
+            "mode": "auto",
+            "alpha": None,
+            "l1_ratio": [0.0, 0.5, 1.0],
+            "selected_alpha": None,
+            "selected_l1_ratio": None,
+            "scale_predictors": True,
+            "nonzero_coefficients": None,
+            "n_alphas": 50,
+        }
+    alpha = regularization_number(source.get("alpha", payload.get("alpha")), "alpha")
+    if alpha <= 0:
+        raise ValueError("Choose a positive GLM regularization alpha")
+    l1_ratio = regularization_l1_ratio(source.get("l1_ratio", source.get("mix", payload.get("l1_ratio", payload.get("regularization_mix", 0.5)))))
+    return {
+        "mode": "manual",
+        "alpha": alpha,
+        "l1_ratio": l1_ratio,
+        "selected_alpha": alpha,
+        "selected_l1_ratio": l1_ratio,
+        "scale_predictors": True,
+        "nonzero_coefficients": None,
+    }
 
 
 def family_parameter(family: str, payload: dict[str, Any]) -> float | None:
@@ -298,6 +406,11 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
     except ValueError as exc:
         family_param = FAMILY_PARAMETER_DEFAULTS.get(family)
         errors.append(str(exc))
+    try:
+        regularization = regularization_config(payload)
+    except ValueError as exc:
+        regularization = regularization_config({"regularization": {"mode": "none"}})
+        errors.append(str(exc))
 
     try:
         training_scope = normalise_training_scope(payload.get("training_scope", payload.get("fit_scope")))
@@ -338,6 +451,7 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
         "family": family,
         "family_parameter": family_param,
         "link": "auto",
+        "regularization": regularization,
         "training_scope": training_scope,
         "response_column": response_column,
         "denominator_column": denominator_column,

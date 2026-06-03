@@ -9,7 +9,7 @@ from py_lucidum.app.context import AppContext
 from .jobs import GlmJobManager
 from .store import GlmModelNameError, GlmModelStore, GlmSourceProvider
 from .training import MissingGlmDependency, glm_dependencies
-from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payload, sample_metadata, validate_request
+from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payload, regularization_options_payload, sample_metadata, validate_request
 
 
 def register(app: FastAPI, context: AppContext) -> None:
@@ -28,6 +28,7 @@ def register(app: FastAPI, context: AppContext) -> None:
             "link": "auto",
             "sample": sample_metadata(context.dataset),
             "families": family_options_payload(),
+            "regularization": regularization_options_payload(),
             "models": store.list_models(),
             "active_model_id": store.active_model_id(),
         }

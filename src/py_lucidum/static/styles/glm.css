@@ -217,33 +217,123 @@
         padding: 0 12px 8px;
       }
 
-      .glm-family-row {
+      .glm-builder-control-stack {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 6px;
+        justify-content: flex-start;
+      }
+
+      .glm-control-line {
+        align-items: center;
         display: flex;
-        gap: 8px;
         min-width: 0;
       }
 
+      .glm-family-row {
+        align-items: center;
+        display: flex;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .glm-penalty-row,
+      .glm-penalty-manual {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 6px;
+        min-width: 0;
+        white-space: nowrap;
+      }
+
+      .glm-penalty-row label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1.2;
+      }
+
+      .glm-control-label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      .glm-family-row > .glm-control-label,
+      .glm-penalty-row > .glm-control-label {
+        flex: 0 0 42px;
+        width: 42px;
+      }
+
       .glm-family-row select,
-      .glm-family-parameter {
+      .glm-family-parameter,
+      .glm-penalty-row select,
+      .glm-penalty-alpha {
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 6px;
+        border-radius: 4px;
         color: var(--text);
         font-size: 12px;
-        height: 28px;
-        padding: 0 8px;
+        height: 21px;
+        line-height: 19px;
+        padding: 0 5px;
+      }
+
+      .glm-family-row select option,
+      .glm-penalty-row select option {
+        line-height: 1.15;
       }
 
       .glm-family-row select {
-        min-width: 150px;
+        flex: 0 0 150px;
+        width: 150px;
+      }
+
+      .glm-penalty-mode {
+        flex: 0 0 110px;
+        width: 110px;
+      }
+
+      .glm-penalty-mix {
+        flex: 0 0 116px;
+        width: 116px;
       }
 
       .glm-family-parameter {
-        width: 104px;
+        flex: 0 0 132px;
+        width: 132px;
       }
 
-      .glm-family-parameter:disabled {
+      .glm-penalty-alpha {
+        flex: 0 0 84px;
+        width: 84px;
+      }
+
+      .glm-family-parameter:disabled,
+      .glm-penalty-alpha:disabled,
+      .glm-penalty-row select:disabled {
         opacity: 0.55;
+      }
+
+      .glm-penalty-manual.disabled {
+        opacity: 0.55;
+      }
+
+      .glm-penalty-manual.disabled select,
+      .glm-penalty-manual.disabled input {
+        cursor: not-allowed;
+      }
+
+      .glm-penalty-manual.disabled select:disabled,
+      .glm-penalty-manual.disabled input:disabled {
+        opacity: 1;
+      }
+
+      .glm-header-scope-control {
+        margin-left: 8px;
       }
 
       .glm-scope-control button {
@@ -333,6 +423,19 @@
 
       .glm-formula-editor {
         background: #fff;
+      }
+
+      .glm-formula-editor .ace_gutter {
+        width: var(--glm-ace-gutter-width, 28px) !important;
+      }
+
+      .glm-formula-editor .ace_scroller {
+        left: var(--glm-ace-gutter-width, 28px) !important;
+      }
+
+      .glm-formula-editor .ace_gutter-cell {
+        padding-left: 2px !important;
+        padding-right: 4px !important;
       }
 
       .glm-formula-editor.fallback {
