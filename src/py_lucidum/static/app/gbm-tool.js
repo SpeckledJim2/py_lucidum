@@ -1,6 +1,7 @@
 import { createGbmTreeViewer } from "./gbm-tree-viewer.js";
 import { createGbmShapTool } from "./gbm-shap-tool.js";
 import { createGbmStackedShapTool } from "./gbm-stacked-shap-tool.js";
+import { loadTabulator } from "./shared/tabulator.js";
 
 const GBM_PARAMETER_OPTIONS = {
   objective: [
@@ -147,7 +148,6 @@ export function createGbmTool({
   reloadSchema,
 }) {
   const tool = "gbm";
-  let tabulatorPromise = null;
   let featureTable = null;
   let parameterTable = null;
   let modelTable = null;
@@ -3508,26 +3508,6 @@ export function createGbmTool({
 
   function cssVar(name, fallback) {
     return getComputedStyle(document.body).getPropertyValue(name).trim() || fallback;
-  }
-
-  function loadTabulator() {
-    if (window.Tabulator) return Promise.resolve(window.Tabulator);
-    if (tabulatorPromise) return tabulatorPromise;
-    tabulatorPromise = new Promise((resolve, reject) => {
-      const cssHref = "/static/vendor/tabulator/tabulator.min.css";
-      if (![...document.styleSheets].some((sheet) => sheet.href?.endsWith(cssHref))) {
-        const link = document.createElement("link");
-        link.rel = "stylesheet";
-        link.href = cssHref;
-        document.head.append(link);
-      }
-      const script = document.createElement("script");
-      script.src = "/static/vendor/tabulator/tabulator.min.js";
-      script.onload = () => window.Tabulator ? resolve(window.Tabulator) : reject(new Error("Tabulator did not load"));
-      script.onerror = () => reject(new Error("Tabulator did not load"));
-      document.head.append(script);
-    });
-    return tabulatorPromise;
   }
 
   return {

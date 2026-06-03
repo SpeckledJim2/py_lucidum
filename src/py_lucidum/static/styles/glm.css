@@ -408,7 +408,8 @@
       }
 
       .glm-coefficient-table-wrap,
-      .glm-model-table-wrap {
+      .glm-model-table-wrap,
+      #glmModelFallback {
         flex: 1 1 auto;
         min-height: 0;
         overflow: auto;
@@ -417,6 +418,91 @@
       .glm-model-table-wrap {
         border: 1px solid var(--glm-table-border);
         border-radius: 4px;
+      }
+
+      .glm-grid {
+        background: var(--panel);
+        border: 1px solid var(--glm-table-border);
+        border-radius: 6px;
+        color: var(--text);
+        min-height: 220px;
+        overflow: hidden;
+      }
+
+      .glm-grid.tabulator {
+        border-color: var(--glm-table-border);
+      }
+
+      .glm-model-grid {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      .glm-grid .tabulator,
+      .glm-grid .tabulator-tableholder,
+      .glm-grid .tabulator-table {
+        background: var(--panel) !important;
+        color: var(--text) !important;
+      }
+
+      .glm-grid .tabulator-header,
+      .glm-grid .tabulator-header .tabulator-col {
+        background: var(--panel-2) !important;
+        border-color: var(--line) !important;
+        color: var(--text) !important;
+      }
+
+      .glm-grid.tabulator .tabulator-header .tabulator-col {
+        font-size: 11px;
+        justify-content: center;
+        line-height: 1.15;
+        min-height: 20px;
+      }
+
+      .glm-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content {
+        align-items: center;
+        display: flex;
+        min-height: 20px;
+        padding: 1px 6px;
+      }
+
+      .glm-grid .tabulator-row,
+      .glm-grid .tabulator-row.tabulator-row-even,
+      .glm-grid .tabulator-row.tabulator-row-odd {
+        background: var(--panel) !important;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+        min-height: 20px;
+      }
+
+      .glm-grid .tabulator-row .tabulator-cell {
+        align-items: center;
+        background: transparent !important;
+        border-right-color: color-mix(in srgb, var(--line) 80%, transparent);
+        color: var(--text) !important;
+        display: inline-flex;
+        font-size: 11px;
+        line-height: 1.15;
+        min-height: 20px;
+        padding: 1px 6px;
+      }
+
+      .glm-grid .tabulator-row.tabulator-selected,
+      .glm-grid .tabulator-row.tabulator-selected .tabulator-cell,
+      .glm-grid .tabulator-row:hover,
+      .glm-grid .tabulator-row:hover .tabulator-cell {
+        background: var(--panel) !important;
+      }
+
+      .glm-model-grid .tabulator-row,
+      .glm-model-table tr[data-glm-model-row] {
+        cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .glm-model-grid .tabulator-row.tabulator-selected,
+      .glm-model-grid .tabulator-row.tabulator-selected .tabulator-cell {
+        background: color-mix(in srgb, var(--line) 40%, var(--panel)) !important;
       }
 
       .glm-table {
@@ -484,8 +570,14 @@
 
       .glm-model-active-cell,
       .glm-model-active-heading {
+        padding-left: 0;
+        padding-right: 0;
         text-align: center;
         width: 28px;
+      }
+
+      .glm-model-grid .tabulator-cell[tabulator-field="active"] {
+        justify-content: center;
       }
 
       .glm-model-table th:nth-child(2) {

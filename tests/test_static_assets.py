@@ -90,6 +90,7 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/shared/api.js",
             "/static/app/shared/format.js",
             "/static/app/shared/schema.js",
+            "/static/app/shared/tabulator.js",
             "/static/app/shared/timing.js",
             "/static/app/gbm-tool.js",
             "/static/app/gbm-shap-tool.js",
@@ -532,6 +533,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/shared/api.js")
         self.assert_no_store("/static/app/shared/format.js")
         self.assert_no_store("/static/app/shared/schema.js")
+        self.assert_no_store("/static/app/shared/tabulator.js")
         self.assert_no_store("/static/app/shared/timing.js")
         self.assert_no_store("/static/app/gbm-tool.js")
         self.assert_no_store("/static/app/gbm-shap-tool.js")
@@ -570,6 +572,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}/activate`', js)
         self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}/rename`', js)
         self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}`', js)
+        self.assertIn('import { loadTabulator } from "./shared/tabulator.js";', glm_js)
         self.assertIn('const ACE_BASE_PATH = "/static/vendor/ace";', js)
         self.assertIn('aceEditor.session.setMode("ace/mode/r");', js)
         self.assertIn('data-glm-tab="builder">Formula builder', js)
@@ -584,18 +587,29 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('data-glm-scope="training"', js)
         self.assertIn('id="glmBuildBtn"', js)
         self.assertIn('id="glmCoefficientTable"', js)
-        self.assertIn('id="glmModelTable"', js)
+        self.assertIn('id="glmModelGrid" class="glm-grid glm-model-grid"', glm_js)
+        self.assertIn('id="glmModelFallback" class="glm-model-fallback"', glm_js)
+        self.assertNotIn('id="glmModelTable"', glm_js)
         self.assertIn('label: `GLM ${glmAutoModelTimeLabel()}`', glm_js)
         self.assertNotIn('label: `GLM ${actual} ${glmAutoModelTimeLabel()}`', glm_js)
         self.assertIn("function validateFamilyParameter(family, rawValue)", glm_js)
         self.assertIn("function setBuildFailure(message)", glm_js)
         self.assertIn('setBuildFailure(job.error || progress.message || "GLM build failed");', glm_js)
+        self.assertIn('setAppReadyStatus("Ready");', glm_js)
+        self.assertNotIn('setAppReadyStatus("GLM built")', glm_js)
         self.assertNotIn('setGlmNotice(job.error || "GLM build failed");', glm_js)
         self.assertIn("function syncBuilderFromModelDetail(detail = {})", glm_js)
         self.assertIn("syncBuilderFromModelDetail(activeDetail);", glm_js)
         self.assertIn('class="glm-model-active-dot"', glm_js)
         self.assertIn('class="glm-model-name-cell"><span class="glm-model-name-main"', glm_js)
         self.assertIn("<th>created</th>", glm_js)
+        self.assertIn('selectableRows: true,', glm_js)
+        self.assertIn('selectableRowsRangeMode: "click",', glm_js)
+        self.assertIn('modelTable.on("rowSelectionChanged", syncSelectedModelsFromTable);', glm_js)
+        self.assertIn("function renderModelFallback(models = modelRows, activeModelId = config?.active_model_id)", glm_js)
+        self.assertIn("function restoreModelSelection(ids)", glm_js)
+        self.assertIn("const commandSelection = event.metaKey || event.ctrlKey;", glm_js)
+        self.assertIn("if (event.shiftKey) {", glm_js)
         self.assertNotIn('type="checkbox"', glm_js)
         self.assertNotIn('["Training rows", diagnostics.training_rows]', glm_js)
         self.assertNotIn('["Null deviance", diagnostics.null_deviance]', glm_js)
@@ -614,7 +628,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".glm-coefficient-actions {\n        position: absolute;", css)
         self.assertIn(".glm-coefficient-meta {\n        color: var(--muted);\n        display: flex;\n        flex-direction: column;", css)
         self.assertIn("font-weight: 500;", css)
-        self.assertIn(".glm-model-table-wrap {\n        border: 1px solid var(--glm-table-border);", css)
+        self.assertIn(".glm-grid.tabulator {\n        border-color: var(--glm-table-border);", css)
+        self.assertIn(".glm-model-grid .tabulator-row.tabulator-selected", css)
+        self.assertIn('.glm-model-grid .tabulator-cell[tabulator-field="active"] {\n        justify-content: center;', css)
         self.assertIn(".glm-model-active-dot", css)
         self.assertIn(".glm-table tbody tr.selected td", css)
         self.assertIn(".glm-model-detail {\n        color: var(--muted);\n        font-size: 10px;\n        font-weight: 400;", css)
@@ -728,17 +744,25 @@ if (status.dataset.phase !== "failed") throw new Error(`phase ${status.dataset.p
 if (status.classList.values.has("hidden")) throw new Error("inline status hidden");
 if (!status.innerHTML.includes("Unable to evaluate factor")) throw new Error(status.innerHTML);
 if (noticeText !== "") throw new Error(`notice should be cleared, got ${noticeText}`);
+renderLiveProgress(null);
+if (!status.classList.values.has("hidden")) throw new Error("cleared status should be hidden");
+if (status.dataset.phase !== "") throw new Error(`cleared phase ${status.dataset.phase}`);
+if (button.disabled) throw new Error("cleared button disabled");
+if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${button.textContent}`);
 """
         self.run_node_script(script)
 
     def test_gbm_frontend_contains_real_tool_contract(self) -> None:
         js = self.app_js_contract()
+        gbm_js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
         css = self.app_css_contract()
 
         self.assertIn('import { createGbmTool } from "./gbm-tool.js";', js)
         self.assertIn('import { createGbmTreeViewer } from "./gbm-tree-viewer.js";', js)
         self.assertIn('import { createGbmShapTool } from "./gbm-shap-tool.js";', js)
         self.assertIn('import { emptyOption, ensureShapChartLibraries, shapChartOption } from "./gbm-shap-chart.js";', js)
+        self.assertIn('import { loadTabulator } from "./shared/tabulator.js";', gbm_js)
+        self.assertNotIn("function loadTabulator()", gbm_js)
         self.assertIn("export function createGbmTool", js)
         self.assertIn("export function createGbmTreeViewer", js)
         self.assertIn("export function createGbmShapTool", js)

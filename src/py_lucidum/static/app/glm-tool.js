@@ -1,3 +1,5 @@
+import { loadTabulator } from "./shared/tabulator.js";
+
 const GLM_RUNNING_POLL_MS = 500;
 const GLM_QUEUED_POLL_MS = 1000;
 const GLM_MODEL_LIST_POLL_MS = 2000;
@@ -127,6 +129,8 @@ export function createGlmTool({
   let config = null;
   let activeDetail = null;
   let coefficientRows = [];
+  let modelTable = null;
+  let modelTableRenderSeq = 0;
   let modelRows = [];
   let selectedModelIds = new Set();
   let pollTimer = null;
@@ -202,6 +206,7 @@ export function createGlmTool({
     setStatus("");
     setChartMessage("");
     disposeEditor();
+    modelTable = null;
     const mount = el("modelToolWrap");
     if (!mount) return;
     mount.innerHTML = shellHtml(data);
@@ -292,9 +297,8 @@ export function createGlmTool({
               <button id="glmActivateModelBtn" class="tab glm-inline-action-button" type="button">Activate</button>
               <button id="glmDeleteModelBtn" class="danger-action glm-model-delete-button" type="button">Delete</button>
             </div>
-            <div class="glm-model-table-wrap">
-              <table class="glm-table glm-model-table" id="glmModelTable"></table>
-            </div>
+            <div id="glmModelGrid" class="glm-grid glm-model-grid"></div>
+            <div id="glmModelFallback" class="glm-model-fallback"></div>
           </div>
         </div>
       </div>
@@ -583,8 +587,10 @@ export function createGlmTool({
         isBuilding = false;
         if (job.status === "succeeded") {
           const latest = await api("/api/glm/config", { method: "GET", clientTiming: true });
+          liveProgress = null;
           await applyModelMutationResult({ model: job.result, config: latest });
-          setAppReadyStatus("GLM built");
+          renderLiveProgress(liveProgress);
+          setAppReadyStatus("Ready");
         } else {
           setBuildFailure(job.error || progress.message || "GLM build failed");
         }
@@ -751,35 +757,85 @@ export function createGlmTool({
     }
   }
 
-  function renderModelTable(models = modelRows, activeModelId = config?.active_model_id) {
-    const table = el("glmModelTable");
-    if (!table) return;
-    if (!models.length) {
-      table.innerHTML = `<tbody><tr><td class="glm-empty-cell">No GLMs built yet</td></tr></tbody>`;
+  async function renderModelTable(models = modelRows, activeModelId = config?.active_model_id) {
+    const grid = el("glmModelGrid");
+    const fallback = el("glmModelFallback");
+    const preservedIds = Array.from(selectedModelIds);
+    const renderSeq = modelTableRenderSeq + 1;
+    modelTableRenderSeq = renderSeq;
+    modelTable = null;
+    if (!grid || !fallback) {
       updateModelActionButtons();
       return;
     }
-    table.innerHTML = `
-      <thead>
-        <tr>
-          <th class="glm-model-active-heading" aria-label="Active model"></th>
-          <th>model</th>
-          <th>created</th>
-          <th>response</th>
-          <th>weight</th>
-          <th>family</th>
-          <th>deviance</th>
-          <th>AIC</th>
-          <th>BIC</th>
-          <th>rows</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${models.map((model) => modelTableRowHtml(model, activeModelId)).join("")}
-      </tbody>
+    grid.innerHTML = "";
+    fallback.innerHTML = "";
+    const rows = modelTableRows(models, activeModelId);
+    try {
+      const Tabulator = await loadTabulator();
+      if (renderSeq !== modelTableRenderSeq || !grid.isConnected) return;
+      modelTable = new Tabulator("#glmModelGrid", {
+        data: rows,
+        height: "100%",
+        layout: "fitDataStretch",
+        placeholder: "No GLMs built yet",
+        initialSort: [{ column: "created_sort", dir: "desc" }],
+        selectableRows: true,
+        selectableRowsRangeMode: "click",
+        columns: [
+          { title: "", field: "active", formatter: activeModelDotFormatter, hozAlign: "center", headerHozAlign: "center", width: 28, minWidth: 28, headerSort: false, resizable: false },
+          { title: "Model", field: "model_label", sorter: "string", formatter: modelNameFormatter, widthGrow: 3, headerSort: true },
+          { title: "Created", field: "created_sort", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().created_display), width: 105, headerSort: true },
+          { title: "Response", field: "response_column", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.4, headerSort: true },
+          { title: "Weight", field: "weight_display", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.1, headerSort: true },
+          { title: "Family", field: "family", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.1, headerSort: true },
+          { title: "Deviance", field: "deviance", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true },
+          { title: "AIC", field: "aic", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true },
+          { title: "BIC", field: "bic", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true },
+          { title: "Rows", field: "training_rows", sorter: "number", formatter: (cell) => Number(cell.getValue() || 0).toLocaleString(), hozAlign: "right", headerHozAlign: "right", width: 86, headerSort: true },
+        ],
+      });
+      modelTable.on("rowSelectionChanged", syncSelectedModelsFromTable);
+      restoreModelSelection(preservedIds);
+      updateModelActionButtons();
+    } catch (_) {
+      if (renderSeq !== modelTableRenderSeq) return;
+      renderModelFallback(models, activeModelId);
+      restoreModelSelection(preservedIds);
+      updateModelActionButtons();
+    }
+  }
+
+  function renderModelFallback(models = modelRows, activeModelId = config?.active_model_id) {
+    const target = el("glmModelFallback");
+    if (!target) return;
+    if (!models.length) {
+      target.innerHTML = `<div class="glm-empty-state">No GLMs built yet</div>`;
+      return;
+    }
+    target.innerHTML = `
+      <table class="glm-table glm-model-table">
+        <thead>
+          <tr>
+            <th class="glm-model-active-heading" aria-label="Active model"></th>
+            <th>model</th>
+            <th>created</th>
+            <th>response</th>
+            <th>weight</th>
+            <th>family</th>
+            <th>deviance</th>
+            <th>AIC</th>
+            <th>BIC</th>
+            <th>rows</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${models.map((model) => modelTableRowHtml(model, activeModelId)).join("")}
+        </tbody>
+      </table>
     `;
-    const rows = Array.from(table.querySelectorAll("[data-glm-model-row]"));
-    let anchorRow = rows.find((row) => row.getAttribute("aria-selected") === "true") || null;
+    const rows = Array.from(target.querySelectorAll("[data-glm-model-row]"));
+    let anchorRow = null;
     const setSelected = (row, selected) => {
       row.classList.toggle("selected", selected);
       row.setAttribute("aria-selected", String(selected));
@@ -837,28 +893,81 @@ export function createGlmTool({
     `;
   }
 
+  function modelTableRows(models = modelRows, activeModelId = config?.active_model_id) {
+    return normaliseModels(models).map((model) => {
+      const diagnostics = model.diagnostics || model.metrics || {};
+      return {
+        ...model,
+        active: model.model_id === activeModelId || Boolean(model.active),
+        model_label: modelLabel(model),
+        created_sort: modelCreatedSort(model.created_at),
+        created_display: formatModelCreated(model.created_at),
+        weight_display: modelWeightLabel(model.denominator_column || model.offset_column),
+        deviance: modelNumberOrNull(diagnostics.deviance),
+        aic: modelNumberOrNull(diagnostics.aic),
+        bic: modelNumberOrNull(diagnostics.bic),
+        training_rows: Number(model.training_rows || diagnostics.training_rows || 0),
+      };
+    });
+  }
+
+  function modelCreatedSort(value) {
+    const time = new Date(value || "").getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function activeModelDotFormatter(cell) {
+    return cell.getValue() ? '<span class="glm-model-active-dot" title="Active model" aria-label="Active model"></span>' : "";
+  }
+
+  function modelNameFormatter(cell) {
+    return `<span class="glm-model-name-main">${escapeHtml(cell.getValue() || "")}</span>`;
+  }
+
   function syncSelectedModelsFromTable() {
-    selectedModelIds = new Set(
-      Array.from(document.querySelectorAll("#glmModelTable [data-glm-model-row]"))
-        .filter((row) => row.getAttribute("aria-selected") === "true")
-        .map((row) => row.dataset.glmModelRow),
-    );
+    selectedModelIds = new Set(selectedModelIdList());
     updateModelActionButtons();
   }
 
   function selectedModelIdList() {
-    return Array.from(selectedModelIds).filter(Boolean);
+    const ids = modelTable && typeof modelTable.getSelectedData === "function"
+      ? modelTable.getSelectedData().map((row) => row?.model_id)
+      : Array.from(document.querySelectorAll('#glmModelFallback [data-glm-model-row][aria-selected="true"]'))
+        .map((row) => row.dataset.glmModelRow);
+    return [...new Set(ids.map((id) => String(id || "")).filter(Boolean))];
+  }
+
+  function restoreModelSelection(ids) {
+    const selected = new Set((ids || []).map((id) => String(id || "")).filter(Boolean));
+    selectedModelIds = selected;
+    if (modelTable && typeof modelTable.getRows === "function") {
+      for (const row of modelTable.getRows()) {
+        const rowId = String(row.getData()?.model_id || "");
+        if (selected.has(rowId)) {
+          row.select();
+        } else {
+          row.deselect();
+        }
+      }
+      return;
+    }
+    for (const row of document.querySelectorAll("#glmModelFallback [data-glm-model-row]")) {
+      const rowId = String(row.dataset.glmModelRow || "");
+      const active = selected.has(rowId);
+      row.classList.toggle("selected", active);
+      row.setAttribute("aria-selected", String(active));
+    }
   }
 
   function updateModelActionButtons() {
     const selectedCount = selectedModelIdList().length;
-    const disableActions = isBuilding || !selectedCount;
+    const disableActions = isBuilding;
     const activate = el("glmActivateModelBtn");
     const rename = el("glmRenameModelBtn");
     const deleteButton = el("glmDeleteModelBtn");
     if (activate) activate.disabled = disableActions || selectedCount !== 1;
     if (rename) rename.disabled = disableActions || selectedCount !== 1;
-    if (deleteButton) deleteButton.disabled = disableActions;
+    if (deleteButton) deleteButton.disabled = disableActions || selectedCount < 1;
   }
 
   async function refreshModelListIfNeeded(options = {}) {

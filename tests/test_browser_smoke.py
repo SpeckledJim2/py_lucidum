@@ -266,6 +266,20 @@ COPY (
                 "2026-05-25T00:00:03Z",
                 [0.45, 0.55, 0.65],
             )
+            self.write_glm_prediction_model(
+                glm_store,
+                "browser-smoke-glm-delete-a",
+                "Disposable smoke GLM A",
+                "2026-05-25T00:00:04Z",
+                [0.18, 0.28, 0.38],
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "browser-smoke-glm-delete-b",
+                "Disposable smoke GLM B",
+                "2026-05-25T00:00:05Z",
+                [0.19, 0.29, 0.39],
+            )
             glm_store.activate_model("browser-smoke-glm")
             base_url, server, thread = self.start_app(data_path, tools=["line_bar", "glm", "gbm"])
             try:
@@ -970,6 +984,231 @@ COPY (
                 self.assertEqual(gbm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
+
+                page.goto(f"{base_url}/?tool=glm", wait_until="domcontentloaded")
+                page.locator(".glm-tool").wait_for(timeout=10_000)
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#glmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
+                glm_navigator_state = page.evaluate(
+                    """
+                    () => {
+                      const dot = document.querySelector("#glmModelGrid .glm-model-active-dot");
+                      const cell = dot?.closest(".tabulator-cell");
+                      let activeDotCenterDelta = null;
+                      if (dot && cell) {
+                        const dotRect = dot.getBoundingClientRect();
+                        const cellRect = cell.getBoundingClientRect();
+                        activeDotCenterDelta = Math.abs((dotRect.left + dotRect.width / 2) - (cellRect.left + cellRect.width / 2));
+                      }
+                      return {
+                        headers: [...document.querySelectorAll("#glmModelGrid .tabulator-col-title")]
+                          .map((node) => node.textContent.trim()).filter(Boolean),
+                        rows: document.querySelectorAll("#glmModelGrid .tabulator-row").length,
+                        activeDots: document.querySelectorAll("#glmModelGrid .glm-model-active-dot").length,
+                        activeDotRowText: dot?.closest(".tabulator-row")?.textContent || "",
+                        activeDotCenterDelta,
+                        selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
+                        renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
+                        activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                        deleteDisabled: document.querySelector("#glmDeleteModelBtn")?.disabled,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    glm_navigator_state["headers"],
+                    ["Model", "Created", "Response", "Weight", "Family", "Deviance", "AIC", "BIC", "Rows"],
+                )
+                self.assertEqual(glm_navigator_state["rows"], 4)
+                self.assertEqual(glm_navigator_state["activeDots"], 1)
+                self.assertIn("Browser smoke GLM", glm_navigator_state["activeDotRowText"])
+                self.assertIsNotNone(glm_navigator_state["activeDotCenterDelta"])
+                self.assertLessEqual(glm_navigator_state["activeDotCenterDelta"], 1.5)
+                self.assertEqual(glm_navigator_state["selectedRows"], 0)
+                self.assertTrue(glm_navigator_state["renameDisabled"])
+                self.assertTrue(glm_navigator_state["activateDisabled"])
+                self.assertTrue(glm_navigator_state["deleteDisabled"])
+                page.locator("#glmModelGrid .tabulator-row", has_text="Disposable smoke GLM A").click()
+                page.locator("#glmModelGrid .tabulator-row", has_text="Disposable smoke GLM B").click()
+                plain_glm_selection = page.evaluate(
+                    """
+                    () => ({
+                      selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
+                      selectedText: [...document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                      renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
+                      activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                      deleteDisabled: document.querySelector("#glmDeleteModelBtn")?.disabled,
+                    })
+                    """
+                )
+                self.assertEqual(plain_glm_selection["selectedRows"], 1)
+                self.assertTrue(any("Disposable smoke GLM B" in text for text in plain_glm_selection["selectedText"]))
+                self.assertFalse(any("Disposable smoke GLM A" in text for text in plain_glm_selection["selectedText"]))
+                self.assertFalse(plain_glm_selection["renameDisabled"])
+                self.assertFalse(plain_glm_selection["activateDisabled"])
+                self.assertFalse(plain_glm_selection["deleteDisabled"])
+                page.locator("#glmModelGrid .tabulator-row", has_text="Disposable smoke GLM A").click(modifiers=["Shift"])
+                shift_glm_selection = page.evaluate(
+                    """
+                    () => ({
+                      selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
+                      selectedText: [...document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                      renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
+                      activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                      deleteDisabled: document.querySelector("#glmDeleteModelBtn")?.disabled,
+                    })
+                    """
+                )
+                self.assertEqual(shift_glm_selection["selectedRows"], 2)
+                self.assertTrue(any("Disposable smoke GLM A" in text for text in shift_glm_selection["selectedText"]))
+                self.assertTrue(any("Disposable smoke GLM B" in text for text in shift_glm_selection["selectedText"]))
+                self.assertTrue(shift_glm_selection["renameDisabled"])
+                self.assertTrue(shift_glm_selection["activateDisabled"])
+                self.assertFalse(shift_glm_selection["deleteDisabled"])
+                row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                page.locator("#glmModelGrid .tabulator-row", has_text="Second smoke GLM").click(modifiers=[row_selection_modifier])
+                command_glm_selection = page.evaluate(
+                    """
+                    () => ({
+                      selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
+                      selectedText: [...document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                      renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
+                      activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                      deleteDisabled: document.querySelector("#glmDeleteModelBtn")?.disabled,
+                    })
+                    """
+                )
+                self.assertEqual(command_glm_selection["selectedRows"], 3)
+                self.assertTrue(any("Second smoke GLM" in text for text in command_glm_selection["selectedText"]))
+                self.assertTrue(any("Disposable smoke GLM A" in text for text in command_glm_selection["selectedText"]))
+                self.assertTrue(any("Disposable smoke GLM B" in text for text in command_glm_selection["selectedText"]))
+                self.assertTrue(command_glm_selection["renameDisabled"])
+                self.assertTrue(command_glm_selection["activateDisabled"])
+                self.assertFalse(command_glm_selection["deleteDisabled"])
+                page.locator("#glmModelGrid .tabulator-row", has_text="Second smoke GLM").click(modifiers=[row_selection_modifier])
+                toggled_glm_selection = page.evaluate(
+                    """
+                    () => ({
+                      selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
+                      selectedText: [...document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                      renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
+                      activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                      deleteDisabled: document.querySelector("#glmDeleteModelBtn")?.disabled,
+                    })
+                    """
+                )
+                self.assertEqual(toggled_glm_selection["selectedRows"], 2)
+                self.assertFalse(any("Second smoke GLM" in text for text in toggled_glm_selection["selectedText"]))
+                self.assertTrue(any("Disposable smoke GLM A" in text for text in toggled_glm_selection["selectedText"]))
+                self.assertTrue(any("Disposable smoke GLM B" in text for text in toggled_glm_selection["selectedText"]))
+                self.assertTrue(toggled_glm_selection["renameDisabled"])
+                self.assertTrue(toggled_glm_selection["activateDisabled"])
+                self.assertFalse(toggled_glm_selection["deleteDisabled"])
+                page.evaluate("() => { window.confirm = () => true; }")
+                page.locator("#glmDeleteModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll("#glmModelGrid .tabulator-row").length === 2
+                      && !document.body.textContent.includes("Disposable smoke GLM A")
+                      && !document.body.textContent.includes("Disposable smoke GLM B")
+                      && document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Browser smoke GLM")
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#glmModelGrid .tabulator-row", has_text="Second smoke GLM").click()
+                selected_glm_navigator_state = page.evaluate(
+                    """
+                    () => ({
+                      selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
+                      renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
+                      activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                      deleteDisabled: document.querySelector("#glmDeleteModelBtn")?.disabled,
+                    })
+                    """
+                )
+                self.assertEqual(selected_glm_navigator_state["selectedRows"], 1)
+                self.assertFalse(selected_glm_navigator_state["renameDisabled"])
+                self.assertFalse(selected_glm_navigator_state["activateDisabled"])
+                self.assertFalse(selected_glm_navigator_state["deleteDisabled"])
+
+                glm_job_succeed = {"value": False}
+                glm_build_payload = {"value": None}
+
+                def glm_build_route(route: Any) -> None:
+                    glm_build_payload["value"] = json.loads(route.request.post_data or "{}")
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "job_id": "glm-live-job",
+                                "status": "queued",
+                                "created_at": "2026-05-25T00:00:00Z",
+                                "updated_at": "2026-05-25T00:00:00Z",
+                                "result": None,
+                                "error": None,
+                                "progress": None,
+                            }
+                        ),
+                    )
+
+                def glm_job_route(route: Any) -> None:
+                    if glm_job_succeed["value"]:
+                        payload = {
+                            "job_id": "glm-live-job",
+                            "status": "succeeded",
+                            "created_at": "2026-05-25T00:00:00Z",
+                            "updated_at": "2026-05-25T00:00:01Z",
+                            "result": {"model_id": "browser-smoke-glm", "sources": {}},
+                            "error": None,
+                            "progress": {
+                                "phase": "succeeded",
+                                "message": "GLM training complete",
+                                "training_rows": 3,
+                            },
+                        }
+                    else:
+                        payload = {
+                            "job_id": "glm-live-job",
+                            "status": "running",
+                            "created_at": "2026-05-25T00:00:00Z",
+                            "updated_at": "2026-05-25T00:00:01Z",
+                            "result": None,
+                            "error": None,
+                            "progress": {
+                                "phase": "fitting",
+                                "message": "Fitting GLM",
+                                "training_rows": 3,
+                            },
+                        }
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+                page.route("**/api/glm/build", glm_build_route)
+                page.route("**/api/glm/jobs/glm-live-job", glm_job_route)
+                page.get_by_role("button", name="Formula builder").click()
+                page.locator("#glmBuildBtn").click()
+                page.locator("#glmBuildStatus").get_by_text("Fitting GLM").wait_for(timeout=10_000)
+                self.assertEqual(glm_build_payload["value"]["family"], "tweedie")
+                glm_job_succeed["value"] = True
+                page.locator("#glmBuildBtn", has_text="Build GLM").wait_for(timeout=10_000)
+                page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const status = document.querySelector("#glmBuildStatus");
+                      return status?.classList.contains("hidden")
+                        && !status.textContent.includes("GLM training complete")
+                        && !status.textContent.includes("training rows");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.unroute("**/api/glm/build", glm_build_route)
+                page.unroute("**/api/glm/jobs/glm-live-job", glm_job_route)
 
                 shap_url = (
                     f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model-2%3Ashap_long"
