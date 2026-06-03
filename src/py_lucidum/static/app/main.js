@@ -888,6 +888,7 @@
         el("ukMapTool").classList.toggle("active", tool === "uk_map");
         el("glmTool").classList.toggle("active", tool === "glm");
         el("gbmTool").classList.toggle("active", tool === "gbm");
+        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "column_profile");
         document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile");
         document.querySelector(".sidebar-filter-section")?.classList.toggle("hidden", isModelTool(tool));
         const glmSourcesAvailable = (state.schema?.data_sources || []).some((source) => String(source.id || "").startsWith("glm:"));
@@ -1975,7 +1976,7 @@
           sectionSelector: ".sidebar-kpi-section",
           cssVar: "--sidebar-kpi-height",
           storageKey: "py_lucidum_sidebar_kpi_height",
-          defaultHeight: 260,
+          defaultHeight: 160,
           minHeight: 42,
           collapsed: () => state.kpiCollapsed,
         },
@@ -2265,6 +2266,7 @@
         const asideStyle = getComputedStyle(aside);
         let capacity = aside.getBoundingClientRect().height - (parseFloat(asideStyle.paddingTop) || 0) - (parseFloat(asideStyle.paddingBottom) || 0);
         capacity -= visibleOuterHeight(el("toolSelectorSection"));
+        capacity -= visibleOuterHeight(document.querySelector(".sidebar-metric-section"));
         SIDEBAR_PANEL_ORDER.forEach((key) => {
           const config = SIDEBAR_PANEL_RESIZE[key];
           const section = document.querySelector(config.sectionSelector);

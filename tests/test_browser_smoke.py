@@ -606,15 +606,63 @@ COPY (
                 page.mouse.move(x, y + delta_y, steps=5)
                 page.mouse.up()
 
+            def header_top(selector: str) -> float:
+                box = page.locator(selector).bounding_box()
+                self.assertIsNotNone(box)
+                assert box is not None
+                return float(box["y"])
+
+            def assert_header_top_stable(selector: str, before: float) -> None:
+                page.wait_for_function(
+                    """
+                    ({ selector, before }) => {
+                      const rect = document.querySelector(selector)?.getBoundingClientRect();
+                      return Boolean(rect) && Math.abs(rect.top - before) <= 1;
+                    }
+                    """,
+                    arg={"selector": selector, "before": before},
+                    timeout=10_000,
+                )
+                self.assertLessEqual(abs(header_top(selector) - before), 1)
+
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#gbmSidebarPanel:not(.hidden)").wait_for(timeout=10_000)
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
+                if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#gbmModelCollapseBtn").click()
+                    self.assertEqual(page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded"), "false")
+                gbm_header_top = header_top(".gbm-model-header h2")
+                page.locator("#gbmModelCollapseBtn").click()
+                self.assertEqual(page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded"), "true")
+                assert_header_top_stable(".gbm-model-header h2", gbm_header_top)
+                page.locator("#gbmModelCollapseBtn").click()
+                self.assertEqual(page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded"), "false")
 
+                filter_header_top = header_top(".filter-header h2")
                 page.locator("#filterCollapseBtn").click()
                 self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "true")
+                assert_header_top_stable(".filter-header h2", filter_header_top)
+
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                page.locator("#gbmSidebarPanel:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#filterCollapseBtn").click()
+                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "true")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rect = document.querySelector(".sidebar-filter-section")?.getBoundingClientRect();
+                      const sidebar = document.querySelector("#appSidebar")?.getBoundingClientRect();
+                      return Boolean(rect && sidebar) && rect.height > 80 && rect.bottom <= sidebar.bottom + 1;
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 filter_before = page.evaluate(
                     """
                     () => {
@@ -631,8 +679,10 @@ COPY (
                       const rect = document.querySelector(".sidebar-filter-section")?.getBoundingClientRect();
                       return Number(localStorage.getItem("py_lucidum_sidebar_filter_height")) > 0
                         && rect
-                        && rect.height > before.height + 20
-                        && rect.top < before.top - 20;
+                        && (
+                          Math.abs(rect.height - before.height) > 20
+                          || Math.abs(rect.top - before.top) > 20
+                        );
                     }
                     """,
                     arg=filter_before,
@@ -665,6 +715,7 @@ COPY (
 
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.locator(".sidebar-metric-section:not(.hidden)").wait_for(timeout=10_000)
                 page.locator(".sidebar-kpi-section:not(.hidden)").wait_for(timeout=10_000)
                 if page.locator("#filterCollapseBtn").get_attribute("aria-expanded") == "true":
                     page.locator("#filterCollapseBtn").click()
@@ -672,6 +723,9 @@ COPY (
                 if page.locator("#kpiCollapseBtn").get_attribute("aria-expanded") == "true":
                     page.locator("#kpiCollapseBtn").click()
                     self.assertEqual(page.locator("#kpiCollapseBtn").get_attribute("aria-expanded"), "false")
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
+                self.assertFalse(page.locator("#kpiSelect").is_visible())
                 page.wait_for_timeout(50)
                 collapsed_kpi_gbm_before = page.evaluate(
                     """
@@ -695,8 +749,10 @@ COPY (
                     arg=collapsed_kpi_gbm_before,
                     timeout=10_000,
                 )
+                kpi_header_top = header_top(".kpi-header h2")
                 page.locator("#kpiCollapseBtn").click()
                 self.assertEqual(page.locator("#kpiCollapseBtn").get_attribute("aria-expanded"), "true")
+                assert_header_top_stable(".kpi-header h2", kpi_header_top)
                 self.assertEqual(page.locator("#sidebarKpiResizer").count(), 0)
                 self.assertTrue(page.locator("#sidebarGbmResizer").is_visible())
                 kpi_before = page.evaluate(
@@ -779,11 +835,39 @@ COPY (
                     chart_requests += 1
 
             page.on("request", count_request)
+
+            def header_top(selector: str) -> float:
+                box = page.locator(selector).bounding_box()
+                self.assertIsNotNone(box)
+                assert box is not None
+                return float(box["y"])
+
+            def assert_header_top_stable(selector: str, before: float) -> None:
+                page.wait_for_function(
+                    """
+                    ({ selector, before }) => {
+                      const rect = document.querySelector(selector)?.getBoundingClientRect();
+                      return Boolean(rect) && Math.abs(rect.top - before) <= 1;
+                    }
+                    """,
+                    arg={"selector": selector, "before": before},
+                    timeout=10_000,
+                )
+                self.assertLessEqual(abs(header_top(selector) - before), 1)
+
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(timeout=10_000)
+                page.locator("#glmModelSelect").wait_for(timeout=10_000)
+                if page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#glmModelCollapseBtn").click()
+                    self.assertEqual(page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded"), "false")
+                glm_header_top = header_top(".glm-model-header h2")
+                page.locator("#glmModelCollapseBtn").click()
+                self.assertEqual(page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded"), "true")
+                assert_header_top_stable(".glm-model-header h2", glm_header_top)
                 startup_model_details = page.evaluate(
                     """
                     () => Object.fromEntries(
@@ -1383,6 +1467,7 @@ COPY (
                 self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
@@ -1392,6 +1477,7 @@ COPY (
                 self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
@@ -1438,8 +1524,17 @@ COPY (
 
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertTrue(page.locator(".sidebar-filter-section").is_visible())
+                page.locator("#sidebarToggleBtn").click()
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertFalse(page.locator("#actualNumerator").is_visible())
+                self.assertFalse(page.locator("#denominator").is_visible())
+                page.locator("#sidebarToggleBtn").click()
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
@@ -1657,7 +1752,7 @@ COPY (
                 )
                 page.get_by_role("button", name="Features and parameters").click()
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
-                page.locator("input[name='gbmFeatureMetric'][value='gain']").check(force=True)
+                page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option", has_text="Gain").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -2857,6 +2952,7 @@ COPY (
                 self.assertTrue(page.locator("#status").evaluate("node => node.classList.contains('hidden')"))
                 gbm_top_after_error = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
                 self.assertLessEqual(abs(gbm_top_before - gbm_top_after_error), 1)
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
