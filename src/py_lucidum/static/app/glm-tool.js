@@ -2,6 +2,7 @@ const GLM_RUNNING_POLL_MS = 500;
 const GLM_QUEUED_POLL_MS = 1000;
 const GLM_MODEL_LIST_POLL_MS = 2000;
 const ACE_BASE_PATH = "/static/vendor/ace";
+const GLM_BUILDER_SPLIT_STORAGE_KEY = "py_lucidum_glm_formula_panel_width";
 
 function glmAutoModelTimeLabel(date = new Date()) {
   const hour = String(date.getHours()).padStart(2, "0");
@@ -20,6 +21,16 @@ function formatModelMetric(value) {
   const number = modelNumberOrNull(value);
   if (number === null) return "--";
   return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function formatModelCreated(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return String(value);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${date.getDate()} ${months[date.getMonth()]} ${hour}:${minute}`;
 }
 
 function csvEscape(value) {
@@ -79,8 +90,6 @@ export function glmModelDetailLabel(model = {}) {
   const parts = [];
   if (model.family) parts.push(String(model.family));
   if (metrics.aic !== undefined) parts.push(`AIC ${formatModelMetric(metrics.aic)}`);
-  if (metrics.deviance !== undefined) parts.push(`dev ${formatModelMetric(metrics.deviance)}`);
-  if (model.training_rows !== undefined) parts.push(`${Number(model.training_rows || 0).toLocaleString()} rows`);
   return parts.join(" · ");
 }
 
@@ -186,7 +195,8 @@ export function createGlmTool({
   function render(data = {}) {
     config = data;
     modelRows = normaliseModels(data.models || []);
-    selectedModelIds = new Set(data.active_model_id ? [String(data.active_model_id)] : []);
+    const availableModelIds = new Set(modelRows.map((model) => model.model_id));
+    selectedModelIds = new Set(Array.from(selectedModelIds).filter((modelId) => availableModelIds.has(modelId)));
     const groupMeta = "";
     setGroupMeta(tool, groupMeta);
     setStatus("");
@@ -197,6 +207,7 @@ export function createGlmTool({
     mount.innerHTML = shellHtml(data);
     bindTabs(mount);
     bindBuilderControls();
+    bindBuilderResizer();
     bindModelActions();
     renderModelTable(modelRows, data.active_model_id);
     syncSidebarModelChooser(modelRows, data.active_model_id);
@@ -213,8 +224,9 @@ export function createGlmTool({
   function shellHtml(data = {}) {
     const sample = data.sample || {};
     const trainingDisabled = !sample.available || !Number(sample.training_rows || 0);
-    if (trainingDisabled && selectedTrainingScope === "training") selectedTrainingScope = "all";
+    if (trainingDisabled && selectedTrainingScope === "training" && !data.active_model_id) selectedTrainingScope = "all";
     const diagnostics = diagnosticsForActiveModel(data.active_model_id);
+    const splitStyle = savedBuilderSplitWidthStyle();
     return `
       <div class="glm-tool">
         <div id="glmNotice" class="glm-notice hidden" role="alert" aria-live="polite"></div>
@@ -226,30 +238,33 @@ export function createGlmTool({
           <div id="glmBuildStatus" class="glm-build-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${buildStatusHtml(liveProgress)}</div>
         </div>
         <div class="glm-tab-panel ${activeTab === "builder" ? "" : "hidden"}" data-glm-panel="builder">
-          <div class="glm-builder-layout">
+          <div class="glm-builder-layout"${splitStyle ? ` style="${splitStyle}"` : ""}>
             <section class="glm-formula-panel">
               <div class="glm-panel-header">
                 <h3 class="glm-panel-title">Formula and family</h3>
-                <div class="glm-family-row">
-                  <select id="glmFamilySelect" aria-label="GLM family">${familyOptionsHtml(data.families || [])}</select>
-                  <input id="glmFamilyParameter" class="glm-family-parameter" type="number" step="any" value="${escapeHtml(String(familyParameterDefault(data.families || [])))}" aria-label="GLM family parameter" />
+                <div class="glm-builder-actions">
+                  <button id="glmClearFormulaBtn" class="tab glm-inline-action-button" type="button" title="Clear formula">× clear</button>
+                  <button id="glmFontSmallerBtn" class="tab glm-icon-action-button" type="button" aria-label="Decrease formula font size" title="Decrease font size">A-</button>
+                  <button id="glmFontLargerBtn" class="tab glm-icon-action-button" type="button" aria-label="Increase formula font size" title="Increase font size">A+</button>
+                  <button id="glmBuildBtn" class="tab glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
               </div>
-              <div class="glm-builder-actions">
+              <div class="glm-builder-control-row">
                 <div class="segmented glm-scope-control" role="group" aria-label="Rows to fit">
                   <button type="button" data-glm-scope="all" class="${selectedTrainingScope === "all" ? "active" : ""}">All</button>
                   <button type="button" data-glm-scope="training" class="${selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
                 </div>
-                <button id="glmClearFormulaBtn" class="tab glm-inline-action-button" type="button" title="Clear formula">× clear</button>
-                <button id="glmFontSmallerBtn" class="tab glm-icon-action-button" type="button" aria-label="Decrease formula font size" title="Decrease font size">A-</button>
-                <button id="glmFontLargerBtn" class="tab glm-icon-action-button" type="button" aria-label="Increase formula font size" title="Increase font size">A+</button>
-                <button id="glmBuildBtn" class="tab glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
+                <div class="glm-family-row">
+                  <input id="glmFamilyParameter" class="glm-family-parameter" type="text" inputmode="decimal" value="${escapeHtml(String(familyParameterDefault(data.families || [])))}" aria-label="GLM family parameter" />
+                  <select id="glmFamilySelect" aria-label="GLM family">${familyOptionsHtml(data.families || [])}</select>
+                </div>
               </div>
               <div class="glm-editor-shell">
                 <div id="glmFormulaEditor" class="glm-formula-editor"></div>
                 <textarea id="glmFormulaText" class="glm-formula-text" spellcheck="false">${escapeHtml(formulaDraft)}</textarea>
               </div>
             </section>
+            <div id="glmBuilderResizer" class="glm-builder-resizer" role="separator" aria-orientation="vertical" aria-label="Resize GLM formula and coefficients panels" tabindex="0"></div>
             <section class="glm-coefficient-panel">
               <div class="glm-panel-header glm-coefficient-header">
                 <div>
@@ -301,23 +316,25 @@ export function createGlmTool({
   }
 
   function familyParameterDefault(families = []) {
-    const family = (families || []).find((row) => row.value === selectedFamily);
-    const parameter = family?.parameter;
+    const parameter = familyParameterConfig(selectedFamily, families);
     if (!parameter) return "";
     const key = `py_lucidum_glm_family_parameter_${selectedFamily}`;
     return localStorage.getItem(key) || parameter.default || "";
+  }
+
+  function familyParameterConfig(familyValue, families = config?.families || []) {
+    if (String(familyValue || "").trim() !== "tweedie") return null;
+    const family = (families || []).find((row) => row.value === "tweedie");
+    return family?.parameter || { label: "Tweedie power", default: "1.5" };
   }
 
   function syncFamilyParameterControl() {
     const select = el("glmFamilySelect");
     const input = el("glmFamilyParameter");
     if (!select || !input) return;
-    const family = (config?.families || []).find((row) => row.value === select.value);
-    const parameter = family?.parameter || null;
+    const parameter = familyParameterConfig(select.value);
     input.disabled = !parameter;
-    input.placeholder = parameter?.label || "";
-    input.min = parameter?.min ?? "";
-    input.max = parameter?.max ?? "";
+    input.placeholder = parameter ? (parameter.label || "Tweedie power") : "";
     input.value = parameter ? (localStorage.getItem(`py_lucidum_glm_family_parameter_${select.value}`) || parameter.default || "") : "";
   }
 
@@ -340,7 +357,7 @@ export function createGlmTool({
       syncFamilyParameterControl();
     });
     el("glmFamilyParameter")?.addEventListener("change", (event) => {
-      if (selectedFamily) localStorage.setItem(`py_lucidum_glm_family_parameter_${selectedFamily}`, event.target.value);
+      if (selectedFamily === "tweedie") localStorage.setItem(`py_lucidum_glm_family_parameter_${selectedFamily}`, event.target.value.trim());
     });
     document.querySelectorAll("[data-glm-scope]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -357,6 +374,58 @@ export function createGlmTool({
     el("glmCopyCoefficientsBtn")?.addEventListener("click", copyCoefficients);
     el("glmDownloadCoefficientsBtn")?.addEventListener("click", downloadCoefficients);
     el("glmCoefficientSearch")?.addEventListener("input", () => renderCoefficientTable(coefficientRows));
+  }
+
+  function savedBuilderSplitWidthStyle() {
+    const width = Number(localStorage.getItem(GLM_BUILDER_SPLIT_STORAGE_KEY));
+    return Number.isFinite(width) && width > 0 ? `--glm-formula-panel-width: ${Math.round(width)}px;` : "";
+  }
+
+  function bindBuilderResizer() {
+    const layout = document.querySelector(".glm-builder-layout");
+    const resizer = el("glmBuilderResizer");
+    if (!layout || !resizer) return;
+
+    const resizeTo = (width, persist = true) => {
+      const layoutRect = layout.getBoundingClientRect();
+      const resizerWidth = resizer.getBoundingClientRect().width || 0;
+      const minLeft = 320;
+      const minRight = 360;
+      const maxLeft = Math.max(minLeft, layoutRect.width - resizerWidth - minRight);
+      const clamped = Math.max(minLeft, Math.min(maxLeft, width));
+      layout.style.setProperty("--glm-formula-panel-width", `${Math.round(clamped)}px`);
+      if (persist) localStorage.setItem(GLM_BUILDER_SPLIT_STORAGE_KEY, String(Math.round(clamped)));
+      if (aceEditor) aceEditor.resize();
+    };
+
+    const resizeFromClientX = (clientX) => {
+      const layoutRect = layout.getBoundingClientRect();
+      resizeTo(clientX - layoutRect.left);
+    };
+
+    resizer.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      resizer.classList.add("dragging");
+      document.body.classList.add("glm-builder-resizing");
+      resizer.setPointerCapture?.(event.pointerId);
+      const onMove = (moveEvent) => resizeFromClientX(moveEvent.clientX);
+      const onUp = () => {
+        resizer.classList.remove("dragging");
+        document.body.classList.remove("glm-builder-resizing");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+    });
+
+    resizer.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const formulaPanel = layout.querySelector(".glm-formula-panel");
+      const current = formulaPanel?.getBoundingClientRect().width || 0;
+      resizeTo(current + (event.key === "ArrowRight" ? 24 : -24));
+    });
   }
 
   function bindModelActions() {
@@ -441,20 +510,26 @@ export function createGlmTool({
   function buildPayload() {
     const actual = el("actualNumerator")?.value || "";
     const denominator = el("denominator")?.value || "__none__";
+    const family = el("glmFamilySelect")?.value || selectedFamily || "normal";
     return {
       formula: getFormulaText(),
-      family: el("glmFamilySelect")?.value || selectedFamily || "normal",
-      family_parameter: el("glmFamilyParameter")?.disabled ? "" : (el("glmFamilyParameter")?.value || ""),
+      family,
+      family_parameter: family === "tweedie" ? (el("glmFamilyParameter")?.value.trim() || "") : "",
       training_scope: selectedTrainingScope,
       response_column: actual,
       denominator_column: denominator === "__none__" ? "" : denominator,
-      label: `GLM ${actual} ${glmAutoModelTimeLabel()}`,
+      label: `GLM ${glmAutoModelTimeLabel()}`,
     };
   }
 
   async function buildModel() {
     if (isBuilding) return;
     const payload = buildPayload();
+    const familyError = validateFamilyParameter(payload.family, payload.family_parameter);
+    if (familyError) {
+      setGlmNotice(familyError);
+      return;
+    }
     if (!payload.response_column && !String(payload.formula || "").includes("~")) {
       setGlmNotice("Choose an Actual metric or enter a full response ~ terms formula");
       return;
@@ -472,6 +547,16 @@ export function createGlmTool({
       renderLiveProgress(liveProgress);
       setGlmNotice(error.message);
     }
+  }
+
+  function validateFamilyParameter(family, rawValue) {
+    if (family !== "tweedie") return "";
+    const text = String(rawValue || "").trim();
+    const value = Number(text);
+    if (!text || !Number.isFinite(value) || value < 1 || value > 2) {
+      return "Choose a Tweedie power from 1 to 2";
+    }
+    return "";
   }
 
   function pollBuildJob(jobId) {
@@ -533,17 +618,53 @@ export function createGlmTool({
   }
 
   function diagnosticsHtml(diagnostics = {}) {
-    const rows = [
+    const primary = [
       ["Deviance", diagnostics.deviance],
-      ["Null deviance", diagnostics.null_deviance],
       ["AIC", diagnostics.aic],
-      ["BIC", diagnostics.bic],
       ["Dispersion", diagnostics.dispersion],
-      ["NAs in fitted", diagnostics.fitted_na_rows],
-      ["Training rows", diagnostics.training_rows],
     ].filter(([, value]) => value !== undefined && value !== null && value !== "");
-    if (!rows.length) return "No active model";
-    return rows.map(([label, value]) => `<span><strong>${escapeHtml(label)}:</strong> ${escapeHtml(formatModelMetric(value))}</span>`).join("");
+    const secondary = [
+      ["NAs in fitted", diagnostics.fitted_na_rows],
+    ].filter(([, value]) => value !== undefined && value !== null && value !== "");
+    const itemHtml = ([label, value]) => `<span><strong>${escapeHtml(label)}:</strong> ${escapeHtml(formatModelMetric(value))}</span>`;
+    if (!primary.length && !secondary.length) return "No active model";
+    return [
+      primary.length ? `<span class="glm-coefficient-meta-row">${primary.map(itemHtml).join("")}</span>` : "",
+      secondary.length ? `<span class="glm-coefficient-meta-row glm-coefficient-meta-row-secondary">${secondary.map(itemHtml).join("")}</span>` : "",
+    ].filter(Boolean).join("");
+  }
+
+  function syncBuilderFromModelDetail(detail = {}) {
+    const manifest = detail?.manifest || {};
+    const rawFormula = detail?.formula ?? manifest?.formula?.raw;
+    if (rawFormula !== undefined && rawFormula !== null) setFormulaText(String(rawFormula));
+
+    const family = String(manifest.family || "").trim();
+    if (family) {
+      selectedFamily = family;
+      localStorage.setItem("py_lucidum_glm_family", selectedFamily);
+      const select = el("glmFamilySelect");
+      if (select) select.value = selectedFamily;
+    }
+
+    const familyParameter = manifest.family_parameter;
+    if (family === "tweedie" && familyParameter !== undefined && familyParameter !== null && String(familyParameter).trim() !== "") {
+      localStorage.setItem(`py_lucidum_glm_family_parameter_${family}`, String(familyParameter));
+    }
+    syncFamilyParameterControl();
+    const input = el("glmFamilyParameter");
+    if (input && !input.disabled && familyParameter !== undefined && familyParameter !== null) {
+      input.value = String(familyParameter);
+    }
+
+    const trainingScope = String(manifest.training_scope || "").trim().toLowerCase();
+    if (trainingScope === "all" || trainingScope === "training") {
+      selectedTrainingScope = trainingScope;
+      localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
+      document.querySelectorAll("[data-glm-scope]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.glmScope === selectedTrainingScope);
+      });
+    }
   }
 
   function coefficientRowsForActiveModel(activeModelId) {
@@ -612,6 +733,9 @@ export function createGlmTool({
   async function loadModelDetail(modelId) {
     try {
       activeDetail = await api(`/api/glm/models/${encodeURIComponent(modelId)}`, { method: "GET" });
+      const detailModelId = String(activeDetail?.manifest?.model_id || modelId || "");
+      if (detailModelId !== String(config?.active_model_id || modelId || "")) return;
+      syncBuilderFromModelDetail(activeDetail);
       const diagnostics = activeDetail?.diagnostics || activeDetail?.manifest?.diagnostics || {};
       const meta = el("glmCoefficientMeta");
       if (meta) meta.innerHTML = diagnosticsHtml(diagnostics);
@@ -633,11 +757,12 @@ export function createGlmTool({
     table.innerHTML = `
       <thead>
         <tr>
-          <th></th>
+          <th class="glm-model-active-heading" aria-label="Active model"></th>
           <th>model</th>
-          <th>family</th>
+          <th>created</th>
           <th>response</th>
           <th>weight</th>
+          <th>family</th>
           <th>deviance</th>
           <th>AIC</th>
           <th>BIC</th>
@@ -648,30 +773,57 @@ export function createGlmTool({
         ${models.map((model) => modelTableRowHtml(model, activeModelId)).join("")}
       </tbody>
     `;
-    table.querySelectorAll("[data-glm-model-row]").forEach((row) => {
+    const rows = Array.from(table.querySelectorAll("[data-glm-model-row]"));
+    let anchorRow = rows.find((row) => row.getAttribute("aria-selected") === "true") || null;
+    const setSelected = (row, selected) => {
+      row.classList.toggle("selected", selected);
+      row.setAttribute("aria-selected", String(selected));
+    };
+    rows.forEach((row) => {
       row.addEventListener("click", (event) => {
-        const checkbox = row.querySelector("input[type='checkbox']");
-        if (!checkbox) return;
-        if (event.target !== checkbox) checkbox.checked = !checkbox.checked;
+        const commandSelection = event.metaKey || event.ctrlKey;
+        if (event.shiftKey) {
+          event.preventDefault();
+          const anchor = anchorRow && rows.includes(anchorRow) ? anchorRow : row;
+          const start = rows.indexOf(anchor);
+          const end = rows.indexOf(row);
+          const min = Math.min(start, end);
+          const max = Math.max(start, end);
+          if (!commandSelection) rows.forEach((candidate) => setSelected(candidate, false));
+          for (let index = min; index <= max; index += 1) {
+            const candidate = rows[index];
+            if (commandSelection && candidate !== anchor) {
+              setSelected(candidate, candidate.getAttribute("aria-selected") !== "true");
+            } else {
+              setSelected(candidate, true);
+            }
+          }
+        } else if (commandSelection) {
+          setSelected(row, row.getAttribute("aria-selected") !== "true");
+        } else {
+          rows.forEach((candidate) => setSelected(candidate, candidate === row));
+        }
+        anchorRow = row;
         syncSelectedModelsFromTable();
       });
-    });
-    table.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
-      checkbox.addEventListener("change", syncSelectedModelsFromTable);
     });
     syncSelectedModelsFromTable();
   }
 
   function modelTableRowHtml(model, activeModelId) {
-    const selected = selectedModelIds.has(model.model_id) || model.model_id === activeModelId;
+    const active = model.model_id === activeModelId;
+    const selected = selectedModelIds.has(model.model_id);
     const diagnostics = model.diagnostics || model.metrics || {};
     return `
-      <tr data-glm-model-row="${escapeHtml(model.model_id)}" class="${model.model_id === activeModelId ? "active" : ""}">
-        <td><input type="checkbox" ${selected ? "checked" : ""} aria-label="Select ${escapeHtml(model.model_id)}" /></td>
-        <td><strong>${escapeHtml(model.label || model.model_id)}</strong><span>${escapeHtml(model.model_id)}</span></td>
-        <td>${escapeHtml(model.family || "")}</td>
+      <tr data-glm-model-row="${escapeHtml(model.model_id)}" class="${active ? "active" : ""}${selected ? " selected" : ""}" aria-selected="${selected ? "true" : "false"}">
+        <td class="glm-model-active-cell">
+          ${active ? '<span class="glm-model-active-dot" title="Active model" aria-label="Active model"></span>' : ""}
+        </td>
+        <td class="glm-model-name-cell"><span class="glm-model-name-main">${escapeHtml(model.label || model.model_id)}</span></td>
+        <td>${escapeHtml(formatModelCreated(model.created_at))}</td>
         <td>${escapeHtml(model.response_column || "")}</td>
         <td>${escapeHtml(modelWeightLabel(model.denominator_column || model.offset_column))}</td>
+        <td>${escapeHtml(model.family || "")}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.deviance))}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.aic))}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.bic))}</td>
@@ -683,7 +835,7 @@ export function createGlmTool({
   function syncSelectedModelsFromTable() {
     selectedModelIds = new Set(
       Array.from(document.querySelectorAll("#glmModelTable [data-glm-model-row]"))
-        .filter((row) => row.querySelector("input[type='checkbox']")?.checked)
+        .filter((row) => row.getAttribute("aria-selected") === "true")
         .map((row) => row.dataset.glmModelRow),
     );
     updateModelActionButtons();

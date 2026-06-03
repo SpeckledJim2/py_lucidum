@@ -139,8 +139,8 @@
 
       .glm-builder-layout {
         display: grid;
-        gap: 12px;
-        grid-template-columns: minmax(320px, 0.95fr) minmax(360px, 1.05fr);
+        gap: 0;
+        grid-template-columns: minmax(320px, var(--glm-formula-panel-width, 0.95fr)) 12px minmax(360px, 1.05fr);
         height: 100%;
         min-height: 0;
         min-width: 0;
@@ -159,23 +159,39 @@
         overflow: hidden;
       }
 
+      .glm-coefficient-panel {
+        position: relative;
+      }
+
       .glm-panel-header {
         align-items: flex-start;
-        border-bottom: 1px solid var(--line);
         display: flex;
         flex: 0 0 auto;
+        flex-wrap: wrap;
         gap: 12px;
         justify-content: space-between;
         min-width: 0;
-        padding: 10px 12px;
+        padding: 8px 12px 5px;
       }
 
       .glm-panel-title {
         color: var(--text);
-        font-size: 17px;
-        font-weight: 800;
-        line-height: 1.1;
+        flex: 0 0 auto;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.2;
         margin: 0;
+      }
+
+      .glm-builder-control-row {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: space-between;
+        min-width: 0;
+        padding: 0 12px 8px;
       }
 
       .glm-family-row {
@@ -190,8 +206,8 @@
         border: 1px solid var(--line);
         border-radius: 6px;
         color: var(--text);
-        font-size: 13px;
-        height: 32px;
+        font-size: 12px;
+        height: 28px;
         padding: 0 8px;
       }
 
@@ -200,24 +216,25 @@
       }
 
       .glm-family-parameter {
-        width: 112px;
+        width: 104px;
       }
 
       .glm-family-parameter:disabled {
         opacity: 0.55;
       }
 
-      .glm-builder-actions {
-        align-items: center;
-        border-bottom: 1px solid var(--line);
-        display: flex;
-        flex: 0 0 auto;
-        gap: 7px;
-        padding: 8px 12px;
+      .glm-scope-control button {
+        min-height: 28px;
       }
 
-      .glm-builder-actions .segmented {
-        margin-right: auto;
+      .glm-builder-actions {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        flex-wrap: wrap;
+        gap: 7px;
+        justify-content: flex-end;
+        min-width: 0;
       }
 
       .glm-inline-action-button,
@@ -247,6 +264,37 @@
         flex: 1 1 auto;
         min-height: 0;
         position: relative;
+      }
+
+      .glm-builder-resizer {
+        cursor: col-resize;
+        min-height: 0;
+        position: relative;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .glm-builder-resizer::before {
+        background: color-mix(in srgb, var(--line) 70%, transparent);
+        border-radius: 999px;
+        bottom: 8px;
+        content: "";
+        left: 50%;
+        position: absolute;
+        top: 8px;
+        transform: translateX(-50%);
+        width: 2px;
+      }
+
+      .glm-builder-resizer:hover::before,
+      .glm-builder-resizer.dragging::before {
+        background: var(--accent);
+        width: 3px;
+      }
+
+      body.glm-builder-resizing {
+        cursor: col-resize;
       }
 
       .glm-formula-editor,
@@ -285,22 +333,33 @@
       }
 
       .glm-coefficient-header {
-        align-items: center;
+        align-items: flex-start;
+        padding-right: 172px;
       }
 
       .glm-coefficient-meta {
         color: var(--muted);
         display: flex;
-        flex-wrap: wrap;
+        flex-direction: column;
         font-size: 11px;
-        font-weight: 700;
-        gap: 6px 12px;
+        font-weight: 500;
+        gap: 3px;
         line-height: 1.2;
         margin-top: 5px;
       }
 
+      .glm-coefficient-meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+      }
+
       .glm-coefficient-meta span {
         white-space: nowrap;
+      }
+
+      .glm-coefficient-meta strong {
+        font-weight: 500;
       }
 
       .glm-coefficient-actions,
@@ -310,13 +369,19 @@
         gap: 8px;
       }
 
+      .glm-coefficient-actions {
+        position: absolute;
+        right: 12px;
+        top: 8px;
+        z-index: 2;
+      }
+
       .glm-table-tools {
         align-items: center;
-        border-bottom: 1px solid var(--line);
         display: flex;
         flex: 0 0 auto;
         justify-content: flex-end;
-        padding: 8px 12px;
+        padding: 0 12px 6px;
       }
 
       .glm-table-tools label {
@@ -339,30 +404,57 @@
         overflow: auto;
       }
 
+      .glm-model-table-wrap {
+        border: 1px solid var(--glm-table-border);
+        border-radius: 4px;
+      }
+
       .glm-table {
         border-collapse: collapse;
         color: var(--text);
-        font-size: 12px;
-        line-height: 1.25;
+        font-size: 11px;
+        line-height: 1.15;
         min-width: 100%;
+        table-layout: fixed;
         width: 100%;
       }
 
       .glm-table th,
       .glm-table td {
-        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
-        padding: 5px 8px;
+        border-bottom: 1px solid var(--line);
+        padding: 2px 6px;
         text-align: left;
-        vertical-align: top;
+        vertical-align: middle;
       }
 
       .glm-table th {
-        background: var(--panel-muted);
+        background: var(--panel-2);
         color: var(--text);
-        font-weight: 800;
+        font-weight: 700;
+        height: 20px;
         position: sticky;
         top: 0;
         z-index: 1;
+      }
+
+      .glm-table td {
+        height: 22px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #glmCoefficientTable th:first-child {
+        width: 52%;
+      }
+
+      .glm-model-table {
+        min-width: 980px;
+      }
+
+      .glm-model-table th,
+      .glm-model-table td {
+        border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
       }
 
       .glm-table td.numeric,
@@ -372,20 +464,66 @@
         white-space: nowrap;
       }
 
-      .glm-table tbody tr.active,
       .glm-table tbody tr:hover {
-        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        background: color-mix(in srgb, var(--accent) 8%, var(--panel));
       }
 
-      .glm-table td strong,
-      .glm-table td span {
+      .glm-table tbody tr.selected td {
+        background: color-mix(in srgb, var(--line) 40%, var(--panel));
+      }
+
+      .glm-model-active-cell,
+      .glm-model-active-heading {
+        text-align: center;
+        width: 28px;
+      }
+
+      .glm-model-table th:nth-child(2) {
+        width: 20%;
+      }
+
+      .glm-model-table th:nth-child(3) {
+        width: 105px;
+      }
+
+      .glm-model-table th:nth-child(4) {
+        width: 12%;
+      }
+
+      .glm-model-table th:nth-child(5),
+      .glm-model-table th:nth-child(6) {
+        width: 10%;
+      }
+
+      .glm-model-table th:nth-child(7),
+      .glm-model-table th:nth-child(8),
+      .glm-model-table th:nth-child(9),
+      .glm-model-table th:nth-child(10) {
+        width: 8%;
+      }
+
+      .glm-model-active-dot {
+        background: #16a34a;
+        border: 1px solid color-mix(in srgb, #15803d 72%, var(--panel));
+        border-radius: 999px;
+        box-shadow: 0 0 0 2px color-mix(in srgb, #16a34a 14%, transparent);
+        display: inline-block;
+        height: 8px;
+        inline-size: 8px;
+        width: 8px;
+      }
+
+      .glm-model-name-cell {
+        min-width: 0;
+      }
+
+      .glm-model-name-main {
+        color: var(--text);
         display: block;
-      }
-
-      .glm-table td span {
-        color: var(--muted);
-        font-size: 10px;
-        margin-top: 2px;
+        font-weight: 700;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .glm-empty-cell,
@@ -397,24 +535,28 @@
       }
 
       .glm-model-navigator {
+        gap: 8px;
         height: 100%;
+        padding: 8px;
       }
 
       .glm-model-actions {
-        border-bottom: 1px solid var(--line);
-        justify-content: flex-end;
-        padding: 8px;
+        justify-content: flex-start;
       }
 
       .glm-model-detail {
         color: var(--muted);
         font-size: 10px;
-        font-weight: 650;
+        font-weight: 400;
       }
 
       @media (max-width: 980px) {
         .glm-builder-layout {
           grid-template-columns: 1fr;
           grid-template-rows: minmax(340px, 1fr) minmax(280px, 1fr);
+        }
+
+        .glm-builder-resizer {
+          display: none;
         }
       }

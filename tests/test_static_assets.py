@@ -253,6 +253,32 @@ for (const [name, model, expected] of cases) {
 """
         self.run_node_script(script)
 
+    def test_glm_model_detail_label_only_includes_family_and_aic(self) -> None:
+        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        helpers = ["glmModelDetailLabel", "modelNumberOrNull", "formatModelMetric"]
+        script = "\n".join(self.js_function_source(js, name) for name in helpers) + """
+const model = {
+  family: "gamma",
+  diagnostics: { aic: 747117.3116, deviance: 20984.7818 },
+  training_rows: 50000,
+};
+const actual = glmModelDetailLabel(model);
+if (actual !== "gamma · AIC 747,117.3116") throw new Error(actual);
+"""
+        self.run_node_script(script)
+
+    def test_glm_tweedie_family_parameter_guard(self) -> None:
+        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        script = self.js_function_source(js, "validateFamilyParameter") + """
+if (validateFamilyParameter("normal", "") !== "") throw new Error("normal should not validate parameter");
+if (validateFamilyParameter("tweedie", "1") !== "") throw new Error("lower bound failed");
+if (validateFamilyParameter("tweedie", "2") !== "") throw new Error("upper bound failed");
+if (!validateFamilyParameter("tweedie", "0.99")) throw new Error("low invalid failed");
+if (!validateFamilyParameter("tweedie", "2.01")) throw new Error("high invalid failed");
+if (!validateFamilyParameter("tweedie", "abc")) throw new Error("non-numeric invalid failed");
+"""
+        self.run_node_script(script)
+
     def test_gbm_training_ready_badge_label_reports_grid_progress(self) -> None:
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
         helpers = ["modelNumberOrNull", "formatTrainingBadgeCount", "gbmTrainingReadyBadgeLabel"]
@@ -533,6 +559,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_glm_frontend_contains_real_tool_contract(self) -> None:
         js = self.app_js_contract()
+        glm_js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
         css = self.app_css_contract()
 
         self.assertIn('import { createGlmTool } from "./glm-tool.js";', js)
@@ -550,10 +577,26 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('id="glmFormulaEditor"', js)
         self.assertIn('id="glmFamilySelect"', js)
         self.assertIn('id="glmFamilyParameter"', js)
+        self.assertIn('type="text" inputmode="decimal"', glm_js)
+        self.assertIn('class="glm-builder-control-row"', glm_js)
+        self.assertIn('id="glmBuilderResizer" class="glm-builder-resizer"', glm_js)
+        self.assertIn("function bindBuilderResizer()", glm_js)
         self.assertIn('data-glm-scope="training"', js)
         self.assertIn('id="glmBuildBtn"', js)
         self.assertIn('id="glmCoefficientTable"', js)
         self.assertIn('id="glmModelTable"', js)
+        self.assertIn('label: `GLM ${glmAutoModelTimeLabel()}`', glm_js)
+        self.assertNotIn('label: `GLM ${actual} ${glmAutoModelTimeLabel()}`', glm_js)
+        self.assertIn("function validateFamilyParameter(family, rawValue)", glm_js)
+        self.assertIn("function syncBuilderFromModelDetail(detail = {})", glm_js)
+        self.assertIn("syncBuilderFromModelDetail(activeDetail);", glm_js)
+        self.assertIn('class="glm-model-active-dot"', glm_js)
+        self.assertIn('class="glm-model-name-cell"><span class="glm-model-name-main"', glm_js)
+        self.assertIn("<th>created</th>", glm_js)
+        self.assertNotIn('type="checkbox"', glm_js)
+        self.assertNotIn('["Training rows", diagnostics.training_rows]', glm_js)
+        self.assertNotIn('["Null deviance", diagnostics.null_deviance]', glm_js)
+        self.assertNotIn('["BIC", diagnostics.bic]', glm_js)
         self.assertIn("syncSidebarModelChooser", js)
         self.assertIn("glm_prediction", js)
         self.assertNotIn("GLM modelling will be added in a later slice", js)
@@ -561,7 +604,78 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".glm-builder-layout", css)
         self.assertIn(".glm-formula-editor", css)
         self.assertIn(".glm-coefficient-panel", css)
+        self.assertIn(".glm-panel-title {\n        color: var(--text);\n        flex: 0 0 auto;\n        font-size: 13px;", css)
+        self.assertIn(".glm-builder-resizer", css)
+        self.assertIn(".glm-coefficient-actions {\n        position: absolute;", css)
+        self.assertIn(".glm-coefficient-meta {\n        color: var(--muted);\n        display: flex;\n        flex-direction: column;", css)
+        self.assertIn("font-weight: 500;", css)
+        self.assertIn(".glm-model-table-wrap {\n        border: 1px solid var(--glm-table-border);", css)
+        self.assertIn(".glm-model-active-dot", css)
+        self.assertIn(".glm-table tbody tr.selected td", css)
+        self.assertIn(".glm-model-detail {\n        color: var(--muted);\n        font-size: 10px;\n        font-weight: 400;", css)
         self.assertIn(".glm-model-list .glm-model-option.active", css)
+
+    def test_glm_active_model_detail_syncs_builder_controls(self) -> None:
+        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        script = self.js_function_source(js, "syncBuilderFromModelDetail") + r"""
+let formulaText = "";
+let selectedFamily = "";
+let selectedTrainingScope = "";
+const storage = new Map();
+const localStorage = {
+  getItem: (key) => storage.get(key) || null,
+  setItem: (key, value) => storage.set(key, String(value)),
+};
+const nodes = {
+  glmFamilySelect: { value: "normal" },
+  glmFamilyParameter: { disabled: false, value: "" },
+};
+function el(id) {
+  return nodes[id] || null;
+}
+function setFormulaText(value) {
+  formulaText = String(value || "");
+  localStorage.setItem("py_lucidum_glm_formula", formulaText);
+}
+function syncFamilyParameterControl() {
+  nodes.glmFamilyParameter.disabled = false;
+  nodes.glmFamilyParameter.value = localStorage.getItem(`py_lucidum_glm_family_parameter_${nodes.glmFamilySelect.value}`) || "";
+}
+function makeScopeButton(scope) {
+  const button = { dataset: { glmScope: scope }, active: false };
+  button.classList = {
+    toggle: (name, active) => {
+      if (name === "active") button.active = Boolean(active);
+    },
+  };
+  return button;
+}
+const allButton = makeScopeButton("all");
+const trainingButton = makeScopeButton("training");
+const document = {
+  querySelectorAll: (selector) => selector === "[data-glm-scope]" ? [allButton, trainingButton] : [],
+};
+syncBuilderFromModelDetail({
+  formula: "Age + C(Segment)",
+  manifest: {
+    family: "tweedie",
+    family_parameter: 1.3,
+    training_scope: "training",
+    formula: { raw: "fallback formula" },
+  },
+});
+if (formulaText !== "Age + C(Segment)") throw new Error(`formula ${formulaText}`);
+if (selectedFamily !== "tweedie") throw new Error(`family ${selectedFamily}`);
+if (nodes.glmFamilySelect.value !== "tweedie") throw new Error(`select ${nodes.glmFamilySelect.value}`);
+if (nodes.glmFamilyParameter.value !== "1.3") throw new Error(`parameter ${nodes.glmFamilyParameter.value}`);
+if (selectedTrainingScope !== "training") throw new Error(`scope ${selectedTrainingScope}`);
+if (allButton.active || !trainingButton.active) throw new Error("scope buttons not synced");
+if (localStorage.getItem("py_lucidum_glm_formula") !== "Age + C(Segment)") throw new Error("formula storage failed");
+if (localStorage.getItem("py_lucidum_glm_family") !== "tweedie") throw new Error("family storage failed");
+if (localStorage.getItem("py_lucidum_glm_family_parameter_tweedie") !== "1.3") throw new Error("parameter storage failed");
+if (localStorage.getItem("py_lucidum_glm_training_scope") !== "training") throw new Error("scope storage failed");
+"""
+        self.run_node_script(script)
 
     def test_gbm_frontend_contains_real_tool_contract(self) -> None:
         js = self.app_js_contract()
@@ -1072,7 +1186,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile");', js)
         self.assertIn('document.querySelector(".sidebar-filter-section")?.classList.toggle("hidden", isModelTool(tool));', js)
         self.assertIn('el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");', js)
-        self.assertIn('el("modelToolFilter").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");', js)
+        self.assertIn('el("modelToolFilter").classList.add("hidden");', js)
         self.assertIn('response: el("actualNumerator")?.value || "actualNumerator"', js)
         self.assertIn('offset: el("denominator")?.value || "denominator"', js)
         self.assertIn("const glmSourcesAvailable = (state.schema?.data_sources || []).some", js)

@@ -849,7 +849,7 @@
         el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarFilter").classList.toggle("hidden", tool !== "line_bar");
         el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");
-        el("modelToolFilter").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");
+        el("modelToolFilter").classList.add("hidden");
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
         el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
