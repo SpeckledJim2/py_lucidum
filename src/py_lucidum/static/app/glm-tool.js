@@ -700,14 +700,14 @@ export function createGlmTool({
       <thead>
         <tr>
           <th>term</th>
-          <th>estimate</th>
-          <th>std.error</th>
-          <th>p.value</th>
+          <th class="numeric">estimate</th>
+          <th class="numeric">std.error</th>
+          <th class="numeric">p.value</th>
         </tr>
       </thead>
       <tbody>
         ${filtered.map((row) => `
-          <tr>
+          <tr class="${glmCoefficientPValueClass(row.p_value)}">
             <td>${escapeHtml(row.term)}</td>
             <td class="numeric">${escapeHtml(formatModelMetric(row.estimate))}</td>
             <td class="numeric">${escapeHtml(formatModelMetric(row.std_error))}</td>
@@ -716,6 +716,14 @@ export function createGlmTool({
         `).join("")}
       </tbody>
     `;
+  }
+
+  function glmCoefficientPValueClass(value) {
+    const number = modelNumberOrNull(value);
+    if (number === null) return "";
+    if (number < 0.01) return "glm-coefficient-pvalue-low";
+    if (number <= 0.05) return "glm-coefficient-pvalue-medium";
+    return "glm-coefficient-pvalue-high";
   }
 
   function formatPValue(value) {

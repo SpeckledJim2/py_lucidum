@@ -280,6 +280,34 @@ if (!validateFamilyParameter("tweedie", "abc")) throw new Error("non-numeric inv
 """
         self.run_node_script(script)
 
+    def test_glm_coefficient_table_pvalue_styling_contract(self) -> None:
+        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        css = self.assert_no_store("/static/styles/glm.css")[1].decode("utf-8")
+        self.assertIn('<th class="numeric">estimate</th>', js)
+        self.assertIn('<th class="numeric">std.error</th>', js)
+        self.assertIn('<th class="numeric">p.value</th>', js)
+        self.assertIn('class="${glmCoefficientPValueClass(row.p_value)}"', js)
+        self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-low", css)
+        self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-medium", css)
+        self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-high", css)
+        script = "\n".join(self.js_function_source(js, name) for name in ["modelNumberOrNull", "glmCoefficientPValueClass"]) + """
+const cases = [
+  [0.0099, "glm-coefficient-pvalue-low"],
+  [0.01, "glm-coefficient-pvalue-medium"],
+  [0.05, "glm-coefficient-pvalue-medium"],
+  [0.0501, "glm-coefficient-pvalue-high"],
+  [null, ""],
+  ["abc", ""],
+];
+for (const [value, expected] of cases) {
+  const actual = glmCoefficientPValueClass(value);
+  if (actual !== expected) {
+    throw new Error(`${value}: expected ${expected}, got ${actual}`);
+  }
+}
+"""
+        self.run_node_script(script)
+
     def test_gbm_training_ready_badge_label_reports_grid_progress(self) -> None:
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
         helpers = ["modelNumberOrNull", "formatTrainingBadgeCount", "gbmTrainingReadyBadgeLabel"]

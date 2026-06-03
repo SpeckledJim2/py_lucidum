@@ -577,6 +577,30 @@
         background: color-mix(in srgb, var(--accent) 8%, var(--panel));
       }
 
+      #glmCoefficientTable tbody tr.glm-coefficient-pvalue-low {
+        background: color-mix(in srgb, #22c55e 14%, var(--panel));
+      }
+
+      #glmCoefficientTable tbody tr.glm-coefficient-pvalue-medium {
+        background: color-mix(in srgb, #facc15 18%, var(--panel));
+      }
+
+      #glmCoefficientTable tbody tr.glm-coefficient-pvalue-high {
+        background: color-mix(in srgb, #ef4444 12%, var(--panel));
+      }
+
+      #glmCoefficientTable tbody tr.glm-coefficient-pvalue-low:hover {
+        background: color-mix(in srgb, #22c55e 18%, var(--panel));
+      }
+
+      #glmCoefficientTable tbody tr.glm-coefficient-pvalue-medium:hover {
+        background: color-mix(in srgb, #facc15 23%, var(--panel));
+      }
+
+      #glmCoefficientTable tbody tr.glm-coefficient-pvalue-high:hover {
+        background: color-mix(in srgb, #ef4444 16%, var(--panel));
+      }
+
       .glm-table tbody tr.selected td {
         background: color-mix(in srgb, var(--line) 40%, var(--panel));
       }
