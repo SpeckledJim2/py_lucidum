@@ -1722,8 +1722,8 @@ export function createGbmTool({
         layout: "fitColumns",
         initialSort: [{ column: "important", dir: "desc" }],
         columns: [
-          { title: "Parameter", field: "name", widthGrow: 2 },
-          { title: "Value", field: "value", editor: "adaptable", editorParams: parameterValueEditorParams(), widthGrow: 1 },
+          { title: "Parameter", field: "name", widthGrow: 1 },
+          { title: "Value", field: "value", formatter: parameterValueFormatter, editor: "adaptable", editorParams: parameterValueEditorParams(), widthGrow: 2 },
         ],
       });
       parameterTable.on("cellEdited", syncGridSampleControl);
@@ -2321,11 +2321,74 @@ export function createGbmTool({
     const options = Array.isArray(configured) && configured.length
       ? configured
       : GBM_PARAMETER_OPTIONS[parameterName] || [];
-    return options.map((value) => String(value)).sort(compareParameterOption);
+    const normalised = options.map(normaliseParameterOption);
+    return parameterName === "init_score"
+      ? initScoreParameterOptions(normalised)
+      : normalised.sort(compareParameterOption);
+  }
+
+  function normaliseParameterOption(option) {
+    if (option && typeof option === "object") {
+      const value = String(option.value ?? "");
+      return {
+        value,
+        label: String(option.label ?? value),
+        kind: String(option.kind ?? ""),
+        disabled: Boolean(option.disabled),
+      };
+    }
+    const value = String(option);
+    return { value, label: value, kind: "", disabled: false };
   }
 
   function compareParameterOption(left, right) {
-    return left.localeCompare(right, undefined, { sensitivity: "base" });
+    if (left.value === "none") return -1;
+    if (right.value === "none") return 1;
+    return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
+  }
+
+  function initScoreParameterOptions(options) {
+    const none = options.filter((option) => option.value === "none").sort(compareParameterOption);
+    const glms = options.filter((option) => option.value !== "none" && option.kind === "glm_prediction").sort(compareParameterOption);
+    const columns = options.filter((option) => option.kind === "dataset_column").sort(compareParameterOption);
+    const other = options
+      .filter((option) => option.value !== "none" && option.kind !== "glm_prediction" && option.kind !== "dataset_column")
+      .sort(compareParameterOption);
+    return [...none, ...glms, ...columns, ...other];
+  }
+
+  function groupedInitScoreOptions(options) {
+    const enabled = options.filter((option) => !option.disabled);
+    const none = enabled.filter((option) => option.value === "none");
+    const glms = enabled.filter((option) => option.value !== "none" && option.kind === "glm_prediction").sort(compareParameterOption);
+    const columns = enabled.filter((option) => option.kind === "dataset_column").sort(compareParameterOption);
+    const groups = [...none];
+    if (glms.length) groups.push({ label: "GLM PREDICTIONS", options: glms });
+    if (columns.length) groups.push({ label: "DATASET COLUMNS", options: columns });
+    return groups;
+  }
+
+  function parameterEditorValues(name) {
+    const parameterName = String(name || "");
+    const options = parameterOptionsForName(parameterName).filter((option) => !option.disabled);
+    if (parameterName === "init_score") return groupedInitScoreOptions(options);
+    const values = {};
+    for (const option of options) values[option.value] = option.label;
+    return values;
+  }
+
+  function parameterOptionByValue(name, value) {
+    const text = String(value ?? "");
+    return parameterOptionsForName(name).find((option) => option.value === text) || null;
+  }
+
+  function parameterValueDisplay(name, value) {
+    return parameterOptionByValue(name, value)?.label || String(value ?? "");
+  }
+
+  function parameterValueFormatter(cell) {
+    const rowData = cell.getRow().getData();
+    return escapeHtml(parameterValueDisplay(rowData.name, cell.getValue()));
   }
 
   function parameterValueEditorParams() {
@@ -2337,7 +2400,7 @@ export function createGbmTool({
 
   function parameterValueEditorLookup(cell) {
     const rowData = cell.getRow().getData();
-    return parameterOptionsForName(rowData.name).length ? "list" : "input";
+    return parameterOptionsForName(rowData.name).filter((option) => !option.disabled).length ? "list" : "input";
   }
 
   function parameterValueEditorParamsLookup(editor, cell) {
@@ -2349,7 +2412,7 @@ export function createGbmTool({
     };
     if (editor === "list") {
       return {
-        values: parameterOptionsForName(rowData.name),
+        values: parameterEditorValues(rowData.name),
         autocomplete: true,
         freetext: true,
         listOnEmpty: true,
@@ -2369,11 +2432,42 @@ export function createGbmTool({
     if (!options.length) {
       return `<input data-gbm-parameter="${escapeHtml(name)}" value="${escapeHtml(value)}" />`;
     }
+    const hasCurrentValue = options.some((option) => option.value === value);
+    const renderedOptions = hasCurrentValue
+      ? options
+      : [{ value, label: `${value} (missing)`, disabled: true }, ...options];
     return `
       <select data-gbm-parameter="${escapeHtml(name)}" aria-label="${escapeHtml(name)}">
-        ${options.map((option) => `<option value="${escapeHtml(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+        ${parameterSelectOptionsHtml(name, renderedOptions, value)}
       </select>
     `;
+  }
+
+  function parameterSelectOptionsHtml(name, options, value) {
+    if (String(name || "") !== "init_score") {
+      return options.map((option) => parameterOptionHtml(option, value)).join("");
+    }
+    const none = options.filter((option) => option.value === "none");
+    const glms = options.filter((option) => option.value !== "none" && option.kind === "glm_prediction").sort(compareParameterOption);
+    const columns = options.filter((option) => option.kind === "dataset_column").sort(compareParameterOption);
+    const other = options
+      .filter((option) => option.value !== "none" && option.kind !== "glm_prediction" && option.kind !== "dataset_column")
+      .sort(compareParameterOption);
+    return [
+      ...none.map((option) => parameterOptionHtml(option, value)),
+      parameterOptgroupHtml("GLM PREDICTIONS", glms, value),
+      parameterOptgroupHtml("DATASET COLUMNS", columns, value),
+      ...other.map((option) => parameterOptionHtml(option, value)),
+    ].filter(Boolean).join("");
+  }
+
+  function parameterOptgroupHtml(label, options, value) {
+    if (!options.length) return "";
+    return `<optgroup label="${escapeHtml(label)}">${options.map((option) => parameterOptionHtml(option, value)).join("")}</optgroup>`;
+  }
+
+  function parameterOptionHtml(option, value) {
+    return `<option value="${escapeHtml(option.value)}" ${option.value === value ? "selected" : ""} ${option.disabled ? "disabled" : ""}>${escapeHtml(option.label)}</option>`;
   }
 
   function bindGridSampleInput() {
@@ -2401,7 +2495,7 @@ export function createGbmTool({
   }
 
   function hasGridParameters(parameters = []) {
-    return parameters.some((parameter) => isGridParameterValue(parameter?.value));
+    return parameters.some((parameter) => String(parameter?.name || "") !== "init_score" && isGridParameterValue(parameter?.value));
   }
 
   function isGridParameterValue(value) {

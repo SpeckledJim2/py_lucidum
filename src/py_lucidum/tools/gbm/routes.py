@@ -27,6 +27,7 @@ from .validation import (
     detect_sample_column,
     ebm_available,
     feature_rows,
+    init_score_current_options,
     normalise_training_mode,
 )
 
@@ -145,11 +146,17 @@ WHERE feature IS NOT NULL
 
         for name, value in values.items():
             text_name = str(name)
-            if text_name == "training_mode":
+            if text_name in {"training_mode", "init_score_metadata"}:
                 continue
             if text_name not in seen:
                 rows.append({"name": text_name, "value": value, "important": False})
         return rows
+
+    def active_init_score_value() -> str:
+        for row in parameter_rows():
+            if str(row.get("name") or "") == "init_score":
+                return str(row.get("value") or "none")
+        return "none"
 
     def feature_spec_payload() -> dict[str, Any]:
         spec = getattr(app.state, "feature_spec", None)
@@ -308,6 +315,12 @@ WHERE feature IS NOT NULL
             )
             sample_column = detect_sample_column(context.dataset)
             can_use_ebm = ebm_available(context.dataset, generated_sample_path=store.generated_sample_path)
+            current_init_score_options = init_score_current_options(
+                context.dataset,
+                active_init_score_value(),
+                response_column=RESPONSE_COLUMN,
+                sample_column=sample_column,
+            )
         return {
             "tool": "gbm",
             "status": "ready",
@@ -319,6 +332,7 @@ WHERE feature IS NOT NULL
             "ebm_available": can_use_ebm,
             "parameters": parameter_rows(),
             "parameter_options": {
+                "init_score": current_init_score_options,
                 "objective": sorted(GBM_OBJECTIVES),
                 "metric": sorted(GBM_METRICS),
                 "data_sample_strategy": list(DATA_SAMPLE_STRATEGIES),

@@ -39,7 +39,7 @@ Chosen defaults:
 ## GBM Behaviour
 
 - Training uses rows where the selected denominator is positive, equal row weights, the selected sidebar Actual response, and ignores the global filter.
-- For log-link objectives such as `poisson`, `gamma`, and `tweedie`, use `log(selected denominator)` as LightGBM `init_score`. If no denominator is selected, treat offset values as 1.
+- For log-link objectives such as `poisson`, `gamma`, and `tweedie`, use `log(selected denominator)` as LightGBM `init_score` when the `init_score` parameter row is `none`. If `init_score` selects a numeric dataset column or fitted GLM prediction source, treat it as a full prediction-space baseline, transform it with the objective link, persist `init_score.parquet`, and replace the denominator-derived initial score.
 - If a canonical `SAMPLE` column exists, train on `training`, early-stop on `test`, score `validation` as holdout diagnostics, and score all valid rows. If not, train all valid rows, disable early stopping, and show a warning.
 - "Create sample column" creates a reusable generated deterministic 60/20/20 training/test/validation assignment in `.lucidum/models/gbm/generated_sample.parquet`, not in the original dataset.
 - `training_mode` is persisted as `normal` or `ebm`, defaulting old models to `normal`. EBM is shown when the active sample source, either a physical dataset `SAMPLE` split or a generated sidecar split, has training and test rows.

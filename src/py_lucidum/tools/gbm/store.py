@@ -20,6 +20,7 @@ from .validation import DEFAULT_TRAINING_MODE
 
 ARTIFACT_FILES = {
     "predictions": "predictions.parquet",
+    "init_score": "init_score.parquet",
     "shap_long": "shap_values.parquet",
     "shap_summary": "shap_summary.parquet",
     "evaluation": "evaluation.parquet",

@@ -33,6 +33,7 @@ The functionality of each tab is described in sections below.
 - only include rows in the GBM training where the denominator is >0
 - equal weights for each row
 - ignore the filter when building a GBM (don't show the filter tool in the sidebar when GBM is displayed)
+- the first parameter-table row is `init_score`; `none` keeps the denominator-derived offset behavior, while a selected fitted GLM prediction or numeric source column is transformed into LightGBM's linear predictor space and replaces the denominator-derived initial score
 
 ## Features and parameters tab
 
@@ -48,6 +49,7 @@ This is made up of two side by side components:
 - for active EBM models, the feature metric toggle includes `EBM Gain`, which replaces the feature grid with a tree-feature-combination table showing `Tree features`, `Dim`, `Trees`, `Gain`, and `% Gain` from the saved tree table.
 - the user selects the LightGBM core parameters and learning control parameters from a top right control.  Show all possible LightGBM parameters in this control, but put the most important ones at the top. This should be scrollable as it's a long list.
 - parameter values support grid-search curly braces. `{200, 300, 400}` means train those explicit values, `{0.05, 0.3; 0.05}` means an inclusive numeric range, and `{bagging, goss}` works for `data_sample_strategy`. When a grid is present, show a compact `Grid samples` numeric control below SHAP rows. The backend samples the hypergrid deterministically without materializing all combinations, skips invalid LightGBM parameter combinations, trains the valid sampled combinations sequentially, saves each model, and activates the best completed model.
+- `init_score` is not eligible for grid-search braces because it resolves to row-level sidecar data, not a LightGBM scalar parameter.
 - include a button to specify whether SHAP values should be created for 0 rows, 10k rows, 100k rows, or all rows.
 - if a physical `SAMPLE` column is present with both `training` and `test` rows, include a model-mode radio button below the SHAP row selector with `Normal` and `EBM`.
 - include a green "train GBM" button at the top which starts model training and diagnostic creation

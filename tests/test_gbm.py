@@ -24,6 +24,7 @@ from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_parameters, validate_request
+from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
 
@@ -271,6 +272,68 @@ COPY (
         self.assertEqual(age["gain"], 0.0)
         sample = next(row for row in payload["features"] if row["name"] == "SAMPLE")
         self.assertFalse(sample["include"])
+
+    def test_gbm_config_includes_unambiguous_init_score_options(self) -> None:
+        data_path = self.root / "init_options.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age,Baseline,gbm_prediction,glm_prediction,SAMPLE\n"
+            "10,100,30,9,1,2,training\n"
+            "20,200,40,19,1,2,test\n"
+            "30,300,50,29,1,2,training\n",
+            encoding="utf-8",
+        )
+        glm_store = GlmModelStore(data_path)
+        model_dir = glm_store.create_model_dir("rating-glm")
+        glm_store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": "rating-glm",
+                "label": "Rating GLM",
+                "created_at": "2026-05-25T00:00:00Z",
+                "family": "poisson",
+                "link": "auto",
+                "response_column": "actualNumerator",
+                "denominator_column": "denominator",
+                "sources": {"predictions": "glm:rating-glm:predictions"},
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 9 AS glm_prediction
+  UNION ALL
+  SELECT 2, 19
+  UNION ALL
+  SELECT 3, 29
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        app = create_app(data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        parameters = payload["parameters"]
+        self.assertEqual(parameters[0]["name"], "init_score")
+        self.assertEqual(parameters[0]["value"], "none")
+        options = payload["parameter_options"]["init_score"]
+        values = [option["value"] for option in options]
+        self.assertEqual(values[0], "none")
+        self.assertIn("glm:rating-glm:predictions", values)
+        self.assertIn("Baseline", values)
+        self.assertIn("Age", values)
+        self.assertNotIn("actualNumerator", values)
+        self.assertNotIn("SAMPLE", values)
+        self.assertNotIn("gbm_prediction", values)
+        self.assertNotIn("glm_prediction", values)
+        glm_option = next(option for option in options if option["value"] == "glm:rating-glm:predictions")
+        self.assertIn("Rating GLM", glm_option["label"])
+        self.assertIn("actualNumerator / denominator", glm_option["label"])
 
     def test_gbm_config_includes_feature_groupings_and_scenarios(self) -> None:
         features_path = self.root / "feature_spec.csv"
@@ -1886,6 +1949,120 @@ COPY (
         self.assertFalse(should_use_offset_init_score(poisson_params, None))
         self.assertTrue(should_use_offset_init_score(poisson_params, "denominator"))
         self.assertFalse(should_use_offset_init_score(regression_params, "denominator"))
+
+    def test_validation_rejects_invalid_init_score_selection_and_domain(self) -> None:
+        data_path = self.root / "bad_init_score.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age,Baseline,SAMPLE\n"
+            "10,100,30,9,training\n"
+            "20,200,40,0,test\n"
+            "30,300,50,29,training\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+            "parameters": default_parameters() + [{"name": "init_score", "value": "Baseline"}],
+            "sample_column": "SAMPLE",
+        }
+
+        result = validate_request(dataset, payload)
+
+        self.assertFalse(result.ok)
+        self.assertIn("positive numeric values", "; ".join(result.errors))
+        self.assertIn("boost_from_average is ignored", "; ".join(result.warnings))
+
+    def test_validation_rejects_init_score_grid_braces(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+            "parameters": default_parameters() + [{"name": "init_score", "value": "{none, Age}"}],
+            "sample_column": "SAMPLE",
+        }
+
+        result = validate_grid_or_request(dataset, payload)
+
+        self.assertFalse(result["ok"])
+        self.assertIn("init_score cannot use grid-search braces", "; ".join(result["errors"]))
+
+    def test_training_persists_init_score_and_uses_it_for_predictions(self) -> None:
+        try:
+            import lightgbm as lgb
+            import pandas as pd
+        except ImportError:
+            self.skipTest("LightGBM dependencies are not installed")
+
+        data_path = self.root / "init_score_train.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age,Baseline\n"
+            "10,100,30,8\n"
+            "20,200,40,18\n"
+            "30,300,50,28\n"
+            "40,400,60,38\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        store = GbmModelStore(data_path)
+        parameters = default_parameters() + [
+            {"name": "init_score", "value": "Baseline"},
+            {"name": "num_iterations", "value": 2},
+            {"name": "early_stopping_rounds", "value": 0},
+            {"name": "learning_rate", "value": 0.1},
+            {"name": "num_leaves", "value": 2},
+            {"name": "min_data_in_leaf", "value": 1},
+            {"name": "metric", "value": "poisson"},
+            {"name": "objective", "value": "poisson"},
+        ]
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "Init score",
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+                "parameters": parameters,
+                "sample_column": "",
+                "shap_rows": "0",
+            },
+        )
+
+        model_id = result["model_id"]
+        manifest = store.read_json(store.artifact_path(model_id, "manifest"))
+        stored_parameters = store.read_json(store.artifact_path(model_id, "parameters"))
+        self.assertEqual(manifest["init_score"]["kind"], "dataset_column")
+        self.assertEqual(manifest["init_score"]["column"], "Baseline")
+        self.assertEqual(manifest["init_score"]["transform"], "log")
+        self.assertEqual(manifest["init_score"]["boost_from_average"], "ignored")
+        self.assertEqual(stored_parameters["init_score"], "Baseline")
+        self.assertEqual(stored_parameters["init_score_metadata"]["column"], "Baseline")
+        self.assertTrue(store.artifact_path(model_id, "init_score").exists())
+
+        con = duckdb.connect(database=":memory:")
+        try:
+            init_rows = con.execute(
+                f"SELECT __lucidum_row_id, init_score, init_score_prediction FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'init_score')))}) ORDER BY __lucidum_row_id"
+            ).fetchall()
+            prediction_rows = con.execute(
+                f"SELECT __lucidum_row_id, gbm_prediction FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'predictions')))}) ORDER BY __lucidum_row_id"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual([row[2] for row in init_rows], [8, 18, 28, 38])
+        for row, expected in zip(init_rows, [8, 18, 28, 38]):
+            self.assertAlmostEqual(row[1], math.log(expected), places=10)
+
+        booster = lgb.Booster(model_file=str(store.artifact_path(model_id, "model")))
+        features = pd.DataFrame({"Age": [30, 40, 50, 60]})
+        raw_scores = booster.predict(features, raw_score=True, num_iteration=result["best_iteration"])
+        expected_predictions = [math.exp(math.log(baseline) + float(raw)) for baseline, raw in zip([8, 18, 28, 38], raw_scores)]
+        for (_row_id, actual), expected in zip(prediction_rows, expected_predictions):
+            self.assertAlmostEqual(actual, expected, places=8)
 
     def test_poisson_demo_without_denominator_trains(self) -> None:
         try:

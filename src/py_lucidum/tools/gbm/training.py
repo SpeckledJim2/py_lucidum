@@ -8,6 +8,7 @@ from typing import Any, Callable
 import duckdb
 
 from py_lucidum.core import Dataset, quote_ident, sql_literal
+from py_lucidum.tools.glm.store import GlmModelStore
 
 from .sample import (
     SAMPLE_COLUMN,
@@ -18,17 +19,21 @@ from .sample import (
 )
 from .store import GbmModelStore, best_metrics_from_evaluation
 from .validation import (
+    INIT_SCORE_NONE,
     OFFSET_COLUMN,
     RESPONSE_COLUMN,
     detect_sample_column,
     display_monotonicity,
     feature_interaction_constraint_groups,
     metric,
+    normalise_init_score_value,
     normalise_feature_grouping_map,
     normalise_feature_interaction_features,
     normalise_feature_interaction_groupings,
     normalise_training_mode,
     objective,
+    init_score_requested,
+    init_score_transform,
     normalise_features,
     normalise_parameters,
     selected_offset_column,
@@ -229,6 +234,114 @@ def write_dataframe_parquet(frame: Any, path: Path) -> None:
         con.close()
 
 
+def init_score_kind(selected_init_score: str) -> str:
+    value = normalise_init_score_value(selected_init_score)
+    if value.lower() == INIT_SCORE_NONE:
+        return "none"
+    if value.startswith("glm:"):
+        return "glm_prediction"
+    return "dataset_column"
+
+
+def attach_glm_init_score(work_frame: Any, dataset: Dataset, selected_init_score: str) -> Any:
+    glm_store = GlmModelStore(dataset.path)
+    ref = glm_store.source_ref(selected_init_score)
+    if ref is None or ref.source_kind != "predictions":
+        raise ValueError(f"Choose a current fitted GLM prediction source for init_score: {selected_init_score}")
+    prediction_path = glm_store.source_path(ref.model_id, "predictions")
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.register("score_rows", work_frame[["__lucidum_row_id"]])
+        init_frame = con.execute(
+            f"""
+SELECT score_rows.__lucidum_row_id, prediction.glm_prediction AS __lucidum_init_score_prediction
+FROM score_rows
+LEFT JOIN read_parquet({sql_literal(str(prediction_path))}) prediction USING (__lucidum_row_id)
+"""
+        ).fetch_df()
+    finally:
+        con.close()
+    return work_frame.merge(init_frame, on="__lucidum_row_id", how="left", sort=False)
+
+
+def init_score_arrays(
+    *,
+    work_frame: Any,
+    selected_init_score: str,
+    selected_objective: str,
+    dataset: Dataset,
+    np: Any,
+    pd: Any,
+) -> tuple[Any | None, Any | None, dict[str, Any]]:
+    value = normalise_init_score_value(selected_init_score)
+    kind = init_score_kind(value)
+    transform = init_score_transform(selected_objective)
+    metadata: dict[str, Any] = {"value": value, "kind": kind, "transform": None if kind == "none" else transform}
+    if kind == "none":
+        return None, None, metadata
+    if kind == "glm_prediction":
+        work_frame = attach_glm_init_score(work_frame, dataset, value)
+        prediction_values = pd.to_numeric(work_frame["__lucidum_init_score_prediction"], errors="coerce")
+        glm_store = GlmModelStore(dataset.path)
+        ref = glm_store.source_ref(value)
+        if ref is not None:
+            metadata.update({"source_id": value, "model_id": ref.model_id})
+    else:
+        if value not in work_frame:
+            raise ValueError(f"Choose a valid numeric dataset column for init_score: {value}")
+        prediction_values = pd.to_numeric(work_frame[value], errors="coerce")
+        metadata.update({"column": value})
+    prediction_array = prediction_values.to_numpy(dtype="float64")
+    linear_array = init_score_to_linear(np, prediction_array, transform, value)
+    metadata.update(
+        {
+            "artifact": "init_score.parquet",
+            "space": "linear_predictor",
+            "prediction_space": True,
+            "replaces_offset": True,
+            "boost_from_average": "ignored",
+            "status": "current",
+        }
+    )
+    return linear_array, prediction_array, metadata
+
+
+def init_score_to_linear(np: Any, values: Any, transform: str, label: str) -> Any:
+    array = np.asarray(values, dtype="float64")
+    finite = np.isfinite(array)
+    if transform == "log":
+        valid = finite & (array > 0)
+        if not bool(valid.all()):
+            raise ValueError(f"init_score {label} must contain positive numeric values for all scored rows")
+        return np.log(array)
+    if transform == "logit":
+        valid = finite & (array > 0) & (array < 1)
+        if not bool(valid.all()):
+            raise ValueError(f"init_score {label} must contain numeric values between 0 and 1 for all scored rows")
+        return np.log(array / (1.0 - array))
+    if not bool(finite.all()):
+        raise ValueError(f"init_score {label} must contain finite numeric values for all scored rows")
+    return array
+
+
+def raw_score_to_prediction(np: Any, raw_values: Any, transform: str) -> Any:
+    if transform == "log":
+        return np.exp(raw_values)
+    if transform == "logit":
+        return 1.0 / (1.0 + np.exp(-raw_values))
+    return raw_values
+
+
+def init_score_dataframe(pd: Any, work_frame: Any, linear_values: Any, prediction_values: Any) -> Any:
+    return pd.DataFrame(
+        {
+            "__lucidum_row_id": work_frame["__lucidum_row_id"].astype("int64").to_numpy(),
+            "init_score": linear_values,
+            "init_score_prediction": prediction_values,
+        }
+    )
+
+
 def training_projection_columns(
     *,
     response_col: str,
@@ -236,8 +349,9 @@ def training_projection_columns(
     sample_column: str | None,
     feature_names: list[str],
     columns: dict[str, Any],
+    init_score_col: str | None = None,
 ) -> list[str]:
-    names = [response_col, offset_col, sample_column, *feature_names]
+    names = [response_col, offset_col, sample_column, init_score_col, *feature_names]
     projected: list[str] = []
     seen: set[str] = set()
     for name in names:
@@ -294,6 +408,7 @@ def train_model(
         raise ValueError("; ".join(validation.errors))
 
     params = normalise_parameters(payload.get("parameters"))
+    selected_init_score = normalise_init_score_value(params.pop("init_score", INIT_SCORE_NONE))
     training_mode = normalise_training_mode(payload.get("training_mode"))
     selected_objective = objective(params)
     params["objective"] = selected_objective
@@ -304,6 +419,7 @@ def train_model(
     configured_num_leaves = max(2, int(params.get("num_leaves", 31) or 31))
     configured_learning_rate = params.get("learning_rate", 0.05)
     stored_params = dict(params)
+    stored_params["init_score"] = selected_init_score
     stored_params["num_iterations"] = num_boost_round
     stored_params["early_stopping_rounds"] = early_stopping_rounds
     stored_params["training_mode"] = training_mode
@@ -329,6 +445,7 @@ def train_model(
             else None
         )
         sample_column = SAMPLE_COLUMN if dataset_sample else None
+        init_score_col = selected_init_score if selected_init_score in columns else None
         source_columns = list(columns)
         projection_columns = training_projection_columns(
             response_col=response_col,
@@ -336,6 +453,7 @@ def train_model(
             sample_column=sample_column,
             feature_names=feature_names,
             columns=columns,
+            init_score_col=init_score_col,
         )
         where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
         select_sql = training_select_sql(
@@ -412,9 +530,19 @@ def train_model(
 
     offset_values = work_frame[offset_col].astype("float64") if offset_col else pd.Series([1.0] * len(work_frame), index=work_frame.index)
     log_offset = np.log(offset_values.to_numpy(dtype="float64"))
-    use_offset_init_score = should_use_offset_init_score(params, offset_col)
-    train_init = log_offset[train_mask.to_numpy()] if use_offset_init_score else None
-    valid_init = log_offset[test_mask.to_numpy()] if use_offset_init_score and bool(test_mask.any()) else None
+    use_supplied_init_score = init_score_requested({"init_score": selected_init_score})
+    init_score_linear, init_score_prediction, init_score_metadata = init_score_arrays(
+        work_frame=work_frame,
+        selected_init_score=selected_init_score,
+        selected_objective=selected_objective,
+        dataset=dataset,
+        np=np,
+        pd=pd,
+    )
+    use_offset_init_score = bool(not use_supplied_init_score and should_use_offset_init_score(params, offset_col))
+    active_init_score = init_score_linear if use_supplied_init_score else log_offset if use_offset_init_score else None
+    train_init = active_init_score[train_mask.to_numpy()] if active_init_score is not None else None
+    valid_init = active_init_score[test_mask.to_numpy()] if active_init_score is not None and bool(test_mask.any()) else None
 
     train_set = lgb.Dataset(
         feature_frame.loc[train_mask],
@@ -437,7 +565,7 @@ def train_model(
             )
         )
         valid_names.append("test")
-    validation_init = log_offset[validation_mask.to_numpy()] if use_offset_init_score and bool(validation_mask.any()) else None
+    validation_init = active_init_score[validation_mask.to_numpy()] if active_init_score is not None and bool(validation_mask.any()) else None
 
     evaluation_result: dict[str, dict[str, list[float]]] = {}
     ebm_controller: EbmStageController | None = None
@@ -509,7 +637,9 @@ def train_model(
         ),
     )
     raw_score = booster.predict(feature_frame, raw_score=True, num_iteration=best_iteration)
-    if use_offset_init_score:
+    if use_supplied_init_score and init_score_linear is not None:
+        prediction = raw_score_to_prediction(np, init_score_linear + raw_score, str(init_score_metadata.get("transform") or "identity"))
+    elif use_offset_init_score:
         prediction = np.exp(log_offset + raw_score)
     else:
         prediction = booster.predict(feature_frame, num_iteration=best_iteration)
@@ -520,6 +650,12 @@ def train_model(
         }
     )
     write_dataframe_parquet(predictions, store.artifact_path(model_id, "predictions"))
+    if use_supplied_init_score and init_score_linear is not None and init_score_prediction is not None:
+        write_dataframe_parquet(
+            init_score_dataframe(pd, work_frame, init_score_linear, init_score_prediction),
+            store.artifact_path(model_id, "init_score"),
+        )
+        init_score_metadata["artifact_path"] = str(store.artifact_path(model_id, "init_score"))
 
     gain_values = booster.feature_importance(importance_type="gain")
     gains = {name: float(value or 0.0) for name, value in zip(feature_names, gain_values)}
@@ -627,6 +763,8 @@ def train_model(
         manifest["ebm"] = ebm_metadata
     if grid_search:
         manifest["grid_search"] = grid_search
+    manifest["init_score"] = init_score_metadata
+    stored_params["init_score_metadata"] = init_score_metadata
     store.write_json(store.artifact_path(model_id, "feature_config"), feature_config)
     store.write_json(store.artifact_path(model_id, "parameters"), stored_params)
     store.write_json(

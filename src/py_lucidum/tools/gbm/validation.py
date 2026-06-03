@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, quote_ident
+from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, quote_ident, sql_literal
+from py_lucidum.tools.glm.store import GlmModelStore
 
 from .sample import (
     SAMPLE_COLUMN,
@@ -16,6 +17,8 @@ from .sample import (
 
 RESPONSE_COLUMN = "actualNumerator"
 OFFSET_COLUMN = "denominator"
+INIT_SCORE_PARAMETER = "init_score"
+INIT_SCORE_NONE = "none"
 DEFAULT_OBJECTIVE = "poisson"
 DEFAULT_METRIC = "poisson"
 DEFAULT_TRAINING_MODE = "normal"
@@ -60,6 +63,7 @@ LOG_LINK_OBJECTIVES = {"poisson", "gamma", "tweedie"}
 MONOTONE_OBJECTIVES = {"regression", "regression_l1", "huber", "fair", "poisson", "gamma", "tweedie", "binary"}
 CROSS_ENTROPY_OBJECTIVES = {"cross_entropy", "cross_entropy_lambda"}
 HIGH_CARDINALITY_THRESHOLD = 20
+RESERVED_INIT_SCORE_COLUMNS = {"gbm_prediction", "glm_prediction"}
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,7 @@ class ValidationResult:
 
 def default_parameters() -> list[dict[str, Any]]:
     return [
+        {"name": INIT_SCORE_PARAMETER, "value": INIT_SCORE_NONE, "important": True},
         {"name": "objective", "value": DEFAULT_OBJECTIVE, "important": True},
         {"name": "metric", "value": DEFAULT_METRIC, "important": True},
         {"name": "data_sample_strategy", "value": "bagging", "important": True},
@@ -277,6 +282,128 @@ def uses_log_offset(params: dict[str, Any]) -> bool:
     return objective(params) in LOG_LINK_OBJECTIVES
 
 
+def normalise_init_score_value(raw: Any) -> str:
+    text = str(raw if raw is not None else INIT_SCORE_NONE).strip()
+    if text == "" or text.lower() in {INIT_SCORE_NONE, "__none__"}:
+        return INIT_SCORE_NONE
+    return text
+
+
+def init_score_value(params: dict[str, Any]) -> str:
+    return normalise_init_score_value(params.get(INIT_SCORE_PARAMETER))
+
+
+def init_score_requested(params: dict[str, Any]) -> bool:
+    return init_score_value(params).lower() != INIT_SCORE_NONE
+
+
+def init_score_transform(selected_objective: str) -> str:
+    if selected_objective in LOG_LINK_OBJECTIVES:
+        return "log"
+    if selected_objective == "binary" or selected_objective in CROSS_ENTROPY_OBJECTIVES:
+        return "logit"
+    return "identity"
+
+
+def init_score_domain_invalid_sql(value_sql: str, transform: str) -> str:
+    base = f"({value_sql} IS NULL OR NOT isfinite({value_sql})"
+    if transform == "log":
+        return f"{base} OR {value_sql} <= 0)"
+    if transform == "logit":
+        return f"{base} OR {value_sql} <= 0 OR {value_sql} >= 1)"
+    return f"{base})"
+
+
+def init_score_domain_message(transform: str) -> str:
+    if transform == "log":
+        return "positive numeric values"
+    if transform == "logit":
+        return "numeric values between 0 and 1"
+    return "finite numeric values"
+
+
+def init_score_options(dataset: Dataset, *, response_column: str = RESPONSE_COLUMN, sample_column: str | None = None) -> list[dict[str, Any]]:
+    options: list[dict[str, Any]] = [{"value": INIT_SCORE_NONE, "label": INIT_SCORE_NONE, "kind": "none"}]
+    glm_store = GlmModelStore(dataset.path)
+    for model in glm_store.list_models():
+        model_id = str(model.get("model_id") or "").strip()
+        if not model_id:
+            continue
+        source_id = glm_store.source_id(model_id)
+        label = init_score_glm_label(model)
+        options.append(
+            {
+                "value": source_id,
+                "label": label,
+                "kind": "glm_prediction",
+                "model_id": model_id,
+                "source_id": source_id,
+            }
+        )
+
+    columns = dataset.column_map()
+    reserved = {str(response_column or RESPONSE_COLUMN), *RESERVED_INIT_SCORE_COLUMNS}
+    if sample_column:
+        reserved.add(sample_column)
+    for column in columns.values():
+        if column.name in reserved or not is_numeric_kind(column.kind):
+            continue
+        options.append(
+            {
+                "value": column.name,
+                "label": column.name,
+                "kind": "dataset_column",
+                "column": column.name,
+            }
+        )
+    return options
+
+
+def init_score_glm_label(model: dict[str, Any]) -> str:
+    model_id = str(model.get("model_id") or "").strip()
+    label = str(model.get("label") or model_id or "GLM").strip()
+    response = str(model.get("response_column") or "response").strip()
+    denominator = str(model.get("denominator_column") or model.get("offset_column") or "N").strip() or "N"
+    return f"{label} glm_prediction ({response} / {denominator})"
+
+
+def init_score_saved_option(dataset: Dataset, raw: Any) -> dict[str, Any] | None:
+    value = normalise_init_score_value(raw)
+    if value.lower() == INIT_SCORE_NONE:
+        return None
+    glm_store = GlmModelStore(dataset.path)
+    ref = glm_store.source_ref(value)
+    if ref is not None:
+        try:
+            model = glm_store.model_list_item(glm_store.model_dir(ref.model_id), glm_store.manifest(ref.model_id), glm_store.active_model_id())
+            return {
+                "value": value,
+                "label": init_score_glm_label(model),
+                "kind": "glm_prediction",
+                "model_id": ref.model_id,
+                "source_id": value,
+            }
+        except ValueError:
+            pass
+    columns = dataset.column_map()
+    if value in columns:
+        return {"value": value, "label": value, "kind": "dataset_column", "column": value}
+    return {"value": value, "label": f"{value} (missing)", "kind": "missing", "disabled": True, "status": "missing"}
+
+
+def init_score_current_options(dataset: Dataset, saved_value: Any = None, *, response_column: str = RESPONSE_COLUMN, sample_column: str | None = None) -> list[dict[str, Any]]:
+    options = init_score_options(dataset, response_column=response_column, sample_column=sample_column)
+    saved = init_score_saved_option(dataset, saved_value)
+    if saved and all(option["value"] != saved["value"] for option in options):
+        saved = dict(saved)
+        saved.setdefault("status", "stale")
+        saved["disabled"] = True
+        if "missing" not in str(saved.get("label") or "").lower():
+            saved["label"] = f"{saved.get('label') or saved['value']} (unavailable)"
+        options.append(saved)
+    return options
+
+
 def selected_response_column(payload: dict[str, Any], columns: dict[str, ColumnInfo]) -> str:
     candidate = str(payload.get("response") or payload.get("response_column") or RESPONSE_COLUMN).strip()
     if not candidate or candidate not in columns or not is_numeric_kind(columns[candidate].kind):
@@ -291,6 +418,99 @@ def selected_offset_column(payload: dict[str, Any], columns: dict[str, ColumnInf
     if candidate not in columns or not is_numeric_kind(columns[candidate].kind):
         raise ValueError("Choose a valid numeric GBM denominator column")
     return candidate
+
+
+def init_score_selection_messages(
+    dataset: Dataset,
+    *,
+    selected_value: str,
+    selected_objective: str,
+    response_col: str,
+    offset_col: str | None,
+    sample_column: str | None,
+) -> tuple[list[str], list[str]]:
+    value = normalise_init_score_value(selected_value)
+    if value.lower() == INIT_SCORE_NONE:
+        return [], []
+    errors: list[str] = []
+    warnings = ["LightGBM boost_from_average is ignored when init_score is supplied"]
+    if "{" in value or "}" in value:
+        errors.append("init_score cannot use grid-search braces")
+        return errors, warnings
+    transform = init_score_transform(selected_objective)
+    if value.startswith("glm:"):
+        glm_store = GlmModelStore(dataset.path)
+        ref = glm_store.source_ref(value)
+        if ref is None or ref.source_kind != "predictions":
+            errors.append(f"Choose a current fitted GLM prediction source for init_score: {value}")
+            return errors, warnings
+        invalid_count = init_score_invalid_count_for_glm(dataset, glm_store.source_path(ref.model_id, "predictions"), offset_col, transform)
+        if invalid_count:
+            errors.append(f"init_score {value} must contain {init_score_domain_message(transform)} for all scored rows")
+        return errors, warnings
+
+    columns = dataset.column_map()
+    column = columns.get(value)
+    if column is None or not is_numeric_kind(column.kind):
+        errors.append(f"Choose a valid numeric dataset column for init_score: {value}")
+        return errors, warnings
+    if value == response_col:
+        errors.append("init_score cannot use the selected GBM response column")
+    if sample_column and value == sample_column:
+        errors.append("init_score cannot use the GBM sample split column")
+    if value in RESERVED_INIT_SCORE_COLUMNS:
+        errors.append(f"init_score cannot use reserved model-output column {value}")
+    if errors:
+        return errors, warnings
+    invalid_count = init_score_invalid_count_for_column(dataset, value, offset_col, transform)
+    if invalid_count:
+        errors.append(f"init_score {value} must contain {init_score_domain_message(transform)} for all scored rows")
+    return errors, warnings
+
+
+def init_score_invalid_count_for_column(dataset: Dataset, column_name: str, offset_col: str | None, transform: str) -> int:
+    where_sql = f"WHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
+    value_sql = "init_score_value"
+    invalid_sql = init_score_domain_invalid_sql(value_sql, transform)
+    row = dataset.con.execute(
+        f"""
+SELECT COALESCE(SUM(CASE WHEN {invalid_sql} THEN 1 ELSE 0 END), 0)
+FROM (
+  SELECT TRY_CAST({quote_ident(column_name)} AS DOUBLE) AS {value_sql}
+  FROM {dataset.relation_sql()}
+  {where_sql}
+) scored_values
+"""
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def init_score_invalid_count_for_glm(dataset: Dataset, prediction_path: Any, offset_col: str | None, transform: str) -> int:
+    where_sql = f"WHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
+    value_sql = "init_score_value"
+    invalid_sql = init_score_domain_invalid_sql(value_sql, transform)
+    offset_projection = f", {quote_ident(offset_col)}" if offset_col else ""
+    row = dataset.con.execute(
+        f"""
+WITH base AS (
+  SELECT ROW_NUMBER() OVER () AS __lucidum_row_id{offset_projection}
+  FROM {dataset.relation_sql()}
+),
+eligible AS (
+  SELECT *
+  FROM base
+  {where_sql}
+),
+scored_values AS (
+  SELECT TRY_CAST(prediction.glm_prediction AS DOUBLE) AS {value_sql}
+  FROM eligible
+  LEFT JOIN read_parquet({sql_literal(str(prediction_path))}) prediction USING (__lucidum_row_id)
+)
+SELECT COALESCE(SUM(CASE WHEN {invalid_sql} THEN 1 ELSE 0 END), 0)
+FROM scored_values
+"""
+    ).fetchone()
+    return int(row[0] or 0)
 
 
 def feature_rows(
@@ -584,6 +804,18 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
         else:
             warnings.append("No sample column was found; the GBM will train on all valid rows without early stopping")
 
+        if response_col:
+            init_errors, init_warnings = init_score_selection_messages(
+                dataset,
+                selected_value=init_score_value(params),
+                selected_objective=selected_objective,
+                response_col=response_col,
+                offset_col=offset_col,
+                sample_column=sample_column,
+            )
+            errors.extend(init_errors)
+            warnings.extend(init_warnings)
+
         for feature in selected_features:
             if feature["name"] in reserved_sample_names:
                 errors.append(f"{feature['name']} is reserved for the GBM sample split")
@@ -735,6 +967,8 @@ __all__ = [
     "DATA_SAMPLE_STRATEGIES",
     "GBM_METRICS",
     "GBM_OBJECTIVES",
+    "INIT_SCORE_NONE",
+    "INIT_SCORE_PARAMETER",
     "OFFSET_COLUMN",
     "RESPONSE_COLUMN",
     "TRAINING_MODES",
@@ -746,6 +980,12 @@ __all__ = [
     "display_monotonicity",
     "feature_interaction_constraint_groups",
     "feature_rows",
+    "init_score_current_options",
+    "init_score_options",
+    "init_score_requested",
+    "init_score_transform",
+    "init_score_value",
+    "normalise_init_score_value",
     "normalise_feature_grouping_map",
     "normalise_feature_interaction_features",
     "normalise_feature_interaction_groupings",

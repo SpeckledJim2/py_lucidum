@@ -7,7 +7,7 @@ from typing import Any
 
 from py_lucidum.core import Dataset
 
-from .validation import ValidationResult, coerce_parameter, normalise_parameters, validate_request
+from .validation import INIT_SCORE_PARAMETER, ValidationResult, coerce_parameter, normalise_parameters, validate_request
 
 
 DEFAULT_GRID_SAMPLES = 25
@@ -134,6 +134,8 @@ def parse_parameter_grid(raw_parameters: Any) -> ParameterGrid:
         name = str(row.get("name") or "").strip()
         if not name:
             raise ParameterGridError("Grid parameter rows must have a parameter name")
+        if name == INIT_SCORE_PARAMETER:
+            raise ParameterGridError("init_score cannot use grid-search braces")
         dimensions.append(parse_grid_dimension(name, row, text))
     return ParameterGrid(rows=rows, dimensions=dimensions)
 
