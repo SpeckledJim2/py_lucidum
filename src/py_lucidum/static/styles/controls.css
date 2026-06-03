@@ -154,7 +154,8 @@
         font-size: 12px;
       }
 
-      .gbm-model-header {
+      .gbm-model-header,
+      .glm-model-header {
         display: flex;
         align-items: center;
         gap: 5px;
@@ -162,17 +163,20 @@
         margin: 0 0 6px;
       }
 
-      .gbm-sidebar-panel.gbm-model-collapsed .gbm-model-header {
+      .gbm-sidebar-panel.gbm-model-collapsed .gbm-model-header,
+      .glm-sidebar-panel.glm-model-collapsed .glm-model-header {
         margin-bottom: 0;
       }
 
-      .gbm-model-header h2 {
+      .gbm-model-header h2,
+      .glm-model-header h2 {
         margin: 0;
         font-size: 12px;
       }
 
       .kpi-selected-meta,
-      .gbm-model-selected-meta {
+      .gbm-model-selected-meta,
+      .glm-model-selected-meta {
         min-width: 0;
         overflow: hidden;
         text-align: right;
@@ -195,7 +199,8 @@
         max-height: none;
       }
 
-      #gbmModelSelect {
+      #gbmModelSelect,
+      #glmModelSelect {
         flex: 1 1 auto;
         width: 100%;
         height: auto;
@@ -204,7 +209,8 @@
       }
 
       .kpi-list .feature,
-      .gbm-model-list .feature {
+      .gbm-model-list .feature,
+      .glm-model-list .feature {
         display: grid;
         grid-template-columns: fit-content(52%) minmax(96px, 1fr);
         font-size: 12px;
@@ -217,26 +223,31 @@
         background: color-mix(in srgb, #f59e0b 22%, var(--panel));
       }
 
-      .gbm-model-list .gbm-model-option.active {
+      .gbm-model-list .gbm-model-option.active,
+      .glm-model-list .glm-model-option.active {
         background: color-mix(in srgb, var(--accent) 20%, var(--panel));
       }
 
-      .gbm-model-list .gbm-model-option {
+      .gbm-model-list .gbm-model-option,
+      .glm-model-list .glm-model-option {
         grid-template-columns: fit-content(72%) minmax(0, 1fr);
       }
 
       .kpi-list .kpi-option:not(.active):hover,
-      .gbm-model-list .gbm-model-option:not(.active):hover {
+      .gbm-model-list .gbm-model-option:not(.active):hover,
+      .glm-model-list .glm-model-option:not(.active):hover {
         background: color-mix(in srgb, var(--accent) 15%, transparent);
       }
 
       .kpi-list .kpi-option[hidden],
-      .gbm-model-list .gbm-model-option[hidden] {
+      .gbm-model-list .gbm-model-option[hidden],
+      .glm-model-list .glm-model-option[hidden] {
         display: none !important;
       }
 
       .kpi-detail,
-      .gbm-model-detail {
+      .gbm-model-detail,
+      .glm-model-detail {
         min-width: 0;
         overflow: hidden;
         text-align: right;

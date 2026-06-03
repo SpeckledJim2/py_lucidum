@@ -1,0 +1,420 @@
+      .glm-sidebar-panel {
+        display: flex;
+        flex-direction: column;
+        flex: 0 0 var(--sidebar-glm-height, 220px);
+        height: auto;
+        margin-top: 0;
+        margin-bottom: 0;
+        min-height: 0;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .glm-sidebar-panel.glm-model-collapsed {
+        flex: 0 0 auto;
+        height: auto;
+      }
+
+      .glm-sidebar-panel.glm-model-collapsed #glmModelSelect {
+        display: none;
+      }
+
+      .glm-sidebar-panel.glm-model-collapsed .filter-collapse-icon {
+        transform: rotate(-45deg) translate(-1px, 1px);
+      }
+
+      .sidebar-glm-resizer {
+        background: linear-gradient(to bottom, var(--line), transparent);
+        cursor: row-resize;
+        flex: 0 0 8px;
+        margin-bottom: 0;
+        min-height: 0;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .sidebar-glm-resizer:hover,
+      .sidebar-glm-resizer.dragging {
+        background: var(--accent);
+      }
+
+      .glm-sidebar-panel.glm-model-collapsed #sidebarGlmResizer {
+        display: none;
+      }
+
+      .glm-tool {
+        --glm-table-border: #999;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        height: 100%;
+        width: 100%;
+        position: relative;
+      }
+
+      .glm-tool-error-shell {
+        min-height: 160px;
+      }
+
+      .glm-notice {
+        background: color-mix(in srgb, var(--panel) 92%, var(--danger));
+        border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line));
+        border-radius: 6px;
+        box-shadow: var(--shadow);
+        color: var(--danger);
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.25;
+        max-width: min(560px, 54%);
+        padding: 7px 9px;
+        position: absolute;
+        right: 8px;
+        top: 8px;
+        z-index: 5;
+      }
+
+      .glm-toolbar {
+        align-items: flex-start;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 12px;
+        justify-content: flex-start;
+        margin-bottom: 10px;
+      }
+
+      .glm-tabs {
+        position: static;
+      }
+
+      .glm-tabs .tab {
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .glm-build-status {
+        align-self: center;
+        color: var(--muted);
+        display: flex;
+        flex-direction: column;
+        flex: 0 1 auto;
+        font-size: 11px;
+        font-weight: 700;
+        gap: 2px;
+        line-height: 1.15;
+        margin-left: auto;
+        max-width: min(680px, 52%);
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+      }
+
+      .glm-build-status-main,
+      .glm-build-status-detail {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .glm-build-status-detail {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      .glm-build-status[data-phase="failed"] {
+        color: var(--danger);
+      }
+
+      .glm-build-status[data-phase="succeeded"] {
+        color: #15803d;
+      }
+
+      .glm-tab-panel {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .glm-builder-layout {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: minmax(320px, 0.95fr) minmax(360px, 1.05fr);
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .glm-formula-panel,
+      .glm-coefficient-panel,
+      .glm-model-navigator {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .glm-panel-header {
+        align-items: flex-start;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex: 0 0 auto;
+        gap: 12px;
+        justify-content: space-between;
+        min-width: 0;
+        padding: 10px 12px;
+      }
+
+      .glm-panel-title {
+        color: var(--text);
+        font-size: 17px;
+        font-weight: 800;
+        line-height: 1.1;
+        margin: 0;
+      }
+
+      .glm-family-row {
+        display: flex;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .glm-family-row select,
+      .glm-family-parameter {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--text);
+        font-size: 13px;
+        height: 32px;
+        padding: 0 8px;
+      }
+
+      .glm-family-row select {
+        min-width: 150px;
+      }
+
+      .glm-family-parameter {
+        width: 112px;
+      }
+
+      .glm-family-parameter:disabled {
+        opacity: 0.55;
+      }
+
+      .glm-builder-actions {
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex: 0 0 auto;
+        gap: 7px;
+        padding: 8px 12px;
+      }
+
+      .glm-builder-actions .segmented {
+        margin-right: auto;
+      }
+
+      .glm-inline-action-button,
+      .glm-icon-action-button,
+      .glm-build-button {
+        flex: 0 0 auto;
+        min-height: 28px;
+      }
+
+      .glm-build-button {
+        background: #15803d;
+        border-color: #15803d;
+        color: #fff;
+        font-weight: 800;
+      }
+
+      .glm-build-button.building,
+      .glm-build-button.building:disabled {
+        background: #d97706;
+        border-color: #d97706;
+        color: #fff;
+        cursor: progress;
+        opacity: 1;
+      }
+
+      .glm-editor-shell {
+        flex: 1 1 auto;
+        min-height: 0;
+        position: relative;
+      }
+
+      .glm-formula-editor,
+      .glm-formula-text {
+        bottom: 0;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        left: 0;
+        line-height: 1.42;
+        position: absolute;
+        right: 0;
+        top: 0;
+      }
+
+      .glm-formula-editor {
+        background: #fff;
+      }
+
+      .glm-formula-editor.fallback {
+        display: none;
+      }
+
+      .glm-formula-text {
+        background: #fff;
+        border: 0;
+        color: #111827;
+        outline: none;
+        padding: 8px;
+        resize: none;
+        white-space: pre;
+      }
+
+      .dark .glm-formula-editor,
+      .dark .glm-formula-text {
+        background: #111827;
+        color: #e5e7eb;
+      }
+
+      .glm-coefficient-header {
+        align-items: center;
+      }
+
+      .glm-coefficient-meta {
+        color: var(--muted);
+        display: flex;
+        flex-wrap: wrap;
+        font-size: 11px;
+        font-weight: 700;
+        gap: 6px 12px;
+        line-height: 1.2;
+        margin-top: 5px;
+      }
+
+      .glm-coefficient-meta span {
+        white-space: nowrap;
+      }
+
+      .glm-coefficient-actions,
+      .glm-model-actions {
+        display: flex;
+        flex: 0 0 auto;
+        gap: 8px;
+      }
+
+      .glm-table-tools {
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex: 0 0 auto;
+        justify-content: flex-end;
+        padding: 8px 12px;
+      }
+
+      .glm-table-tools label {
+        align-items: center;
+        color: var(--text);
+        display: flex;
+        font-size: 12px;
+        font-weight: 700;
+        gap: 6px;
+      }
+
+      .glm-table-tools input {
+        min-width: 180px;
+      }
+
+      .glm-coefficient-table-wrap,
+      .glm-model-table-wrap {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .glm-table {
+        border-collapse: collapse;
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.25;
+        min-width: 100%;
+        width: 100%;
+      }
+
+      .glm-table th,
+      .glm-table td {
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+        padding: 5px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .glm-table th {
+        background: var(--panel-muted);
+        color: var(--text);
+        font-weight: 800;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+      }
+
+      .glm-table td.numeric,
+      .glm-table th.numeric {
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .glm-table tbody tr.active,
+      .glm-table tbody tr:hover {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+      }
+
+      .glm-table td strong,
+      .glm-table td span {
+        display: block;
+      }
+
+      .glm-table td span {
+        color: var(--muted);
+        font-size: 10px;
+        margin-top: 2px;
+      }
+
+      .glm-empty-cell,
+      .glm-empty-state {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 10px;
+      }
+
+      .glm-model-navigator {
+        height: 100%;
+      }
+
+      .glm-model-actions {
+        border-bottom: 1px solid var(--line);
+        justify-content: flex-end;
+        padding: 8px;
+      }
+
+      .glm-model-detail {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      @media (max-width: 980px) {
+        .glm-builder-layout {
+          grid-template-columns: 1fr;
+          grid-template-rows: minmax(340px, 1fr) minmax(280px, 1fr);
+        }
+      }

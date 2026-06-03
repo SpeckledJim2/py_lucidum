@@ -112,7 +112,7 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertNotIn("/api/glm/summary", paths)
         self.assertNotIn("/api/gbm/summary", paths)
 
-    def test_model_tool_shells_can_be_enabled_without_model_dependencies(self) -> None:
+    def test_model_tools_can_be_enabled_without_model_dependencies(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm", "gbm"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
@@ -120,6 +120,10 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/column-profile/detail", paths)
         self.assertIn("/api/glm/summary", paths)
+        self.assertIn("/api/glm/config", paths)
+        self.assertIn("/api/glm/models", paths)
+        self.assertIn("/api/glm/validate", paths)
+        self.assertIn("/api/glm/build", paths)
         self.assertIn("/api/gbm/summary", paths)
         self.assertNotIn("/api/chart", paths)
 
@@ -128,7 +132,9 @@ class ColumnProfileToolTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["tool"], "glm")
-        self.assertEqual(payload["status"], "not_implemented")
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["response"], "response_column")
+        self.assertEqual(payload["denominator"], "denominator_column")
 
     def test_column_profile_can_be_enabled_alone(self) -> None:
         app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)

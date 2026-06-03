@@ -2,18 +2,118 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
 
+from .jobs import GlmJobManager
+from .store import GlmModelNameError, GlmModelStore, GlmSourceProvider
+from .training import MissingGlmDependency, glm_dependencies
+from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payload, sample_metadata, validate_request
+
 
 def register(app: FastAPI, context: AppContext) -> None:
-    async def summary_endpoint(request: Request) -> dict[str, Any]:
-        context.check_token(request)
+    store = GlmModelStore(context.dataset.path)
+    context.dataset.register_data_source_provider(GlmSourceProvider(store))
+    jobs = GlmJobManager()
+    app.state.glm_store = store
+    app.state.glm_jobs = jobs
+
+    def config_payload() -> dict[str, Any]:
         return {
             "tool": "glm",
-            "status": "not_implemented",
-            "message": "GLM modelling is not implemented in this refactor slice.",
+            "status": "ready",
+            "response": RESPONSE_COLUMN,
+            "denominator": DENOMINATOR_COLUMN,
+            "link": "auto",
+            "sample": sample_metadata(context.dataset),
+            "families": family_options_payload(),
+            "models": store.list_models(),
+            "active_model_id": store.active_model_id(),
         }
 
-    app.add_api_route("/api/glm/summary", summary_endpoint, methods=["GET"])
+    @app.get("/api/glm/summary")
+    async def summary_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        return config_payload()
+
+    @app.get("/api/glm/config")
+    async def config_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        return config_payload()
+
+    @app.get("/api/glm/models")
+    async def models_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        return {
+            "models": store.list_models(),
+            "active_model_id": store.active_model_id(),
+        }
+
+    @app.post("/api/glm/validate")
+    async def validate_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        return validate_request(context.dataset, payload)
+
+    @app.post("/api/glm/build")
+    async def build_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        try:
+            glm_dependencies()
+            validation = validate_request(context.dataset, payload)
+            if not validation["ok"]:
+                raise ValueError("; ".join(validation["errors"]))
+            job = jobs.start(context.dataset, store, payload)
+            return job.as_payload()
+        except MissingGlmDependency as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/glm/jobs/{job_id}")
+    async def job_endpoint(request: Request, job_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Choose a valid GLM job")
+        return job.as_payload()
+
+    @app.get("/api/glm/models/{model_id}")
+    async def model_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        try:
+            return store.model_detail(model_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/glm/models/{model_id}/activate")
+    async def activate_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        try:
+            manifest = store.activate_model(model_id)
+            return {"model": manifest, "config": config_payload()}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/glm/models/{model_id}/rename")
+    async def rename_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        payload = await request.json()
+        try:
+            manifest = store.rename_model(model_id, str(payload.get("new_model_id") or ""))
+            return {"model": manifest, "config": config_payload()}
+        except GlmModelNameError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/glm/models/{model_id}")
+    async def delete_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        try:
+            manifest = store.delete_model(model_id)
+            return {"deleted_model_id": model_id, "model": manifest, "config": config_payload()}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc

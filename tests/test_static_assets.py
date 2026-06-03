@@ -54,6 +54,7 @@ class StaticAssetTests(unittest.TestCase):
         "/static/styles/uk-map.css",
         "/static/styles/column-profile.css",
         "/static/styles/model-shell.css",
+        "/static/styles/glm.css",
         "/static/styles/gbm.css",
     ]
 
@@ -85,6 +86,7 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/column-profile-tool.js",
             "/static/app/line-bar-tool.js",
             "/static/app/uk-map-tool.js",
+            "/static/app/glm-tool.js",
             "/static/app/shared/api.js",
             "/static/app/shared/format.js",
             "/static/app/shared/schema.js",
@@ -166,15 +168,18 @@ const schema = {{
   data_sources: [
     {{ id: "dataset", columns: [{{ name: "Actual", kind: "numeric" }}] }},
     {{ id: "gbm:one:predictions", kind: "gbm_predictions", active: true, columns: [{{ name: "gbm_prediction", kind: "numeric" }}] }},
+    {{ id: "glm:one:predictions", kind: "glm_predictions", active: true, columns: [{{ name: "glm_prediction", kind: "numeric" }}] }},
   ],
 }};
 if (dataSourceForId(schema, "dataset").id !== "dataset") throw new Error("dataSourceForId failed");
 if (!dataSourceHasColumn(schema, "gbm:one:predictions", "gbm_prediction")) throw new Error("dataSourceHasColumn failed");
 if (sourceColumns(schema, "dataset").length !== 1) throw new Error("sourceColumns failed");
 if (!toolEnabled(schema, "line_bar")) throw new Error("toolEnabled failed");
-if (!isModelTool("gbm") || isModelTool("line_bar")) throw new Error("isModelTool failed");
-if (!isModelPredictionColumn({{ name: "gbm_prediction" }})) throw new Error("isModelPredictionColumn failed");
+if (!isModelTool("gbm") || !isModelTool("glm") || isModelTool("line_bar")) throw new Error("isModelTool failed");
+if (!isModelPredictionColumn({{ name: "gbm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction" }})) throw new Error("isModelPredictionColumn failed");
 if (preferredStartupSource(schema.data_sources, "missing") !== "gbm:one:predictions") throw new Error("preferredStartupSource failed");
+schema.data_sources[1].active = false;
+if (preferredStartupSource(schema.data_sources, "missing") !== "glm:one:predictions") throw new Error("preferredStartupSource GLM fallback failed");
 """
         self.run_node_script(script)
 
@@ -425,8 +430,11 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".dataset-meta-gbm-link {", css)
         self.assertIn("text-decoration-skip-ink: none;", css)
         self.assertIn("function renderDatasetMeta(", js)
+        self.assertIn('const payload = await api("/api/glm/models", { method: "GET" });', js)
         self.assertIn('const payload = await api("/api/gbm/models", { method: "GET" });', js)
+        self.assertIn("button.textContent = `GLMs (${datasetGlmCount.toLocaleString()})`;", js)
         self.assertIn("button.textContent = `GBMs (${datasetGbmCount.toLocaleString()})`;", js)
+        self.assertIn("glmTool.openModelNavigator();", js)
         self.assertIn("gbmTool.openModelNavigator();", js)
         self.assertIn("openModelNavigator,", js)
         self.assertIn('window.matchMedia("(prefers-color-scheme: dark)").matches', html)
@@ -467,6 +475,13 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('href="/static/app.css"', html)
         self.assertIn('type="module" src="/static/app.js"', html)
         self.assertIn('id="modelToolWrap" class="model-tool-wrap hidden"', html)
+        self.assertIn('id="glmSidebarPanel" class="section glm-sidebar-panel hidden"', html)
+        self.assertIn('id="sidebarGlmResizer"', html)
+        self.assertIn('aria-label="Resize KPI and GLM model controls"', html)
+        self.assertIn('id="glmModelCollapseBtn"', html)
+        self.assertIn('<h2>GLMs</h2>', html)
+        self.assertIn('id="glmModelSelectedMeta"', html)
+        self.assertIn('id="glmModelSelect" class="feature-list glm-model-list" role="listbox"', html)
         self.assertIn('id="gbmSidebarPanel" class="section gbm-sidebar-panel hidden"', html)
         self.assertIn('id="sidebarGbmResizer"', html)
         self.assertIn('aria-label="Resize KPI and GBM model controls"', html)
@@ -474,7 +489,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('<h2>GBMs</h2>', html)
         self.assertIn('id="gbmModelSelectedMeta"', html)
         self.assertIn('id="gbmModelSelect" class="feature-list gbm-model-list" role="listbox"', html)
+        self.assertIn("No GLMs built yet", js)
         self.assertIn("No GBMs trained yet", js)
+        self.assertIn(".glm-empty-state", css)
         self.assertIn(".gbm-model-list .gbm-empty-state", css)
         self.assertNotIn('id="gbmActiveModelSelect"', html)
         self.assertNotIn("?v=", html)
@@ -485,6 +502,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/column-profile-tool.js")
         self.assert_no_store("/static/app/line-bar-tool.js")
         self.assert_no_store("/static/app/uk-map-tool.js")
+        self.assert_no_store("/static/app/glm-tool.js")
         self.assert_no_store("/static/app/shared/api.js")
         self.assert_no_store("/static/app/shared/format.js")
         self.assert_no_store("/static/app/shared/schema.js")
@@ -500,6 +518,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/vendor/tabulator/tabulator.min.css")
         self.assert_no_store("/static/vendor/d3/d3.min.js")
         self.assert_no_store("/static/vendor/echarts-gl/echarts-gl.min.js")
+        self.assert_no_store("/static/vendor/ace/ace.js")
+        self.assert_no_store("/static/vendor/ace/mode-r.js")
+        self.assert_no_store("/static/vendor/ace/theme-textmate.js")
+        self.assert_no_store("/static/vendor/ace/theme-monokai.js")
         app_css = self.assert_no_store("/static/app.css")[1].decode("utf-8")
         for path in self.CSS_MODULE_PATHS:
             import_path = f'.{path.removeprefix("/static")}'
@@ -508,6 +530,38 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
             self.assert_no_store(path)
         self.assert_no_store("/static/monitor.js")
         self.assert_no_store("/static/monitor.css")
+
+    def test_glm_frontend_contains_real_tool_contract(self) -> None:
+        js = self.app_js_contract()
+        css = self.app_css_contract()
+
+        self.assertIn('import { createGlmTool } from "./glm-tool.js";', js)
+        self.assertIn("export function createGlmTool", js)
+        self.assertIn('api("/api/glm/config"', js)
+        self.assertIn('api("/api/glm/build"', js)
+        self.assertIn('`/api/glm/jobs/${encodeURIComponent(jobId)}`', js)
+        self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}/activate`', js)
+        self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}/rename`', js)
+        self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}`', js)
+        self.assertIn('const ACE_BASE_PATH = "/static/vendor/ace";', js)
+        self.assertIn('aceEditor.session.setMode("ace/mode/r");', js)
+        self.assertIn('data-glm-tab="builder">Formula builder', js)
+        self.assertIn('data-glm-tab="models">Model navigator', js)
+        self.assertIn('id="glmFormulaEditor"', js)
+        self.assertIn('id="glmFamilySelect"', js)
+        self.assertIn('id="glmFamilyParameter"', js)
+        self.assertIn('data-glm-scope="training"', js)
+        self.assertIn('id="glmBuildBtn"', js)
+        self.assertIn('id="glmCoefficientTable"', js)
+        self.assertIn('id="glmModelTable"', js)
+        self.assertIn("syncSidebarModelChooser", js)
+        self.assertIn("glm_prediction", js)
+        self.assertNotIn("GLM modelling will be added in a later slice", js)
+        self.assertIn(".glm-tool", css)
+        self.assertIn(".glm-builder-layout", css)
+        self.assertIn(".glm-formula-editor", css)
+        self.assertIn(".glm-coefficient-panel", css)
+        self.assertIn(".glm-model-list .glm-model-option.active", css)
 
     def test_gbm_frontend_contains_real_tool_contract(self) -> None:
         js = self.app_js_contract()
@@ -1015,12 +1069,14 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertNotIn(".gbm-model-activate-button", css)
         self.assertIn(".gbm-parameter-select", css)
         self.assertIn(".gbm-fallback-table select", css)
-        self.assertIn('document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile" || tool === "glm");', js)
+        self.assertIn('document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile");', js)
         self.assertIn('document.querySelector(".sidebar-filter-section")?.classList.toggle("hidden", isModelTool(tool));', js)
         self.assertIn('el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");', js)
         self.assertIn('el("modelToolFilter").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");', js)
         self.assertIn('response: el("actualNumerator")?.value || "actualNumerator"', js)
         self.assertIn('offset: el("denominator")?.value || "denominator"', js)
+        self.assertIn("const glmSourcesAvailable = (state.schema?.data_sources || []).some", js)
+        self.assertIn("glmTool.syncSidebarFromSchema();", js)
         self.assertIn("const gbmSourcesAvailable = (state.schema?.data_sources || []).some", js)
         self.assertIn("gbmTool.syncSidebarFromSchema();", js)
         self.assertIn("function syncSidebarFromSchema()", js)
@@ -1116,8 +1172,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("return [...predictionColumns, ...otherColumns];", js)
         self.assertIn("for (const col of expectedDisplayColumns())", js)
         self.assertIn("function preferredStartupSource(availableSources, requestedSource)", js)
-        self.assertIn('const activePredictionSource = availableSources.find((source) => source.kind === "gbm_predictions" && source.active);', js)
-        self.assertIn('const predictionSource = availableSources.find((source) => source.kind === "gbm_predictions");', js)
+        self.assertIn('const activePredictionSource = availableSources.find((source) => ["glm_predictions", "gbm_predictions"].includes(source.kind) && source.active);', js)
+        self.assertIn('const predictionSource = availableSources.find((source) => ["glm_predictions", "gbm_predictions"].includes(source.kind));', js)
         self.assertIn("state.source = preferredStartupSource(availableSources, requestedSource);", js)
         self.assertIn('source: state.source || "dataset"', js)
         self.assertIn('const previousExpected = el("expectedNumerator").value;', js)
@@ -1603,7 +1659,7 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn('id="kpiSelect" class="feature-list kpi-list" role="listbox"', html)
         self.assertNotIn('id="sidebarKpiResizer"', html)
         self.assertIn(".kpi-header h2 {\n        margin: 0;\n        font-size: 12px;", css)
-        self.assertIn(".kpi-selected-meta,\n      .gbm-model-selected-meta {\n        min-width: 0;\n        overflow: hidden;\n        text-align: right;", css)
+        self.assertIn(".kpi-selected-meta,\n      .gbm-model-selected-meta,\n      .glm-model-selected-meta {\n        min-width: 0;\n        overflow: hidden;\n        text-align: right;", css)
         self.assertIn("color: var(--muted);\n        font-size: 10px;\n        margin-left: auto;", css)
         self.assertIn(".sidebar-kpi-section.kpi-collapsed .kpi-controls,", css)
         self.assertIn(".sidebar-kpi-section.kpi-collapsed #kpiSelect {\n        display: none;", css)
@@ -1619,7 +1675,7 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertNotIn(".sidebar-kpi-resizer", css)
         self.assertIn(".sidebar-filter-section {\n        display: flex;\n        flex-direction: column;\n        flex: 0 0 var(--sidebar-filter-height, 238px);\n        height: auto;\n        margin-top: 0;\n        margin-bottom: 0;\n        min-height: 0;\n        overflow: hidden;", css)
         self.assertIn(".sidebar-kpi-section.hidden ~ .sidebar-filter-section,\n      .sidebar-kpi-section.kpi-collapsed ~ .sidebar-filter-section {\n        margin-top: 0;", css)
-        self.assertIn(".kpi-list .feature,\n      .gbm-model-list .feature {\n        display: grid;\n        grid-template-columns: fit-content(52%) minmax(96px, 1fr);", css)
+        self.assertIn(".kpi-list .feature,\n      .gbm-model-list .feature,\n      .glm-model-list .feature {\n        display: grid;\n        grid-template-columns: fit-content(52%) minmax(96px, 1fr);", css)
         self.assertIn(".kpi-list .kpi-option.active {\n        background: color-mix(in srgb, #f59e0b 22%, var(--panel));", css)
         self.assertIn(".gbm-sidebar-panel {\n        display: flex;\n        flex-direction: column;\n        flex: 0 0 var(--sidebar-gbm-height, 220px);\n        height: auto;\n        margin-top: 0;\n        margin-bottom: 0;\n        min-height: 0;\n        overflow: hidden;", css)
         self.assertIn("position: relative;", css)
@@ -1628,16 +1684,19 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn(".sidebar-gbm-resizer {\n        background: linear-gradient(to bottom, var(--line), transparent);", css)
         self.assertIn("flex: 0 0 8px;", css)
         self.assertNotIn("top: -8px;", css)
-        self.assertIn(".gbm-model-header {\n        display: flex;\n        align-items: center;", css)
-        self.assertIn(".gbm-model-selected-meta {\n        min-width: 0;\n        overflow: hidden;", css)
-        self.assertIn("#gbmModelSelect {\n        flex: 1 1 auto;\n        width: 100%;", css)
-        self.assertIn(".gbm-model-list .feature {\n        display: grid;\n        grid-template-columns: fit-content(52%) minmax(96px, 1fr);", css)
-        self.assertIn(".gbm-model-list .gbm-model-option.active {\n        background: color-mix(in srgb, var(--accent) 20%, var(--panel));", css)
-        self.assertIn(".gbm-model-list .gbm-model-option {\n        grid-template-columns: fit-content(72%) minmax(0, 1fr);", css)
-        self.assertIn(".kpi-detail,\n      .gbm-model-detail {\n        min-width: 0;\n        overflow: hidden;\n        text-align: right;", css)
+        self.assertIn(".gbm-model-header,\n      .glm-model-header {\n        display: flex;\n        align-items: center;", css)
+        self.assertIn(".gbm-model-selected-meta,\n      .glm-model-selected-meta {\n        min-width: 0;\n        overflow: hidden;", css)
+        self.assertIn("#gbmModelSelect,\n      #glmModelSelect {\n        flex: 1 1 auto;\n        width: 100%;", css)
+        self.assertIn(".gbm-model-list .feature,\n      .glm-model-list .feature {\n        display: grid;\n        grid-template-columns: fit-content(52%) minmax(96px, 1fr);", css)
+        self.assertIn(".gbm-model-list .gbm-model-option.active,\n      .glm-model-list .glm-model-option.active {\n        background: color-mix(in srgb, var(--accent) 20%, var(--panel));", css)
+        self.assertIn(".gbm-model-list .gbm-model-option,\n      .glm-model-list .glm-model-option {\n        grid-template-columns: fit-content(72%) minmax(0, 1fr);", css)
+        self.assertIn(".kpi-detail,\n      .gbm-model-detail,\n      .glm-model-detail {\n        min-width: 0;\n        overflow: hidden;\n        text-align: right;", css)
         self.assertIn(".gbm-model-detail {\n        justify-self: stretch;\n        text-align: right;", css)
         self.assertIn("kpiCollapsed: false", js)
         self.assertIn("collapsedKpiGroups: new Set()", js)
+        self.assertIn("glmModelCollapsed: false", js)
+        self.assertIn("collapsedGlmModelGroups: new Set()", js)
+        self.assertIn("glmModelGroupsInitialised: false", js)
         self.assertIn("gbmModelCollapsed: false", js)
         self.assertIn("collapsedGbmModelGroups: new Set()", js)
         self.assertIn("gbmModelGroupsInitialised: false", js)
@@ -1658,6 +1717,10 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn("function selectKpi(kpi)", js)
         self.assertIn('storageKey: "py_lucidum_sidebar_kpi_height"', js)
         self.assertIn("function clampSidebarFilterHeight()", js)
+        self.assertIn("function setGlmModelCollapsed(collapsed)", js)
+        self.assertIn("function syncGlmModelCollapseButton()", js)
+        self.assertIn("function setupSidebarGlmResize()", js)
+        self.assertIn("function setSidebarGlmHeight(rawHeight)", js)
         self.assertIn("function setGbmModelCollapsed(collapsed)", js)
         self.assertIn("function syncGbmModelCollapseButton()", js)
         self.assertIn("function setupSidebarGbmResize()", js)
@@ -1669,6 +1732,7 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn("function sidebarResizableHeightCapacity()", js)
         self.assertIn("requestAnimationFrame(clampSidebarPanelHeights);", js)
         self.assertIn('el("kpiCollapseBtn").addEventListener("click", () => setKpiCollapsed(!state.kpiCollapsed));', js)
+        self.assertIn('el("glmModelCollapseBtn").addEventListener("click", () => setGlmModelCollapsed(!state.glmModelCollapsed));', js)
         self.assertIn('el("gbmModelCollapseBtn").addEventListener("click", () => setGbmModelCollapsed(!state.gbmModelCollapsed));', js)
         self.assertIn("syncKpiSelectionFromMetrics();", js)
 
@@ -1682,7 +1746,7 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn('"No trained models"', js)
         self.assertIn('"No predictions for selected model"', js)
         self.assertIn('"No SHAP values for selected model"', js)
-        self.assertIn("option.dataset.sourceId = sourceId;", js)
+        self.assertIn("option.dataset.sourceId = column.source_id || sourceId;", js)
         self.assertIn("option.dataset.metricKind = kind;", js)
         self.assertIn('column?.source_role === "gbm_shap_value"', js)
         self.assertIn('String(column?.name || "").startsWith("SHAP__")', js)

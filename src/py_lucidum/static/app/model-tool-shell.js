@@ -81,7 +81,7 @@ export function createModelToolShell({
   function render(tool, data = {}) {
     const label = labelFor(tool);
     const groupMeta = `${label} setup`;
-    const chartMessage = data.message || `${label} modelling will be added in a later slice.`;
+    const chartMessage = data.message || `${label} modelling screen is not registered.`;
     setGroupMeta(tool, groupMeta);
     setStatus("");
     setChartMessage(chartMessage);

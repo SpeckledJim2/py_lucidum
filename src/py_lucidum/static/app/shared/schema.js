@@ -37,8 +37,8 @@ export function isModelPredictionColumn(column) {
 
 export function preferredStartupSource(availableSources, requestedSource) {
   if (availableSources.some((source) => source.id === requestedSource)) return requestedSource;
-  const activePredictionSource = availableSources.find((source) => source.kind === "gbm_predictions" && source.active);
+  const activePredictionSource = availableSources.find((source) => ["glm_predictions", "gbm_predictions"].includes(source.kind) && source.active);
   if (activePredictionSource) return activePredictionSource.id;
-  const predictionSource = availableSources.find((source) => source.kind === "gbm_predictions");
+  const predictionSource = availableSources.find((source) => ["glm_predictions", "gbm_predictions"].includes(source.kind));
   return predictionSource?.id || "dataset";
 }

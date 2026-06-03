@@ -21,6 +21,11 @@ gbm = [
   "numpy>=2.0",
   "pandas>=2.2",
 ]
+glm = [
+  "glum>=3.4",
+  "numpy>=2.0",
+  "pandas>=2.2",
+]
 
 [project.scripts]
 lucidum = "py_lucidum.cli:main"

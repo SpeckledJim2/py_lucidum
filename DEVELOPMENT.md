@@ -18,11 +18,11 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.tools.column_profile` implements filtered column summary/detail profiling and routes.
 - `py_lucidum.tools.line_bar` implements chart aggregation and line/bar routes.
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
-- `py_lucidum.tools.glm` registers a lightweight shell route for future modelling work.
+- `py_lucidum.tools.glm` implements the opt-in `glum` GLM tool. GLM validation, training jobs, persistence, coefficient/model-detail routes, and model-output data sources live in separate backend modules.
 - `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM training, validation, persistence, tree summary/detail, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
-- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, `src/py_lucidum/static/app/model-tool-shell.js` owns remaining modelling shell UI, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
+- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/glm-tool.js` owns the GLM frontend, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
 - `src/py_lucidum/static/app.css` is the stable linked CSS entrypoint and import manifest. Split styles live under `src/py_lucidum/static/styles/`; `foundations.css` and `controls.css` own shared primitives, while shell/tool files own boundary-specific selectors.
-- Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/` and lazy-loaded by the tools that need them. GBM currently uses Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
+- Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/` and lazy-loaded by the tools that need them. GLM uses Ace for formula editing. GBM currently uses Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
 
 Tool code should depend on `core` and the app registration context, but tools should not depend on each other. Shared behavior should move into `core` or another shared module only when there is real reuse.
 
@@ -56,6 +56,15 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `POST /api/line-bar/chart`
   - `POST /api/uk-map/summary`
   - `GET /api/glm/summary`
+  - `GET /api/glm/config`
+  - `GET /api/glm/models`
+  - `POST /api/glm/validate`
+  - `POST /api/glm/build`
+  - `GET /api/glm/jobs/{job_id}`
+  - `GET /api/glm/models/{model_id}`
+  - `POST /api/glm/models/{model_id}/activate`
+  - `POST /api/glm/models/{model_id}/rename`
+  - `DELETE /api/glm/models/{model_id}`
   - `GET /api/gbm/summary`
   - `GET /api/gbm/config`
   - `GET /api/gbm/models`
@@ -141,7 +150,16 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 **GLM and GBM**
 
 - GLM and GBM are opt-in tools (`--tools glm,gbm`) and are not part of the default user-facing tool set. Column Profile is still enabled alongside them.
-- GLM still returns a shell `status: "not_implemented"` response.
+- GLM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
+- GLM training imports `glum`, pandas, and numpy lazily through the `glm` optional extra. These packages must not become base install dependencies. Build routes should report missing GLM dependencies as an actionable install-extra error, not a server 500.
+- GLM accepts full `response ~ terms` formulas and RHS-only formulas using the sidebar Actual response. Raw formulas are stored with comments, but `#` comments outside quoted strings are stripped before fitting. The allowed formula context is intentionally narrow: `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms. Obvious unsafe text such as `__`, `import`, `eval`, `exec`, `open`, and statement separators is rejected before fitting.
+- GLM families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`; the first implementation uses `link="auto"`. Tweedie power and negative-binomial theta are the only exposed family parameters.
+- GLM uses the sidebar Actual and Weight/KPI controls as the model response and denominator inputs. If a denominator is selected, training fits `response / denominator` with `sample_weight=denominator` and writes `glm_prediction` on the original response scale.
+- GLM `All` fits all valid rows. GLM `Training` fits only a physical uppercase/lowercase-insensitive `SAMPLE = training` column and does not create generated sample splits.
+- GLM artifacts are stored beside the source dataset under `.lucidum/models/glm/`, with `manifest.json`, `formula.txt`, `coefficients.parquet`, `predictions.parquet`, and `diagnostics.json`.
+- GLM model changes reload frontend schema and invalidate source-scoped tools. Preserve Column Profile cache when it is active because it depends only on the raw dataset and active filter, but refresh Line/Bar and UK Mapping because they can read `glm:<model_id>:predictions` and `glm_prediction`.
+- GLM model IDs are folder names under `.lucidum/models/glm/` and must stay source-ID safe: letters, numbers, dots, underscores, and hyphens only. Renaming a model renames the folder and updates manifest source IDs; deleting the active model promotes the newest remaining model, or clears active state if none remain.
+- GLM model outputs publish data sources through the shared `data_sources` contract using IDs such as `glm:<model_id>:predictions`.
 - GBM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
 - GBM training imports LightGBM, pandas, and numpy lazily through the `gbm` optional extra. These packages must not become base install dependencies. On macOS, LightGBM's native library may also require Homebrew `libomp`; missing `libomp.dylib` should be reported as an actionable GBM dependency error, not a server 500.
 - GBM training runs as an in-memory background job. `GET /api/gbm/jobs/{job_id}` returns transient `progress` while the job is queued/running, including phase, message, iteration, train/test metric points, and live evaluation history. Persisted training history remains `training_log.json` and `evaluation.parquet`; frontend Evaluation Log downsampling and `All` / `Tail` view zooming are render-only and must not truncate these artifacts.
@@ -164,7 +182,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - GBM training and model-output sources must use explicit readable-column projections. Avoid `SELECT *` on the raw dataset path because unreadable columns can fail even when they are not selected as model features.
 - GBM model outputs publish data sources through the shared `data_sources` contract using IDs such as `gbm:<model_id>:predictions`, `gbm:<model_id>:shap_long`, and `gbm:<model_id>:shap_summary`.
 - The `gbm:<model_id>:shap_long` source ID is retained for compatibility, but the stored SHAP values artifact is wide: `__lucidum_row_id` plus one numeric SHAP column per selected feature. When selected feature interaction constraint groups exist, excluding singleton feature constraints, `shap_values.parquet` also includes grouped contribution columns named `<Grouping>_INTERACTION_GROUP`; these are row-wise sums of the grouped feature SHAP columns and are not included in `shap_summary.parquet`. Bounded SHAP row modes such as `10k` and `100k` use a deterministic random sample from all scored rows seeded by the model `seed` parameter, not the first rows. `gbm:<model_id>:shap_summary` remains one row per feature.
-- The Actual selector groups choices into Dataset features, Model predictions, and SHAP values. Model prediction and SHAP choices are scoped to the active GBM model and switch the active data source to that model output source when selected.
+- The Actual selector groups choices into Dataset features, Model predictions, and SHAP values. Model prediction choices include active GLM and GBM prediction sources and switch the active data source to that model output source when selected. SHAP choices remain scoped to the active GBM model.
 - GBM SHAP plotting reads only saved SHAP sidecars and the original trained feature values joined by `__lucidum_row_id`; it must not import LightGBM, pandas, or numpy. SHAP config exposes only the active model's trained features with saved SHAP columns and includes loaded `Base` metadata for those features. One-feature plots use the selected feature's SHAP values; flame plots use the returned plotted x-domain exactly and omit the old 45-55 ribbon; two-feature plots use the sum of the two selected SHAP contributions. Continuous numeric axes use banding and optional tail grouping, return explicit numeric domains, omit missing numeric values with a warning, and factor-style axes include missing as `(missing)`. Numeric features forced to factor style keep natural band order, while true categorical box plots sort by descending median SHAP. Numeric/numeric surface payloads return dense backend grids for ECharts GL. Ordinary SHAP plot requests accept `rescale` values `-`, `0`, or `1`; `-` preserves raw behavior, `0` shifts by the relevant Base reference on the linear predictor scale, and `1` exponentiates values first before scaling to the base response-scale reference. Ordinary SHAP plots use one shared reference per plot. Stacked SHAP stays on the linear predictor contribution scale and does not accept a rescale control. The SHAP frontend preserves matching legend visibility across active-model switches only when the selected features, plot type, and legend series still match.
 - LightGBM-specific training, objective handling, offsets, SHAP, feature importance, tree extraction, and tree label normalization belong in backend GBM modules, not in frontend code.
 - GBM tree routes read persisted `tree_table.parquet` artifacts only and do not import LightGBM. The list route returns compact tree metadata; the detail route returns a frontend-ready split/leaf hierarchy with compact numeric thresholds, decoded categorical thresholds, edge labels, default-branch markers, cover percentages, and node values for colouring. Long categorical split display labels are summarized while full split labels remain available in tooltip fields, and frontend node clicks highlight the selected root-to-node path.
@@ -213,6 +231,7 @@ node --check src/py_lucidum/static/app/shared/api.js
 node --check src/py_lucidum/static/app/shared/format.js
 node --check src/py_lucidum/static/app/shared/schema.js
 node --check src/py_lucidum/static/app/shared/timing.js
+node --check src/py_lucidum/static/app/glm-tool.js
 node --check src/py_lucidum/static/app/gbm-tool.js
 node --check src/py_lucidum/static/app/gbm-shap-tool.js
 node --check src/py_lucidum/static/app/gbm-shap-chart.js
@@ -247,6 +266,7 @@ The current test suite should cover:
 - Line-and-bar aggregation, filters, transforms, grouping, sorting, saved filters, CSV reads, and Parquet reads.
 - UK map area, sector, and unit aggregation, alias defaults, coordinate validation, and custom column defaults.
 - Tool registry defaults, optional GLM/GBM registration, and the default `dataset` data-source contract.
+- GLM config without optional dependencies, formula validation/comment stripping, lazy dependency failures, training jobs, coefficient/diagnostic artifacts, active-model mutation routes, and `glm_prediction` data-source publishing.
 - GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, live job progress, active-model feature/parameter refresh, model data-source publishing, Gain ordering, SHAP row limits, SHAP plot aggregation routes, tree summary/detail routes, and chart/map use of prediction sources.
 - Browser smoke behavior for loading profile, chart, map, and GBM tools without unexpected extra API requests or stale active-model state, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.
 

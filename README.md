@@ -9,12 +9,11 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
 - **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, tables, Base-aware transforms, and sigma bars.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, or postcode units when unit and coordinate columns are available.
+- **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persistent sidecar artifacts, and active `glm_prediction` sources that can be plotted like other model predictions.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, and SHAP plotting when SHAP rows are saved during training.
 - **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios/interaction constraints.
 
 Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skipped by the shared schema used by normal selectors. Column Profile reports them as skipped, and the GBM feature chooser shows them as disabled invalid rows.
-
-The GLM tool slot exists in the codebase for future modelling work, but GLM model building is not part of the current user-facing release.
 
 ## Installation
 
@@ -28,9 +27,10 @@ python3.13 -m venv .venv
 
 This installs the `lucidum` command inside the virtual environment.
 
-To enable GBM model training, install the optional modelling extra:
+To enable GLM or GBM model training, install the relevant optional modelling extra:
 
 ```bash
+.venv/bin/python -m pip install -e ".[glm]"
 .venv/bin/python -m pip install -e ".[gbm]"
 ```
 
@@ -87,7 +87,7 @@ Parquet is recommended for normal use because DuckDB can read it efficiently.
 .venv/bin/lucidum --demo --features specs/feature_spec.csv
 .venv/bin/lucidum --demo --no-features
 .venv/bin/lucidum --demo --tools line-bar
-.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,gbm
+.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm,gbm
 ```
 
 - `--open` opens the generated URL with Python's configured browser handler.
@@ -97,7 +97,7 @@ Parquet is recommended for normal use because DuckDB can read it efficiently.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, and optional Base metadata used by chart rescaling. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
-- `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `gbm` after installing the `gbm` extra to train LightGBM models.
+- `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `glm` after installing the `glm` extra to train GLMs, and `gbm` after installing the `gbm` extra to train LightGBM models.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
 
@@ -193,6 +193,20 @@ POSTCODE_AREA,POSTCODE,B,,feature,feature
 ```
 
 `Feature` must match a dataset column name exactly. `Grouping` is optional metadata shown in the GBM Feature table and, when present, is also used to offer GBM feature interaction constraints. `Base` is optional metadata used to anchor Line/Bar and GBM SHAP chart rescaling to `0` or `1`; it is not a scenario. Older specs without the `Base` column are still accepted, in which case every column after `Grouping` is treated as a scenario. Each scenario column appears in the GBM scenario dropdown; if a scenario cell contains the word `feature`, case-insensitive, that row is selected when the scenario is chosen.
+
+## GLM Models
+
+The GLM tool is opt-in. Column Profile remains enabled and opens first:
+
+```bash
+.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm
+```
+
+The Formula builder accepts either a full `response ~ terms` Formulaic formula, or RHS-only `terms` that use the sidebar Actual metric as the response. Lines can include `#` comments; comments are stored with the model but stripped before fitting. The formula context includes `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms.
+
+Families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`, with `link="auto"` in the first implementation. If a sidebar Weight is selected, GLM fits `Actual / Weight` with `sample_weight=Weight` and stores `glm_prediction` back on the original Actual scale. Saved models live beside the dataset under `.lucidum/models/glm/`, and the active model publishes a `glm:<model_id>:predictions` data source.
+
+`All` fits all valid rows. `Training` fits only rows where a physical `SAMPLE` column equals `training`, case-insensitively; GLM does not create generated sample splits.
 
 ## GBM Models
 

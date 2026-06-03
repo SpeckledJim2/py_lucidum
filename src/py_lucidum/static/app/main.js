@@ -1,8 +1,8 @@
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import { createLineBarTool } from "./line-bar-tool.js";
       import { createUkMapTool } from "./uk-map-tool.js";
+      import { createGlmTool } from "./glm-tool.js";
       import { createGbmTool } from "./gbm-tool.js";
-      import { createModelToolShell } from "./model-tool-shell.js";
       import { createApiClient, monitorPath } from "./shared/api.js";
       import { createFormatters, escapeHtml } from "./shared/format.js";
       import {
@@ -69,6 +69,9 @@
         kpiGroupsInitialised: false,
         activeKpiKey: "",
         activeKpiFormat: null,
+        glmModelCollapsed: false,
+        collapsedGlmModelGroups: new Set(),
+        glmModelGroupsInitialised: false,
         gbmModelCollapsed: false,
         collapsedGbmModelGroups: new Set(),
         gbmModelGroupsInitialised: false,
@@ -126,6 +129,7 @@
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
       let datasetMetaBase = "";
+      let datasetGlmCount = null;
       let datasetGbmCount = null;
       const el = (id) => document.getElementById(id);
       const api = createApiClient({ token });
@@ -245,24 +249,34 @@
         numericColumnExists,
         refreshUkMap,
       });
-      const modelToolShell = createModelToolShell({
+      const glmTool = createGlmTool({
         api,
+        clearToolCaches,
+        copyTextToClipboard,
         el,
         escapeHtml,
         measureToolRender,
+        renderExpectedNumerators: () => lineBarTool.renderExpectedNumerators(),
+        renderFeatures: () => lineBarTool.renderFeatures(),
         saveToolPresentation,
         setChartMessage,
         setClientTiming,
+        setDatasetGlmCount,
         setDuckDbTiming,
         setGroupMeta,
         setRenderTiming,
         setStatus,
+        setAppReadyStatus: setReadyBadge,
         setToolTimingFailed,
+        showClipboardToast,
         startToolTiming,
         state,
         syncClientTimingFromData,
         syncDuckDbTimingFromData,
         toolCache,
+        updateAxisControls: () => lineBarTool.updateAxisControls(),
+        refreshActiveTool,
+        reloadSchema: reloadSchemaAfterModelMutation,
       });
       const gbmTool = createGbmTool({
         api,
@@ -291,25 +305,7 @@
         updateAxisControls: () => lineBarTool.updateAxisControls(),
         refreshActiveTool,
         setDatasetGbmCount,
-        reloadSchema: async (preferredSource) => {
-          state.schema = await api("/api/schema");
-          if (preferredSource) state.source = preferredSource;
-          if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
-          const previousActual = el("actualNumerator").value;
-          const previousExpected = el("expectedNumerator").value;
-          const previousDenominator = el("denominator").value;
-          fillMetricSelect(el("actualNumerator"));
-          fillMetricSelect(el("expectedNumerator"), true);
-          fillDenominatorSelect(el("denominator"));
-          if (!setActualSelection(previousActual, state.source)) {
-            el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
-          }
-          el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";
-          el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
-          lineBarTool.renderExpectedNumerators();
-          lineBarTool.renderFeatures();
-          lineBarTool.updateAxisControls();
-        },
+        reloadSchema: reloadSchemaAfterModelMutation,
       });
 
       function monitorUrl() {
@@ -653,18 +649,18 @@
             handleMissingRequest: () => ukMapTool.showMissingRequest(),
           };
         }
+        if (tool === "glm") {
+          return {
+            buildRequest: () => glmTool.buildRequest(),
+            fetch: (request, requestKey) => glmTool.fetchData(request, requestKey),
+            useCached: (cache, options) => glmTool.useCached(cache, options),
+          };
+        }
         if (tool === "gbm") {
           return {
             buildRequest: () => gbmTool.buildRequest(),
             fetch: (request, requestKey) => gbmTool.fetchData(request, requestKey),
             useCached: (cache, options) => gbmTool.useCached(cache, options),
-          };
-        }
-        if (isModelTool(tool)) {
-          return {
-            buildRequest: () => modelToolShell.buildRequest(tool),
-            fetch: (request, requestKey) => modelToolShell.fetchData(tool, request, requestKey),
-            useCached: (cache) => modelToolShell.useCached(tool, cache),
           };
         }
         return {
@@ -738,15 +734,28 @@
         return fileSize ? `${path} · ${fileSize}` : path;
       }
 
-      function renderDatasetMeta(fileMeta = datasetMetaBase, gbmCount = datasetGbmCount) {
+      function renderDatasetMeta(fileMeta = datasetMetaBase, gbmCount = datasetGbmCount, glmCount = datasetGlmCount) {
         datasetMetaBase = String(fileMeta || "");
         const numericCount = Number(gbmCount);
         datasetGbmCount = Number.isFinite(numericCount) && numericCount >= 0 ? Math.trunc(numericCount) : null;
+        const numericGlmCount = Number(glmCount);
+        datasetGlmCount = Number.isFinite(numericGlmCount) && numericGlmCount >= 0 ? Math.trunc(numericGlmCount) : null;
         const target = el("datasetMeta");
         const rows = Number(state.schema?.row_count || 0).toLocaleString();
         const columns = Number(state.schema?.columns?.length || 0).toLocaleString();
         target.textContent = "";
         target.append(document.createTextNode(`${datasetMetaBase} · ${rows} rows · ${columns} columns`));
+        if (datasetGlmCount !== null && toolEnabled("glm")) {
+          target.append(document.createTextNode(" · "));
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "dataset-meta-gbm-link dataset-meta-glm-link";
+          button.textContent = `GLMs (${datasetGlmCount.toLocaleString()})`;
+          button.title = "Open GLM Model navigator";
+          button.setAttribute("aria-label", `Open saved GLMs, ${datasetGlmCount.toLocaleString()} models`);
+          button.addEventListener("click", openGlmModelNavigator);
+          target.append(button);
+        }
         if (datasetGbmCount === null || !toolEnabled("gbm")) return;
         target.append(document.createTextNode(" · "));
         const button = document.createElement("button");
@@ -759,23 +768,48 @@
         target.append(button);
       }
 
+      async function refreshDatasetGlmCount() {
+        if (!toolEnabled("glm")) {
+          renderDatasetMeta(datasetMetaBase, datasetGbmCount, null);
+          return;
+        }
+        try {
+          const payload = await api("/api/glm/models", { method: "GET" });
+          const models = Array.isArray(payload?.models) ? payload.models : [];
+          renderDatasetMeta(datasetMetaBase, datasetGbmCount, models.length);
+        } catch (_) {
+          renderDatasetMeta(datasetMetaBase, datasetGbmCount, null);
+        }
+      }
+
       async function refreshDatasetGbmCount() {
         if (!toolEnabled("gbm")) {
-          renderDatasetMeta(datasetMetaBase, null);
+          renderDatasetMeta(datasetMetaBase, null, datasetGlmCount);
           return;
         }
         try {
           const payload = await api("/api/gbm/models", { method: "GET" });
           const models = Array.isArray(payload?.models) ? payload.models : [];
-          renderDatasetMeta(datasetMetaBase, models.length);
+          renderDatasetMeta(datasetMetaBase, models.length, datasetGlmCount);
         } catch (_) {
-          renderDatasetMeta(datasetMetaBase, null);
+          renderDatasetMeta(datasetMetaBase, null, datasetGlmCount);
         }
       }
 
       function setDatasetGbmCount(count) {
         if (!toolEnabled("gbm")) return;
-        renderDatasetMeta(datasetMetaBase, count);
+        renderDatasetMeta(datasetMetaBase, count, datasetGlmCount);
+      }
+
+      function setDatasetGlmCount(count) {
+        if (!toolEnabled("glm")) return;
+        renderDatasetMeta(datasetMetaBase, datasetGbmCount, count);
+      }
+
+      function openGlmModelNavigator() {
+        if (!toolEnabled("glm")) return;
+        glmTool.openModelNavigator();
+        setTool("glm");
       }
 
       function openGbmModelNavigator() {
@@ -795,8 +829,11 @@
         el("ukMapTool").classList.toggle("active", tool === "uk_map");
         el("glmTool").classList.toggle("active", tool === "glm");
         el("gbmTool").classList.toggle("active", tool === "gbm");
-        document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile" || tool === "glm");
+        document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile");
         document.querySelector(".sidebar-filter-section")?.classList.toggle("hidden", isModelTool(tool));
+        const glmSourcesAvailable = (state.schema?.data_sources || []).some((source) => String(source.id || "").startsWith("glm:"));
+        el("glmSidebarPanel")?.classList.toggle("hidden", !(tool === "glm" || (toolEnabled("glm") && glmSourcesAvailable)));
+        glmTool.syncSidebarFromSchema();
         const gbmSourcesAvailable = (state.schema?.data_sources || []).some((source) => String(source.id || "").startsWith("gbm:"));
         el("gbmSidebarPanel")?.classList.toggle("hidden", !(tool === "gbm" || (toolEnabled("gbm") && gbmSourcesAvailable)));
         gbmTool.syncSidebarFromSchema();
@@ -924,6 +961,31 @@
         }
       }
 
+      function setGlmModelCollapsed(collapsed) {
+        state.glmModelCollapsed = Boolean(collapsed);
+        document.querySelector(".glm-sidebar-panel")?.classList.toggle("glm-model-collapsed", state.glmModelCollapsed);
+        syncGlmModelCollapseButton();
+        if (!state.glmModelCollapsed) {
+          requestAnimationFrame(() => {
+            const savedHeight = Number(localStorage.getItem("py_lucidum_sidebar_glm_height"));
+            const section = document.querySelector(".glm-sidebar-panel");
+            const currentHeight = section?.getBoundingClientRect().height || 0;
+            setSidebarGlmHeight(Number.isFinite(savedHeight) && savedHeight > 0 ? savedHeight : currentHeight);
+          });
+        } else {
+          clampSidebarPanelHeights();
+          requestAnimationFrame(clampSidebarPanelHeights);
+        }
+      }
+
+      function syncGlmModelCollapseButton() {
+        const button = el("glmModelCollapseBtn");
+        const label = state.glmModelCollapsed ? "Expand GLM models" : "Collapse GLM models";
+        button.setAttribute("aria-expanded", String(!state.glmModelCollapsed));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
       function setGbmModelCollapsed(collapsed) {
         state.gbmModelCollapsed = Boolean(collapsed);
         document.querySelector(".gbm-sidebar-panel")?.classList.toggle("gbm-model-collapsed", state.gbmModelCollapsed);
@@ -978,16 +1040,13 @@
       function fillActualMetricSelect(select) {
         select.innerHTML = "";
         appendActualMetricGroup(select, "Dataset features", numericColumnsForSource("dataset"), "dataset", "dataset", "No numeric dataset features");
-        const predictionSource = activeModelSource("gbm_predictions");
-        const trainedModels = gbmModelSourcesExist();
-        const predictionColumns = predictionSource
-          ? numericColumnsForSource(predictionSource.id).filter(isModelPredictionColumn)
-          : [];
+        const predictionColumns = activePredictionColumns();
+        const trainedModels = modelPredictionSourcesExist();
         appendActualMetricGroup(
           select,
           "Model predictions",
           predictionColumns,
-          predictionSource?.id || "",
+          "",
           "prediction",
           trainedModels ? "No predictions for selected model" : "No trained models",
         );
@@ -1015,7 +1074,7 @@
         } else {
           for (const column of columns) {
             const option = new Option(metricColumnLabel(column), column.name);
-            option.dataset.sourceId = sourceId;
+            option.dataset.sourceId = column.source_id || sourceId;
             option.dataset.metricKind = kind;
             group.append(option);
           }
@@ -1025,6 +1084,27 @@
 
       function activeModelSource(kind) {
         return (state.schema?.data_sources || []).find((source) => source.kind === kind && source.active) || null;
+      }
+
+      function activePredictionColumns() {
+        return activeModelSources(["glm_predictions", "gbm_predictions"]).flatMap((source) => (
+          numericColumnsForSource(source.id)
+            .filter(isModelPredictionColumn)
+            .map((column) => ({
+              ...column,
+              label: `${source.kind === "glm_predictions" ? "GLM" : "GBM"} · ${metricColumnLabel(column)}`,
+              source_id: source.id,
+            }))
+        ));
+      }
+
+      function activeModelSources(kinds) {
+        const desiredKinds = new Set(kinds);
+        return (state.schema?.data_sources || []).filter((source) => desiredKinds.has(source.kind) && source.active);
+      }
+
+      function modelPredictionSourcesExist() {
+        return (state.schema?.data_sources || []).some((source) => source.kind === "gbm_predictions" || source.kind === "glm_predictions");
       }
 
       function gbmModelSourcesExist() {
@@ -1100,6 +1180,26 @@
         if (actualValue) setActualSelection(actualValue, actualSource);
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
+        el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";
+        el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
+        lineBarTool.renderExpectedNumerators();
+        lineBarTool.renderFeatures();
+        lineBarTool.updateAxisControls();
+      }
+
+      async function reloadSchemaAfterModelMutation(preferredSource) {
+        state.schema = await api("/api/schema");
+        if (preferredSource) state.source = preferredSource;
+        if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
+        const previousActual = el("actualNumerator").value;
+        const previousExpected = el("expectedNumerator").value;
+        const previousDenominator = el("denominator").value;
+        fillMetricSelect(el("actualNumerator"));
+        fillMetricSelect(el("expectedNumerator"), true);
+        fillDenominatorSelect(el("denominator"));
+        if (!setActualSelection(previousActual, state.source)) {
+          el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
+        }
         el("expectedNumerator").value = numericColumnExists(previousExpected) ? previousExpected : "";
         el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
         lineBarTool.renderExpectedNumerators();
@@ -1678,7 +1778,7 @@
         });
       }
 
-      const SIDEBAR_PANEL_ORDER = ["kpi", "gbm", "filter"];
+      const SIDEBAR_PANEL_ORDER = ["kpi", "gbm", "glm", "filter"];
       const SIDEBAR_PANEL_RESIZE = {
         kpi: {
           sectionSelector: ".sidebar-kpi-section",
@@ -1697,6 +1797,15 @@
           minHeight: 42,
           collapsed: () => state.gbmModelCollapsed,
         },
+        glm: {
+          sectionSelector: ".glm-sidebar-panel",
+          resizerId: "sidebarGlmResizer",
+          cssVar: "--sidebar-glm-height",
+          storageKey: "py_lucidum_sidebar_glm_height",
+          defaultHeight: 220,
+          minHeight: 42,
+          collapsed: () => state.glmModelCollapsed,
+        },
         filter: {
           sectionSelector: ".sidebar-filter-section",
           resizerId: "sidebarFilterResizer",
@@ -1714,6 +1823,10 @@
 
       function setupSidebarGbmResize() {
         setupSidebarPanelResize("gbm");
+      }
+
+      function setupSidebarGlmResize() {
+        setupSidebarPanelResize("glm");
       }
 
       function restoreSidebarPanelHeights() {
@@ -1778,6 +1891,10 @@
         setSidebarPanelHeight("gbm", rawHeight, { preserveSpacer: true });
       }
 
+      function setSidebarGlmHeight(rawHeight) {
+        setSidebarPanelHeight("glm", rawHeight, { preserveSpacer: true });
+      }
+
       function clampSidebarPanelHeights() {
         const activeKeys = activeSidebarPanelKeys();
         if (!activeKeys.length) {
@@ -1809,6 +1926,10 @@
 
       function clampSidebarGbmHeight() {
         setSidebarPanelHeight("gbm", currentSidebarPanelHeight("gbm"), { preserveSpacer: true });
+      }
+
+      function clampSidebarGlmHeight() {
+        setSidebarPanelHeight("glm", currentSidebarPanelHeight("glm"), { preserveSpacer: true });
       }
 
       function setSidebarPanelHeight(key, rawHeight, options = {}) {
@@ -2101,11 +2222,13 @@
         restoreSidebarPanelHeights();
         setupSidebarFilterResize();
         setupSidebarGbmResize();
+        setupSidebarGlmResize();
         setupChartControlsResize();
         setupChartControlHeightsResize();
         ukMapTool.bindControls();
         syncSidebarToggleButton();
         setKpiCollapsed(state.kpiCollapsed);
+        setGlmModelCollapsed(state.glmModelCollapsed);
         setGbmModelCollapsed(state.gbmModelCollapsed);
         syncFilterCollapseButton();
         syncFilterFooterToggleButton();
@@ -2157,6 +2280,7 @@
         el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
         el("filterFooterToggleBtn").addEventListener("click", () => setFilterFooterVisible(state.filterFooterCollapsed));
         el("kpiCollapseBtn").addEventListener("click", () => setKpiCollapsed(!state.kpiCollapsed));
+        el("glmModelCollapseBtn").addEventListener("click", () => setGlmModelCollapsed(!state.glmModelCollapsed));
         el("gbmModelCollapseBtn").addEventListener("click", () => setGbmModelCollapsed(!state.gbmModelCollapsed));
         el("filterCollapseBtn").addEventListener("click", () => setFilterCollapsed(!state.filterCollapsed));
         el("filterSidebarClearBtn").addEventListener("click", clearFilter);
@@ -2166,6 +2290,7 @@
           syncThemeButton();
           if (state.tool === "line_bar") lineBarTool.refreshTheme();
           if (state.tool === "uk_map") ukMapTool.refreshTheme();
+          if (state.tool === "glm") measureToolRender("glm", () => glmTool.refreshTheme());
           if (state.tool === "gbm") measureToolRender("gbm", () => gbmTool.refreshTheme());
         });
         el("reloadBtn").addEventListener("click", async () => {
@@ -2183,7 +2308,8 @@
           state.bandSuggestionPendingKey = null;
           state.bandSuggestionRequestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
           clearToolCaches();
-          renderDatasetMeta(schemaFileMeta(), datasetGbmCount);
+          renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
+          refreshDatasetGlmCount();
           refreshDatasetGbmCount();
           setFilterRowMeta(state.schema.row_count);
           if (filtersUnchanged) {
@@ -2254,6 +2380,7 @@
           renderKpis();
           renderToolSelector();
           renderDatasetMeta(fileMeta);
+          refreshDatasetGlmCount();
           refreshDatasetGbmCount();
           state.tool = chooseDefaultTool();
           renderSavedFilters();
