@@ -183,7 +183,7 @@ def create_app(
         dataset = app.state.dataset
         try:
             with dataset.lock:
-                source = dataset.normalise_source(payload.get("source"))
+                source = dataset.normalise_source(payload.get("xSource") or payload.get("source"))
                 feature = str(payload.get("feature") or "").strip()
                 filter_sql = dataset.normalise_filter(payload.get("filter"), source_id=source)
                 suggestion = dataset.band_suggestion_for_column(source, feature, filter_sql)

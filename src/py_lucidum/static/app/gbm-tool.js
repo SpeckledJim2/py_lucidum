@@ -2998,12 +2998,11 @@ export function createGbmTool({
       : (result?.model || configActiveModel);
     const shapSource = activeModel?.sources?.shap_long || configActiveModel?.sources?.shap_long || "";
     const predictionSource = activeModel?.sources?.predictions || configActiveModel?.sources?.predictions || "";
-    if (currentKind === "gbm_shap_long" && shapSource) return shapSource;
-    if (currentKind === "gbm_predictions" && predictionSource) return predictionSource;
-    const direct = predictionSource || "";
-    if (direct) return direct;
+    if (currentKind === "gbm_shap_long") return shapSource || predictionSource || "dataset";
+    if (currentKind === "gbm_predictions") return predictionSource || "dataset";
+    if (!dataSourceById(state.source) && predictionSource) return predictionSource;
     const fallbackModel = (data?.models || []).find((item) => item.active);
-    return fallbackModel?.sources?.predictions || "dataset";
+    return dataSourceById(state.source) ? state.source || "dataset" : fallbackModel?.sources?.predictions || "dataset";
   }
 
   async function loadModelDetail(modelId) {

@@ -2846,6 +2846,10 @@ COPY (
 
         dataset = Dataset(self.data_path)
         dataset.register_data_source_provider(GbmSourceProvider(GbmModelStore(self.data_path)))
+        model_prediction_source = dataset.model_prediction_source("gbm:m1:predictions")
+        self.assertIsNotNone(model_prediction_source)
+        self.assertEqual(model_prediction_source.column, "gbm_prediction")
+        self.assertIn("predictions.parquet", model_prediction_source.relation_sql)
         result = chart(
             dataset,
             {

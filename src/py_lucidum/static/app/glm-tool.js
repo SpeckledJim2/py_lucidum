@@ -975,10 +975,10 @@ export function createGlmTool({
     const configActiveModel = (data?.models || []).find((item) => item.active);
     const activeModel = result?.deleted_model_id ? null : (result?.model || configActiveModel);
     const predictionSource = activeModel?.sources?.predictions || configActiveModel?.sources?.predictions || "";
-    if (currentKind === "glm_predictions" && predictionSource) return predictionSource;
-    if (predictionSource) return predictionSource;
+    if (currentKind === "glm_predictions") return predictionSource || "dataset";
+    if (!dataSourceById(state.source) && predictionSource) return predictionSource;
     const fallbackModel = (data?.models || []).find((item) => item.active);
-    return fallbackModel?.sources?.predictions || "dataset";
+    return dataSourceById(state.source) ? state.source || "dataset" : fallbackModel?.sources?.predictions || "dataset";
   }
 
   function dataSourceById(sourceId) {

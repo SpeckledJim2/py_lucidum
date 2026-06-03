@@ -20,7 +20,7 @@
 
       function paramsFromLocation() {
         const standardParams = new URLSearchParams(location.search);
-        const expectedKeys = ["token", "tool", "source", "x", "actual", "expected", "denominator", "postcode_area", "postcode_sector", "postcode_unit", "latitude", "longitude"];
+        const expectedKeys = ["token", "tool", "source", "x", "xSource", "actual", "expected", "denominator", "postcode_area", "postcode_sector", "postcode_unit", "latitude", "longitude"];
         if (expectedKeys.some((key) => standardParams.has(key))) return standardParams;
         const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
         try {
@@ -43,6 +43,7 @@
       const state = {
         schema: null,
         x: null,
+        xSource: "",
         sort: "alpha",
         lowGroup: "0",
         labels: "none",
@@ -208,9 +209,9 @@
         applyToolPresentation,
         saveToolPresentation,
         toolCache,
-        sourceColumns,
+        sourceColumns: lineBarFeatureColumns,
         expectedColumns,
-        selectedColumn,
+        selectedColumn: selectedLineBarColumn,
         numericColumns,
         dataSourceForId,
         dataSourceHasColumn,
@@ -513,6 +514,62 @@
 
       function selectedColumn() {
         return sourceColumns().find((c) => c.name === state.x);
+      }
+
+      function lineBarFeatureColumns() {
+        const currentSource = state.source || "dataset";
+        const currentKind = currentDataSource()?.kind || "";
+        const columns = sourceColumns().map((column) => ({
+          ...column,
+          source_id: column.source_id || currentSource,
+        }));
+        if (currentKind === "gbm_shap_long") return columns;
+        const seen = new Set(columns.map((column) => `${column.source_id || currentSource}\u0000${column.name}`));
+        for (const column of activePredictionColumns()) {
+          const sourceId = column.source_id || "";
+          const key = `${sourceId}\u0000${column.name}`;
+          if (!sourceId || seen.has(key)) continue;
+          columns.push(column);
+          seen.add(key);
+        }
+        return columns;
+      }
+
+      function lineBarColumnSourceId(column) {
+        return column?.source_id || state.source || "dataset";
+      }
+
+      function selectedLineBarColumn() {
+        const sourceId = state.xSource || state.source || "dataset";
+        const columns = lineBarFeatureColumns();
+        return columns.find((column) => column.name === state.x && lineBarColumnSourceId(column) === sourceId)
+          || columns.find((column) => column.name === state.x)
+          || null;
+      }
+
+      function lineBarColumnExists(name, sourceId = "") {
+        const columnName = String(name || "");
+        if (!columnName) return false;
+        return lineBarFeatureColumns().some((column) => (
+          column.name === columnName && (!sourceId || lineBarColumnSourceId(column) === sourceId)
+        ));
+      }
+
+      function lineBarFeatureSourceForName(name, preferredSource = "") {
+        const columnName = String(name || "");
+        const columns = lineBarFeatureColumns();
+        const preferred = String(preferredSource || "");
+        const match = columns.find((column) => (
+          column.name === columnName && (!preferred || lineBarColumnSourceId(column) === preferred)
+        )) || columns.find((column) => column.name === columnName);
+        return lineBarColumnSourceId(match);
+      }
+
+      function syncLineBarXFallback() {
+        if (lineBarColumnExists(state.x, state.xSource)) return;
+        const first = lineBarFeatureColumns()[0] || null;
+        state.x = first?.name || null;
+        state.xSource = lineBarColumnSourceId(first);
       }
 
       function currentDataSource() {
@@ -1262,6 +1319,7 @@
 
       function syncExpectedSourceFromSelection({ expectedValue = "", expectedSource = "" } = {}) {
         const targetSource = expectedSource || expectedSelectionSourceId();
+        if (selectedExpectedIsPrediction()) return false;
         if (!targetSource || targetSource === state.source) return false;
         const selectedExpected = expectedValue || el("expectedNumerator").value;
         state.source = targetSource;
@@ -1280,7 +1338,7 @@
         const previousExpectedSource = expectedSource || expectedSelectionSourceId();
         const previousExpectedIsPrediction = expectedIsPrediction === null ? selectedExpectedIsPrediction() : Boolean(expectedIsPrediction);
         const previousDenominator = el("denominator").value;
-        if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
+        syncLineBarXFallback();
         fillMetricSelect(el("actualNumerator"));
         if (previousActual && !setActualSelection(previousActual, previousActualSource)) {
           el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
@@ -1291,25 +1349,35 @@
           el("expectedNumerator").value = "";
         }
         el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
+        syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
       }
 
       async function reloadSchemaAfterModelMutation(preferredSource, options = {}) {
-        state.schema = await api("/api/schema");
-        const modelKind = String(options?.modelKind || "");
-        if (preferredSource) state.source = preferredSource;
-        if (!columnExists(state.x)) state.x = sourceColumns()[0]?.name || null;
+        const previousX = state.x;
+        const previousXSource = state.xSource;
         const previousActual = el("actualNumerator").value;
+        const previousActualSource = actualSelectionSourceId();
         const previousExpected = el("expectedNumerator").value;
         const previousExpectedSource = expectedSelectionSourceId();
         const previousExpectedIsPrediction = selectedExpectedIsPrediction();
         const previousDenominator = el("denominator").value;
+        state.schema = await api("/api/schema");
+        const modelKind = String(options?.modelKind || "");
+        if (preferredSource) state.source = preferredSource;
+        state.x = previousX;
+        state.xSource = previousXSource;
+        if (modelKind && previousX === predictionColumnNameForModelKind(modelKind)) {
+          const predictionSource = activePredictionSourceForModelKind(modelKind);
+          if (predictionSource?.id) state.xSource = predictionSource.id;
+        }
+        syncLineBarXFallback();
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
-        if (!setActualSelection(previousActual, state.source)) {
+        if (!setActualSelection(previousActual, previousActualSource)) {
           el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
         }
         if (previousExpectedIsPrediction && modelKind) {
@@ -1318,6 +1386,7 @@
           el("expectedNumerator").value = "";
         }
         el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
+        syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
@@ -1688,7 +1757,13 @@
         const availableSources = state.schema.data_sources || [];
         state.source = preferredStartupSource(availableSources, requestedSource);
         const requestedX = requestedDefault("x");
-        state.x = columnExists(requestedX) ? requestedX : sourceColumns()[0]?.name || null;
+        const requestedXSource = requestedDefault("xSource") || state.source;
+        if (lineBarColumnExists(requestedX, requestedXSource) || lineBarColumnExists(requestedX)) {
+          state.x = requestedX;
+          state.xSource = lineBarFeatureSourceForName(requestedX, requestedXSource);
+        } else {
+          syncLineBarXFallback();
+        }
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));

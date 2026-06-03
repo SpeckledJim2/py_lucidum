@@ -858,6 +858,41 @@ COPY (
                     {"text": "gbm_predictionnumeric", "source": "gbm:browser-smoke-model-2:predictions", "active": False},
                     expected_state,
                 )
+                feature_state = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll("#featureList .feature")]
+                      .map((button) => ({
+                        text: button.textContent || "",
+                        source: button.dataset.sourceId || "",
+                        active: button.classList.contains("active"),
+                      }))
+                    """
+                )
+                self.assertIn(
+                    {"text": "glm_predictionnumeric", "source": "glm:browser-smoke-glm:predictions", "active": False},
+                    feature_state,
+                )
+                self.assertIn(
+                    {"text": "gbm_predictionnumeric", "source": "gbm:browser-smoke-model-2:predictions", "active": False},
+                    feature_state,
+                )
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/banding/suggestion") and response.status == 200,
+                    timeout=10_000,
+                ) as glm_banding_info:
+                    page.locator(
+                        '#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]',
+                        has_text="glm_prediction",
+                    ).click()
+                glm_banding_body = json.loads(glm_banding_info.value.request.post_data or "{}")
+                self.assertEqual(glm_banding_body["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(glm_banding_body["xSource"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(glm_banding_body["feature"], "glm_prediction")
+                page.wait_for_function(
+                    '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    timeout=10_000,
+                )
+                self.assertNotIn("Banding estimate failed", page.locator("#status").text_content(timeout=10_000))
 
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_expected_info:
                     page.locator(
@@ -865,19 +900,40 @@ COPY (
                         has_text="gbm_prediction",
                     ).click()
                 gbm_expected_body = json.loads(gbm_expected_info.value.post_data or "{}")
-                self.assertEqual(gbm_expected_body["source"], "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(gbm_expected_body["source"], "glm:browser-smoke-glm:predictions")
                 self.assertEqual(gbm_expected_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_expected_body["responses"][1]["numerator"], "gbm_prediction")
+                self.assertEqual(gbm_expected_body["responses"][1]["source"], "gbm:browser-smoke-model-2:predictions")
+                feature_state = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll("#featureList .feature")]
+                      .map((button) => ({
+                        text: button.textContent || "",
+                        source: button.dataset.sourceId || "",
+                        active: button.classList.contains("active"),
+                      }))
+                    """
+                )
+                self.assertIn(
+                    {"text": "glm_predictionnumeric", "source": "glm:browser-smoke-glm:predictions", "active": True},
+                    feature_state,
+                )
+                self.assertIn(
+                    {"text": "gbm_predictionnumeric", "source": "gbm:browser-smoke-model-2:predictions", "active": False},
+                    feature_state,
+                )
 
-                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_expected_info:
-                    page.locator(
-                        '#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"]',
-                        has_text="glm_prediction",
-                    ).click()
-                glm_expected_body = json.loads(glm_expected_info.value.post_data or "{}")
-                self.assertEqual(glm_expected_body["source"], "glm:browser-smoke-glm:predictions")
-                self.assertEqual(glm_expected_body["responses"][0]["numerator"], "actualNumerator")
-                self.assertEqual(glm_expected_body["responses"][1]["numerator"], "glm_prediction")
+                page.locator(
+                    '#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"]',
+                    has_text="glm_prediction",
+                ).click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"]')
+                      ?.classList.contains("active")
+                    """,
+                    timeout=10_000,
+                )
 
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_to_glm_info:
                     page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm-2"]').click()
@@ -886,22 +942,25 @@ COPY (
                 self.assertEqual(glm_to_glm_body["source"], "glm:browser-smoke-glm-2:predictions")
                 self.assertEqual(glm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(glm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
+                self.assertEqual(glm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
 
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_to_gbm_info:
                     page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
                 glm_to_gbm_body = json.loads(glm_to_gbm_info.value.post_data or "{}")
                 page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
-                self.assertEqual(glm_to_gbm_body["source"], "gbm:browser-smoke-model:predictions")
+                self.assertEqual(glm_to_gbm_body["source"], "glm:browser-smoke-glm-2:predictions")
                 self.assertEqual(glm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(glm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
+                self.assertEqual(glm_to_gbm_body["responses"][1]["source"], "gbm:browser-smoke-model:predictions")
 
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_to_gbm_info:
                     page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
                 gbm_to_gbm_body = json.loads(gbm_to_gbm_info.value.post_data or "{}")
                 page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
-                self.assertEqual(gbm_to_gbm_body["source"], "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(gbm_to_gbm_body["source"], "glm:browser-smoke-glm-2:predictions")
                 self.assertEqual(gbm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
+                self.assertEqual(gbm_to_gbm_body["responses"][1]["source"], "gbm:browser-smoke-model-2:predictions")
 
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_to_glm_info:
                     page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm"]').click()
@@ -910,6 +969,7 @@ COPY (
                 self.assertEqual(gbm_to_glm_body["source"], "glm:browser-smoke-glm:predictions")
                 self.assertEqual(gbm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
+                self.assertEqual(gbm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
 
                 shap_url = (
                     f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model-2%3Ashap_long"

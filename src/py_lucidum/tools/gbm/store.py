@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import duckdb
 
-from py_lucidum.core import Dataset, quote_ident, sql_literal
+from py_lucidum.core import Dataset, ModelPredictionSource, quote_ident, sql_literal
 
 from .sample import GENERATED_SAMPLE_FILENAME
 from .validation import DEFAULT_TRAINING_MODE
@@ -526,6 +526,18 @@ class GbmSourceProvider:
 
     def relation_sql(self, source_id: str) -> str:
         return self.store.relation_sql(source_id)
+
+    def prediction_source(self, source_id: str) -> ModelPredictionSource | None:
+        ref = self.store.source_ref(source_id)
+        if ref is None or ref.source_kind != "predictions":
+            return None
+        source_path = self.store.source_path(ref.model_id, "predictions")
+        return ModelPredictionSource(
+            source_id=source_id,
+            column="gbm_prediction",
+            relation_sql=f"read_parquet({sql_literal(str(source_path))})",
+            active=self.store.active_model_id() == ref.model_id,
+        )
 
     def data_sources(self, dataset: Dataset) -> list[dict[str, Any]]:
         sources: list[dict[str, Any]] = []

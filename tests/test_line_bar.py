@@ -12,10 +12,25 @@ from unittest.mock import patch
 import duckdb
 
 from py_lucidum.app import create_app
-from py_lucidum.core import Dataset, load_kpis, load_saved_filters
+from py_lucidum.core import Dataset, ModelPredictionSource, load_kpis, load_saved_filters, sql_literal
 from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
 from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count
+
+
+class PredictionSidecarProvider:
+    def __init__(self, sources: dict[str, ModelPredictionSource]):
+        self.sources = sources
+
+    def has_source(self, source_id: str) -> bool:
+        return source_id in self.sources
+
+    def relation_sql(self, source_id: str) -> str:
+        source = self.sources[source_id]
+        return source.relation_sql
+
+    def prediction_source(self, source_id: str) -> ModelPredictionSource | None:
+        return self.sources.get(source_id)
 
 
 def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
@@ -465,6 +480,152 @@ COPY (
         request["source"] = "model-output"
         with self.assertRaisesRegex(ValueError, "valid data source"):
             chart(dataset, request)
+
+    def test_chart_mixes_glm_and_gbm_prediction_sidecars_with_union_rows(self) -> None:
+        glm_path = self.root / "glm_predictions.parquet"
+        gbm_path = self.root / "gbm_predictions.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 100.0 AS glm_prediction
+  UNION ALL
+  SELECT 3, 300.0
+) TO {sql_literal(str(glm_path))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 2 AS __lucidum_row_id, 20.0 AS gbm_prediction
+  UNION ALL
+  SELECT 3, 30.0
+) TO {sql_literal(str(gbm_path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(
+            PredictionSidecarProvider(
+                {
+                    "glm:m1:predictions": ModelPredictionSource(
+                        source_id="glm:m1:predictions",
+                        column="glm_prediction",
+                        relation_sql=f"read_parquet({sql_literal(str(glm_path))})",
+                        active=True,
+                    ),
+                    "gbm:m1:predictions": ModelPredictionSource(
+                        source_id="gbm:m1:predictions",
+                        column="gbm_prediction",
+                        relation_sql=f"read_parquet({sql_literal(str(gbm_path))})",
+                        active=True,
+                    ),
+                }
+            )
+        )
+
+        result = chart(
+            dataset,
+            {
+                "source": "dataset",
+                "x": "glm_prediction",
+                "xSource": "glm:m1:predictions",
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "GBM", "numerator": "gbm_prediction", "source": "gbm:m1:predictions"},
+                ],
+                "denominator": "__none__",
+                "filter": "",
+                "bandWidth": 1,
+                "dateBucket": "none",
+                "lowGroup": "0",
+                "sort": "alpha",
+                "sigma": 0,
+                "transform": "none",
+            },
+        )
+
+        by_x = {row["x"]: row for row in result["rows"]}
+        self.assertEqual(result["source"], "dataset")
+        self.assertEqual(result["row_count"], 3)
+        self.assertEqual(result["filtered_row_count"], 3)
+        self.assertEqual(result["field_sources"]["x"], "glm:m1:predictions")
+        self.assertIn("(missing)", by_x)
+        self.assertIn("100", by_x)
+        self.assertIn("300", by_x)
+        self.assertAlmostEqual(by_x["(missing)"]["resp0"], 200)
+        self.assertAlmostEqual(by_x["(missing)"]["resp1"], 20)
+        self.assertIsNone(by_x["100"]["resp0"])
+        self.assertIsNone(by_x["100"]["resp1"])
+        self.assertAlmostEqual(by_x["300"]["resp0"], 300)
+        self.assertAlmostEqual(by_x["300"]["resp1"], 30)
+
+    def test_lazy_banding_suggestion_uses_x_source_for_prediction_axes(self) -> None:
+        glm_path = self.root / "glm_banding_predictions.parquet"
+        gbm_path = self.root / "gbm_banding_predictions.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 101.0 AS glm_prediction
+  UNION ALL
+  SELECT 2, 202.0
+  UNION ALL
+  SELECT 3, 303.0
+) TO {sql_literal(str(glm_path))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 10.0 AS gbm_prediction
+  UNION ALL
+  SELECT 2, 20.0
+  UNION ALL
+  SELECT 3, 30.0
+) TO {sql_literal(str(gbm_path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        app.state.dataset.register_data_source_provider(
+            PredictionSidecarProvider(
+                {
+                    "glm:m1:predictions": ModelPredictionSource(
+                        source_id="glm:m1:predictions",
+                        column="glm_prediction",
+                        relation_sql=f"read_parquet({sql_literal(str(glm_path))})",
+                        active=True,
+                    ),
+                    "gbm:m1:predictions": ModelPredictionSource(
+                        source_id="gbm:m1:predictions",
+                        column="gbm_prediction",
+                        relation_sql=f"read_parquet({sql_literal(str(gbm_path))})",
+                        active=True,
+                    ),
+                }
+            )
+        )
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/banding/suggestion",
+            {
+                "source": "gbm:m1:predictions",
+                "xSource": "glm:m1:predictions",
+                "feature": "glm_prediction",
+            },
+        )
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["source"], "glm:m1:predictions")
+        self.assertEqual(payload["feature"], "glm_prediction")
+        self.assertGreater(payload["band_suggestion"], 0)
 
     def test_default_saved_filters_fall_back_to_specs_directory(self) -> None:
         self.filters_path.unlink()

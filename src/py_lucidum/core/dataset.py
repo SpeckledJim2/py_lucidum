@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,14 @@ import duckdb
 
 from .schema import ColumnInfo, duckdb_error_message, infer_kind, is_numeric_kind, suggested_band_width
 from .sql import quote_ident, sql_literal
+
+
+@dataclass(frozen=True)
+class ModelPredictionSource:
+    source_id: str
+    column: str
+    relation_sql: str
+    active: bool = False
 
 
 class Dataset:
@@ -62,6 +71,28 @@ class Dataset:
     def register_data_source_provider(self, provider: Any) -> None:
         if provider not in self._source_providers:
             self._source_providers.append(provider)
+
+    def model_prediction_source(self, source_id: Any) -> ModelPredictionSource | None:
+        source = str(source_id or "").strip()
+        if not source or source == "dataset":
+            return None
+        for provider in self._source_providers:
+            prediction_source = getattr(provider, "prediction_source", None)
+            if not callable(prediction_source):
+                continue
+            raw = prediction_source(source)
+            if raw is None:
+                continue
+            if isinstance(raw, ModelPredictionSource):
+                return raw
+            if isinstance(raw, dict):
+                return ModelPredictionSource(
+                    source_id=str(raw.get("source_id") or source),
+                    column=str(raw.get("column") or ""),
+                    relation_sql=str(raw.get("relation_sql") or ""),
+                    active=bool(raw.get("active")),
+                )
+        return None
 
     def data_sources(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -356,6 +387,9 @@ FROM sample
         return self._ensure_schema()
 
     def normalise_filter(self, raw: Any, source_id: Any = None) -> str:
+        return self.normalise_filter_for_relation(raw, self.relation_sql_for_source(source_id))
+
+    def normalise_filter_for_relation(self, raw: Any, relation_sql: str) -> str:
         expression = str(raw or "").strip()
         if not expression:
             return ""
@@ -363,7 +397,7 @@ FROM sample
         if any(token in expression for token in forbidden):
             raise ValueError("Filter must be a single DuckDB expression without statement separators or comments")
         try:
-            self.con.execute(f"SELECT 1 FROM {self.relation_sql_for_source(source_id)} WHERE ({expression}) LIMIT 0")
+            self.con.execute(f"SELECT 1 FROM {relation_sql} WHERE ({expression}) LIMIT 0")
         except duckdb.Error as exc:
             message = str(exc).splitlines()[0]
             raise ValueError(f"Invalid filter: {message}") from exc

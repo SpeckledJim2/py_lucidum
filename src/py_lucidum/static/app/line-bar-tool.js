@@ -60,9 +60,9 @@ export function createLineBarTool({
     if (!lineBarToolAvailable()) return "";
     const name = String(featureName || "");
     if (!name) return "";
-    const currentSource = state.source || "dataset";
-    if (dataSourceHasColumn(currentSource, name)) return currentSource;
-    return "dataset";
+    const match = sourceColumns().find((column) => column.name === name);
+    if (match) return match.source_id || state.source || "dataset";
+    return dataSourceHasColumn("dataset", name) ? "dataset" : "";
   }
 
   function lineBarToolAvailable() {
@@ -81,6 +81,7 @@ export function createLineBarTool({
     if (!targetSource) return false;
     state.source = targetSource;
     state.x = name;
+    state.xSource = targetSource;
     state.bandFeature = null;
     renderFeatures();
     updateAxisControls();
@@ -136,7 +137,8 @@ export function createLineBarTool({
   }
 
   function currentBandFeatureKey() {
-    return JSON.stringify([state.source || "dataset", state.x || ""]);
+    const sourceId = selectedColumn()?.source_id || state.xSource || state.source || "dataset";
+    return JSON.stringify([sourceId, state.x || ""]);
   }
 
   function fallbackBandWidthForSelectedColumn() {
@@ -156,10 +158,12 @@ export function createLineBarTool({
     state.bandSuggestionPendingKey = bandFeatureKey;
     syncBandingControl();
     try {
+      const sourceId = selectedColumn()?.source_id || state.xSource || state.source || "dataset";
       const data = await api("/api/banding/suggestion", {
         method: "POST",
         body: JSON.stringify({
-          source: state.source || "dataset",
+          source: sourceId,
+          xSource: sourceId,
           feature: state.x,
           filter: state.activeFilter,
         }),
@@ -295,11 +299,15 @@ export function createLineBarTool({
     }
     for (const col of columns) {
       if (query && !col.name.toLowerCase().includes(query)) continue;
+      const sourceId = col.source_id || state.source || "dataset";
+      const active = col.name === state.x && (!state.xSource || state.xSource === sourceId);
       const button = document.createElement("button");
-      button.className = `feature ${col.name === state.x ? "active" : ""}`;
+      button.className = `feature ${active ? "active" : ""}`;
+      button.dataset.sourceId = sourceId;
       button.innerHTML = `<span>${escapeHtml(col.name)}</span><span class="kind">${col.kind}</span>`;
       button.addEventListener("click", () => {
         state.x = col.name;
+        state.xSource = sourceId;
         renderFeatures();
         updateAxisControls();
         refreshChart();
@@ -320,15 +328,21 @@ export function createLineBarTool({
   function currentResponses() {
     const responses = [];
     if (el("actualNumerator").value) {
+      const option = el("actualNumerator").selectedOptions[0];
+      const source = option?.dataset.metricKind === "prediction" ? option.dataset.sourceId || "" : "";
       responses.push({
         label: el("actualNumerator").value,
         numerator: el("actualNumerator").value,
+        ...(source ? { source } : {}),
       });
     }
     if (el("expectedNumerator").value) {
+      const option = el("expectedNumerator").selectedOptions[0];
+      const source = option?.dataset.metricKind === "prediction" ? option.dataset.sourceId || "" : "";
       responses.push({
         label: el("expectedNumerator").value,
         numerator: el("expectedNumerator").value,
+        ...(source ? { source } : {}),
       });
     }
     return responses;
@@ -348,8 +362,11 @@ export function createLineBarTool({
       setGroupMeta("line_bar", "Estimating banding...");
       return null;
     }
+    const column = selectedColumn();
+    const xSource = column && isModelPredictionColumn(column) ? column.source_id || state.xSource || state.source || "dataset" : "";
     return {
       source: state.source || "dataset",
+      ...(xSource ? { xSource } : {}),
       x: state.x,
       sort: state.sort,
       lowGroup: state.lowGroup,

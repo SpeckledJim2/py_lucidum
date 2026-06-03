@@ -256,6 +256,10 @@ class GlmToolTests(unittest.TestCase):
 
         dataset.register_data_source_provider(GlmSourceProvider(store))
         source_id = store.source_id(model_id)
+        model_prediction_source = dataset.model_prediction_source(source_id)
+        self.assertIsNotNone(model_prediction_source)
+        self.assertEqual(model_prediction_source.column, "glm_prediction")
+        self.assertIn("predictions.parquet", model_prediction_source.relation_sql)
         sources = dataset.data_sources()
         glm_source = next(source for source in sources if source["id"] == source_id)
         self.assertEqual(glm_source["kind"], "glm_predictions")

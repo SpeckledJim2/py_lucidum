@@ -7,6 +7,7 @@ from typing import Any
 from py_lucidum.core import (
     ColumnInfo,
     Dataset,
+    ModelPredictionSource,
     build_denominator_summary_sql,
     build_response_summary_sql,
     denominator_valid_condition,
@@ -25,13 +26,15 @@ from py_lucidum.core import (
 
 def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
     with dataset.lock:
-        source_id = dataset.normalise_source(request.get("source"))
-        columns = dataset.column_map_for_source(source_id)
+        context = chart_context(dataset, request)
+        source_id = context["source_id"]
+        relation = context["relation"]
+        columns = context["columns"]
         x_col = str(request.get("x") or "")
         if x_col not in columns:
             raise ValueError("Choose a valid x-axis feature")
 
-        filter_sql = dataset.normalise_filter(request.get("filter"), source_id=source_id)
+        filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
         responses = normalise_responses(request.get("responses"), columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
         x_info = columns[x_col]
@@ -50,11 +53,11 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         x_group_kind = "quantile" if quantile_count else x_info.kind
         sigma_multiplier = float(request.get("sigma") or 0)
         include_sigma = sigma_multiplier > 0 and len(responses) >= 2
-        row_count = dataset.row_count_for_source(source_id)
-        filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
-        denominator_summary = summarize_denominator(dataset, responses, denominator, filter_sql, source_id=source_id)
-        response_summaries = response_summary(dataset, responses, denominator, filter_sql, source_id=source_id)
-        sql = build_chart_sql(dataset.relation_sql_for_source(source_id), x_sql, responses, denominator, include_sigma, filter_sql)
+        row_count = context["row_count"]
+        filtered_row_count = relation_row_count(dataset, relation, filter_sql)
+        denominator_summary = relation_denominator_summary(dataset, relation, responses, denominator, filter_sql)
+        response_summaries = relation_response_summary(dataset, relation, responses, denominator, filter_sql)
+        sql = build_chart_sql(relation, x_sql, responses, denominator, include_sigma, filter_sql)
         raw_rows = [
             dict(zip([d[0] for d in dataset.con.description], row))
             for row in dataset.con.execute(sql).fetchall()
@@ -94,9 +97,10 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             "filtered_row_count": filtered_row_count,
             "filter": filter_sql,
             "responses": [
-                {"label": r["label"], "numerator": r["numerator"]}
+                {"label": r["label"], "numerator": r["numerator"], **({"source": r["source"]} if r.get("source") else {})}
                 for r in responses
             ],
+            **({"field_sources": context["field_sources"]} if context.get("field_sources") else {}),
             "denominator": {
                 "column": denominator["column"],
                 "label": denominator["label"],
@@ -114,6 +118,160 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+def chart_context(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
+    source_id = dataset.normalise_source(request.get("source"))
+    if not uses_field_sources(request):
+        relation = dataset.relation_sql_for_source(source_id)
+        return {
+            "source_id": source_id,
+            "relation": relation,
+            "columns": dataset.column_map_for_source(source_id),
+            "row_count": dataset.row_count_for_source(source_id),
+            "field_sources": None,
+        }
+    return mixed_chart_context(dataset, request, source_id)
+
+
+def uses_field_sources(request: dict[str, Any]) -> bool:
+    if str(request.get("xSource") or "").strip():
+        return True
+    raw_responses = request.get("responses")
+    if not isinstance(raw_responses, list):
+        return False
+    return any(isinstance(item, dict) and str(item.get("source") or "").strip() for item in raw_responses)
+
+
+def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: str) -> dict[str, Any]:
+    dataset_columns = dataset.column_map()
+    columns = dict(dataset_columns)
+    prediction_sources: dict[str, ModelPredictionSource] = {}
+    field_sources: dict[str, Any] = {"x": "dataset", "responses": []}
+    x_col = str(request.get("x") or "")
+    x_source = field_source_id(dataset, request.get("xSource"), source_id)
+    field_sources["x"] = x_source
+    add_field_column(dataset, columns, dataset_columns, prediction_sources, x_col, x_source)
+    raw_responses = request.get("responses")
+    if isinstance(raw_responses, list):
+        for item in raw_responses:
+            if not isinstance(item, dict):
+                continue
+            response_source = field_source_id(dataset, item.get("source"), source_id)
+            field_sources["responses"].append(response_source)
+            add_field_column(dataset, columns, dataset_columns, prediction_sources, str(item.get("numerator") or ""), response_source)
+    relation = mixed_relation_sql(dataset, list(prediction_sources.values()))
+    return {
+        "source_id": source_id,
+        "relation": relation,
+        "columns": columns,
+        "row_count": relation_row_count(dataset, relation),
+        "field_sources": field_sources,
+    }
+
+
+def field_source_id(dataset: Dataset, raw_source: Any, fallback_source: str) -> str:
+    raw = str(raw_source or "").strip()
+    if raw:
+        return dataset.normalise_source(raw)
+    return fallback_source or "dataset"
+
+
+def add_field_column(
+    dataset: Dataset,
+    columns: dict[str, ColumnInfo],
+    dataset_columns: dict[str, ColumnInfo],
+    prediction_sources: dict[str, ModelPredictionSource],
+    column_name: str,
+    source_id: str,
+) -> None:
+    if not column_name:
+        return
+    prediction_source = dataset.model_prediction_source(source_id)
+    if prediction_source is not None and column_name == prediction_source.column:
+        if not prediction_source.column or not prediction_source.relation_sql:
+            raise ValueError("Choose a valid model prediction source")
+        prediction_sources[prediction_source.source_id] = prediction_source
+        columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
+        return
+    if column_name in dataset_columns:
+        columns[column_name] = dataset_columns[column_name]
+
+
+def mixed_relation_sql(dataset: Dataset, prediction_sources: list[ModelPredictionSource]) -> str:
+    dataset_columns = [column.name for column in dataset.valid_schema_columns()]
+    source_column_sql = ",\n    ".join(quote_ident(name) for name in dataset_columns)
+    source_column_suffix = f",\n    {source_column_sql}" if source_column_sql else ""
+    joins: list[str] = []
+    selects = [f"base.{quote_ident(name)}" for name in dataset_columns]
+    scope_sql = ""
+    if prediction_sources:
+        scope_parts = [
+            f"SELECT __lucidum_row_id FROM {source.relation_sql}"
+            for source in prediction_sources
+        ]
+        scope_sql = ",\nprediction_scope AS (\n  " + "\n  UNION\n  ".join(scope_parts) + "\n)"
+        joins.append("INNER JOIN prediction_scope scope USING (__lucidum_row_id)")
+    for index, source in enumerate(prediction_sources):
+        alias = f"prediction_{index}"
+        joins.append(f"LEFT JOIN {source.relation_sql} {alias} USING (__lucidum_row_id)")
+        selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+    select_sql = ",\n  ".join(selects) if selects else "*"
+    join_sql = "\n".join(joins)
+    return f"""(
+WITH dataset_rows AS (
+  SELECT
+    ROW_NUMBER() OVER () AS __lucidum_row_id{source_column_suffix}
+  FROM {dataset.relation_sql()}
+){scope_sql}
+SELECT
+  {select_sql}
+FROM dataset_rows base
+{join_sql}
+)"""
+
+
+def relation_row_count(dataset: Dataset, relation: str, filter_sql: str = "") -> int:
+    where_sql = f" WHERE ({filter_sql})" if filter_sql else ""
+    value = dataset.con.execute(f"SELECT COUNT(*) FROM {relation}{where_sql}").fetchone()[0]
+    return int(value)
+
+
+def relation_denominator_summary(
+    dataset: Dataset,
+    relation: str,
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+    filter_sql: str = "",
+) -> dict[str, Any]:
+    sql = build_denominator_summary_sql(relation, responses, denominator, filter_sql)
+    cursor = dataset.con.execute(sql)
+    fetched = cursor.fetchone()
+    return dict(zip([d[0] for d in cursor.description], fetched or []))
+
+
+def relation_response_summary(
+    dataset: Dataset,
+    relation: str,
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+    filter_sql: str = "",
+) -> list[dict[str, Any]]:
+    if not responses:
+        return []
+    sql = build_response_summary_sql(relation, responses, denominator, filter_sql)
+    cursor = dataset.con.execute(sql)
+    fetched = cursor.fetchone()
+    row = dict(zip([d[0] for d in cursor.description], fetched or []))
+    return [
+        {
+            "label": response["label"],
+            "value": json_number(row.get(f"resp{index}")),
+            "numerator": json_number(row.get(f"resp{index}_num")),
+            "denominator": json_number(row.get(f"resp{index}_den")),
+        }
+        for index, response in enumerate(responses)
+    ]
+
+
 def normalise_responses(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[str, str]]:
     responses: list[dict[str, str]] = []
     if not isinstance(raw, list):
@@ -127,7 +285,8 @@ def normalise_responses(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[s
         if not is_numeric_kind(columns[str(numerator)].kind):
             continue
         label = item.get("label") or str(numerator)
-        responses.append({"label": str(label), "numerator": str(numerator)})
+        source = str(item.get("source") or "").strip()
+        responses.append({"label": str(label), "numerator": str(numerator), **({"source": source} if source else {})})
     return responses[:2]
 
 
