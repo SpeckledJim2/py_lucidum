@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 import math
 import subprocess
 import sys
 import tempfile
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,6 +22,18 @@ from .validation import TARGET_COLUMN, physical_sample_column, validate_request
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 _GLUM_FIRST_IMPORT_SAW_LIGHTGBM: bool | None = None
+
+
+@contextmanager
+def _suppress_tabmat_mixed_dtype_warning() -> Iterator[None]:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"^Matrices do not all have the same dtype\.",
+            category=UserWarning,
+            module=r"^tabmat\.split_matrix$",
+        )
+        yield
 
 
 class MissingGlmDependency(RuntimeError):
@@ -379,17 +394,19 @@ def _train_model_impl(
         drop_first=False,
         robust=True,
     )
-    estimator.fit(
-        fit_frame,
-        sample_weight=fit_weight_values,
-        store_covariance_matrix=True,
-        context=context,
-    )
+    with _suppress_tabmat_mixed_dtype_warning():
+        estimator.fit(
+            fit_frame,
+            sample_weight=fit_weight_values,
+            store_covariance_matrix=True,
+            context=context,
+        )
 
     progress({"phase": "scoring", "message": "Scoring GLM predictions", "percent": 70})
-    predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pd)
-    coefficients = coefficient_rows(estimator, fit_frame, y_fit.to_numpy(dtype=float), fit_weight_values, context, np, pd)
-    diagnostics = diagnostics_payload(estimator, fit_frame, y_fit.to_numpy(dtype=float), fit_weight_values, context, np, len(coefficients))
+    with _suppress_tabmat_mixed_dtype_warning():
+        predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pd)
+        coefficients = coefficient_rows(estimator, fit_frame, y_fit.to_numpy(dtype=float), fit_weight_values, context, np, pd)
+        diagnostics = diagnostics_payload(estimator, fit_frame, y_fit.to_numpy(dtype=float), fit_weight_values, context, np, len(coefficients))
     diagnostics.update(
         {
             "training_rows": int(fit_mask.sum()),

@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import unittest
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -12,7 +13,12 @@ from unittest.mock import patch
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
-from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
+from py_lucidum.tools.glm.training import (
+    MissingGlmDependency,
+    _suppress_tabmat_mixed_dtype_warning,
+    glm_dependencies,
+    train_model,
+)
 from py_lucidum.tools.glm.validation import strip_formula_comments, validate_request
 
 
@@ -123,6 +129,39 @@ class GlmToolTests(unittest.TestCase):
             glm_dependencies()
         except MissingGlmDependency as exc:
             self.skipTest(str(exc))
+
+    def test_glm_suppresses_only_tabmat_mixed_dtype_warning(self) -> None:
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            with _suppress_tabmat_mixed_dtype_warning():
+                warnings.warn_explicit(
+                    "Matrices do not all have the same dtype. Dtypes are [dtype('float64'), dtype('int64')].",
+                    UserWarning,
+                    "split_matrix.py",
+                    206,
+                    module="tabmat.split_matrix",
+                )
+                warnings.warn_explicit(
+                    "Different tabmat warning",
+                    UserWarning,
+                    "split_matrix.py",
+                    206,
+                    module="tabmat.split_matrix",
+                )
+                warnings.warn_explicit(
+                    "Matrices do not all have the same dtype. Dtypes are [dtype('float64'), dtype('int64')].",
+                    UserWarning,
+                    "other.py",
+                    1,
+                    module="other.module",
+                )
+
+        messages = [str(warning.message) for warning in captured]
+        self.assertEqual(len(messages), 2)
+        self.assertIn("Different tabmat warning", messages)
+        self.assertTrue(
+            any(message.startswith("Matrices do not all have the same dtype.") for message in messages)
+        )
 
     def test_glm_config_routes_work_without_optional_dependency_imports(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
