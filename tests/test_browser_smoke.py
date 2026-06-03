@@ -3707,6 +3707,32 @@ COPY (
                 )
                 page.locator('.filter-selection-mode button[data-value="multi"]').click()
                 self.assertTrue(page.locator('.filter-operator button[data-value="and"]').is_visible())
+                filter_layout = page.evaluate(
+                    """() => {
+                      const rectFor = (selector) => {
+                        const box = document.querySelector(selector).getBoundingClientRect();
+                        return {
+                          left: box.left,
+                          right: box.right,
+                          top: box.top,
+                          bottom: box.bottom,
+                        };
+                      };
+                      return {
+                        mode: rectFor(".filter-selection-mode"),
+                        clear: rectFor("#filterSidebarClearBtn"),
+                        operator: rectFor(".filter-operator"),
+                        primary: rectFor(".filter-controls-primary"),
+                        header: rectFor(".filter-header"),
+                        meta: rectFor("#filterRowMeta"),
+                      };
+                    }"""
+                )
+                self.assertGreater(filter_layout["clear"]["left"], filter_layout["mode"]["right"])
+                self.assertAlmostEqual(filter_layout["clear"]["right"], filter_layout["primary"]["right"], delta=1)
+                self.assertGreater(filter_layout["operator"]["top"], filter_layout["mode"]["bottom"] - 1)
+                self.assertAlmostEqual(filter_layout["operator"]["left"], filter_layout["mode"]["left"], delta=1)
+                self.assertAlmostEqual(filter_layout["meta"]["right"], filter_layout["header"]["right"], delta=1)
                 self.assertEqual(
                     page.locator("#filterInput").input_value(),
                     "(DRIVER_AGE >= 30 AND DRIVER_AGE < 60) OR (DRIVER_AGE > 70) OR (POSTCODE_AREA = 'SO')",
@@ -3724,8 +3750,9 @@ COPY (
                 self.assertFalse(page.locator('.filter-operator button[data-value="and"]').is_visible())
                 self.assertTrue(page.locator("#filterSidebarClearBtn").is_visible())
                 page.locator("#filterCollapseBtn").click()
-                self.assertTrue(page.locator("#filterSidebarClearBtn").is_visible())
+                self.assertFalse(page.locator("#filterSidebarClearBtn").is_visible())
                 page.locator("#filterCollapseBtn").click()
+                self.assertTrue(page.locator("#filterSidebarClearBtn").is_visible())
                 driver_rows.first.click()
                 self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
                 self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "false")

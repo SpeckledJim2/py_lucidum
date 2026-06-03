@@ -150,13 +150,15 @@
               </button>
               <h2>FILTER</h2>
               <span id="filterRowMeta" class="filter-row-meta"></span>
-              <button id="filterSidebarClearBtn" class="filter-action filter-sidebar-clear" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
             </div>
             <div class="filter-controls-row">
-              <div class="segmented filter-selection-mode" data-control="filterSelectionMode" aria-label="Saved filter selection mode">
-                <button data-value="single" class="active" type="button">Single</button>
-                <button data-value="grouped" type="button">Grouped</button>
-                <button data-value="multi" type="button">Multi</button>
+              <div class="filter-controls-primary">
+                <div class="segmented filter-selection-mode" data-control="filterSelectionMode" aria-label="Saved filter selection mode">
+                  <button data-value="single" class="active" type="button">Single</button>
+                  <button data-value="grouped" type="button">Grouped</button>
+                  <button data-value="multi" type="button">Multi</button>
+                </div>
+                <button id="filterSidebarClearBtn" class="filter-action filter-sidebar-clear" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
               </div>
               <div class="segmented filter-operator" data-control="filterOperator" aria-label="Saved filter operator">
                 <button data-value="and" class="active" type="button">All</button>

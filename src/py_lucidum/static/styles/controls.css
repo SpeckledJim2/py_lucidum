@@ -185,7 +185,8 @@
 
       .kpi-selected-meta,
       .gbm-model-selected-meta,
-      .glm-model-selected-meta {
+      .glm-model-selected-meta,
+      .filter-row-meta {
         min-width: 0;
         overflow: hidden;
         text-align: right;
@@ -425,17 +426,6 @@
         transform: rotate(-45deg) translate(-1px, 1px);
       }
 
-      .filter-row-meta {
-        min-width: 0;
-        overflow: hidden;
-        text-align: right;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        color: var(--muted);
-        font-size: 10px;
-        margin-left: auto;
-      }
-
       .sidebar-filter-resizer {
         cursor: row-resize;
         height: 8px;
@@ -466,11 +456,18 @@
       }
 
       .filter-controls-row {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
+        display: flex;
+        flex-direction: column;
         gap: 6px;
         margin-bottom: 7px;
+        align-items: stretch;
+      }
+
+      .filter-controls-primary {
+        display: flex;
         align-items: center;
+        gap: 6px;
+        min-width: 0;
       }
 
       .filter-controls-row .segmented {
@@ -485,11 +482,11 @@
 
       body.saved-filter-single-mode .filter-operator,
       body.saved-filter-grouped-mode .filter-operator {
-        visibility: hidden;
+        display: none;
       }
 
       .filter-operator {
-        justify-self: end;
+        align-self: flex-start;
       }
 
       .filter-action {
@@ -508,6 +505,8 @@
       .filter-sidebar-clear {
         width: 24px;
         min-height: 24px;
+        flex: 0 0 auto;
+        margin-left: auto;
         font-size: 14px;
       }
 
