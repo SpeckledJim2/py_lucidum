@@ -16,6 +16,11 @@ from py_lucidum.core import (
     summarize_denominator,
     weighted_value_sql,
 )
+from py_lucidum.tools.uk_map.smoothing import (
+    MAX_SMOOTHING_LEVEL,
+    normalise_smoothing_level,
+    smooth_sector_rows,
+)
 
 
 LEVELS = {
@@ -77,6 +82,7 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         source_id = dataset.normalise_source(request.get("source"))
         columns = dataset.column_map_for_source(source_id)
         level = normalise_level(request.get("level"))
+        smoothing_level = normalise_smoothing_level(request.get("smoothingLevel"))
         compact_unit_points = level == "unit" and bool(request.get("compactUnitPoints"))
         response = normalise_response(request, columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
@@ -84,14 +90,14 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         join_column = normalise_join_column(level, request, app_defaults, columns)
         filter_sql = dataset.normalise_filter(request.get("filter"), source_id=source_id)
 
-        row_count = dataset.row_count_for_source(source_id)
-        filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
-        denominator_summary = summarize_denominator(dataset, [response], denominator, filter_sql, source_id=source_id)
-        response_summaries = response_summary(dataset, [response], denominator, filter_sql, source_id=source_id)
         point_summary: dict[str, Any] | None = None
         if level == "unit":
             latitude_column = normalise_coordinate_column("latitude", request, app_defaults, columns)
             longitude_column = normalise_coordinate_column("longitude", request, app_defaults, columns)
+            row_count = dataset.row_count_for_source(source_id)
+            filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
+            denominator_summary = summarize_denominator(dataset, [response], denominator, filter_sql, source_id=source_id)
+            response_summaries = response_summary(dataset, [response], denominator, filter_sql, source_id=source_id)
             rows_or_points, point_summary = unit_rows(
                 dataset,
                 join_column,
@@ -103,10 +109,24 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 source_id=source_id,
                 compact=compact_unit_points,
             )
+            smoothing = smoothing_metadata(0, smoothing_level, point_summary["plotted_count"])
+            smoothing_warning = None
             rows = [] if compact_unit_points else rows_or_points
         else:
+            row_count = dataset.row_count_for_source(source_id)
+            filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
+            denominator_summary = summarize_denominator(dataset, [response], denominator, filter_sql, source_id=source_id)
+            response_summaries = response_summary(dataset, [response], denominator, filter_sql, source_id=source_id)
             rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
+            if level == "sector":
+                rows, smoothing, smoothing_warning = smooth_sector_rows(rows, smoothing_level)
+                smoothing["requested_level"] = smoothing_level
+            else:
+                smoothing = smoothing_metadata(0, smoothing_level, len(rows))
+                smoothing_warning = None
         warnings = denominator_warnings(denominator, denominator_summary)
+        if smoothing_warning:
+            warnings.append(smoothing_warning)
         plotted_count = int(point_summary["plotted_count"]) if point_summary else len(rows)
         if plotted_count == 0:
             if level == "unit" and point_summary and point_summary["summary_count"]:
@@ -141,6 +161,7 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 "numerator_total": response_summaries[0]["numerator"] if response_summaries else None,
                 "denominator": response_summaries[0]["denominator"] if response_summaries else None,
             },
+            "smoothing": smoothing,
             "warnings": warnings,
         }
         if compact_unit_points:
@@ -150,6 +171,20 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         if point_summary:
             payload["point_summary"] = point_summary
         return payload
+
+
+def smoothing_metadata(level: int, requested_level: int, matched_rows: int) -> dict[str, Any]:
+    return {
+        "level": level,
+        "requested_level": requested_level,
+        "max_level": MAX_SMOOTHING_LEVEL,
+        "applied": False,
+        "method": "none",
+        "matched_rows": matched_rows,
+        "smoothed_rows": 0,
+        "fallback_rows": 0,
+        "contributing_rows": 0,
+    }
 
 
 def normalise_level(raw: Any) -> str:

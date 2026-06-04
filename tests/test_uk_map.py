@@ -6,10 +6,18 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
 from py_lucidum.app import create_app, normalise_tools
 from py_lucidum.core import Dataset
+from py_lucidum.tools.uk_map import query as uk_map_query
 from py_lucidum.tools.uk_map.query import summary
+from py_lucidum.tools.uk_map.smoothing import (
+    DEFAULT_SECTOR_ADJACENCY_PATH,
+    load_sector_adjacency,
+    normalise_smoothing_level,
+    smooth_sector_rows,
+)
 
 
 def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
@@ -159,6 +167,163 @@ class UkMapToolTests(unittest.TestCase):
             [("AL1 1", 10, 30), ("AL1 2", None, 0)],
         )
         self.assertIn("1 row excluded from Weight because Weight was missing.", result["warnings"])
+
+    def test_sector_summary_accepts_smoothing_level(self) -> None:
+        dataset = Dataset(self.data_path)
+        result = summary(dataset, self.request(level="sector", smoothingLevel=1))
+
+        self.assertEqual(result["smoothing"]["level"], 1)
+        self.assertEqual(result["smoothing"]["requested_level"], 1)
+        self.assertTrue(result["smoothing"]["applied"])
+        self.assertEqual(result["smoothing"]["method"], "shared_edge_weighted_numerator")
+        self.assertIn("raw_value", result["rows"][0])
+
+    def test_smoothing_level_is_validated(self) -> None:
+        self.assertEqual(normalise_smoothing_level("none"), 0)
+        self.assertEqual(normalise_smoothing_level(5), 5)
+
+        dataset = Dataset(self.data_path)
+        with self.assertRaisesRegex(ValueError, "Choose a smoothing level from None to 5"):
+            summary(dataset, self.request(level="sector", smoothingLevel=6))
+
+        with self.assertRaisesRegex(ValueError, "Choose a smoothing level from None to 5"):
+            summary(dataset, self.request(level="sector", smoothingLevel=1.5))
+
+    def test_area_and_unit_smoothing_requests_are_no_ops(self) -> None:
+        dataset = Dataset(self.data_path)
+
+        area_result = summary(dataset, self.request(level="area", smoothingLevel=2))
+        unit_result = summary(dataset, self.request(level="unit", smoothingLevel=2))
+
+        self.assertEqual(area_result["smoothing"]["requested_level"], 2)
+        self.assertEqual(area_result["smoothing"]["level"], 0)
+        self.assertFalse(area_result["smoothing"]["applied"])
+        self.assertEqual(unit_result["smoothing"]["requested_level"], 2)
+        self.assertEqual(unit_result["smoothing"]["level"], 0)
+        self.assertFalse(unit_result["smoothing"]["applied"])
+
+    def test_sector_smoothing_pools_weighted_numerators(self) -> None:
+        adjacency_path = self.root / "adjacency.json"
+        adjacency_path.write_text(
+            json.dumps({
+                "keys": ["A", "B", "C", "D", "E", "F"],
+                "neighbour_type": "shared_edge",
+                "neighbours": [[1], [0, 2, 4], [1], [], [1, 5], [4]],
+            }),
+            encoding="utf-8",
+        )
+        load_sector_adjacency.cache_clear()
+        self.addCleanup(load_sector_adjacency.cache_clear)
+        rows = [
+            {"key": "A", "row_count": 1, "numerator": 100, "denominator": 10, "volume": 10, "value": 10},
+            {"key": "B", "row_count": 1, "numerator": 600, "denominator": 30, "volume": 30, "value": 20},
+            {"key": "C", "row_count": 1, "numerator": None, "denominator": 0, "volume": 0, "value": None},
+            {"key": "D", "row_count": 1, "numerator": 500, "denominator": 100, "volume": 100, "value": 5},
+            {"key": "X", "row_count": 1, "numerator": 9, "denominator": 1, "volume": 1, "value": 9},
+        ]
+
+        smoothed, metadata, warning = smooth_sector_rows(rows, 1, adjacency_path=str(adjacency_path))
+        smoothed_by_key = {row["key"]: row for row in smoothed}
+
+        self.assertIsNone(warning)
+        self.assertTrue(metadata["applied"])
+        self.assertEqual(metadata["matched_rows"], 5)
+        self.assertEqual(metadata["target_rows"], 6)
+        self.assertEqual(metadata["smoothed_rows"], 5)
+        self.assertEqual(metadata["fallback_rows"], 2)
+        self.assertEqual(smoothed_by_key["A"]["value"], 17.5)
+        self.assertEqual(smoothed_by_key["A"]["numerator"], 700)
+        self.assertEqual(smoothed_by_key["A"]["denominator"], 40)
+        self.assertEqual(smoothed_by_key["A"]["raw_value"], 10)
+        self.assertEqual(smoothed_by_key["A"]["smoothing_contributing_sectors"], 2)
+        self.assertEqual(smoothed_by_key["B"]["value"], 17.5)
+        self.assertEqual(smoothed_by_key["C"]["value"], 20)
+        self.assertIsNone(smoothed_by_key["C"]["raw_value"])
+        self.assertEqual(smoothed_by_key["C"]["smoothing_contributing_sectors"], 1)
+        self.assertEqual(smoothed_by_key["D"]["value"], 5)
+        self.assertEqual(smoothed_by_key["D"]["smoothing_contributing_sectors"], 1)
+        self.assertEqual(smoothed_by_key["E"]["value"], 20)
+        self.assertEqual(smoothed_by_key["E"]["row_count"], 0)
+        self.assertIsNone(smoothed_by_key["E"]["raw_value"])
+        self.assertEqual(smoothed_by_key["E"]["smoothing_contributing_sectors"], 1)
+        self.assertIsNone(smoothed_by_key["F"]["value"])
+        self.assertEqual(smoothed_by_key["F"]["smoothing_contributing_sectors"], 0)
+        self.assertEqual(smoothed_by_key["X"]["value"], 9)
+        self.assertEqual(smoothed_by_key["X"]["raw_value"], 9)
+        self.assertEqual(smoothed_by_key["X"]["smoothing_contributing_sectors"], 0)
+
+    def test_sector_smoothing_level_zero_does_not_synthesise_missing_sectors(self) -> None:
+        adjacency_path = self.root / "adjacency_zero.json"
+        adjacency_path.write_text(
+            json.dumps({
+                "keys": ["A", "B"],
+                "neighbour_type": "shared_edge",
+                "neighbours": [[1], [0]],
+            }),
+            encoding="utf-8",
+        )
+        rows = [{"key": "A", "row_count": 1, "numerator": 100, "denominator": 10, "volume": 10, "value": 10}]
+
+        smoothed, metadata, warning = smooth_sector_rows(rows, 0, adjacency_path=str(adjacency_path))
+
+        self.assertIsNone(warning)
+        self.assertFalse(metadata["applied"])
+        self.assertEqual(metadata["target_rows"], 1)
+        self.assertEqual(smoothed, rows)
+
+    def test_sector_summary_smoothing_returns_synthetic_missing_sector_rows(self) -> None:
+        data_path = self.root / "sector_smoothing_endpoint.csv"
+        data_path.write_text(
+            "PostcodeSector,Actual\n"
+            "A,100\n",
+            encoding="utf-8",
+        )
+        adjacency_path = self.root / "endpoint_adjacency.json"
+        adjacency_path.write_text(
+            json.dumps({
+                "keys": ["A", "B", "C"],
+                "neighbour_type": "shared_edge",
+                "neighbours": [[1], [0], []],
+            }),
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        original_smooth_sector_rows = uk_map_query.smooth_sector_rows
+
+        with patch.object(
+            uk_map_query,
+            "smooth_sector_rows",
+            side_effect=lambda rows, level: original_smooth_sector_rows(rows, level, adjacency_path=str(adjacency_path)),
+        ):
+            result = summary(dataset, self.request(level="sector", smoothingLevel=1))
+
+        rows_by_key = {row["key"]: row for row in result["rows"]}
+        self.assertEqual(result["smoothing"]["matched_rows"], 1)
+        self.assertEqual(result["smoothing"]["target_rows"], 3)
+        self.assertEqual(rows_by_key["A"]["value"], 100)
+        self.assertEqual(rows_by_key["A"]["raw_value"], 100)
+        self.assertEqual(rows_by_key["B"]["value"], 100)
+        self.assertEqual(rows_by_key["B"]["row_count"], 0)
+        self.assertIsNone(rows_by_key["B"]["raw_value"])
+        self.assertEqual(rows_by_key["B"]["smoothing_contributing_sectors"], 1)
+        self.assertIsNone(rows_by_key["C"]["value"])
+        self.assertEqual(rows_by_key["C"]["row_count"], 0)
+        self.assertIsNone(rows_by_key["C"]["raw_value"])
+        self.assertEqual(rows_by_key["C"]["smoothing_contributing_sectors"], 0)
+
+    def test_sector_adjacency_sidecar_matches_geojson_keys(self) -> None:
+        geojson_path = DEFAULT_SECTOR_ADJACENCY_PATH.with_name("sectors_MappaR.geojson")
+        geojson = json.loads(geojson_path.read_text(encoding="utf-8"))
+        geojson_keys = [feature["properties"]["PostcodeSector"] for feature in geojson["features"]]
+        adjacency = load_sector_adjacency()
+
+        self.assertEqual(list(adjacency.keys), geojson_keys)
+        self.assertEqual(len(adjacency.neighbours), len(geojson_keys))
+        for index, neighbours in enumerate(adjacency.neighbours):
+            self.assertEqual(list(neighbours), sorted(neighbours))
+            self.assertEqual(len(neighbours), len(set(neighbours)))
+            self.assertNotIn(index, neighbours)
+            self.assertTrue(all(0 <= neighbour < len(geojson_keys) for neighbour in neighbours))
 
     def test_custom_postcode_column_default(self) -> None:
         dataset = Dataset(self.data_path)

@@ -64,6 +64,7 @@
         mapOpacity: 1,
         mapHotspots: 0,
         mapLabelSize: 0,
+        mapSmoothingLevel: 0,
         featureSort: "original",
         expectedSort: "original",
         openSidebarSection: null,

@@ -8,7 +8,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
 - **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, tables, Base-aware transforms, sigma bars, and optional active-GBM SHAP ribbon overlays.
-- **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, or postcode units when unit and coordinate columns are available.
+- **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, including optional sector neighbour smoothing, or postcode units when unit and coordinate columns are available.
 - **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persistent sidecar artifacts, and active `glm_prediction` sources that can be plotted like other model predictions.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, and SHAP plotting when SHAP rows are saved during training.
 - **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios/interaction constraints.

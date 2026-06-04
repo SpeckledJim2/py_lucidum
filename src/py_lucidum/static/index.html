@@ -363,10 +363,15 @@
                     <span class="slider-scale"><b>Bot</b><b id="mapHotspotsValue">All</b><b>Top</b></span>
                     <input id="mapHotspots" type="range" min="-1" max="1" step="0.1" value="0" />
                   </label>
-                  <label class="map-slider-control">
+                  <label id="mapLabelControl" class="map-slider-control">
                     <span>Labels</span>
                     <span class="slider-scale"><b>0</b><b id="mapLabelSizeValue">0</b><b>20</b></span>
                     <input id="mapLabelSize" type="range" min="0" max="20" step="1" value="0" />
+                  </label>
+                  <label id="mapSmoothingControl" class="map-slider-control" hidden>
+                    <span>Smooth</span>
+                    <span class="slider-scale"><b>N0</b><b id="mapSmoothingValue">None</b><b>N5</b></span>
+                    <input id="mapSmoothing" type="range" min="0" max="5" step="1" value="0" />
                   </label>
                 </div>
               </div>

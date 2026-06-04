@@ -141,12 +141,14 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 **UK mapping**
 
 - Area and sector layers join grouped KPI summaries to bundled GeoJSON assets.
+- Sector smoothing uses a committed shared-edge adjacency sidecar generated from the bundled sector GeoJSON, then pools already-aggregated numerator and denominator values across sectors reachable within the selected neighbour depth. When smoothing is active, all sidecar sectors are smoothing targets, so sectors with no original data can be filled from valid neighbours. Raw sector fields remain available in the API rows for popup context.
 - Default join columns are `PostcodeArea`, `PostcodeSector`, and `PostcodeUnit`; uppercase aliases are supported.
 - Default coordinate columns are `lat` and `long`; `latitude`/`LATITUDE` and `longitude`/`LONGITUDE` aliases are supported.
 - Unit points group by postcode unit, average coordinates, and plot only units with valid KPI and valid coordinates.
 - Area and sector geometry use Leaflet GeoJSON with hover tooltips and click popups.
 - Unit points render on a canvas-backed Leaflet layer with a hit grid for hover tooltips and click popups. Unit redraws intentionally project rows first and then apply pixel-space culling; a geographic viewport prefilter before projection is not part of the current rendering strategy because it did not improve observed redraw speed during testing.
 - If no unit point columns are configured and defaults are absent, the Units layer is disabled. Explicit invalid unit point columns produce validation errors when requested.
+- Regenerate the sector adjacency sidecar with `scripts/build_uk_sector_adjacency.py` after replacing `sectors_MappaR.geojson`.
 
 **GLM and GBM**
 

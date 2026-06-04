@@ -386,8 +386,18 @@
         min-width: 0;
       }
 
+      .map-slider-control[hidden] {
+        display: none;
+      }
+
       .map-slider-control > span:first-child {
         font-weight: 500;
+      }
+
+      .map-slider-control.disabled > span,
+      .map-slider-control input[type="range"]:disabled {
+        color: color-mix(in srgb, currentColor 50%, transparent);
+        opacity: 0.65;
       }
 
       .slider-scale {

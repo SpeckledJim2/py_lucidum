@@ -137,6 +137,7 @@ export function createUkMapTool({
       latitudeColumn: latitudeColumn(),
       longitudeColumn: longitudeColumn(),
       compactUnitPoints: state.mapLevel === "unit",
+      smoothingLevel: state.mapLevel === "sector" ? state.mapSmoothingLevel : 0,
     };
   }
 
@@ -445,6 +446,7 @@ export function createUkMapTool({
       captureMapView("map-level-change");
       state.mapLevel = target.value;
       syncMapControls();
+      syncFloatingMapControl();
       refreshMap();
     }
   }
@@ -1072,7 +1074,7 @@ export function createUkMapTool({
     ukMapLayer = cachedPolygonLayer.layer;
     applyMapPolygonStyles();
     if (!ukMap.hasLayer(ukMapLayer)) ukMapLayer.addTo(ukMap);
-    renderMapLabels(data, summaries, hotspotKeys);
+    if (data.level === "area") renderMapLabels(data, summaries, hotspotKeys);
 
     const searchWarning = applyRenderedMapCamera(data.level, ukMapLayer.getBounds());
     renderMapLegend(scale, data.response?.label || "Actual");
@@ -1146,7 +1148,7 @@ export function createUkMapTool({
 
   function renderMapLabels(data, summaries, hotspotKeys) {
     const fontSize = Number(state.mapLabelSize);
-    if (!Number.isFinite(fontSize) || fontSize <= 0 || !ukMapLayer) return;
+    if (data.level !== "area" || !Number.isFinite(fontSize) || fontSize <= 0 || !ukMapLayer) return;
     ukMapLabelLayer = L.layerGroup().addTo(ukMap);
     ukMapLayer.eachLayer((layer) => {
       const key = mapPolygonLayerKey(layer);
@@ -1224,10 +1226,22 @@ export function createUkMapTool({
     el("mapOpacity").value = String(state.mapOpacity);
     el("mapHotspots").value = String(state.mapHotspots);
     el("mapLabelSize").value = String(state.mapLabelSize);
+    el("mapSmoothing").value = String(state.mapSmoothingLevel);
     el("mapLineWeightValue").textContent = String(state.mapLineWeight);
     el("mapOpacityValue").textContent = formatCompactSliderValue(state.mapOpacity);
     el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
     el("mapLabelSizeValue").textContent = String(state.mapLabelSize);
+    el("mapSmoothingValue").textContent = formatSmoothingLevel(state.mapSmoothingLevel);
+    const labelHidden = state.mapLevel !== "area";
+    const labelControl = el("mapLabelControl") || el("mapLabelSize").closest(".map-slider-control");
+    if (labelControl) labelControl.hidden = labelHidden;
+    el("mapLabelSize").disabled = labelHidden;
+    labelControl?.classList.toggle("disabled", labelHidden);
+    const smoothingHidden = state.mapLevel !== "sector";
+    const smoothingControl = el("mapSmoothingControl") || el("mapSmoothing").closest(".map-slider-control");
+    if (smoothingControl) smoothingControl.hidden = smoothingHidden;
+    el("mapSmoothing").disabled = smoothingHidden;
+    smoothingControl?.classList.toggle("disabled", smoothingHidden);
   }
 
   function formatCompactSliderValue(value) {
@@ -1242,6 +1256,11 @@ export function createUkMapTool({
     const sliderValue = Math.round(raw * 10) / 10;
     if (sliderValue === 0) return "All";
     return `${sliderValue < 0 ? "B" : "T"}${mapHotspotPercent(sliderValue)}`;
+  }
+
+  function formatSmoothingLevel(value) {
+    const level = Math.max(0, Math.min(5, Math.round(Number(value) || 0)));
+    return level <= 0 ? "None" : `N${level}`;
   }
 
   function normalisePostcodeSearch(raw) {
@@ -1279,6 +1298,7 @@ export function createUkMapTool({
     if (state.mapLevel !== search.level) {
       state.mapLevel = search.level;
       syncMapControls();
+      syncFloatingMapControl();
       await refreshMap();
       return;
     }
@@ -1298,12 +1318,24 @@ export function createUkMapTool({
       return `<div class="map-popup"><strong>${escapeHtml(title)}</strong><div>No matching data</div></div>`;
     }
     const weightLabel = data.denominator?.bar_label || "Weight";
-    return `<div class="map-popup">
-      <strong>${escapeHtml(title)}</strong>
-      <div>${escapeHtml(data.response?.label || "Actual")}: ${escapeHtml(formatLineValue(row.value) || "No data")}</div>
-      <div>${escapeHtml(weightLabel)}: ${escapeHtml(formatNumber(row.denominator))}</div>
-      <div>Rows: ${escapeHtml(formatNumber(row.row_count))}</div>
-    </div>`;
+    const responseLabel = data.response?.label || "Actual";
+    const rowsLabel = row.raw_row_count ?? row.row_count;
+    const lines = [
+      `<strong>${escapeHtml(title)}</strong>`,
+      `<div>${escapeHtml(responseLabel)}: ${escapeHtml(formatLineValue(row.value) || "No data")}</div>`,
+      `<div>${escapeHtml(weightLabel)}: ${escapeHtml(formatNumber(row.denominator))}</div>`,
+    ];
+    if (mapSmoothingApplied(data, row)) {
+      lines.push(`<div>Raw ${escapeHtml(responseLabel)}: ${escapeHtml(formatLineValue(row.raw_value) || "No data")}</div>`);
+      lines.push(`<div>Raw ${escapeHtml(weightLabel)}: ${escapeHtml(formatNumber(row.raw_denominator))}</div>`);
+      lines.push(`<div>Neighbours: ${escapeHtml(formatNumber(row.smoothing_contributing_sectors))}</div>`);
+    }
+    lines.push(`<div>Rows: ${escapeHtml(formatNumber(rowsLabel))}</div>`);
+    return `<div class="map-popup">${lines.join("")}</div>`;
+  }
+
+  function mapSmoothingApplied(data, row) {
+    return Boolean(data?.level === "sector" && data?.smoothing?.applied && Number(data?.smoothing?.level) > 0 && row && Object.prototype.hasOwnProperty.call(row, "raw_value"));
   }
 
   function finiteNumber(value) {
@@ -1512,8 +1544,19 @@ export function createUkMapTool({
     ].forEach(([id, stateKey]) => {
       el(id).addEventListener("input", (event) => {
         state[stateKey] = Number(event.target.value);
+        if (id === "mapLabelSize" && state.mapLevel !== "area") {
+          syncFloatingMapControl();
+          return;
+        }
         redrawMapInPlace();
       });
+    });
+    el("mapSmoothing").addEventListener("input", (event) => {
+      state.mapSmoothingLevel = Number(event.target.value);
+      syncFloatingMapControl();
+      if (state.mapLevel !== "sector") return;
+      captureMapView("smoothing-change");
+      refreshMap();
     });
     el("mapPostcodeSearch").addEventListener("click", searchMapPostcode);
     el("mapPostcodeClear").addEventListener("click", () => {

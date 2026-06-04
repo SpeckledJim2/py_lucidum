@@ -39,11 +39,11 @@ class BrowserSmokeTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
             data_path.write_text(
-                "PostcodeArea,PostcodeSector,vehicle_age,price,value\n"
-                "AB,AB10 1,1,100,10\n"
-                "AB,AB10 1,2,200,20\n"
-                "AL,AL1 1,3,300,30\n"
-                "AL,AL1 2,4,400,40\n",
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long\n"
+                "AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1\n"
+                "AB,AB10 1,2,200,20,AB10 1AB,57.2,-2.2\n"
+                "AL,AL1 1,3,300,30,AL1 1AA,51.8,-0.3\n"
+                "AL,AL1 2,4,400,40,AL1 2AA,51.7,-0.2\n",
                 encoding="utf-8",
             )
             base_url, server, thread = self.start_app(data_path)
@@ -1394,6 +1394,8 @@ COPY (
                 page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-pane')")
                 page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')")
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
+                self.assertFalse(page.locator("#mapLabelControl").is_hidden())
+                self.assertFalse(page.locator("#mapLabelSize").is_disabled())
                 page.evaluate(
                     """
                     () => {
@@ -1481,11 +1483,39 @@ COPY (
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
                 wait_for_map_view(stable_map_view)
 
+                self.assertTrue(page.locator("#mapLabelControl").is_hidden())
+                self.assertTrue(page.locator("#mapLabelSize").is_disabled())
+                self.assertFalse(page.locator("#mapSmoothingControl").is_hidden())
+                self.assertFalse(page.locator("#mapSmoothing").is_disabled())
+                with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                    page.evaluate(
+                        """
+                        () => {
+                            const input = document.querySelector("#mapSmoothing");
+                            input.value = "2";
+                            input.dispatchEvent(new Event("input", { bubbles: true }));
+                        }
+                        """
+                    )
+                page.wait_for_function('() => document.querySelector("#mapSmoothingValue")?.textContent === "N2"')
+                wait_for_map_view(stable_map_view)
+
+                with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                    page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').check()
+                page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")')
+                wait_for_map_view(stable_map_view)
+
+                self.assertTrue(page.locator("#mapLabelControl").is_hidden())
+                self.assertTrue(page.locator("#mapLabelSize").is_disabled())
+                self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
+                self.assertTrue(page.locator("#mapSmoothing").is_disabled())
+                wait_for_map_view(stable_map_view)
+
                 self.assertEqual(page_errors, [])
                 self.assertEqual(profile_requests, 2)
                 self.assertEqual(profile_detail_requests, 3)
                 self.assertEqual(chart_requests, 1)
-                self.assertEqual(map_requests, 5)
+                self.assertEqual(map_requests, 7)
             finally:
                 browser.close()
 

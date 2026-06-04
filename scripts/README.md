@@ -17,3 +17,11 @@ tree, and runs pytest with the current virtualenv's Python. Any arguments after
 ```bash
 .venv/bin/python scripts/run_browser_smoke.py -- tests/test_browser_smoke.py -q
 ```
+
+## UK Sector Adjacency
+
+Regenerate the postcode-sector shared-edge adjacency sidecar after replacing the bundled sector GeoJSON:
+
+```bash
+.venv/bin/python scripts/build_uk_sector_adjacency.py
+```
