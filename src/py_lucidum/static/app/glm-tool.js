@@ -267,7 +267,7 @@ export function createGlmTool({
                   <div class="glm-family-row">
                     <label class="glm-control-label" for="glmFamilySelect">Family</label>
                     <select id="glmFamilySelect" aria-label="GLM family">${familyOptionsHtml(data.families || [])}</select>
-                    <input id="glmFamilyParameter" class="glm-family-parameter" type="text" inputmode="decimal" placeholder="tweedie.var.power" value="${escapeHtml(String(familyParameterDefault(data.families || [])))}" aria-label="GLM family parameter" />
+                    <input id="glmFamilyParameter" class="glm-family-parameter" type="text" inputmode="decimal" placeholder="family.parameter" value="${escapeHtml(String(familyParameterDefault(data.families || [])))}" aria-label="GLM family parameter" />
                   </div>
                 </div>
                 <div class="glm-control-line">
@@ -360,7 +360,7 @@ export function createGlmTool({
     if (!select || !input) return;
     const parameter = familyParameterConfig(select.value);
     input.disabled = !parameter;
-    input.placeholder = "tweedie.var.power";
+    input.placeholder = "family.parameter";
     input.value = parameter ? (localStorage.getItem(`py_lucidum_glm_family_parameter_${select.value}`) || parameter.default || "") : "";
   }
 
