@@ -290,7 +290,7 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
-    def test_sidebar_vertical_resizers_work_across_tools(self) -> None:
+    def test_sidebar_accordion_works_across_tools(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
             data_path.write_text(
@@ -304,15 +304,15 @@ COPY (
             store = GbmModelStore(data_path)
             self.write_gbm_prediction_model(
                 store,
-                "sidebar-resizer-model",
-                "Sidebar resizer model",
+                "sidebar-accordion-model",
+                "Sidebar accordion model",
                 "2026-05-26T00:00:00Z",
                 [0.12, 0.23, 0.34, 0.45],
             )
-            store.activate_model("sidebar-resizer-model")
-            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "uk_map", "gbm"])
+            store.activate_model("sidebar-accordion-model")
+            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "uk_map", "glm", "gbm"])
             try:
-                self.exercise_sidebar_vertical_resizers(base_url)
+                self.exercise_sidebar_accordion(base_url)
             finally:
                 server.should_exit = True
                 thread.join(timeout=5)
@@ -587,7 +587,7 @@ COPY (
             assert response.status == 200
             assert expected_content_type in response.headers.get("content-type", "")
 
-    def exercise_sidebar_vertical_resizers(self, base_url: str) -> None:
+    def exercise_sidebar_accordion(self, base_url: str) -> None:
         assert sync_playwright is not None
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
@@ -595,219 +595,105 @@ COPY (
             page_errors: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-            def drag_resizer(selector: str, delta_y: int) -> None:
-                box = page.locator(selector).bounding_box()
-                self.assertIsNotNone(box)
-                assert box is not None
-                x = box["x"] + box["width"] / 2
-                y = box["y"] + box["height"] / 2
-                page.mouse.move(x, y)
-                page.mouse.down()
-                page.mouse.move(x, y + delta_y, steps=5)
-                page.mouse.up()
+            section_buttons = {
+                "kpi": "#kpiCollapseBtn",
+                "gbm": "#gbmModelCollapseBtn",
+                "glm": "#glmModelCollapseBtn",
+                "filter": "#filterCollapseBtn",
+            }
 
-            def header_top(selector: str) -> float:
-                box = page.locator(selector).bounding_box()
-                self.assertIsNotNone(box)
-                assert box is not None
-                return float(box["y"])
+            section_bodies = {
+                "kpi": "#kpiSelect",
+                "gbm": "#gbmModelSelect",
+                "glm": "#glmModelSelect",
+                "filter": "#savedFilterSelect",
+            }
 
-            def assert_header_top_stable(selector: str, before: float) -> None:
+            def wait_accordion_state(open_section: str | None) -> None:
                 page.wait_for_function(
                     """
-                    ({ selector, before }) => {
-                      const rect = document.querySelector(selector)?.getBoundingClientRect();
-                      return Boolean(rect) && Math.abs(rect.top - before) <= 1;
-                    }
+                    ({ openSection, buttons }) => Object.entries(buttons).every(([section, selector]) => {
+                      const button = document.querySelector(selector);
+                      return button && button.getAttribute("aria-expanded") === String(section === openSection);
+                    })
                     """,
-                    arg={"selector": selector, "before": before},
+                    arg={"openSection": open_section, "buttons": section_buttons},
                     timeout=10_000,
                 )
-                self.assertLessEqual(abs(header_top(selector) - before), 1)
+                for section, selector in section_buttons.items():
+                    self.assertEqual(page.locator(selector).get_attribute("aria-expanded"), str(section == open_section).lower())
+                for section, selector in section_bodies.items():
+                    self.assertEqual(page.locator(selector).is_visible(), section == open_section)
+
+            def assert_sidebar_headers_visible() -> None:
+                for selector in section_buttons.values():
+                    self.assertTrue(page.locator(selector).is_visible())
+                self.assertEqual(page.locator("#sidebarGbmResizer").count(), 0)
+                self.assertEqual(page.locator("#sidebarGlmResizer").count(), 0)
+                self.assertEqual(page.locator("#sidebarFilterResizer").count(), 0)
+                self.assertTrue(page.locator("#sidebarResizer").is_visible())
+                self.assertTrue(
+                    page.evaluate(
+                        """
+                        () => {
+                          const sections = [...document.querySelectorAll("[data-sidebar-section]")].map((section) => section.dataset.sidebarSection);
+                          return sections.join("|") === "kpi|gbm|glm|filter";
+                        }
+                        """
+                    )
+                )
 
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
-                page.locator("#gbmSidebarPanel:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#gbmSidebarPanel").wait_for(timeout=10_000)
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
-                self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
-                if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") == "true":
-                    page.locator("#gbmModelCollapseBtn").click()
-                    self.assertEqual(page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded"), "false")
-                gbm_header_top = header_top(".gbm-model-header h2")
-                page.locator("#gbmModelCollapseBtn").click()
-                self.assertEqual(page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded"), "true")
-                assert_header_top_stable(".gbm-model-header h2", gbm_header_top)
-                page.locator("#gbmModelCollapseBtn").click()
-                self.assertEqual(page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded"), "false")
+                assert_sidebar_headers_visible()
+                wait_accordion_state(None)
 
-                filter_header_top = header_top(".filter-header h2")
+                page.locator("#kpiCollapseBtn").click()
+                wait_accordion_state("kpi")
+                page.locator("#glmModelCollapseBtn").click()
+                wait_accordion_state("glm")
+                page.locator("#glmModelCollapseBtn").click()
+                wait_accordion_state(None)
                 page.locator("#filterCollapseBtn").click()
-                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "true")
-                assert_header_top_stable(".filter-header h2", filter_header_top)
-
-                page.goto(base_url, wait_until="domcontentloaded")
-                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
-                page.locator("#gbmSidebarPanel:not(.hidden)").wait_for(timeout=10_000)
-                page.locator("#filterCollapseBtn").click()
-                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "true")
-                page.wait_for_function(
-                    """
-                    () => {
-                      const rect = document.querySelector(".sidebar-filter-section")?.getBoundingClientRect();
-                      const sidebar = document.querySelector("#appSidebar")?.getBoundingClientRect();
-                      return Boolean(rect && sidebar) && rect.height > 80 && rect.bottom <= sidebar.bottom + 1;
-                    }
-                    """,
-                    timeout=10_000,
-                )
-                filter_before = page.evaluate(
-                    """
-                    () => {
-                      const section = document.querySelector(".sidebar-filter-section");
-                      const rect = section.getBoundingClientRect();
-                      return { top: rect.top, height: rect.height };
-                    }
-                    """
-                )
-                drag_resizer("#sidebarFilterResizer", -90)
-                page.wait_for_function(
-                    """
-                    (before) => {
-                      const rect = document.querySelector(".sidebar-filter-section")?.getBoundingClientRect();
-                      return Number(localStorage.getItem("py_lucidum_sidebar_filter_height")) > 0
-                        && rect
-                        && (
-                          Math.abs(rect.height - before.height) > 20
-                          || Math.abs(rect.top - before.top) > 20
-                        );
-                    }
-                    """,
-                    arg=filter_before,
-                    timeout=10_000,
-                )
-
-                gbm_before = page.evaluate(
-                    """
-                    () => {
-                      const rect = document.querySelector(".gbm-sidebar-panel").getBoundingClientRect();
-                      return { top: rect.top, bottom: rect.bottom, height: rect.height };
-                    }
-                    """
-                )
-                drag_resizer("#sidebarGbmResizer", 70)
-                page.wait_for_function(
-                    """
-                    (before) => {
-                      const rect = document.querySelector(".gbm-sidebar-panel")?.getBoundingClientRect();
-                      return Number(localStorage.getItem("py_lucidum_sidebar_gbm_height")) > 0
-                        && rect
-                        && rect.top > before.top + 16
-                        && Math.abs(rect.bottom - before.bottom) <= 2
-                        && rect.height < before.height - 16;
-                    }
-                    """,
-                    arg=gbm_before,
-                    timeout=10_000,
-                )
+                wait_accordion_state("filter")
 
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                 page.locator(".sidebar-metric-section:not(.hidden)").wait_for(timeout=10_000)
-                page.locator(".sidebar-kpi-section:not(.hidden)").wait_for(timeout=10_000)
-                if page.locator("#filterCollapseBtn").get_attribute("aria-expanded") == "true":
-                    page.locator("#filterCollapseBtn").click()
-                    self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "false")
-                if page.locator("#kpiCollapseBtn").get_attribute("aria-expanded") == "true":
-                    page.locator("#kpiCollapseBtn").click()
-                    self.assertEqual(page.locator("#kpiCollapseBtn").get_attribute("aria-expanded"), "false")
+                assert_sidebar_headers_visible()
+                wait_accordion_state("filter")
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
-                self.assertFalse(page.locator("#kpiSelect").is_visible())
-                page.wait_for_timeout(50)
-                collapsed_kpi_gbm_before = page.evaluate(
-                    """
-                    () => {
-                      const rect = document.querySelector(".gbm-sidebar-panel").getBoundingClientRect();
-                      return { top: rect.top, bottom: rect.bottom, height: rect.height };
-                    }
-                    """
-                )
-                drag_resizer("#sidebarGbmResizer", 60)
-                page.wait_for_function(
-                    """
-                    (before) => {
-                      const rect = document.querySelector(".gbm-sidebar-panel")?.getBoundingClientRect();
-                      return rect
-                        && rect.top > before.top + 16
-                        && Math.abs(rect.bottom - before.bottom) <= 2
-                        && rect.height < before.height - 16;
-                    }
-                    """,
-                    arg=collapsed_kpi_gbm_before,
-                    timeout=10_000,
-                )
-                kpi_header_top = header_top(".kpi-header h2")
-                page.locator("#kpiCollapseBtn").click()
-                self.assertEqual(page.locator("#kpiCollapseBtn").get_attribute("aria-expanded"), "true")
-                assert_header_top_stable(".kpi-header h2", kpi_header_top)
-                self.assertEqual(page.locator("#sidebarKpiResizer").count(), 0)
-                self.assertTrue(page.locator("#sidebarGbmResizer").is_visible())
-                kpi_before = page.evaluate(
-                    """
-                    () => {
-                      const rect = document.querySelector(".sidebar-kpi-section").getBoundingClientRect();
-                      const gbmRect = document.querySelector(".gbm-sidebar-panel").getBoundingClientRect();
-                      return { bottom: rect.bottom, height: rect.height, gbmHeight: gbmRect.height };
-                    }
-                    """
-                )
-                kpi_delta = -80 if kpi_before["gbmHeight"] < 100 else 80
-                drag_resizer("#sidebarGbmResizer", kpi_delta)
-                page.wait_for_function(
-                    """
-                    ({ before, delta }) => {
-                      const rect = document.querySelector(".sidebar-kpi-section")?.getBoundingClientRect();
-                      const gbmRect = document.querySelector(".gbm-sidebar-panel")?.getBoundingClientRect();
-                      const moved = delta > 0
-                        ? rect && rect.height > before.height + 20 && rect.bottom > before.bottom + 20
-                        : rect && rect.height < before.height - 20 && rect.bottom < before.bottom - 20;
-                      return Number(localStorage.getItem("py_lucidum_sidebar_kpi_height")) > 0
-                        && rect
-                        && gbmRect
-                        && moved
-                        && Math.abs(rect.bottom - gbmRect.top) <= 2
-                        && !document.querySelector(".sidebar-filter-section")?.classList.contains("hidden");
-                    }
-                    """,
-                    arg={"before": kpi_before, "delta": kpi_delta},
-                    timeout=10_000,
-                )
-                if page.locator("#kpiCollapseBtn").get_attribute("aria-expanded") == "true":
-                    page.locator("#kpiCollapseBtn").click()
-                    self.assertEqual(page.locator("#kpiCollapseBtn").get_attribute("aria-expanded"), "false")
-                if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") == "true":
-                    page.locator("#gbmModelCollapseBtn").click()
-                    self.assertEqual(page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded"), "false")
-                if page.locator("#filterCollapseBtn").get_attribute("aria-expanded") == "true":
-                    page.locator("#filterCollapseBtn").click()
-                    self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "false")
-                page.wait_for_function(
-                    """
-                    () => {
-                      const kpi = document.querySelector(".kpi-header h2")?.getBoundingClientRect();
-                      const gbm = document.querySelector(".gbm-model-header h2")?.getBoundingClientRect();
-                      const filter = document.querySelector(".filter-header h2")?.getBoundingClientRect();
-                      if (!kpi || !gbm || !filter) return false;
-                      const kpiToGbm = gbm.top - kpi.top;
-                      const gbmToFilter = filter.top - gbm.top;
-                      return Math.abs(kpiToGbm - gbmToFilter) <= 1;
-                    }
-                    """,
-                    timeout=10_000,
-                )
+
+                page.locator("#ukMapTool").click()
+                page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
+                assert_sidebar_headers_visible()
+                wait_accordion_state("filter")
+
+                page.locator("#glmTool").click()
+                page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
+                assert_sidebar_headers_visible()
+                wait_accordion_state("filter")
+
+                page.locator("#gbmTool").click()
+                page.locator("#modelToolWrap:not(.hidden) .gbm-tool").wait_for(timeout=10_000)
+                assert_sidebar_headers_visible()
+                wait_accordion_state("filter")
+
+                page.locator("#filterCollapseBtn").click()
+                wait_accordion_state(None)
+                page.locator("#sidebarToggleBtn").click()
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
+                self.assertFalse(page.locator("#sidebarResizer").is_visible())
+                self.assertFalse(page.locator("#kpiCollapseBtn").is_visible())
+                page.locator("#sidebarToggleBtn").click()
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
+                assert_sidebar_headers_visible()
+                wait_accordion_state(None)
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()
@@ -855,19 +741,31 @@ COPY (
                 )
                 self.assertLessEqual(abs(header_top(selector) - before), 1)
 
+            def open_sidebar_section(button_selector: str) -> None:
+                if page.locator(button_selector).get_attribute("aria-expanded") != "true":
+                    page.locator(button_selector).click()
+                page.wait_for_function(
+                    """
+                    (selector) => document.querySelector(selector)?.getAttribute("aria-expanded") === "true"
+                    """,
+                    arg=button_selector,
+                    timeout=10_000,
+                )
+
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").wait_for(timeout=10_000)
-                page.locator("#gbmModelSelect").wait_for(timeout=10_000)
-                page.locator("#glmModelSelect").wait_for(timeout=10_000)
+                page.locator("#gbmModelSelect").wait_for(state="attached", timeout=10_000)
+                page.locator("#glmModelSelect").wait_for(state="attached", timeout=10_000)
                 if page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded") == "true":
                     page.locator("#glmModelCollapseBtn").click()
                     self.assertEqual(page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded"), "false")
-                glm_header_top = header_top(".glm-model-header h2")
+                glm_header_top = header_top("#glmModelCollapseBtn")
                 page.locator("#glmModelCollapseBtn").click()
                 self.assertEqual(page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded"), "true")
-                assert_header_top_stable(".glm-model-header h2", glm_header_top)
+                assert_header_top_stable("#glmModelCollapseBtn", glm_header_top)
+                open_sidebar_section("#gbmModelCollapseBtn")
                 startup_model_details = page.evaluate(
                     """
                     () => Object.fromEntries(
@@ -890,6 +788,7 @@ COPY (
 
                 profile_requests_before = profile_requests
                 profile_detail_requests_before = profile_detail_requests
+                open_sidebar_section("#gbmModelCollapseBtn")
                 page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
                 page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
                 page.wait_for_function(
@@ -902,6 +801,7 @@ COPY (
                 page.wait_for_timeout(250)
                 self.assertEqual(profile_requests, profile_requests_before)
                 self.assertEqual(profile_detail_requests, profile_detail_requests_before)
+                open_sidebar_section("#gbmModelCollapseBtn")
                 page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
                 page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
                 page.wait_for_timeout(250)
@@ -918,6 +818,7 @@ COPY (
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                     timeout=10_000,
                 )
+                open_sidebar_section("#gbmModelCollapseBtn")
                 chart_requests_before = chart_requests
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as chart_request_info:
                     page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
@@ -1033,6 +934,7 @@ COPY (
                     timeout=10_000,
                 )
 
+                open_sidebar_section("#glmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_to_glm_info:
                     page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm-2"]').click()
                 glm_to_glm_body = json.loads(glm_to_glm_info.value.post_data or "{}")
@@ -1042,6 +944,7 @@ COPY (
                 self.assertEqual(glm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(glm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
 
+                open_sidebar_section("#gbmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_to_gbm_info:
                     page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
                 glm_to_gbm_body = json.loads(glm_to_gbm_info.value.post_data or "{}")
@@ -1051,6 +954,7 @@ COPY (
                 self.assertEqual(glm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
                 self.assertEqual(glm_to_gbm_body["responses"][1]["source"], "gbm:browser-smoke-model:predictions")
 
+                open_sidebar_section("#gbmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_to_gbm_info:
                     page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
                 gbm_to_gbm_body = json.loads(gbm_to_gbm_info.value.post_data or "{}")
@@ -1060,6 +964,7 @@ COPY (
                 self.assertEqual(gbm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
                 self.assertEqual(gbm_to_gbm_body["responses"][1]["source"], "gbm:browser-smoke-model-2:predictions")
 
+                open_sidebar_section("#glmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_to_glm_info:
                     page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm"]').click()
                 gbm_to_glm_body = json.loads(gbm_to_glm_info.value.post_data or "{}")
@@ -1340,6 +1245,7 @@ COPY (
                 self.assertFalse(any("SHAP__" in option for option in expected_options))
 
                 chart_requests_before = chart_requests
+                open_sidebar_section("#gbmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as shap_request_info:
                     page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
                 shap_request_body = json.loads(shap_request_info.value.post_data or "{}")
@@ -1766,6 +1672,12 @@ COPY (
                     timeout=10_000,
                 )
                 assert_feature_heading_matches_checked(2)
+                if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") != "true":
+                    page.locator("#gbmModelCollapseBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmModelCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                    timeout=10_000,
+                )
                 page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
                 page.wait_for_function(
                     """
@@ -1777,6 +1689,12 @@ COPY (
                         && labels.join("|") === "EBM Gain|Gain|SHAP";
                     }
                     """,
+                    timeout=10_000,
+                )
+                if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") != "true":
+                    page.locator("#gbmModelCollapseBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmModelCollapseBtn")?.getAttribute("aria-expanded") === "true"',
                     timeout=10_000,
                 )
                 page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
@@ -2206,7 +2124,7 @@ COPY (
                 self.assertTrue(stacked_state["hasOther"])
                 self.assertTrue(stacked_state["reconciles"])
                 page.get_by_role("button", name="Features and parameters").click()
-                page.locator("#gbmModelSelect").wait_for(timeout=10_000)
+                page.locator("#gbmModelSelect").wait_for(state="attached", timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
@@ -2956,7 +2874,7 @@ COPY (
                 self.assertTrue(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
-                self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#modelToolGroupMeta").is_visible())
                 self.assertFalse(page.locator("#modelToolFilter").is_visible())
                 page.wait_for_function(
@@ -3816,6 +3734,11 @@ COPY (
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.locator("#lineBarTool").click()
+                page.locator("#kpiCollapseBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#kpiCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                    timeout=10_000,
+                )
                 page.locator("#kpiSelect .kpi-theme").first.wait_for(timeout=10_000)
                 price_row = page.locator('.kpi-option[data-kpi-group="PRICE"]')
                 self.assertEqual(page.locator("#actualNumerator").input_value(), "price")

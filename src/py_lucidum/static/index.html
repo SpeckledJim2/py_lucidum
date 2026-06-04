@@ -107,67 +107,64 @@
             </div>
           </section>
 
-          <section class="section sidebar-kpi-section hidden">
-            <div class="kpi-header">
-              <button id="kpiCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse KPIs" aria-expanded="true" title="Collapse KPIs">
-                <span class="filter-collapse-icon" aria-hidden="true"></span>
-              </button>
-              <h2>KPIs</h2>
+          <section class="section sidebar-kpi-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="kpi">
+            <button id="kpiCollapseBtn" class="kpi-header sidebar-section-header" type="button" aria-label="Expand KPIs" aria-expanded="false" title="Expand KPIs">
+              <span class="filter-collapse-icon" aria-hidden="true"></span>
+              <span class="sidebar-section-title">KPIs</span>
               <span id="kpiSelectedMeta" class="kpi-selected-meta"></span>
+            </button>
+            <div class="sidebar-section-body">
+              <div id="kpiSelect" class="feature-list kpi-list" role="listbox" aria-label="KPIs"></div>
             </div>
-            <div id="kpiSelect" class="feature-list kpi-list" role="listbox" aria-label="KPIs"></div>
           </section>
 
-          <section id="gbmSidebarPanel" class="section gbm-sidebar-panel hidden">
-            <div id="sidebarGbmResizer" class="sidebar-gbm-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize KPI and GBM model controls"></div>
-            <div class="gbm-model-header">
-              <button id="gbmModelCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse GBM models" aria-expanded="true" title="Collapse GBM models">
-                <span class="filter-collapse-icon" aria-hidden="true"></span>
-              </button>
-              <h2>GBMs</h2>
+          <section id="gbmSidebarPanel" class="section gbm-sidebar-panel sidebar-accordion-section sidebar-section-closed" data-sidebar-section="gbm">
+            <button id="gbmModelCollapseBtn" class="gbm-model-header sidebar-section-header" type="button" aria-label="Expand GBMs" aria-expanded="false" title="Expand GBMs">
+              <span class="filter-collapse-icon" aria-hidden="true"></span>
+              <span class="sidebar-section-title">GBMs</span>
               <span id="gbmModelSelectedMeta" class="gbm-model-selected-meta"></span>
+            </button>
+            <div class="sidebar-section-body">
+              <div id="gbmModelSelect" class="feature-list gbm-model-list" role="listbox" aria-label="GBM models"></div>
             </div>
-            <div id="gbmModelSelect" class="feature-list gbm-model-list" role="listbox" aria-label="GBM models"></div>
           </section>
 
-          <section id="glmSidebarPanel" class="section glm-sidebar-panel hidden">
-            <div id="sidebarGlmResizer" class="sidebar-glm-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize KPI and GLM model controls"></div>
-            <div class="glm-model-header">
-              <button id="glmModelCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Collapse GLM models" aria-expanded="true" title="Collapse GLM models">
-                <span class="filter-collapse-icon" aria-hidden="true"></span>
-              </button>
-              <h2>GLMs</h2>
+          <section id="glmSidebarPanel" class="section glm-sidebar-panel sidebar-accordion-section sidebar-section-closed" data-sidebar-section="glm">
+            <button id="glmModelCollapseBtn" class="glm-model-header sidebar-section-header" type="button" aria-label="Expand GLMs" aria-expanded="false" title="Expand GLMs">
+              <span class="filter-collapse-icon" aria-hidden="true"></span>
+              <span class="sidebar-section-title">GLMs</span>
               <span id="glmModelSelectedMeta" class="glm-model-selected-meta"></span>
+            </button>
+            <div class="sidebar-section-body">
+              <div id="glmModelSelect" class="feature-list glm-model-list" role="listbox" aria-label="GLM models"></div>
             </div>
-            <div id="glmModelSelect" class="feature-list glm-model-list" role="listbox" aria-label="GLM models"></div>
           </section>
 
-          <section class="section sidebar-filter-section filter-collapsed">
-            <div id="sidebarFilterResizer" class="sidebar-filter-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize KPI and filter controls"></div>
-            <div class="filter-header">
-              <button id="filterCollapseBtn" class="filter-collapse-toggle" type="button" aria-label="Expand filter" aria-expanded="false" title="Expand filter">
-                <span class="filter-collapse-icon" aria-hidden="true"></span>
-              </button>
-              <h2>FILTER</h2>
+          <section class="section sidebar-filter-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="filter">
+            <button id="filterCollapseBtn" class="filter-header sidebar-section-header" type="button" aria-label="Expand FILTER" aria-expanded="false" title="Expand FILTER">
+              <span class="filter-collapse-icon" aria-hidden="true"></span>
+              <span class="sidebar-section-title">FILTER</span>
               <span id="filterRowMeta" class="filter-row-meta"></span>
-            </div>
-            <div class="filter-controls-row">
-              <div class="filter-controls-primary">
-                <div class="segmented filter-selection-mode" data-control="filterSelectionMode" aria-label="Saved filter selection mode">
-                  <button data-value="single" class="active" type="button">Single</button>
-                  <button data-value="grouped" type="button">Grouped</button>
-                  <button data-value="multi" type="button">Multi</button>
+            </button>
+            <div class="sidebar-section-body">
+              <div class="filter-controls-row">
+                <div class="filter-controls-primary">
+                  <div class="segmented filter-selection-mode" data-control="filterSelectionMode" aria-label="Saved filter selection mode">
+                    <button data-value="single" class="active" type="button">Single</button>
+                    <button data-value="grouped" type="button">Grouped</button>
+                    <button data-value="multi" type="button">Multi</button>
+                  </div>
+                  <button id="filterSidebarClearBtn" class="filter-action filter-sidebar-clear" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
                 </div>
-                <button id="filterSidebarClearBtn" class="filter-action filter-sidebar-clear" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
+                <div class="segmented filter-operator" data-control="filterOperator" aria-label="Saved filter operator">
+                  <button data-value="and" class="active" type="button">All</button>
+                  <button data-value="or" type="button">Any</button>
+                  <button data-value="nand" type="button">Not all</button>
+                  <button data-value="nor" type="button">None</button>
+                </div>
               </div>
-              <div class="segmented filter-operator" data-control="filterOperator" aria-label="Saved filter operator">
-                <button data-value="and" class="active" type="button">All</button>
-                <button data-value="or" type="button">Any</button>
-                <button data-value="nand" type="button">Not all</button>
-                <button data-value="nor" type="button">None</button>
-              </div>
+              <div id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox" aria-label="Saved filters" aria-multiselectable="true"></div>
             </div>
-            <div id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox" aria-label="Saved filters" aria-multiselectable="true"></div>
           </section>
         </aside>
 
