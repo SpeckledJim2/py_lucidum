@@ -19,9 +19,16 @@ from py_lucidum.core import (
     quote_ident,
     response_parts,
     response_summary,
+    sql_literal,
     summarize_denominator,
     weighted_value_sql,
 )
+from py_lucidum.tools.gbm.shap import FLAME_PERCENTILES as SHAP_RIBBON_PERCENTILES
+from py_lucidum.tools.gbm.shap import percentile_key, percentile_selects
+from py_lucidum.tools.gbm.validation import CROSS_ENTROPY_OBJECTIVES, LOG_LINK_OBJECTIVES
+
+
+BINARY_LINK_OBJECTIVES = {"binary", *CROSS_ENTROPY_OBJECTIVES}
 
 
 def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
@@ -69,7 +76,18 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             x_kind=x_group_kind,
             threshold=str(request.get("lowGroup") or "0"),
         )
-        sorted_rows = sort_rows(grouped_rows, x_group_kind, str(request.get("sort") or "alpha"))
+        partial_dependence = build_partial_dependence_overlay(
+            dataset,
+            request,
+            columns=columns,
+            x_col=x_col,
+            x_sql=x_sql,
+            x_group_kind=x_group_kind,
+            responses=responses,
+            denominator=denominator,
+        )
+        partial_medians = partial_dependence_medians(partial_dependence)
+        sorted_rows = sort_rows(grouped_rows, x_group_kind, str(request.get("sort") or "alpha"), partial_medians)
         clean_numeric_band_labels(sorted_rows, x_group_kind, request.get("bandWidth"))
         max_groups = int(request.get("maxGroups") or 10000)
         if len(sorted_rows) > max_groups:
@@ -88,8 +106,19 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             base=request.get("base"),
             band_width=request.get("bandWidth"),
         )
+        if partial_dependence:
+            transform_partial_dependence_overlay(
+                partial_dependence,
+                transform,
+                warnings,
+                x_kind=x_group_kind,
+                base=request.get("base"),
+                band_width=request.get("bandWidth"),
+            )
+            order_partial_dependence_rows(partial_dependence, sorted_rows)
+            warnings.extend(partial_dependence.get("warnings") or [])
 
-        return {
+        payload = {
             "x": x_col,
             "x_kind": x_info.kind,
             "source": source_id,
@@ -116,6 +145,9 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             "warnings": warnings,
             "transform": transform_metadata,
         }
+        if partial_dependence:
+            payload["partial_dependence"] = partial_dependence
+        return payload
 
 
 def chart_context(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
@@ -665,7 +697,12 @@ def combine_sigma(rows: list[dict[str, Any]]) -> tuple[float | int | None, float
     return json_number(math.sqrt(variance) / math.sqrt(valid_folds)), json_number(valid_folds)
 
 
-def sort_rows(rows: list[dict[str, Any]], x_kind: str, sort: str) -> list[dict[str, Any]]:
+def sort_rows(
+    rows: list[dict[str, Any]],
+    x_kind: str,
+    sort: str,
+    shap_medians: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
     if x_kind not in {"categorical"}:
         return sorted(rows, key=lambda r: (r["x_sort"] is None, r["x_sort"]))
     if sort == "volume":
@@ -674,7 +711,524 @@ def sort_rows(rows: list[dict[str, Any]], x_kind: str, sort: str) -> list[dict[s
         return sorted(rows, key=lambda r: (r.get("resp0") is None, -(r.get("resp0") or 0), str(r["x"]).lower()))
     if sort == "expected":
         return sorted(rows, key=lambda r: (r.get("resp1") is None, -(r.get("resp1") or 0), str(r["x"]).lower()))
+    if sort == "shap":
+        medians = shap_medians or {}
+        return sorted(rows, key=lambda r: (r.get("is_tail"), medians.get(str(r["x"])) is None, -(medians.get(str(r["x"])) or 0), str(r["x"]).lower()))
     return sorted(rows, key=lambda r: str(r["x"]).lower())
+
+
+def build_partial_dependence_overlay(
+    dataset: Dataset,
+    request: dict[str, Any],
+    *,
+    columns: dict[str, ColumnInfo],
+    x_col: str,
+    x_sql: dict[str, str],
+    x_group_kind: str,
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+) -> dict[str, Any] | None:
+    if not partial_dependence_mode_is_shap(request.get("partialDependence")):
+        return None
+    source = active_gbm_shap_source(dataset)
+    if source is None:
+        return empty_partial_dependence_warning("No active GBM SHAP values are available.")
+    model_id = str(source.get("model_id") or "")
+    shap_source_id = str(source.get("id") or "")
+    prediction_source = active_gbm_prediction_source(dataset, model_id)
+    if not model_id or not shap_source_id or prediction_source is None:
+        return empty_partial_dependence_warning("The active GBM needs both SHAP values and predictions for SHAP ribbons.")
+
+    shap_column = shap_value_column_for_feature(source, x_col)
+    if not shap_column:
+        return empty_partial_dependence_warning(f"No active GBM SHAP values are available for {x_col}.")
+    shap_source_columns = dataset.column_map_for_source(shap_source_id)
+    if x_col not in shap_source_columns:
+        return empty_partial_dependence_warning(f"The active GBM SHAP source does not include {x_col}.")
+    if "gbm_prediction" not in shap_source_columns:
+        return empty_partial_dependence_warning("The active GBM SHAP source does not include fitted predictions.")
+
+    overlay_responses = [response for response in responses if response.get("numerator") in shap_source_columns]
+    overlay_denominator = normalise_overlay_denominator(denominator, shap_source_columns)
+    shap_relation = dataset.relation_sql_for_source(shap_source_id)
+    filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), shap_relation)
+    shap_expr = shap_response_sql(str(source.get("objective") or prediction_source.get("objective") or ""), quote_ident(shap_column))
+    initial_sql = build_partial_dependence_sql(
+        shap_relation,
+        x_sql,
+        shap_expr,
+        overlay_responses,
+        overlay_denominator,
+        filter_sql,
+    )
+    initial_raw_rows = [
+        dict(zip([d[0] for d in dataset.con.description], row))
+        for row in dataset.con.execute(initial_sql).fetchall()
+    ]
+    initial_rows = normalise_partial_dependence_rows(initial_raw_rows)
+    group_mapping = partial_low_weight_group_mapping(initial_rows, x_group_kind, str(request.get("lowGroup") or "0"))
+    if group_mapping:
+        final_sql = build_partial_dependence_sql(
+            shap_relation,
+            x_sql,
+            shap_expr,
+            overlay_responses,
+            overlay_denominator,
+            filter_sql,
+            group_mapping=group_mapping,
+        )
+        raw_rows = [
+            dict(zip([d[0] for d in dataset.con.description], row))
+            for row in dataset.con.execute(final_sql).fetchall()
+        ]
+        rows = normalise_partial_dependence_rows(raw_rows)
+    else:
+        rows = []
+    if x_group_kind == "numeric":
+        clean_partial_numeric_labels(rows, request.get("bandWidth"))
+    scale = scale_partial_dependence_rows(rows, objective=str(source.get("objective") or prediction_source.get("objective") or ""))
+    warnings: list[str] = []
+    if not rows:
+        warnings.append("No SHAP ribbon rows matched the current chart selection.")
+    if scale.get("warning"):
+        warnings.append(str(scale["warning"]))
+    return {
+        "mode": "shap",
+        "model_id": model_id,
+        "feature": x_col,
+        "shap_column": shap_column,
+        "percentiles": list(SHAP_RIBBON_PERCENTILES),
+        "rows": rows,
+        "warnings": warnings,
+        "scale": {key: value for key, value in scale.items() if key != "warning"},
+        "transform": {"mode": str(request.get("transform") or "none")},
+    }
+
+
+def partial_dependence_mode_is_shap(raw: Any) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    return str(raw.get("mode") or "none").strip().lower() == "shap"
+
+
+def empty_partial_dependence_warning(message: str) -> dict[str, Any]:
+    return {
+        "mode": "shap",
+        "model_id": "",
+        "feature": "",
+        "percentiles": list(SHAP_RIBBON_PERCENTILES),
+        "rows": [],
+        "warnings": [message],
+        "scale": {"method": "none", "target": None, "source_mean": None},
+        "transform": {"mode": "none"},
+    }
+
+
+def active_gbm_shap_source(dataset: Dataset) -> dict[str, Any] | None:
+    sources = dataset.data_sources()
+    return next((source for source in sources if source.get("kind") == "gbm_shap_long" and source.get("active")), None)
+
+
+def active_gbm_prediction_source(dataset: Dataset, model_id: str) -> dict[str, Any] | None:
+    sources = dataset.data_sources()
+    return next(
+        (
+            source
+            for source in sources
+            if source.get("kind") == "gbm_predictions"
+            and source.get("active")
+            and str(source.get("model_id") or "") == model_id
+        ),
+        None,
+    )
+
+
+def shap_value_column_for_feature(source: dict[str, Any], feature: str) -> str:
+    for column in source.get("columns") or []:
+        if not isinstance(column, dict):
+            continue
+        if column.get("source_role") != "gbm_shap_value":
+            continue
+        if str(column.get("artifact_column") or column.get("label") or "") == feature:
+            return str(column.get("name") or "")
+    return ""
+
+
+def normalise_overlay_denominator(
+    denominator: dict[str, str | None],
+    columns: dict[str, ColumnInfo],
+) -> dict[str, str | None]:
+    column = denominator.get("column")
+    if not column:
+        return denominator
+    if column in columns:
+        return denominator
+    return {"column": None, "label": "Average row value", "bar_label": "Row count"}
+
+
+def shap_response_sql(objective: str, shap_column_sql: str) -> str:
+    selected_objective = str(objective or "").strip().lower()
+    raw = f"TRY_CAST({shap_column_sql} AS DOUBLE)"
+    if selected_objective in LOG_LINK_OBJECTIVES:
+        return f"EXP({raw})"
+    if selected_objective in BINARY_LINK_OBJECTIVES:
+        return f"1.0 / (1.0 + EXP(-({raw})))"
+    return raw
+
+
+def build_partial_dependence_sql(
+    relation: str,
+    x_sql: dict[str, str],
+    shap_expr: str,
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+    filter_sql: str = "",
+    *,
+    group_mapping: list[dict[str, Any]] | None = None,
+) -> str:
+    checks = [f"{shap_expr} IS NOT NULL", "TRY_CAST(gbm_prediction AS DOUBLE) IS NOT NULL"]
+    selected_response_checks = denominator_valid_condition(responses, denominator)
+    if selected_response_checks != "TRUE":
+        checks.append(selected_response_checks)
+    valid_condition = " AND ".join(checks)
+    weight_expr = weighted_value_sql(denominator, valid_condition)
+    percentile_sql = ",\n    ".join(percentile_selects("__shap_response", SHAP_RIBBON_PERCENTILES))
+    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    quantile_cte = ""
+    keyed_from = "base"
+    rownum_expr = "__rownum"
+    source_columns = "*"
+    if x_sql.get("quantile_count"):
+        quantile_cte = f""",
+quantiles AS (
+  SELECT
+    __rownum,
+    NTILE({x_sql['quantile_count']}) OVER (ORDER BY __x_raw, __rownum) AS __x_quantile
+  FROM (
+    SELECT
+      __rownum,
+      {x_sql['raw']} AS __x_raw
+    FROM base
+    WHERE {x_sql['raw']} IS NOT NULL
+  ) non_missing
+)"""
+        keyed_from = "base LEFT JOIN quantiles USING (__rownum)"
+        rownum_expr = "base.__rownum"
+        source_columns = "base.*"
+    map_cte = partial_group_map_cte(group_mapping)
+    if group_mapping:
+        valid_sql = f"""
+valid AS (
+  SELECT
+    map.final_label AS x_label,
+    map.final_x_sort AS x_sort,
+    map.final_original_order AS original_order,
+    map.final_is_tail AS is_tail,
+    keyed.__shap_response,
+    keyed.__gbm_prediction,
+    keyed.__weight_value
+  FROM keyed
+  INNER JOIN group_map map ON keyed.x_label = map.source_label
+  WHERE keyed.__weight_value IS NOT NULL
+    AND keyed.__shap_response IS NOT NULL
+    AND keyed.__gbm_prediction IS NOT NULL
+)"""
+    else:
+        valid_sql = """
+valid AS (
+  SELECT
+    x_label,
+    x_sort,
+    __rownum AS original_order,
+    FALSE AS is_tail,
+    __shap_response,
+    __gbm_prediction,
+    __weight_value
+  FROM keyed
+  WHERE __weight_value IS NOT NULL
+    AND __shap_response IS NOT NULL
+    AND __gbm_prediction IS NOT NULL
+)"""
+    return f"""
+WITH base AS (
+  SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}{where_sql}
+){quantile_cte},
+keyed AS (
+  SELECT
+    {rownum_expr} AS __rownum,
+    {x_sql['key']} AS x_key,
+    {x_sql['label']} AS x_label,
+    {x_sql['sort']} AS x_sort,
+    {shap_expr} AS __shap_response,
+    TRY_CAST(gbm_prediction AS DOUBLE) AS __gbm_prediction,
+    {weight_expr} AS __weight_value,
+    {source_columns}
+  FROM {keyed_from}
+){map_cte},
+{valid_sql}
+SELECT
+    x_label,
+    MIN(x_sort) AS x_sort,
+    MIN(original_order) AS original_order,
+    BOOL_OR(is_tail) AS is_tail,
+    COALESCE(SUM(__weight_value), 0) AS volume,
+    SUM(__gbm_prediction * __weight_value) AS fitted_num,
+    COALESCE(SUM(__weight_value), 0) AS fitted_den,
+    {percentile_sql}
+FROM valid
+GROUP BY x_label
+"""
+
+
+def partial_group_map_cte(group_mapping: list[dict[str, Any]] | None) -> str:
+    if not group_mapping:
+        return ""
+    values = ",\n    ".join(
+        "("
+        f"{sql_literal(str(row.get('source_x') or ''))}, "
+        f"{sql_literal(str(row.get('final_x') or ''))}, "
+        f"{sql_literal(str(row.get('final_x_sort') or ''))}, "
+        f"{int(row.get('final_original_order') or 0)}, "
+        f"{'TRUE' if row.get('final_is_tail') else 'FALSE'}"
+        ")"
+        for row in group_mapping
+    )
+    return f""",
+group_map(source_label, final_label, final_x_sort, final_original_order, final_is_tail) AS (
+  VALUES
+    {values}
+)"""
+
+
+def normalise_partial_dependence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalised: list[dict[str, Any]] = []
+    for row in rows:
+        item = {
+            "x": str(row.get("x_label")),
+            "x_sort": row.get("x_sort"),
+            "original_order": int(row.get("original_order") or 0),
+            "volume": json_number(row.get("volume")) or 0,
+            "fitted_num": json_number(row.get("fitted_num")) or 0,
+            "fitted_den": json_number(row.get("fitted_den")) or 0,
+            "is_tail": bool(row.get("is_tail")),
+        }
+        for percentile in SHAP_RIBBON_PERCENTILES:
+            item[percentile_key(percentile)] = json_number(row.get(percentile_key(percentile)))
+        normalised.append(item)
+    return normalised
+
+
+def partial_low_weight_group_mapping(rows: list[dict[str, Any]], x_kind: str, threshold: str) -> list[dict[str, Any]]:
+    total_volume = sum(float(row.get("volume") or 0) for row in rows)
+    threshold_value = parse_group_threshold(threshold, total_volume)
+    normalised = list(rows)
+    missing_rows: list[dict[str, Any]] = []
+    if x_kind == "quantile":
+        missing_rows = [row for row in normalised if row["x"] == "Missing"]
+        normalised = [row for row in normalised if row["x"] != "Missing"]
+    if threshold_value <= 0 or len(normalised) < 3:
+        return [partial_group_mapping_row(row, row) for row in [*normalised, *missing_rows]]
+
+    if x_kind in {"integer", "numeric", "date", "datetime", "quantile"}:
+        ordered = sorted(normalised, key=lambda r: (r.get("x_sort") is None, r.get("x_sort")))
+        low: list[dict[str, Any]] = []
+        high: list[dict[str, Any]] = []
+        cumulative = 0.0
+        for row in ordered:
+            volume = float(row.get("volume") or 0)
+            if cumulative + volume <= threshold_value:
+                low.append(row)
+                cumulative += volume
+            else:
+                break
+        cumulative = 0.0
+        for row in reversed(ordered[len(low):]):
+            volume = float(row.get("volume") or 0)
+            if cumulative + volume <= threshold_value:
+                high.append(row)
+                cumulative += volume
+            else:
+                break
+        high = list(reversed(high))
+        middle = ordered[len(low): len(ordered) - len(high) if high else len(ordered)]
+        mapping: list[dict[str, Any]] = []
+        mapping.extend(partial_tail_mapping_rows(low, "Low tail") if len(low) > 1 else [partial_group_mapping_row(row, row) for row in low])
+        mapping.extend(partial_group_mapping_row(row, row) for row in middle)
+        mapping.extend(partial_tail_mapping_rows(high, "High tail") if len(high) > 1 else [partial_group_mapping_row(row, row) for row in high])
+        mapping.extend(partial_group_mapping_row(row, row) for row in missing_rows)
+        return mapping
+
+    rare = [row for row in normalised if float(row.get("volume") or 0) <= threshold_value]
+    common = [row for row in normalised if float(row.get("volume") or 0) > threshold_value]
+    mapping = [partial_group_mapping_row(row, row) for row in common]
+    if len(rare) > 1:
+        mapping.extend(partial_tail_mapping_rows(rare, "Other"))
+    else:
+        mapping.extend(partial_group_mapping_row(row, row) for row in rare)
+    return mapping
+
+
+def partial_group_mapping_row(source: dict[str, Any], final: dict[str, Any], *, label: str | None = None, is_tail: bool | None = None) -> dict[str, Any]:
+    return {
+        "source_x": source.get("x"),
+        "final_x": label if label is not None else final.get("x"),
+        "final_x_sort": final.get("x_sort"),
+        "final_original_order": final.get("original_order"),
+        "final_is_tail": bool(final.get("is_tail")) if is_tail is None else is_tail,
+    }
+
+
+def partial_tail_mapping_rows(rows: list[dict[str, Any]], label: str) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    final = {
+        "x": label,
+        "x_sort": rows[0].get("x_sort"),
+        "original_order": min(int(row.get("original_order") or 0) for row in rows),
+        "is_tail": True,
+    }
+    return [partial_group_mapping_row(row, final, label=label, is_tail=True) for row in rows]
+
+
+def weighted_average(values: Any) -> float | int | None:
+    numerator = 0.0
+    denominator = 0.0
+    for raw_value, raw_weight in values:
+        value = json_number(raw_value)
+        weight = json_number(raw_weight)
+        if value is None or weight is None:
+            continue
+        numerator += float(value) * float(weight)
+        denominator += float(weight)
+    return json_number(numerator / denominator) if denominator else None
+
+
+def clean_partial_numeric_labels(rows: list[dict[str, Any]], band_width: Any) -> None:
+    decimal_places = decimal_places_for_band_width(band_width)
+    if decimal_places is None:
+        return
+    for row in rows:
+        if row.get("is_tail"):
+            continue
+        label = format_numeric_band_label(row.get("x_sort"), decimal_places)
+        if label is not None:
+            row["x"] = label
+
+
+def scale_partial_dependence_rows(rows: list[dict[str, Any]], *, objective: str) -> dict[str, Any]:
+    target = weighted_average((row.get("fitted_num") / row.get("fitted_den") if row.get("fitted_den") else None, row.get("fitted_den")) for row in rows)
+    source_mean = weighted_average((row.get("p50"), row.get("volume")) for row in rows)
+    selected_objective = str(objective or "").strip().lower()
+    positive_scale = selected_objective in LOG_LINK_OBJECTIVES or selected_objective in BINARY_LINK_OBJECTIVES
+    if target is None or source_mean is None:
+        return {"method": "none", "target": target, "source_mean": source_mean, "warning": "SHAP ribbons could not be scaled to fitted values."}
+    if positive_scale:
+        if source_mean == 0:
+            return {"method": "none", "target": target, "source_mean": source_mean, "warning": "SHAP ribbons could not be scaled because the median SHAP mean is zero."}
+        multiplier = float(target) / float(source_mean)
+        for row in rows:
+            for percentile in SHAP_RIBBON_PERCENTILES:
+                key = percentile_key(percentile)
+                value = json_number(row.get(key))
+                row[key] = json_number(float(value) * multiplier) if value is not None else None
+        return {"method": "multiply", "target": json_number(target), "source_mean": json_number(source_mean), "factor": json_number(multiplier)}
+    shift = float(target) - float(source_mean)
+    for row in rows:
+        for percentile in SHAP_RIBBON_PERCENTILES:
+            key = percentile_key(percentile)
+            value = json_number(row.get(key))
+            row[key] = json_number(float(value) + shift) if value is not None else None
+    return {"method": "add", "target": json_number(target), "source_mean": json_number(source_mean), "shift": json_number(shift)}
+
+
+def partial_dependence_medians(partial_dependence: dict[str, Any] | None) -> dict[str, float]:
+    medians: dict[str, float] = {}
+    if not partial_dependence:
+        return medians
+    for row in partial_dependence.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        median = json_number(row.get("p50"))
+        if median is not None:
+            medians[str(row.get("x"))] = float(median)
+    return medians
+
+
+def transform_partial_dependence_overlay(
+    partial_dependence: dict[str, Any],
+    transform: str,
+    warnings: list[str],
+    *,
+    x_kind: str,
+    base: Any,
+    band_width: Any,
+) -> None:
+    rows = partial_dependence.get("rows")
+    if not isinstance(rows, list):
+        return
+    metadata = partial_dependence_transform_metadata(rows, transform, warnings, x_kind=x_kind, base=base, band_width=band_width)
+    invalid_count = 0
+    reference = json_number(metadata.get("value"))
+    for row in rows:
+        for percentile in SHAP_RIBBON_PERCENTILES:
+            key = percentile_key(percentile)
+            before = row.get(key)
+            row[key] = transform_value(before, transform, reference)
+            if before is not None and row[key] is None:
+                invalid_count += 1
+    if invalid_count:
+        partial_dependence.setdefault("warnings", []).append(f"{invalid_count} SHAP ribbon values could not be shown because they are outside the {transform} transform domain.")
+    partial_dependence["transform"] = metadata
+
+
+def partial_dependence_transform_metadata(
+    rows: list[dict[str, Any]],
+    transform: str,
+    warnings: list[str],
+    *,
+    x_kind: str,
+    base: Any,
+    band_width: Any,
+) -> dict[str, Any]:
+    base_text = str(base or "").strip()
+    average = weighted_average((row.get("p50"), row.get("volume")) for row in rows)
+    metadata: dict[str, Any] = {
+        "mode": transform,
+        "base": base_text,
+        "reference": "overall_average",
+        "base_x": None,
+        "value": json_number(average),
+    }
+    if transform not in {"zero", "one"}:
+        return metadata
+    if not base_text:
+        return metadata
+    base_row = base_reference_row(rows, x_kind=x_kind, base=base_text, band_width=band_width)
+    if base_row is None:
+        warnings.append(f"Base value {base_text} could not be matched on the x-axis; using overall response averages for SHAP ribbon {transform} transform.")
+        return metadata
+    reference = json_number(base_row.get("p50"))
+    if reference is None or (transform == "one" and reference == 0):
+        warnings.append(f"Base value {base_text} has no usable SHAP ribbon reference; using overall response averages for the {transform} transform.")
+        return metadata
+    metadata.update({"reference": "base", "base_x": base_row.get("x"), "value": reference})
+    return metadata
+
+
+def order_partial_dependence_rows(partial_dependence: dict[str, Any], sorted_rows: list[dict[str, Any]]) -> None:
+    rows = [row for row in partial_dependence.get("rows") or [] if isinstance(row, dict)]
+    by_x = {str(row.get("x")): row for row in rows}
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in sorted_rows:
+        label = str(row.get("x"))
+        match = by_x.get(label)
+        if match is not None:
+            ordered.append(match)
+            seen.add(label)
+    partial_dependence["rows"] = ordered
+    if rows and not ordered:
+        partial_dependence.setdefault("warnings", []).append("SHAP ribbon groups did not match the rendered chart groups.")
 
 
 def apply_transform(

@@ -182,6 +182,7 @@
                 <button data-value="volume">Weight</button>
                 <button data-value="actual">Actual</button>
                 <button id="expectedSortButton" data-value="expected" class="hidden">Expected</button>
+                <button id="shapSortButton" data-value="shap" class="hidden">SHAP</button>
               </div>
             </div>
             <div class="control">
@@ -201,6 +202,13 @@
                 <button data-value="bar">Bar</button>
                 <button data-value="line">Line</button>
                 <button data-value="all">All</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Partial dependancies</h3>
+              <div class="segmented" data-control="partialDependence">
+                <button data-value="none" class="active">-</button>
+                <button data-value="shap">SHAP</button>
               </div>
             </div>
             <div id="bandControl" class="control">

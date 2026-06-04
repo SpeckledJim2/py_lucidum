@@ -2259,7 +2259,7 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
     def test_line_bar_x_axis_title_uses_selected_feature_with_tight_spacing(self) -> None:
         js = self.app_js_contract()
 
-        self.assertIn('textStyle: { color: getCss("--text"), fontWeight: 700 },', js)
+        self.assertIn('const textStyle = { color: getCss("--text"), fontWeight: 700 };', js)
         self.assertIn('name: data.x || "",', js)
         self.assertIn('nameLocation: "middle",', js)
         self.assertIn("nameGap: xLabelPolicy.nameGap,", js)
@@ -2342,6 +2342,28 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn('state.quantileMode === "quantile" && previousControlValue !== "quantile"', js)
         self.assertIn('state.bandWidth = "10";', js)
         self.assertIn('function normalizeBandWidthForQuantiles()', js)
+
+    def test_line_bar_partial_dependence_shap_contract(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        html = html_body.decode("utf-8")
+        js = self.app_js_contract()
+
+        self.assertIn("<h3>Partial dependancies</h3>", html)
+        self.assertIn('<div class="segmented" data-control="partialDependence">', html)
+        self.assertIn('<button data-value="shap">SHAP</button>', html)
+        self.assertIn('id="shapSortButton" data-value="shap" class="hidden"', html)
+        self.assertLess(html.index("<h3>Labels</h3>"), html.index("<h3>Partial dependancies</h3>"))
+        self.assertLess(html.index("<h3>Partial dependancies</h3>"), html.index('id="bandControl"'))
+        self.assertIn('partialDependence: "none"', js)
+        self.assertIn('partialDependence: { mode: state.partialDependence === "shap" ? "shap" : "none" }', js)
+        self.assertIn('el("shapSortButton")?.classList.toggle("hidden", !shapSortAvailable);', js)
+        self.assertIn('"partialDependence"', js)
+        self.assertIn("function shapPartialDependenceSeries(data)", js)
+        self.assertIn("function shapRibbonSeries(rows, lowKey, highKey, label, color)", js)
+        self.assertIn("function lineBarLegendOptions(legendData, shapLegendData, shapLegendSelection)", js)
+        self.assertIn("matchingLegendSelection(previousOption, shapLegendData)", js)
+        self.assertIn("series: [barSeries, ...shapSeries, ...lineSeries, ...customSeries]", js)
+        self.assertIn("grid: { left: 72, right: 76, top: hasShapSeries ? 82 : 56", js)
 
     def test_gbm_shap_banding_uses_lazy_suggestion_without_auto_control(self) -> None:
         shap_js = self.assert_no_store("/static/app/gbm-shap-tool.js")[1].decode("utf-8")

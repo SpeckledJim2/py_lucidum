@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import unittest
 from pathlib import Path
@@ -15,6 +16,8 @@ from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, ModelPredictionSource, load_kpis, load_saved_filters, sql_literal
 from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
+from py_lucidum.tools.gbm.sources import GbmSourceProvider
+from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count
 
 
@@ -143,6 +146,85 @@ class LineBarToolTests(unittest.TestCase):
                 {"label": "Expected", "numerator": "Expected"},
             ],
         }
+
+    def write_active_gbm_for_shap_ribbons(
+        self,
+        *,
+        objective: str = "poisson",
+        predictions: list[tuple[int, float]] | None = None,
+        shap_values: list[tuple[int, float, float]] | None = None,
+    ) -> GbmModelStore:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir(f"{objective}-ribbons")
+        model_id = model_dir.name
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": f"{objective} ribbons",
+                "created_at": "2026-06-04T00:00:00Z",
+                "objective": objective,
+                "metric": objective,
+                "response_column": "Actual",
+                "offset_column": "Weight",
+                "sources": {
+                    "predictions": f"gbm:{model_id}:predictions",
+                    "shap_long": f"gbm:{model_id}:shap_long",
+                    "shap_summary": f"gbm:{model_id}:shap_summary",
+                },
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            prediction_rows = predictions or [(1, 100.0), (2, 200.0), (3, 300.0), (4, 400.0)]
+            prediction_values = ", ".join(f"({row_id}, {value})" for row_id, value in prediction_rows)
+            con.execute(
+                f"""
+COPY (
+  SELECT *
+  FROM (VALUES {prediction_values}) AS rows(__lucidum_row_id, gbm_prediction)
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            if shap_values is None:
+                shap_values = (
+                    [(1, 0.0, 0.0), (2, 0.0, 0.0), (3, 1.0, 1.0), (4, 1.0, 1.0)]
+                    if objective == "poisson"
+                    else [(1, 10.0, 10.0), (2, 10.0, 10.0), (3, 20.0, 20.0), (4, 20.0, 20.0)]
+                )
+            shap_rows = ", ".join(f"({row_id}, {use_of_van}, {youngest_driver_age})" for row_id, use_of_van, youngest_driver_age in shap_values)
+            con.execute(
+                f"""
+COPY (
+  SELECT *
+  FROM (VALUES {shap_rows}) AS rows(__lucidum_row_id, UseofVan, YoungestDriverAge)
+) TO {sql_literal(str(model_dir / "shap_values.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 'UseofVan' AS feature, 1.0 AS mean_abs_shap, 0.0 AS mean_shap, 4 AS row_count
+  UNION ALL SELECT 'YoungestDriverAge', 1.0, 0.0, 4
+) TO {sql_literal(str(model_dir / "shap_summary.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model(model_id)
+        return store
+
+    def dataset_with_gbm_ribbons(
+        self,
+        *,
+        objective: str = "poisson",
+        predictions: list[tuple[int, float]] | None = None,
+        shap_values: list[tuple[int, float, float]] | None = None,
+    ) -> Dataset:
+        store = self.write_active_gbm_for_shap_ribbons(objective=objective, predictions=predictions, shap_values=shap_values)
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(GbmSourceProvider(store))
+        return dataset
 
     def test_app_registers_line_bar_routes_and_saved_filters(self) -> None:
         app = create_app(
@@ -561,6 +643,133 @@ COPY (
         self.assertIsNone(by_x["100"]["resp1"])
         self.assertAlmostEqual(by_x["300"]["resp0"], 300)
         self.assertAlmostEqual(by_x["300"]["resp1"], 30)
+
+    def test_chart_adds_active_gbm_shap_ribbons_scaled_to_fitted_values(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons()
+        request = self.request()
+        request["partialDependence"] = {"mode": "shap"}
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["mode"], "shap")
+        self.assertEqual(partial["feature"], "UseofVan")
+        self.assertEqual(partial["percentiles"], [0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100])
+        self.assertEqual(partial["scale"]["method"], "multiply")
+        self.assertAlmostEqual(partial["scale"]["target"], 250.0)
+        by_x = {row["x"]: row for row in partial["rows"]}
+        self.assertAlmostEqual(by_x["Social"]["p50"], 250.0 / ((1.0 + math.exp(1.0)) / 2.0))
+        self.assertAlmostEqual(by_x["Business"]["p50"], math.exp(1.0) * by_x["Social"]["p50"])
+
+    def test_chart_shap_ribbons_respect_filter_weight_and_numeric_banding(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons()
+        request = self.request("UseofVan = 'Business'")
+        request.update(
+            {
+                "x": "YoungestDriverAge",
+                "bandWidth": "10",
+                "denominator": "Weight",
+                "partialDependence": {"mode": "shap"},
+            }
+        )
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        target = (300.0 * 30.0 + 400.0 * 40.0) / 70.0
+        self.assertEqual([row["x"] for row in partial["rows"]], ["50", "60"])
+        self.assertAlmostEqual(partial["scale"]["target"], target)
+        weighted_p50 = sum(row["p50"] * row["volume"] for row in partial["rows"]) / sum(row["volume"] for row in partial["rows"])
+        self.assertAlmostEqual(weighted_p50, target)
+
+    def test_chart_shap_ribbons_use_quantile_banding(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons()
+        request = self.request()
+        request.update(
+            {
+                "x": "YoungestDriverAge",
+                "bandWidth": "2",
+                "quantileMode": "quantile",
+                "partialDependence": {"mode": "shap"},
+            }
+        )
+
+        result = chart(dataset, request)
+
+        self.assertEqual([row["x"] for row in result["partial_dependence"]["rows"]], ["Q1", "Q2"])
+
+    def test_chart_shap_ribbons_recompute_percentiles_for_low_weight_other_group(self) -> None:
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "10,A,2024-01-01,1000,1,1,1\n"
+            "20,B,2024-01-02,1000,1,1,1\n"
+            "30,C,2024-01-03,1000,1,1,1\n"
+            "40,D,2024-01-04,1000,1,1,1\n",
+            encoding="utf-8",
+        )
+        dataset = self.dataset_with_gbm_ribbons(
+            objective="regression",
+            predictions=[(1, 55.0), (2, 55.0), (3, 55.0), (4, 55.0)],
+            shap_values=[(1, 0.0, 0.0), (2, 10.0, 10.0), (3, 100.0, 100.0), (4, 200.0, 200.0)],
+        )
+        request = self.request()
+        request.update({"lowGroup": "1", "partialDependence": {"mode": "shap"}})
+
+        result = chart(dataset, request)
+
+        row = result["partial_dependence"]["rows"][0]
+        self.assertEqual(row["x"], "Other")
+        self.assertAlmostEqual(row["p0"], 0.0)
+        self.assertAlmostEqual(row["p50"], 55.0)
+        self.assertAlmostEqual(row["p100"], 200.0)
+
+    def test_chart_shap_sort_orders_categoricals_by_scaled_median(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons()
+        request = self.request()
+        request.update({"partialDependence": {"mode": "shap"}, "sort": "shap"})
+
+        result = chart(dataset, request)
+
+        self.assertEqual([row["x"] for row in result["rows"]], ["Business", "Social"])
+        self.assertEqual([row["x"] for row in result["partial_dependence"]["rows"]], ["Business", "Social"])
+
+    def test_chart_shap_ribbons_apply_line_bar_base_transform(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons()
+        request = self.request()
+        request.update({"partialDependence": {"mode": "shap"}, "transform": "zero", "base": "Social"})
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        by_x = {row["x"]: row for row in partial["rows"]}
+        self.assertEqual(partial["transform"]["reference"], "base")
+        self.assertEqual(partial["transform"]["base_x"], "Social")
+        self.assertAlmostEqual(by_x["Social"]["p50"], 0.0)
+        self.assertGreater(by_x["Business"]["p50"], 0)
+
+    def test_chart_shap_ribbons_use_additive_scaling_for_identity_objective(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons(objective="regression")
+        request = self.request()
+        request["partialDependence"] = {"mode": "shap"}
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["scale"]["method"], "add")
+        self.assertAlmostEqual(partial["scale"]["target"], 250.0)
+        by_x = {row["x"]: row for row in partial["rows"]}
+        self.assertAlmostEqual(by_x["Social"]["p50"], 245.0)
+        self.assertAlmostEqual(by_x["Business"]["p50"], 255.0)
+
+    def test_chart_shap_ribbons_missing_active_model_returns_warning(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request["partialDependence"] = {"mode": "shap"}
+
+        result = chart(dataset, request)
+
+        self.assertEqual(result["partial_dependence"]["rows"], [])
+        self.assertIn("No active GBM SHAP values", result["warnings"][0])
 
     def test_lazy_banding_suggestion_uses_x_source_for_prediction_axes(self) -> None:
         glm_path = self.root / "glm_banding_predictions.parquet"

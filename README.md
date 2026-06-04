@@ -7,7 +7,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 ## Current Tools
 
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
-- **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, tables, Base-aware transforms, and sigma bars.
+- **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, tables, Base-aware transforms, sigma bars, and optional active-GBM SHAP ribbon overlays.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, or postcode units when unit and coordinate columns are available.
 - **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persistent sidecar artifacts, and active `glm_prediction` sources that can be plotted like other model predictions.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, and SHAP plotting when SHAP rows are saved during training.
@@ -228,6 +228,8 @@ If a Feature Specification is loaded, the Feature table shows its `Grouping` val
 Choosing one or more interaction groups constrains the currently selected trainable features in each group so they can only interact with features in the same group, with all other selected features left together in a remainder constraint.
 
 When a saved model has both Gain and saved SHAP rows, the Feature table shows a Gain/SHAP toggle and displays one importance metric at a time; SHAP means mean absolute SHAP value over the saved SHAP rows. For saved EBM models, the same toggle also offers `EBM Gain`, replacing the Feature table with a tree-feature-combination gain summary built from the saved tree table.
+
+When an active GBM has both saved predictions and saved SHAP rows, Line and Bar can show `Partial dependancies > SHAP` ribbons for the selected x-axis feature. These ribbons use the same grouping, banding, filter, denominator, low-weight grouping, and response transform as the chart. The ribbon median is scaled to the active GBM fitted prediction mean for the current chart slice, using the selected Weight when present; categorical x-axes also offer a SHAP sort ordered by median SHAP.
 
 ### Training and artifacts
 

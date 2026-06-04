@@ -117,6 +117,8 @@ I'd like the tool to treat the predictions "as if" they were just another column
 
 The Line and Bar Actual chooser separates numeric choices into Dataset features, Model predictions, and SHAP values. Model prediction and SHAP options are limited to the currently active GBM model.
 
+When the active GBM has both saved predictions and saved SHAP rows, the Line and Bar tool can overlay `Partial dependancies` SHAP ribbons for the selected x-axis feature. The ribbons are grouped with the same Line and Bar controls, use the SHAP screen percentile set, are transformed to response scale from the GBM objective link, and are scaled so the weighted median ribbon mean matches the active GBM fitted values for the current chart slice. Categorical features use ribbons rather than box plots and can be sorted by median SHAP.
+
 ## UI Notes
 
 I want a consistent look and theme to the other tools.

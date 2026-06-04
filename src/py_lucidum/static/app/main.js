@@ -53,6 +53,7 @@
         dateBucket: "none",
         transform: "none",
         sigma: "0",
+        partialDependence: "none",
         source: locationParams.get("source") || "dataset",
         tool: "column_profile",
         view: "chart",

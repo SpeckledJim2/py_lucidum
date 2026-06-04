@@ -30,6 +30,7 @@ Chosen defaults:
 - Job polling responses include transient progress snapshots with current phase, iteration, train/test metric values, and live evaluation history.
 - Add GBM tree routes for model tree lists and selected tree detail.
 - Add GBM SHAP routes for trained-feature config and compact plot-ready aggregation payloads, including explicit numeric domains, dense numeric/numeric surface grids, and `-` / `0` / `1` Base-aware rescale requests for ordinary SHAP plots.
+- Extend Line/Bar chart responses with optional active-GBM SHAP ribbon overlays driven by `partialDependence.mode="shap"`, including categorical SHAP sort by scaled median SHAP.
 - Extend the shared data-source contract with:
   - `gbm:<model_id>:predictions`
   - `gbm:<model_id>:shap_long`
@@ -52,6 +53,7 @@ Chosen defaults:
 - During training, a LightGBM callback updates the in-memory job with current iteration and metric values so the browser can update status text and the evaluation chart before the model is persisted.
 - SHAP row options are `0`, `10k`, `100k`, and `all`. Bounded options save a deterministic random sample from all scored rows using the model seed. SHAP values are stored as a wide artifact keyed by `__lucidum_row_id`, with one numeric column per selected feature; the summary artifact remains one row per feature.
 - SHAP plots read only saved SHAP rows joined to trained feature values by `__lucidum_row_id`; one-feature plots use that feature's SHAP, while two-feature plots use the sum of the two selected SHAP contributions. Rescale `0` and `1` use Feature Specification Base metadata with one shared reference per plot, not a separate reference per line. Rescale `1` exponentiates values first, then scales to the base response value.
+- Line/Bar SHAP ribbons read only the active model's saved SHAP and prediction sidecars, reuse the Line/Bar grouping/filter/weight/transform controls, convert SHAP values through the GBM objective link, and scale the ribbon p50 to the active GBM fitted prediction mean for the current chart slice.
 
 ## UI
 
