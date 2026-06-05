@@ -15,7 +15,7 @@ import duckdb
 from py_lucidum.core import Dataset, is_numeric_kind, quote_ident, sql_literal, suggested_band_width
 
 from .store import GlmModelStore, json_safe_number
-from .training import data_frame_from_dataset, formula_context, glm_dependencies, offset_values_for_frame, write_dataframe_parquet
+from .training import formula_context, glm_dependencies, offset_values_for_frame, write_dataframe_parquet
 from .validation import TARGET_COLUMN
 
 
@@ -71,8 +71,9 @@ def _feature_spec_map(feature_spec: Any) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _schema_kinds(dataset: Dataset) -> dict[str, str]:
-    return {column.name: column.kind for column in dataset.valid_schema_columns()}
+def _schema_columns_and_kinds(dataset: Dataset) -> tuple[list[str], dict[str, str]]:
+    columns = dataset.valid_schema_columns()
+    return [column.name for column in columns], {column.name: column.kind for column in columns}
 
 
 def _column_tokens(expression: str, columns: list[str]) -> list[str]:
@@ -113,6 +114,30 @@ def _fit_frame_for_levels(frame: Any, manifest: dict[str, Any], pd: Any) -> Any:
     if training_scope == "training" and sample_column and sample_column in frame.columns:
         return frame.loc[frame[sample_column].astype(str).str.strip().str.lower() == "training"].copy()
     return frame
+
+
+def _required_tabulation_columns(
+    source_columns: list[str],
+    manifest: dict[str, Any],
+    all_features: list[str],
+    offset_terms: list[str],
+) -> list[str]:
+    requested = set(all_features)
+    denominator_column = str(manifest.get("denominator_column") or "").strip()
+    if denominator_column:
+        requested.add(denominator_column)
+    sample_column = str(manifest.get("sample_column") or "").strip()
+    if str(manifest.get("training_scope") or "all") == "training" and sample_column:
+        requested.add(sample_column)
+    for expression in offset_terms:
+        requested.update(_column_tokens(expression, source_columns))
+    return [column for column in source_columns if column in requested]
+
+
+def _tabulation_frame_from_dataset(dataset: Dataset, columns: list[str]) -> Any:
+    projection = ["ROW_NUMBER() OVER () AS __lucidum_row_id", *[quote_ident(name) for name in columns]]
+    with dataset.lock:
+        return dataset.con.execute(f"SELECT {', '.join(projection)} FROM {dataset.relation_sql()}").fetchdf()
 
 
 def _feature_transform_bounds(estimator: Any, source_columns: list[str]) -> dict[str, dict[str, float]]:
@@ -371,20 +396,46 @@ def _prediction_frame(base: dict[str, Any], variables: list[str], grid: Any, pd:
     return frame
 
 
-def _scored_level(value: Any, meta: dict[str, Any]) -> Any:
+def _scored_feature_series(series: Any, meta: dict[str, Any], np: Any, pd: Any) -> Any:
     if not is_numeric_kind(str(meta.get("kind") or "")):
-        return _json_value(value)
-    number = _as_number(value)
+        return series.map(lambda value: None if pd.isna(value) else _json_value(value))
+    values = pd.to_numeric(series, errors="coerce")
     minimum = _as_number(meta.get("min"))
     maximum = _as_number(meta.get("max"))
     band = _as_number(meta.get("banding"))
-    if number is None or minimum is None or maximum is None or not band or band <= 0:
-        return None
-    clipped = min(max(number, minimum), maximum)
-    if clipped >= maximum:
-        return _round_grid_value(maximum)
-    index = math.floor((clipped - minimum) / band + 1e-9)
-    return _round_grid_value(minimum + index * band)
+    if minimum is None or maximum is None or not band or band <= 0:
+        return pd.Series(np.nan, index=series.index, dtype=float)
+    clipped = values.clip(lower=minimum, upper=maximum)
+    keys = np.floor((clipped - minimum) / band + 1e-9) * band + minimum
+    keys = pd.Series(keys, index=series.index, dtype=float).mask(clipped >= maximum, maximum)
+    keys = keys.round(10)
+    return keys.where(values.notna())
+
+
+def _normalise_lookup_keys(table: Any, features: list[str], feature_meta: dict[str, dict[str, Any]], np: Any, pd: Any) -> Any:
+    lookup = table.loc[table["status"].astype(str) == "ok", [*features, "tabulated_linear"]].copy()
+    for feature in features:
+        lookup[feature] = _scored_feature_series(lookup[feature], feature_meta[feature], np, pd)
+    lookup["tabulated_linear"] = pd.to_numeric(lookup["tabulated_linear"], errors="coerce")
+    return lookup.dropna(subset=features)
+
+
+def _component_from_table(frame: Any, table: Any, features: list[str], feature_meta: dict[str, dict[str, Any]], np: Any, pd: Any) -> Any:
+    if table is None:
+        return pd.Series(np.nan, index=frame.index, dtype=float)
+    lookup = _normalise_lookup_keys(table, features, feature_meta, np, pd)
+    if not features or lookup.empty:
+        return pd.Series(np.nan, index=frame.index, dtype=float)
+    if len(features) == 1:
+        feature = features[0]
+        key = _scored_feature_series(frame[feature], feature_meta[feature], np, pd)
+        lookup_series = lookup.drop_duplicates(subset=[feature]).set_index(feature)["tabulated_linear"]
+        return pd.to_numeric(key.map(lookup_series), errors="coerce")
+    keys = pd.DataFrame(index=frame.index)
+    for feature in features:
+        keys[feature] = _scored_feature_series(frame[feature], feature_meta[feature], np, pd)
+    merged = keys.merge(lookup.drop_duplicates(subset=features), on=features, how="left", sort=False)
+    return pd.Series(pd.to_numeric(merged["tabulated_linear"], errors="coerce").to_numpy(), index=frame.index, dtype=float)
 
 
 def _table_file_path(store: GlmModelStore, model_id: str, table_id: str) -> Path:
@@ -411,15 +462,16 @@ def _build_model_tabulations(
     with estimator_path.open("rb") as handle:
         estimator = pickle.load(handle)
     manifest = store.manifest(model_id)
-    frame, source_columns = data_frame_from_dataset(dataset)
-    kinds = _schema_kinds(dataset)
+    source_columns, kinds = _schema_columns_and_kinds(dataset)
     spec_rows = _feature_spec_map(feature_spec)
-    fit_frame = _fit_frame_for_levels(frame, manifest, pd)
     context = formula_context(np)
     offset_terms = [str(term) for term in (manifest.get("offset_terms") or manifest.get("formula", {}).get("offset_terms") or [])]
     groups = _term_groups(estimator, offset_terms, source_columns)
     non_base_groups = {features: info for features, info in groups.items() if features}
     all_features = sorted({feature for features in non_base_groups for feature in features})
+    required_columns = _required_tabulation_columns(source_columns, manifest, all_features, offset_terms)
+    frame = _tabulation_frame_from_dataset(dataset, required_columns)
+    fit_frame = _fit_frame_for_levels(frame, manifest, pd)
     transform_bounds = _feature_transform_bounds(estimator, source_columns)
     base = _base_row(frame)
     inferred_bases: list[dict[str, Any]] = []
@@ -487,6 +539,7 @@ def _build_model_tabulations(
     cumulative_adjustment = 0.0
     table_index = 1
     skipped_tables: list[dict[str, Any]] = []
+    table_frames: dict[str, Any] = {}
     for features, info in sorted(non_base_groups.items(), key=lambda item: (len(item[0]), item[0])):
         table_id = "|".join(features)
         table_label = " × ".join(features)
@@ -522,6 +575,7 @@ def _build_model_tabulations(
         table["status"] = table["__status"]
         table = table.drop(columns=["__status"])
         write_dataframe_parquet(table, _table_file_path(store, model_id, table_id))
+        table_frames[table_id] = table
         tables.append(
             {
                 "table_id": table_id,
@@ -563,21 +617,7 @@ def _build_model_tabulations(
         if table_info["table_id"] == "base" or table_info.get("skipped"):
             continue
         features = list(table_info.get("features") or [])
-        table_path = _table_file_path(store, model_id, str(table_info["table_id"]))
-        table_rows = store.read_parquet_records(table_path)
-        lookup: dict[tuple[Any, ...], Any] = {}
-        for row in table_rows:
-            if str(row.get("status") or "ok") != "ok":
-                continue
-            key = tuple(_json_value(row.get(feature)) for feature in features)
-            lookup[key] = row.get("tabulated_linear")
-        values: list[float | None] = []
-        for _, source_row in frame.iterrows():
-            key = tuple(_scored_level(source_row[feature], feature_meta[feature]) for feature in features)
-            value = lookup.get(key)
-            number = _as_number(value)
-            values.append(number)
-        component = pd.Series(values, index=frame.index, dtype=float)
+        component = _component_from_table(frame, table_frames.get(str(table_info["table_id"])), features, feature_meta, np, pd)
         missing = missing | component.isna()
         eta = eta + component.fillna(0.0)
         safe_name = _safe_id(str(table_info["table_id"]))

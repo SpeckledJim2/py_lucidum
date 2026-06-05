@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
+from py_lucidum.tools.glm import tabulation as glm_tabulation
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.tabulation import build_tabulations, tabulation_config, tabulation_plot, tabulation_table
 from py_lucidum.tools.glm.training import (
@@ -140,6 +141,16 @@ class GlmToolTests(unittest.TestCase):
             y_value = 100 + x_value + (5 if segment == "B" else 0)
             rows.append(f"{y_value},{x_value},{segment}\n")
         path.write_text("".join(rows), encoding="utf-8")
+        return path
+
+    def categorical_unseen_data_path(self) -> Path:
+        path = self.root / "categorical_unseen.csv"
+        path.write_text(
+            "y,Segment,SAMPLE\n"
+            "10,A,training\n"
+            "20,B,training\n",
+            encoding="utf-8",
+        )
         return path
 
     def test_glm_suppresses_only_tabmat_mixed_dtype_warning(self) -> None:
@@ -532,6 +543,137 @@ class GlmToolTests(unittest.TestCase):
 
         self.assertEqual(tab_manifest["feature_meta"]["Segment"]["base"], "A")
         self.assertIn("Estimated base", "\n".join(tab_manifest["warnings"]))
+
+    def test_glm_tabulation_scoring_is_vectorized_without_broad_loader(self) -> None:
+        self.require_glm_dependencies()
+        _glum, _glr, _glrcv, _np, pd = glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "Age + C(Segment)", "response_column": "actualNumerator", "family": "normal", "training_scope": "all"},
+        )
+        model_id = result["model_id"]
+        feature_spec = {
+            "rows": [
+                {"feature": "Age", "grouping": "Driver", "base": "40", "min": "30", "max": "70", "banding": "5"},
+                {"feature": "Segment", "grouping": "Driver", "base": "A"},
+            ]
+        }
+
+        with (
+            patch.object(pd.DataFrame, "iterrows", side_effect=AssertionError("tabulation scoring must not iterate rows")),
+            patch("py_lucidum.tools.glm.tabulation.data_frame_from_dataset", side_effect=AssertionError("tabulation must not use the broad loader"), create=True),
+        ):
+            build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+
+        with dataset.lock:
+            rows = dataset.con.execute(
+                f"SELECT COUNT(*), COUNT(glm_tabulated_prediction) FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'tabulated_predictions')))})"
+            ).fetchone()
+        self.assertEqual(rows, (6, 6))
+
+    def test_glm_tabulation_loads_only_required_scoring_columns(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "wide.csv"
+        path.write_text(
+            "y,Age,unused_text,unused_number\n"
+            "10,30,a,1\n"
+            "20,40,b,2\n"
+            "30,50,c,3\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "Age", "response_column": "y", "family": "normal", "training_scope": "all"},
+        )
+        captured_columns: list[list[str]] = []
+        original_loader = glm_tabulation._tabulation_frame_from_dataset
+
+        def capture_frame(load_dataset: Dataset, columns: list[str]) -> Any:
+            captured_columns.append(list(columns))
+            return original_loader(load_dataset, columns)
+
+        with patch("py_lucidum.tools.glm.tabulation._tabulation_frame_from_dataset", side_effect=capture_frame):
+            build_tabulations(dataset, store, {"model_ids": [result["model_id"]]}, {"rows": []})
+
+        self.assertEqual(captured_columns, [["Age"]])
+
+    def test_glm_tabulation_vectorized_categorical_unseen_rows_stay_missing(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.categorical_unseen_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "C(Segment)",
+                "response_column": "y",
+                "family": "normal",
+                "training_scope": "training",
+                "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+        data_path.write_text(
+            "y,Segment,SAMPLE\n"
+            "10,A,training\n"
+            "20,B,training\n"
+            "30,C,test\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, {"rows": [{"feature": "Segment", "grouping": "Test", "base": "A"}]})
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertEqual(tab_manifest["diagnostics"]["missing_tabulated_prediction_rows"], 1)
+        self.assertIn("1 dataset level for Segment", "\n".join(tab_manifest["warnings"]))
+        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "Segment.parquet")
+        self.assertEqual(next(row["status"] for row in table_rows if row["Segment"] == "C"), "unseen")
+        with dataset.lock:
+            rows = dataset.con.execute(
+                f"SELECT COUNT(*), COUNT(glm_tabulated_prediction), SUM(CASE WHEN glm_tabulation_missing THEN 1 ELSE 0 END) FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'tabulated_predictions')))})"
+            ).fetchone()
+        self.assertEqual(rows, (3, 2, 1))
+
+    def test_glm_tabulation_vectorized_interaction_lookup_writes_components(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "Age * C(Segment)",
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+        feature_spec = {
+            "rows": [
+                {"feature": "Age", "grouping": "Driver", "base": "40", "min": "30", "max": "70", "banding": "5"},
+                {"feature": "Segment", "grouping": "Driver", "base": "A"},
+            ]
+        }
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertIn("Age|Segment", [table["table_id"] for table in tab_manifest["tables"]])
+        with dataset.lock:
+            rows = dataset.con.execute(
+                f"SELECT COUNT(*), COUNT(glm_tabulated_prediction), COUNT(tabulated_linear__Age_Segment) FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'tabulated_predictions')))})"
+            ).fetchone()
+        self.assertEqual(rows, (6, 6, 6))
 
     def test_glm_tabulation_config_returns_all_model_statuses(self) -> None:
         self.require_glm_dependencies()
