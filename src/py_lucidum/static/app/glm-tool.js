@@ -219,9 +219,10 @@ export function createGlmTool({
     modelRows = normaliseModels(data.models || []);
     const availableModelIds = new Set(modelRows.map((model) => model.model_id));
     selectedModelIds = new Set(Array.from(selectedModelIds).filter((modelId) => availableModelIds.has(modelId)));
-    selectedTabulationModelIds = new Set(Array.from(selectedTabulationModelIds).filter((modelId) => availableModelIds.has(modelId)));
-    if (tabulationSelectionAnchorModelId && !availableModelIds.has(tabulationSelectionAnchorModelId)) tabulationSelectionAnchorModelId = "";
-    if (!selectedTabulationModelIds.size && data.active_model_id) selectedTabulationModelIds.add(data.active_model_id);
+    const availableTabulationRefs = new Set(tabulationAvailableModels().map((model) => tabulationModelRef(model)).filter(Boolean));
+    selectedTabulationModelIds = new Set(Array.from(selectedTabulationModelIds).map(normaliseTabulationRef).filter((modelRef) => availableTabulationRefs.has(modelRef)));
+    if (tabulationSelectionAnchorModelId && !availableTabulationRefs.has(normaliseTabulationRef(tabulationSelectionAnchorModelId))) tabulationSelectionAnchorModelId = "";
+    if (!selectedTabulationModelIds.size && data.active_model_id) selectedTabulationModelIds.add(`glm:${data.active_model_id}`);
     const groupMeta = "";
     setGroupMeta(tool, groupMeta);
     setStatus("");
@@ -355,6 +356,7 @@ export function createGlmTool({
 
   function tabulationsPanelHtml() {
     const selectedIds = tabulationSelectedModelIds();
+    const availableModels = tabulationAvailableModels();
     const tables = Array.isArray(tabulationConfig?.tables) ? tabulationConfig.tables : [];
     if (tables.length && !tables.some((table) => String(table.table_id || "") === selectedTabulationTableId)) {
       selectedTabulationTableId = String(tables[0]?.table_id || "base");
@@ -369,11 +371,11 @@ export function createGlmTool({
         <section class="glm-tabulation-sidebar">
           <div class="glm-panel-header">
             <h3 class="glm-panel-title">Tabulations</h3>
-            <button id="glmBuildTabulationsBtn" class="tab glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !modelRows.length ? "disabled" : ""}>${isTabulating ? "Building..." : "Build"}</button>
+            <button id="glmBuildTabulationsBtn" class="tab glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !availableModels.length ? "disabled" : ""}>${isTabulating ? "Tabulating..." : "Tabulate"}</button>
           </div>
           <label class="glm-tabulation-label" for="glmTabulationModelSelect">Select models</label>
-          <div id="glmTabulationModelSelect" class="glm-tabulation-list glm-tabulation-model-list" role="listbox" aria-label="Select GLM models" aria-multiselectable="true">
-            ${modelRows.length ? modelRows.map((model) => tabulationModelRowHtml(model, selectedIds.includes(model.model_id))).join("") : '<div class="glm-empty-state">No GLM models</div>'}
+          <div id="glmTabulationModelSelect" class="glm-tabulation-list glm-tabulation-model-list" role="listbox" aria-label="Select models" aria-multiselectable="true">
+            ${tabulationModelListHtml(availableModels, selectedIds)}
           </div>
           <label class="glm-tabulation-label" for="glmTabulationTableSelect">Select table</label>
           <div id="glmTabulationTableSelect" class="glm-tabulation-list glm-tabulation-table-list" role="listbox" aria-label="Select tabulated table">
@@ -384,20 +386,26 @@ export function createGlmTool({
         <div id="glmTabulationResizer" class="glm-builder-resizer glm-tabulation-resizer" role="separator" aria-orientation="vertical" aria-label="Resize GLM tabulations and table panels" tabindex="0"></div>
         <section class="glm-tabulation-main">
           <div class="glm-tabulation-controls">
-            <div class="segmented glm-tabulation-view-toggle" role="group" aria-label="Tabulation view">
-              <button type="button" data-glm-tabulation-view="table" class="${tabulationView === "table" ? "active" : ""}">Table</button>
-              <button type="button" data-glm-tabulation-view="plot" class="${tabulationView === "plot" ? "active" : ""}" ${features.length > 2 ? "disabled" : ""}>Plot</button>
+            <div class="glm-tabulation-control-group glm-tabulation-control-left">
+              <div class="segmented glm-tabulation-view-toggle" role="group" aria-label="Tabulation view">
+                <button type="button" data-glm-tabulation-view="table" class="${tabulationView === "table" ? "active" : ""}">Table</button>
+                <button type="button" data-glm-tabulation-view="plot" class="${tabulationView === "plot" ? "active" : ""}" ${features.length > 2 ? "disabled" : ""}>Plot</button>
+              </div>
             </div>
-            <div class="segmented glm-tabulation-scale-toggle" role="group" aria-label="Tabulation display scale">
-              <button type="button" data-glm-tabulation-scale="linear" class="${tabulationScale === "linear" ? "active" : ""}">linear</button>
-              <button type="button" data-glm-tabulation-scale="exp" class="${tabulationScale === "exp" ? "active" : ""}">exp</button>
+            <div class="glm-tabulation-control-group glm-tabulation-control-middle">
+              <div class="segmented glm-tabulation-scale-toggle" role="group" aria-label="Tabulation display scale">
+                <button type="button" data-glm-tabulation-scale="linear" class="${tabulationScale === "linear" ? "active" : ""}">linear</button>
+                <button type="button" data-glm-tabulation-scale="exp" class="${tabulationScale === "exp" ? "active" : ""}">exp</button>
+              </div>
+              <label class="glm-tabulation-check"><input id="glmTabulationColor" type="checkbox" ${tabulationColor ? "checked" : ""} /> colour</label>
             </div>
-            <label class="glm-tabulation-check"><input id="glmTabulationColor" type="checkbox" ${tabulationColor ? "checked" : ""} /> colour</label>
-            <div class="glm-tabulation-crosstab-group">
-              <label class="glm-tabulation-crosstab-label" for="glmTabulationCrosstab">crosstab</label>
-              <select id="glmTabulationCrosstab" class="glm-tabulation-crosstab" ${crosstabOptions.length > 1 ? "" : "disabled"}>
-                ${tabulationCrosstabOptionsHtml(crosstabOptions)}
-              </select>
+            <div class="glm-tabulation-control-group glm-tabulation-control-right">
+              <div class="glm-tabulation-crosstab-group">
+                <label class="glm-tabulation-crosstab-label" for="glmTabulationCrosstab">crosstab</label>
+                <select id="glmTabulationCrosstab" class="glm-tabulation-crosstab" ${crosstabOptions.length > 1 ? "" : "disabled"}>
+                  ${tabulationCrosstabOptionsHtml(crosstabOptions)}
+                </select>
+              </div>
             </div>
           </div>
           <div id="glmTabulationNotice" class="glm-tabulation-inline-notice"></div>
@@ -414,11 +422,54 @@ export function createGlmTool({
   }
 
   function tabulationSelectedModelIds() {
-    const availableModelIds = new Set(modelRows.map((model) => model.model_id));
-    const ids = Array.from(selectedTabulationModelIds).filter((modelId) => availableModelIds.has(modelId));
+    const availableModels = tabulationAvailableModels();
+    const availableModelIds = new Set(availableModels.map((model) => tabulationModelRef(model)).filter(Boolean));
+    const ids = Array.from(selectedTabulationModelIds).map(normaliseTabulationRef).filter((modelId) => availableModelIds.has(modelId));
     if (ids.length) return [...new Set(ids)];
-    const active = config?.active_model_id || modelRows.find((model) => model.active)?.model_id || modelRows[0]?.model_id || "";
-    return active ? [active] : [];
+    const active = availableModels.find((model) => model.active) || (config?.active_model_id ? { model_kind: "glm", model_id: config.active_model_id } : null) || availableModels[0] || null;
+    const activeRef = active ? tabulationModelRef(active) : "";
+    return activeRef ? [activeRef] : [];
+  }
+
+  function normaliseTabulationRef(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    if (text.startsWith("glm:") || text.startsWith("gbm:")) {
+      const parts = text.split(":");
+      return parts.length >= 2 ? `${parts[0]}:${parts[1]}` : text;
+    }
+    return `glm:${text}`;
+  }
+
+  function tabulationModelRef(model = {}) {
+    const explicit = String(model.model_ref || "").trim();
+    if (explicit) return normaliseTabulationRef(explicit);
+    const kind = String(model.model_kind || "glm").toLowerCase() === "gbm" ? "gbm" : "glm";
+    const modelId = String(model.model_id || "").trim();
+    return modelId ? `${kind}:${modelId}` : "";
+  }
+
+  function tabulationAvailableModels() {
+    const allModels = Array.isArray(tabulationConfig?.all_models) ? tabulationConfig.all_models : [];
+    if (allModels.length) return allModels;
+    return modelRows.map((model) => ({ ...model, model_kind: "glm", model_ref: `glm:${model.model_id}` }));
+  }
+
+  function tabulationModelListHtml(models = [], selectedIds = []) {
+    const groups = [
+      { kind: "glm", label: "GLMs", models: models.filter((model) => String(model.model_kind || "glm").toLowerCase() !== "gbm") },
+      { kind: "gbm", label: "GBMs", models: models.filter((model) => String(model.model_kind || "glm").toLowerCase() === "gbm") },
+    ];
+    const html = groups
+      .filter((group) => group.models.length)
+      .map((group) => `
+        <div class="saved-filter-theme glm-tabulation-model-group" data-glm-tabulation-model-group="${group.kind}" role="presentation">
+          <span class="saved-filter-theme-label">${escapeHtml(group.label)}</span>
+        </div>
+        ${group.models.map((model) => tabulationModelRowHtml(model, selectedIds.includes(tabulationModelRef(model)))).join("")}
+      `)
+      .join("");
+    return html || '<div class="glm-empty-state">No models</div>';
   }
 
   function activeTabulationTable() {
@@ -430,13 +481,18 @@ export function createGlmTool({
   }
 
   function tabulationModelRowHtml(model, selected) {
-    const modelId = String(model?.model_id || "");
+    const modelId = tabulationModelRef(model);
     return `
       <button type="button" class="glm-tabulation-list-row ${selected ? "selected" : ""}" data-glm-tabulation-model-id="${escapeHtml(modelId)}" role="option" aria-selected="${selected ? "true" : "false"}">
-        <span class="glm-tabulation-row-main">${escapeHtml(modelLabel(model))}</span>
+        <span class="glm-tabulation-row-main">${escapeHtml(tabulationModelLabel(model))}</span>
         <span class="glm-tabulation-row-meta">${escapeHtml(tabulationModelStatus(modelId))}</span>
       </button>
     `;
+  }
+
+  function tabulationModelLabel(model = {}) {
+    const kind = String(model.model_kind || "glm").toUpperCase();
+    return `${kind} · ${modelLabel(model)}`;
   }
 
   function tabulationTableRowHtml(table, selected) {
@@ -451,7 +507,8 @@ export function createGlmTool({
 
   function tabulationConfigModel(modelId) {
     const models = Array.isArray(tabulationConfig?.all_models) ? tabulationConfig.all_models : (tabulationConfig?.models || []);
-    return models.find((model) => String(model.model_id || "") === String(modelId || "")) || null;
+    const ref = normaliseTabulationRef(modelId);
+    return models.find((model) => tabulationModelRef(model) === ref || String(model.model_id || "") === String(modelId || "")) || null;
   }
 
   function tabulationModelStatus(modelId) {
@@ -499,7 +556,7 @@ export function createGlmTool({
       ].filter(([, value]) => value !== undefined && value !== null && value !== "");
       return `
         <div class="glm-tabulation-model-diagnostic">
-          <strong>${escapeHtml(model.label || model.model_id)}</strong>
+          <strong>${escapeHtml(tabulationModelLabel(model))}</strong>
           ${rows.map(([label, value]) => `<span>${escapeHtml(label)}: ${escapeHtml(formatModelMetric(value))}</span>`).join("")}
           ${model.tabulatable ? "" : '<span class="glm-tabulation-warning">rebuild required</span>'}
           ${warnings.slice(0, 3).map((warning) => `<span class="glm-tabulation-warning">${escapeHtml(warning)}</span>`).join("")}
@@ -519,17 +576,18 @@ export function createGlmTool({
   }
 
   function selectTabulationModel(modelId, event = {}) {
-    const orderedIds = modelRows.map((model) => model.model_id).filter(Boolean);
-    if (!orderedIds.includes(modelId)) return;
+    const modelRef = normaliseTabulationRef(modelId);
+    const orderedIds = tabulationAvailableModels().map((model) => tabulationModelRef(model)).filter(Boolean);
+    if (!orderedIds.includes(modelRef)) return;
     const current = new Set(tabulationSelectedModelIds());
     const commandSelection = Boolean(event.metaKey || event.ctrlKey);
     let next;
     if (event.shiftKey) {
       const anchor = orderedIds.includes(tabulationSelectionAnchorModelId)
         ? tabulationSelectionAnchorModelId
-        : (Array.from(current).find((candidate) => orderedIds.includes(candidate)) || modelId);
+        : (Array.from(current).find((candidate) => orderedIds.includes(candidate)) || modelRef);
       const start = orderedIds.indexOf(anchor);
-      const end = orderedIds.indexOf(modelId);
+      const end = orderedIds.indexOf(modelRef);
       const min = Math.min(start, end);
       const max = Math.max(start, end);
       const range = orderedIds.slice(min, max + 1);
@@ -537,14 +595,14 @@ export function createGlmTool({
       range.forEach((candidate) => next.add(candidate));
     } else if (commandSelection) {
       next = new Set(current);
-      if (next.has(modelId)) next.delete(modelId);
-      else next.add(modelId);
+      if (next.has(modelRef)) next.delete(modelRef);
+      else next.add(modelRef);
     } else {
-      next = new Set([modelId]);
+      next = new Set([modelRef]);
     }
-    if (!next.size) next.add(modelId);
+    if (!next.size) next.add(modelRef);
     selectedTabulationModelIds = next;
-    tabulationSelectionAnchorModelId = modelId;
+    tabulationSelectionAnchorModelId = modelRef;
   }
 
   function bindTabulationControls() {
@@ -618,7 +676,7 @@ export function createGlmTool({
       return;
     }
     try {
-      tabulationConfig = await api("/api/glm/tabulations/config", { method: "POST", body: JSON.stringify({ model_ids }) });
+      tabulationConfig = await api("/api/glm/tabulations/config", { method: "POST", body: JSON.stringify({ model_refs: model_ids }) });
       const tables = Array.isArray(tabulationConfig?.tables) ? tabulationConfig.tables : [];
       if (tables.length && !tables.some((table) => String(table.table_id || "") === selectedTabulationTableId)) {
         selectedTabulationTableId = String(tables[0]?.table_id || "base");
@@ -640,15 +698,15 @@ export function createGlmTool({
     if (isTabulating) return;
     const model_ids = tabulationSelectedModelIds();
     if (!model_ids.length) {
-      setGlmNotice("Choose at least one GLM model to tabulate");
+      setGlmNotice("Choose at least one model to tabulate");
       return;
     }
     isTabulating = true;
-    liveProgress = { phase: "queued", message: "Starting GLM tabulations" };
+    liveProgress = { phase: "queued", message: "Starting model tabulations" };
     renderLiveProgress(liveProgress);
     renderTabulationsPanel();
     try {
-      const job = await api("/api/glm/tabulations/build", { method: "POST", body: JSON.stringify({ model_ids }) });
+      const job = await api("/api/glm/tabulations/build", { method: "POST", body: JSON.stringify({ model_refs: model_ids }) });
       pollTabulationJob(job.job_id);
     } catch (error) {
       setTabulationFailure(error.message);
@@ -671,7 +729,7 @@ export function createGlmTool({
         isTabulating = false;
         if (job.status === "succeeded") {
           liveProgress = null;
-          await reloadSchema(state.source || "dataset", { modelKind: "glm" });
+          await reloadSchema(state.source || "dataset", {});
           clearCachesAfterGlmModelSourceChange();
           renderExpectedNumerators();
           renderFeatures();
@@ -684,7 +742,7 @@ export function createGlmTool({
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
         } else {
-          setTabulationFailure(job.error || progress.message || "GLM tabulation failed");
+          setTabulationFailure(job.error || progress.message || "Model tabulation failed");
         }
       } catch (error) {
         setTabulationFailure(error.message);
@@ -699,7 +757,7 @@ export function createGlmTool({
       tabulationPollTimer = null;
     }
     isTabulating = false;
-    liveProgress = { phase: "failed", message: String(message || "GLM tabulation failed") };
+    liveProgress = { phase: "failed", message: String(message || "Model tabulation failed") };
     renderLiveProgress(liveProgress);
     renderTabulationsPanel();
   }
@@ -714,7 +772,7 @@ export function createGlmTool({
     }
     const seq = tabulationRenderSeq + 1;
     tabulationRenderSeq = seq;
-    const payload = { model_ids, table_id, scale: tabulationScale, crosstab: tabulationCrosstab };
+    const payload = { model_refs: model_ids, table_id, scale: tabulationScale, crosstab: tabulationCrosstab };
     try {
       if (tabulationView === "plot") {
         const data = await api("/api/glm/tabulations/plot", { method: "POST", body: JSON.stringify(payload) });
@@ -768,7 +826,8 @@ export function createGlmTool({
 
   function tabulationColumnDefinition(column, data = {}) {
     const field = String(column.field || "");
-    const numeric = Boolean(column.tabulation_value) || tabulationSelectedModelIds().includes(field);
+    const tabulationValue = Boolean(column.tabulation_value);
+    const numeric = tabulationValue || tabulationSelectedModelIds().includes(field);
     const statusField = String(column.status_field || `__status__${field}`);
     return {
       ...column,
@@ -785,16 +844,21 @@ export function createGlmTool({
             element.classList.add("glm-tabulation-colour-cell");
             element.style.setProperty("--glm-tabulation-cell-bg", color);
             element.style.setProperty("background", color, "important");
-            return value === null || value === undefined ? "NA" : escapeHtml(formatModelMetric(value));
+            return value === null || value === undefined ? "NA" : escapeHtml(tabulationValue ? formatTabulationValue(value) : formatModelMetric(value));
           }
         }
         element.classList.remove("glm-tabulation-colour-cell");
         element.style.removeProperty("--glm-tabulation-cell-bg");
         element.style.removeProperty("background");
-        return value === null || value === undefined ? "NA" : escapeHtml(formatModelMetric(value));
+        return value === null || value === undefined ? "NA" : escapeHtml(tabulationValue ? formatTabulationValue(value) : formatModelMetric(value));
       },
       hozAlign: numeric ? "right" : "left",
     };
+  }
+
+  function formatTabulationValue(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(4) : formatModelMetric(value);
   }
 
   function tabulationCellColor(value, min, max) {
@@ -815,10 +879,11 @@ export function createGlmTool({
         <thead><tr>${columns.map((column) => `<th>${escapeHtml(column.title || column.field)}</th>`).join("")}</tr></thead>
         <tbody>${rows.map((row) => `<tr>${columns.map((column) => {
           const value = row[column.field];
-          const numeric = Boolean(column.tabulation_value) || tabulationSelectedModelIds().includes(column.field);
+          const tabulationValue = Boolean(column.tabulation_value);
+          const numeric = tabulationValue || tabulationSelectedModelIds().includes(column.field);
           const status = row[column.status_field || `__status__${column.field}`] || "ok";
           const style = numeric && tabulationColor && status === "ok" ? ` style="background:${tabulationCellColor(value, data.min, data.max)}"` : "";
-          return `<td class="${numeric ? "numeric" : ""}${status !== "ok" ? " glm-tabulation-na-cell" : ""}"${style}>${value === null || value === undefined ? "NA" : escapeHtml(numeric ? formatModelMetric(value) : value)}</td>`;
+          return `<td class="${numeric ? "numeric" : ""}${status !== "ok" ? " glm-tabulation-na-cell" : ""}"${style}>${value === null || value === undefined ? "NA" : escapeHtml(tabulationValue ? formatTabulationValue(value) : (numeric ? formatModelMetric(value) : value))}</td>`;
         }).join("")}</tr>`).join("")}</tbody>
       </table>
     `;
@@ -845,7 +910,7 @@ export function createGlmTool({
       legend: { type: "scroll", top: 4, right: 8 },
       grid: { left: 54, right: 24, top: 48, bottom: 52 },
       xAxis: { type: "category", data: data.x_axis || [], axisLabel: { hideOverlap: true } },
-      yAxis: { type: "value", name: data.scale === "exp" ? "exp(tabulated_glm)" : "tabulated_glm" },
+      yAxis: { type: "value", name: data.scale === "exp" ? "exp(tabulated)" : "tabulated" },
       series: data.series,
     });
   }
@@ -1349,9 +1414,9 @@ export function createGlmTool({
     }
     const tabulationButton = el("glmBuildTabulationsBtn");
     if (tabulationButton) {
-      tabulationButton.disabled = isTabulating || !modelRows.length;
+      tabulationButton.disabled = isTabulating || !tabulationAvailableModels().length;
       tabulationButton.classList.toggle("building", isTabulating);
-      tabulationButton.textContent = isTabulating ? "Building..." : "Build";
+      tabulationButton.textContent = isTabulating ? "Tabulating..." : "Tabulate";
     }
   }
 

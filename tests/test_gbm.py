@@ -20,11 +20,14 @@ from py_lucidum.tools.gbm.grid import parse_parameter_grid, prepare_grid_run, sa
 from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager, best_grid_model
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
 from py_lucidum.tools.gbm.shap import shap_config, shap_plot, stacked_shap_plot
+from py_lucidum.tools.gbm import tabulation as gbm_tabulation
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
+from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
+from py_lucidum.tools.glm.tabulation import tabulation_config, tabulation_table
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
 
@@ -2838,6 +2841,235 @@ COPY (
         self.assertEqual(detail_status, 200)
         self.assertEqual(json.loads(summary_body)["trees"][0]["features"], "Segment x Age")
         self.assertEqual(json.loads(detail_body)["root"]["feature"], "Segment")
+
+    def write_gbm_tabulation_artifacts(
+        self,
+        *,
+        model_id: str = "tab-gbm",
+        tree_sql: str,
+        predictions: list[float],
+        objective: str = "regression",
+    ) -> GbmModelStore:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": model_id,
+                "created_at": "2026-05-25T00:00:00Z",
+                "objective": objective,
+                "metric": "l2",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "best_iteration": 1,
+                "training_rows": 2,
+                "test_rows": 1,
+                "source_columns": ["Age", "Segment", "denominator"],
+                "feature_importance": [
+                    {"name": "Age", "kind": "integer", "gain": 1.0},
+                    {"name": "Segment", "kind": "categorical", "gain": 1.0},
+                ],
+                "sources": {"predictions": f"gbm:{model_id}:predictions"},
+                "init_score": {"kind": "none", "value": "none"},
+            },
+        )
+        store.write_json(
+            model_dir / "feature_config.json",
+            [
+                {"name": "Age", "kind": "integer", "include": True, "gain": 1.0},
+                {"name": "Segment", "kind": "categorical", "include": True, "gain": 1.0},
+            ],
+        )
+        prediction_select = "\n  UNION ALL\n  ".join(
+            f"SELECT {index} AS __lucidum_row_id, {float(value)} AS gbm_prediction"
+            for index, value in enumerate(predictions, start=1)
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  {prediction_select}
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+{tree_sql}
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model(model_id)
+        return store
+
+    def test_gbm_tabulation_builds_two_leaf_numeric_table_without_lightgbm_or_broad_load(self) -> None:
+        tree_sql = """
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 1.0 AS split_gain, '35' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 2.0, 2
+"""
+        store = self.write_gbm_tabulation_artifacts(tree_sql=tree_sql, predictions=[1.0, 2.0, 2.0])
+        dataset = Dataset(self.data_path)
+        feature_spec = {"rows": [{"feature": "Age", "min": 30, "max": 50, "banding": 10, "base": 30}]}
+        original_loader = gbm_tabulation._tabulation_frame_from_predictions
+        captured_columns: list[list[str]] = []
+
+        def capture_loader(*args: Any, **kwargs: Any) -> Any:
+            captured_columns.append(list(args[3]))
+            return original_loader(*args, **kwargs)
+
+        original_import = builtins.__import__
+
+        def block_lightgbm(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "lightgbm":
+                raise AssertionError("GBM tabulation must not import LightGBM")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=block_lightgbm):
+            with patch("py_lucidum.tools.gbm.tabulation._tabulation_frame_from_predictions", side_effect=capture_loader):
+                result = build_gbm_tabulations(dataset, store, "tab-gbm", feature_spec)
+
+        self.assertEqual(result["status"], "tabulated")
+        self.assertEqual(len(captured_columns), 1)
+        self.assertCountEqual(captured_columns[0], ["Age", "denominator"])
+        self.assertNotIn("Segment", captured_columns[0])
+        table_rows = store.read_parquet_records(store.tabulations_dir("tab-gbm") / "Age.parquet")
+        self.assertEqual([row["tabulated_linear"] for row in table_rows], [0.0, 1.0, 1.0])
+        prediction_rows = store.read_parquet_records(store.artifact_path("tab-gbm", "tabulated_predictions"))
+        self.assertEqual([row["gbm_tabulated_prediction"] for row in prediction_rows], [1.0, 2.0, 2.0])
+
+    def test_gbm_tabulation_builds_three_leaf_two_feature_table_with_missing_default(self) -> None:
+        self.data_path.write_text(
+            "actualNumerator,denominator,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,SAMPLE\n"
+            "10,1,30,A,AB,AB10 1,AB10 1AA,57.1,-2.1,training\n"
+            "20,1,40,B,AB,AB10 1,AB10 1AB,57.2,-2.2,test\n"
+            "30,1,50,,CD,CD20 2,CD20 2AA,56.1,-1.1,training\n",
+            encoding="utf-8",
+        )
+        tree_sql = """
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-S1' AS right_child,
+         NULL AS parent_index, 'Segment' AS split_feature, 1.0 AS split_gain, '0' AS threshold,
+         'A' AS threshold_label, '==' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-S1', '0-L1', '0-L2', '0-S0', 'Age', 1.0, '45', NULL, '<=', 'right', 'None', 0.0, 2.0, 2
+  UNION ALL SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 3.0, 1.0, 1
+"""
+        store = self.write_gbm_tabulation_artifacts(tree_sql=tree_sql, predictions=[1.0, 2.0, 3.0])
+        dataset = Dataset(self.data_path)
+        feature_spec = {"rows": [{"feature": "Age", "min": 30, "max": 50, "banding": 10, "base": 30}, {"feature": "Segment", "base": "A"}]}
+
+        result = build_gbm_tabulations(dataset, store, "tab-gbm", feature_spec)
+
+        self.assertEqual(result["status"], "tabulated")
+        self.assertEqual(result["tables"][1]["features"], ["Age", "Segment"])
+        prediction_rows = store.read_parquet_records(store.artifact_path("tab-gbm", "tabulated_predictions"))
+        self.assertEqual([row["gbm_tabulated_prediction"] for row in prediction_rows], [1.0, 2.0, 3.0])
+        table_rows = store.read_parquet_records(store.tabulations_dir("tab-gbm") / "Age_Segment.parquet")
+        self.assertTrue(any(row["Segment"] is None and row["Age"] == 50 and row["tabulated_linear"] == 2.0 for row in table_rows))
+
+    def test_gbm_tabulation_rejects_more_than_three_leaf_or_two_feature_trees(self) -> None:
+        tree_sql = """
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-S1' AS left_child, '0-S2' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 1.0 AS split_gain, '35' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-S1', '0-L0', '0-L1', '0-S0', 'Segment', 1.0, '0', 'A', '==', 'right', 'None', 0.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-S2', '0-L2', '0-L3', '0-S0', 'denominator', 1.0, '1', NULL, '<=', 'right', 'None', 0.0, 2.0, 2
+  UNION ALL SELECT 0, 3, '0-L0', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L2', NULL, NULL, '0-S2', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 3.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L3', NULL, NULL, '0-S2', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 4.0, 1.0, 1
+"""
+        store = self.write_gbm_tabulation_artifacts(tree_sql=tree_sql, predictions=[1.0, 2.0, 3.0])
+        dataset = Dataset(self.data_path)
+
+        result = build_gbm_tabulations(dataset, store, "tab-gbm", {"rows": []})
+
+        self.assertEqual(result["status"], "not_tabulatable")
+        warning_text = " ".join(result["warnings"])
+        self.assertIn("4 leaves", warning_text)
+        self.assertIn("uses 3 features", warning_text)
+
+    def test_gbm_tabulation_source_and_mixed_glm_table_payload(self) -> None:
+        tree_sql = """
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 1.0 AS split_gain, '35' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 2.0, 2
+"""
+        gbm_store = self.write_gbm_tabulation_artifacts(tree_sql=tree_sql, predictions=[1.0, 2.0, 2.0])
+        dataset = Dataset(self.data_path)
+        build_gbm_tabulations(dataset, gbm_store, "tab-gbm", {"rows": [{"feature": "Age", "min": 30, "max": 50, "banding": 10, "base": 30}]})
+
+        dataset.register_data_source_provider(GbmSourceProvider(gbm_store))
+        schema = dataset.schema_for_source("gbm:tab-gbm:predictions")
+        self.assertIn("gbm_tabulated_prediction", [column["name"] for column in schema["columns"]])
+        chart_result = chart(
+            dataset,
+            {
+                "source": "gbm:tab-gbm:predictions",
+                "x": "Segment",
+                "responses": [{"label": "GBM tabulated", "numerator": "gbm_tabulated_prediction"}],
+                "denominator": "__none__",
+                "filter": "",
+                "bandWidth": 0,
+                "dateBucket": "none",
+                "lowGroup": "0",
+                "sort": "alpha",
+                "sigma": 0,
+                "transform": "none",
+            },
+        )
+        self.assertEqual([row["x"] for row in chart_result["rows"]], ["A", "B", "C"])
+        self.assertEqual([row["resp0"] for row in chart_result["rows"]], [1.0, 2.0, 2.0])
+
+        glm_store = GlmModelStore(self.data_path)
+        glm_dir = glm_store.create_model_dir("tab-glm")
+        glm_store.write_json(glm_dir / "manifest.json", {"model_id": "tab-glm", "label": "GLM table", "created_at": "2026-05-25T00:00:00Z", "sources": {}})
+        glm_store.write_json(
+            glm_store.artifact_path("tab-glm", "tabulation_manifest"),
+            {
+                "model_id": "tab-glm",
+                "status": "tabulated",
+                "tables": [{"table_id": "Age", "label": "Age", "index": 1, "features": ["Age"], "cell_count": 3, "skipped": False, "path": "tabulations/Age.parquet"}],
+                "warnings": [],
+                "diagnostics": {},
+            },
+        )
+        glm_store.tabulations_dir("tab-glm").mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 30 AS Age, 0.0 AS tabulated_linear, 'ok' AS status
+  UNION ALL SELECT 40, 1.0, 'ok'
+  UNION ALL SELECT 50, 1.0, 'ok'
+) TO {sql_literal(str(glm_store.tabulations_dir("tab-glm") / "Age.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+
+        config = tabulation_config(glm_store, {"model_refs": ["glm:tab-glm", "gbm:tab-gbm"]}, gbm_store=gbm_store)
+        table = tabulation_table(glm_store, {"model_refs": ["glm:tab-glm", "gbm:tab-gbm"], "table_id": "Age"}, gbm_store=gbm_store)
+
+        self.assertEqual([model["model_kind"] for model in config["models"]], ["glm", "gbm"])
+        value_columns = [column for column in table["columns"] if column.get("tabulation_value")]
+        self.assertEqual([column["field"] for column in value_columns], ["glm:tab-glm", "gbm:tab-gbm"])
+        self.assertEqual(table["rows"][0]["glm:tab-glm"], 0.0)
+        self.assertEqual(table["rows"][0]["gbm:tab-gbm"], 0.0)
 
     def test_ebm_gain_summary_groups_tree_feature_combinations(self) -> None:
         store = GbmModelStore(self.data_path)

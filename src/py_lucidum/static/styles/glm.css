@@ -531,6 +531,11 @@
         flex: 0 0 132px;
       }
 
+      .glm-tabulation-model-group {
+        cursor: default;
+        padding-left: 8px;
+      }
+
       .glm-tabulation-table-list {
         flex: 1 1 auto;
         min-height: 132px;
@@ -621,12 +626,31 @@
       .glm-tabulation-controls {
         align-items: center;
         border-bottom: 1px solid var(--line);
-        display: flex;
+        display: grid;
         flex: 0 0 auto;
-        flex-wrap: nowrap;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
         gap: 8px;
         min-width: 0;
         padding: 8px 12px;
+      }
+
+      .glm-tabulation-control-group {
+        align-items: center;
+        display: inline-flex;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .glm-tabulation-control-left {
+        justify-self: start;
+      }
+
+      .glm-tabulation-control-middle {
+        justify-self: center;
+      }
+
+      .glm-tabulation-control-right {
+        justify-self: end;
       }
 
       .glm-tabulation-controls .segmented button {
@@ -649,7 +673,6 @@
         display: inline-flex;
         flex: 0 1 auto;
         gap: 6px;
-        margin-left: auto;
         min-width: 0;
       }
 

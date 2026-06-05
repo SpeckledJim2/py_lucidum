@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass
 import itertools
 import math
 import pickle
@@ -22,6 +23,19 @@ from .validation import TARGET_COLUMN
 ProgressCallback = Callable[[dict[str, Any]], None]
 MAX_TABULATION_CELLS = 100_000
 MODEL_CROSSTAB = "__model__"
+
+
+@dataclass(frozen=True)
+class _TabulationModelRef:
+    kind: str
+    model_id: str
+    ref: str
+    field: str
+    legacy_field: bool = False
+
+    @property
+    def label_kind(self) -> str:
+        return self.kind.upper()
 
 
 def _safe_id(value: str) -> str:
@@ -442,6 +456,73 @@ def _table_file_path(store: GlmModelStore, model_id: str, table_id: str) -> Path
     return store.tabulations_dir(model_id) / f"{_safe_id(table_id)}.parquet"
 
 
+def _parse_model_ref(value: Any, *, default_kind: str = "glm", legacy_field: bool = False) -> _TabulationModelRef | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    kind = default_kind
+    model_id = text
+    if text.startswith("glm:") or text.startswith("gbm:"):
+        parts = text.split(":")
+        kind = parts[0]
+        model_id = parts[1] if len(parts) > 1 else ""
+    if kind not in {"glm", "gbm"} or not model_id:
+        return None
+    ref = f"{kind}:{model_id}"
+    field = model_id if legacy_field and kind == "glm" else ref
+    return _TabulationModelRef(kind=kind, model_id=model_id, ref=ref, field=field, legacy_field=legacy_field and kind == "glm")
+
+
+def _dedupe_refs(refs: list[_TabulationModelRef]) -> list[_TabulationModelRef]:
+    deduped: list[_TabulationModelRef] = []
+    seen: set[str] = set()
+    for ref in refs:
+        key = ref.ref
+        if key in seen:
+            continue
+        deduped.append(ref)
+        seen.add(key)
+    return deduped
+
+
+def _requested_model_refs(payload: dict[str, Any], *, for_build: bool = False, store: GlmModelStore | None = None) -> list[_TabulationModelRef]:
+    raw_refs = payload.get("model_refs")
+    refs: list[_TabulationModelRef] = []
+    if isinstance(raw_refs, list) and raw_refs:
+        refs.extend(ref for value in raw_refs if (ref := _parse_model_ref(value)) is not None)
+    raw_model_ids = [str(model_id).strip() for model_id in payload.get("model_ids", []) if str(model_id).strip()]
+    raw_gbm_model_ids = [str(model_id).strip() for model_id in payload.get("gbm_model_ids", []) if str(model_id).strip()]
+    if raw_model_ids:
+        has_typed_model_ids = any(value.startswith("glm:") or value.startswith("gbm:") for value in raw_model_ids)
+        legacy_plain = not refs and not has_typed_model_ids and not raw_gbm_model_ids
+        refs.extend(
+            ref
+            for value in raw_model_ids
+            if (ref := _parse_model_ref(value, default_kind="glm", legacy_field=legacy_plain)) is not None
+        )
+    refs.extend(
+        ref
+        for value in raw_gbm_model_ids
+        if (ref := _parse_model_ref(value, default_kind="gbm")) is not None
+    )
+    refs = _dedupe_refs(refs)
+    if refs or not for_build:
+        return refs
+    active = store.active_model_id() if store is not None else None
+    return [_TabulationModelRef(kind="glm", model_id=active, ref=f"glm:{active}", field=active, legacy_field=True)] if active else []
+
+
+def _model_ref_for_status(status: dict[str, Any]) -> str:
+    return str(status.get("model_ref") or f"{status.get('model_kind') or 'glm'}:{status.get('model_id') or ''}")
+
+
+def _model_field_label(model_ref: _TabulationModelRef, status: dict[str, Any] | None = None) -> str:
+    label = str((status or {}).get("label") or model_ref.model_id)
+    if model_ref.legacy_field:
+        return label
+    return f"{model_ref.label_kind} · {label}"
+
+
 def _build_model_tabulations(
     dataset: Dataset,
     store: GlmModelStore,
@@ -689,21 +770,35 @@ def build_tabulations(
     feature_spec: Any,
     *,
     progress_callback: ProgressCallback | None = None,
+    gbm_store: Any = None,
 ) -> dict[str, Any]:
     progress = progress_callback or (lambda _progress: None)
-    model_ids = [str(model_id).strip() for model_id in payload.get("model_ids", []) if str(model_id).strip()]
-    if not model_ids:
-        active = store.active_model_id()
-        model_ids = [active] if active else []
-    if not model_ids:
-        raise ValueError("Choose at least one GLM model to tabulate")
+    model_refs = _requested_model_refs(payload, for_build=True, store=store)
+    if not model_refs:
+        raise ValueError("Choose at least one model to tabulate")
     results: list[dict[str, Any]] = []
-    for index, model_id in enumerate(model_ids, start=1):
-        store.validate_model_id(model_id)
-        progress({"phase": "starting", "message": f"Tabulating GLM {index} of {len(model_ids)}", "model_id": model_id, "percent": int((index - 1) / len(model_ids) * 100)})
-        results.append(_build_model_tabulations(dataset, store, model_id, feature_spec, progress))
+    for index, model_ref in enumerate(model_refs, start=1):
+        progress({"phase": "starting", "message": f"Tabulating {model_ref.label_kind} {index} of {len(model_refs)}", "model_id": model_ref.model_id, "model_ref": model_ref.ref, "percent": int((index - 1) / len(model_refs) * 100)})
+        if model_ref.kind == "gbm":
+            if gbm_store is None:
+                raise ValueError("GBM tabulation is unavailable because the GBM tool is not loaded")
+            from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
+
+            gbm_store.validate_model_id(model_ref.model_id)
+            results.append(build_gbm_tabulations(dataset, gbm_store, model_ref.model_id, feature_spec, progress_callback=progress))
+        else:
+            store.validate_model_id(model_ref.model_id)
+            result = _build_model_tabulations(dataset, store, model_ref.model_id, feature_spec, progress)
+            result.setdefault("model_kind", "glm")
+            result.setdefault("model_ref", f"glm:{model_ref.model_id}")
+            results.append(result)
     dataset.reload()
-    return {"models": results, "model_ids": model_ids}
+    return {
+        "models": results,
+        "model_ids": [ref.model_id for ref in model_refs if ref.kind == "glm"],
+        "gbm_model_ids": [ref.model_id for ref in model_refs if ref.kind == "gbm"],
+        "model_refs": [ref.ref for ref in model_refs],
+    }
 
 
 def _tabulation_manifest(store: GlmModelStore, model_id: str) -> dict[str, Any] | None:
@@ -721,6 +816,8 @@ def _tabulation_model_status(store: GlmModelStore, model: dict[str, Any]) -> dic
         model_warnings.append("Rebuild this GLM before tabulating; estimator.pkl is missing.")
     return {
         "model_id": model_id,
+        "model_ref": f"glm:{model_id}",
+        "model_kind": "glm",
         "label": model.get("label") or model_id,
         "active": bool(model.get("active")),
         "tabulatable": tabulatable,
@@ -731,13 +828,26 @@ def _tabulation_model_status(store: GlmModelStore, model: dict[str, Any]) -> dic
     }
 
 
-def tabulation_config(store: GlmModelStore, payload: dict[str, Any]) -> dict[str, Any]:
-    requested = [str(model_id).strip() for model_id in payload.get("model_ids", []) if str(model_id).strip()]
-    all_models = store.list_models()
-    by_id = {str(model.get("model_id")): model for model in all_models}
-    selected_models = [by_id[model_id] for model_id in requested if model_id in by_id] if requested else all_models
-    all_statuses = [_tabulation_model_status(store, model) for model in all_models]
-    selected_statuses = [_tabulation_model_status(store, model) for model in selected_models]
+def tabulation_config(store: GlmModelStore, payload: dict[str, Any], *, gbm_store: Any = None) -> dict[str, Any]:
+    requested_refs = _requested_model_refs(payload)
+    glm_models = store.list_models()
+    glm_statuses = [_tabulation_model_status(store, model) for model in glm_models]
+    gbm_statuses: list[dict[str, Any]] = []
+    if gbm_store is not None:
+        from py_lucidum.tools.gbm.tabulation import tabulation_model_status as gbm_tabulation_model_status
+
+        gbm_statuses = [gbm_tabulation_model_status(gbm_store, model) for model in gbm_store.list_models()]
+    all_statuses = [*glm_statuses, *gbm_statuses]
+    by_ref = {_model_ref_for_status(status): status for status in all_statuses}
+    by_legacy_glm_id = {str(status.get("model_id") or ""): status for status in glm_statuses}
+    if requested_refs:
+        selected_statuses = [
+            status
+            for ref in requested_refs
+            if (status := by_ref.get(ref.ref) or (by_legacy_glm_id.get(ref.model_id) if ref.legacy_field else None))
+        ]
+    else:
+        selected_statuses = all_statuses
     union: dict[str, dict[str, Any]] = {}
     warnings: list[str] = []
     for status in selected_statuses:
@@ -758,6 +868,35 @@ def _read_table(store: GlmModelStore, model_id: str, table_id: str) -> tuple[dic
     if not table_info or table_info.get("skipped"):
         return table_info, []
     return table_info, store.read_parquet_records(_table_file_path(store, model_id, table_id))
+
+
+def _read_table_for_ref(
+    store: GlmModelStore,
+    gbm_store: Any,
+    model_ref: _TabulationModelRef,
+    table_id: str,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if model_ref.kind == "gbm":
+        if gbm_store is None:
+            return None, []
+        from py_lucidum.tools.gbm.tabulation import read_table as read_gbm_table
+
+        return read_gbm_table(gbm_store, model_ref.model_id, table_id)
+    return _read_table(store, model_ref.model_id, table_id)
+
+
+def _status_for_ref(store: GlmModelStore, gbm_store: Any, model_ref: _TabulationModelRef) -> dict[str, Any] | None:
+    if model_ref.kind == "gbm":
+        if gbm_store is None:
+            return None
+        from py_lucidum.tools.gbm.tabulation import tabulation_model_status as gbm_tabulation_model_status
+
+        models = {str(model.get("model_id") or ""): model for model in gbm_store.list_models()}
+        model = models.get(model_ref.model_id)
+        return gbm_tabulation_model_status(gbm_store, model) if model else None
+    models = {str(model.get("model_id") or ""): model for model in store.list_models()}
+    model = models.get(model_ref.model_id)
+    return _tabulation_model_status(store, model) if model else None
 
 
 def _display_number(value: Any, scale: str) -> float | None:
@@ -805,26 +944,36 @@ def _tabulation_table_payload(
     }
 
 
-def tabulation_table(store: GlmModelStore, payload: dict[str, Any]) -> dict[str, Any]:
-    model_ids = [str(model_id).strip() for model_id in payload.get("model_ids", []) if str(model_id).strip()]
+def tabulation_table(store: GlmModelStore, payload: dict[str, Any], *, gbm_store: Any = None) -> dict[str, Any]:
+    model_refs = _requested_model_refs(payload)
     table_id = str(payload.get("table_id") or "base").strip() or "base"
     crosstab = str(payload.get("crosstab") or "").strip()
     scale = "exp" if str(payload.get("scale") or "").lower() == "exp" else "linear"
-    model_rows: list[tuple[str, dict[str, Any], list[dict[str, Any]]]] = []
+    model_rows: list[tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]] = []
     feature_columns: list[str] = []
     notices: list[str] = []
-    for model_id in model_ids:
-        table_info, rows = _read_table(store, model_id, table_id)
+    model_entries: list[dict[str, Any]] = []
+    for model_ref in model_refs:
+        status = _status_for_ref(store, gbm_store, model_ref)
+        entry = {
+            "field": model_ref.field,
+            "label": _model_field_label(model_ref, status),
+            "model_id": model_ref.model_id,
+            "model_ref": model_ref.ref,
+            "model_kind": model_ref.kind,
+        }
+        model_entries.append(entry)
+        table_info, rows = _read_table_for_ref(store, gbm_store, model_ref, table_id)
         if not table_info:
-            notices.append(f"{model_id} has no {table_id} tabulation.")
+            notices.append(f"{entry['label']} has no {table_id} tabulation.")
             continue
         features = list(table_info.get("features") or [])
         if not feature_columns:
             feature_columns = features
         if table_info.get("skipped"):
-            notices.append(str(table_info.get("warning") or f"{model_id} skipped {table_id}."))
+            notices.append(str(table_info.get("warning") or f"{entry['label']} skipped {table_id}."))
             continue
-        model_rows.append((model_id, table_info, rows))
+        model_rows.append((entry, table_info, rows))
     if crosstab and crosstab not in {MODEL_CROSSTAB, *feature_columns}:
         notices.append(f"Ignoring unknown crosstab {crosstab}.")
         crosstab = ""
@@ -833,7 +982,7 @@ def tabulation_table(store: GlmModelStore, payload: dict[str, Any]) -> dict[str,
             table_id=table_id,
             scale=scale,
             crosstab=crosstab,
-            model_ids=model_ids,
+            model_entries=model_entries,
             model_rows=model_rows,
             feature_columns=feature_columns,
             notices=notices,
@@ -842,7 +991,7 @@ def tabulation_table(store: GlmModelStore, payload: dict[str, Any]) -> dict[str,
         table_id=table_id,
         scale=scale,
         crosstab=crosstab,
-        model_ids=model_ids,
+        model_entries=model_entries,
         model_rows=model_rows,
         feature_columns=feature_columns,
         notices=notices,
@@ -854,25 +1003,26 @@ def _tabulation_table_long(
     table_id: str,
     scale: str,
     crosstab: str,
-    model_ids: list[str],
-    model_rows: list[tuple[str, dict[str, Any], list[dict[str, Any]]]],
+    model_entries: list[dict[str, Any]],
+    model_rows: list[tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]],
     feature_columns: list[str],
     notices: list[str],
 ) -> dict[str, Any]:
     row_map: dict[tuple[Any, ...], dict[str, Any]] = {}
-    for model_id, table_info, rows in model_rows:
+    for model, table_info, rows in model_rows:
+        field = str(model["field"])
         features = list(table_info.get("features") or [])
         for row in rows:
             key = tuple(_json_value(row.get(feature)) for feature in features) if features else ("base",)
             target = row_map.setdefault(key, {feature: _json_value(row.get(feature)) for feature in features})
             if not features:
                 target["table"] = "base"
-            target[model_id] = _display_number(row.get("tabulated_linear"), scale)
-            target[f"__status__{model_id}"] = str(row.get("status") or "ok")
+            target[field] = _display_number(row.get("tabulated_linear"), scale)
+            target[f"__status__{field}"] = str(row.get("status") or "ok")
     columns = [{"title": feature, "field": feature} for feature in feature_columns]
     if not feature_columns:
         columns = [{"title": "table", "field": "table"}]
-    columns.extend(_tabulation_value_column(model_id, model_id) for model_id in model_ids)
+    columns.extend(_tabulation_value_column(model["label"], str(model["field"])) for model in model_entries)
     return _tabulation_table_payload(table_id=table_id, scale=scale, crosstab=crosstab, columns=columns, rows=list(row_map.values()), notices=notices)
 
 
@@ -881,24 +1031,26 @@ def _tabulation_table_feature_crosstab(
     table_id: str,
     scale: str,
     crosstab: str,
-    model_ids: list[str],
-    model_rows: list[tuple[str, dict[str, Any], list[dict[str, Any]]]],
+    model_entries: list[dict[str, Any]],
+    model_rows: list[tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]],
     feature_columns: list[str],
     notices: list[str],
 ) -> dict[str, Any]:
     remaining_features = [feature for feature in feature_columns if feature != crosstab]
     crosstab_values = _ordered_tabulation_values({_json_value(row.get(crosstab)) for _, _, rows in model_rows for row in rows})
     pivot_fields = {value: f"__pivot__{index}" for index, value in enumerate(crosstab_values)}
-    include_model_column = len(model_ids) > 1
+    include_model_column = len(model_entries) > 1
     row_map: dict[tuple[Any, ...], dict[str, Any]] = {}
-    for model_id, table_info, rows in model_rows:
+    model_labels = {str(model["field"]): str(model["label"]) for model in model_entries}
+    for model, table_info, rows in model_rows:
+        field_name = str(model["field"])
         features = list(table_info.get("features") or [])
         for row in rows:
             base_values = tuple(_json_value(row.get(feature)) for feature in remaining_features)
-            key = (*base_values, model_id) if include_model_column else base_values or ("base",)
+            key = (*base_values, field_name) if include_model_column else base_values or ("base",)
             target = row_map.setdefault(key, {feature: _json_value(row.get(feature)) for feature in remaining_features})
             if include_model_column:
-                target["model"] = model_id
+                target["model"] = model_labels.get(field_name, field_name)
             pivot_value = _json_value(row.get(crosstab))
             field = pivot_fields.get(pivot_value)
             if not field:
@@ -912,8 +1064,8 @@ def _tabulation_table_feature_crosstab(
     return _tabulation_table_payload(table_id=table_id, scale=scale, crosstab=crosstab, columns=columns, rows=list(row_map.values()), notices=notices)
 
 
-def tabulation_plot(store: GlmModelStore, payload: dict[str, Any]) -> dict[str, Any]:
-    model_ids = [str(model_id).strip() for model_id in payload.get("model_ids", []) if str(model_id).strip()]
+def tabulation_plot(store: GlmModelStore, payload: dict[str, Any], *, gbm_store: Any = None) -> dict[str, Any]:
+    model_refs = _requested_model_refs(payload)
     table_id = str(payload.get("table_id") or "base").strip() or "base"
     crosstab = str(payload.get("crosstab") or "").strip()
     scale = "exp" if str(payload.get("scale") or "").lower() == "exp" else "linear"
@@ -921,15 +1073,17 @@ def tabulation_plot(store: GlmModelStore, payload: dict[str, Any]) -> dict[str, 
     x_axis: list[Any] = []
     notices: list[str] = []
     first_features: list[str] = []
-    for model_id in model_ids:
-        table_info, rows = _read_table(store, model_id, table_id)
+    for model_ref in model_refs:
+        status = _status_for_ref(store, gbm_store, model_ref)
+        label = _model_field_label(model_ref, status)
+        table_info, rows = _read_table_for_ref(store, gbm_store, model_ref, table_id)
         if not table_info or table_info.get("skipped"):
-            notices.append(f"{model_id} has no plottable {table_id} tabulation.")
+            notices.append(f"{label} has no plottable {table_id} tabulation.")
             continue
         features = list(table_info.get("features") or [])
         first_features = first_features or features
         if len(features) == 0:
-            series.append({"name": model_id, "type": "bar", "data": [_display_number(rows[0].get("tabulated_linear"), scale)] if rows else []})
+            series.append({"name": label, "type": "bar", "data": [_display_number(rows[0].get("tabulated_linear"), scale)] if rows else []})
             x_axis = ["base"]
         elif len(features) == 1:
             feature = features[0]
@@ -937,7 +1091,7 @@ def tabulation_plot(store: GlmModelStore, payload: dict[str, Any]) -> dict[str, 
             by_value = {_json_value(row.get(feature)): row for row in rows}
             ordered = [by_value[value] for value in ordered_values if value in by_value]
             x_axis = [_json_value(row.get(feature)) for row in ordered]
-            series.append({"name": model_id, "type": "line", "showSymbol": True, "data": [_display_number(row.get("tabulated_linear"), scale) for row in ordered]})
+            series.append({"name": label, "type": "line", "showSymbol": True, "data": [_display_number(row.get("tabulated_linear"), scale) for row in ordered]})
         elif len(features) == 2:
             if crosstab not in features:
                 notices.append(f"Choose a feature crosstab to plot {table_id}.")
@@ -951,7 +1105,7 @@ def tabulation_plot(store: GlmModelStore, payload: dict[str, Any]) -> dict[str, 
             for cross_value in cross_values:
                 series.append(
                     {
-                        "name": f"{model_id} · {cross}={cross_value}",
+                        "name": f"{label} · {cross}={cross_value}",
                         "type": "line",
                         "showSymbol": True,
                         "data": [_display_number(lookup.get((x_value, cross_value), {}).get("tabulated_linear"), scale) for x_value in x_values],

@@ -30,6 +30,8 @@ ARTIFACT_FILES = {
     "parameters": "parameters.json",
     "training_log": "training_log.json",
     "model": "model.txt",
+    "tabulation_manifest": "tabulation_manifest.json",
+    "tabulated_predictions": "tabulated_predictions.parquet",
 }
 
 SOURCE_KINDS = {
@@ -135,8 +137,12 @@ def unique_output_column_name(base_name: str, used_names: set[str]) -> str:
     return candidate
 
 
-def prediction_source_select_sql(source_columns: list[str]) -> str:
-    return ",\n  ".join(f"base.{quote_ident(name)}" for name in source_columns)
+def prediction_source_select_sql(source_columns: list[str], *, include_tabulated: bool = False) -> str:
+    parts = [f"base.{quote_ident(name)}" for name in source_columns]
+    parts.append("prediction.gbm_prediction")
+    if include_tabulated:
+        parts.append("tabulated.gbm_tabulated_prediction")
+    return ",\n  ".join(parts)
 
 
 def shap_source_select_sql(
@@ -208,6 +214,9 @@ class GbmModelStore:
     def artifact_path(self, model_id: str, artifact: str) -> Path:
         filename = ARTIFACT_FILES[artifact]
         return self.model_dir(model_id) / filename
+
+    def tabulations_dir(self, model_id: str) -> Path:
+        return self.model_dir(model_id) / "tabulations"
 
     def write_json(self, path: Path, payload: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,12 +435,18 @@ COPY (
         offset_col = str(manifest.get("offset_column") or "").strip()
         where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
         source_columns = self.source_columns(manifest)
-        select_sql = prediction_source_select_sql(source_columns)
+        tabulated_prediction_path = self.artifact_path(ref.model_id, "tabulated_predictions")
+        include_tabulated = tabulated_prediction_path.exists()
+        select_sql = prediction_source_select_sql(source_columns, include_tabulated=include_tabulated)
         base_projection_sql = row_number_source_projection_sql(source_columns)
+        tabulated_join_sql = (
+            f"\nLEFT JOIN read_parquet({sql_literal(str(tabulated_prediction_path))}) tabulated USING (__lucidum_row_id)"
+            if include_tabulated
+            else ""
+        )
         return f"""(
 SELECT
-  {select_sql}{',' if select_sql else ''}
-  prediction.gbm_prediction
+  {select_sql}
 FROM (
   SELECT
     *
@@ -443,6 +458,7 @@ FROM (
   {where_sql}
 ) base
 INNER JOIN read_parquet({sql_literal(str(source_path))}) prediction USING (__lucidum_row_id)
+{tabulated_join_sql}
 )"""
 
     def shap_relation_sql(self, model_id: str, source_path: Path) -> str:
@@ -506,6 +522,18 @@ INNER JOIN read_parquet({sql_literal(str(source_path))}) shap USING (__lucidum_r
         }
         return detail
 
+    def read_parquet_records(self, path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
+        if not path.exists():
+            return []
+        limit_sql = f" LIMIT {int(limit)}" if limit is not None else ""
+        con = duckdb.connect(database=":memory:")
+        try:
+            rows = con.execute(f"SELECT * FROM read_parquet({sql_literal(str(path))}){limit_sql}").fetchall()
+            names = [str(col[0]) for col in con.description]
+        finally:
+            con.close()
+        return [dict(zip(names, row)) for row in rows]
+
     def source_manifest_entries(self) -> list[tuple[dict[str, Any], str, dict[str, str]]]:
         entries: list[tuple[dict[str, Any], str, dict[str, str]]] = []
         for model in self.list_models():
@@ -533,10 +561,21 @@ class GbmSourceProvider:
         if ref is None or ref.source_kind != "predictions":
             return None
         source_path = self.store.source_path(ref.model_id, "predictions")
+        tabulated_path = self.store.artifact_path(ref.model_id, "tabulated_predictions")
+        relation_sql = f"read_parquet({sql_literal(str(source_path))})"
+        if tabulated_path.exists():
+            relation_sql = f"""(
+SELECT
+  prediction.__lucidum_row_id,
+  prediction.gbm_prediction,
+  tabulated.gbm_tabulated_prediction
+FROM read_parquet({sql_literal(str(source_path))}) prediction
+LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lucidum_row_id)
+)"""
         return ModelPredictionSource(
             source_id=source_id,
             column="gbm_prediction",
-            relation_sql=f"read_parquet({sql_literal(str(source_path))})",
+            relation_sql=relation_sql,
             active=self.store.active_model_id() == ref.model_id,
         )
 

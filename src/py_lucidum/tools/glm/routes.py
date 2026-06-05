@@ -87,11 +87,8 @@ def register(app: FastAPI, context: AppContext) -> None:
         context.check_token(request)
         payload = dict(await request.json())
         try:
-            glm_dependencies()
-            job = jobs.start_tabulations(context.dataset, store, payload, getattr(app.state, "feature_spec", {}))
+            job = jobs.start_tabulations(context.dataset, store, payload, getattr(app.state, "feature_spec", {}), getattr(app.state, "gbm_store", None))
             return job.as_payload()
-        except MissingGlmDependency as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -107,19 +104,19 @@ def register(app: FastAPI, context: AppContext) -> None:
     async def tabulation_config_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
         payload = dict(await request.json())
-        return tabulation_config(store, payload)
+        return tabulation_config(store, payload, gbm_store=getattr(app.state, "gbm_store", None))
 
     @app.post("/api/glm/tabulations/table")
     async def tabulation_table_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
         payload = dict(await request.json())
-        return tabulation_table(store, payload)
+        return tabulation_table(store, payload, gbm_store=getattr(app.state, "gbm_store", None))
 
     @app.post("/api/glm/tabulations/plot")
     async def tabulation_plot_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
         payload = dict(await request.json())
-        return tabulation_plot(store, payload)
+        return tabulation_plot(store, payload, gbm_store=getattr(app.state, "gbm_store", None))
 
     @app.get("/api/glm/models/{model_id}")
     async def model_endpoint(request: Request, model_id: str) -> dict[str, Any]:

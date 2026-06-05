@@ -48,11 +48,11 @@ class GlmJobManager:
         thread.start()
         return job
 
-    def start_tabulations(self, dataset: Dataset, store: GlmModelStore, payload: dict[str, Any], feature_spec: Any) -> GlmJob:
+    def start_tabulations(self, dataset: Dataset, store: GlmModelStore, payload: dict[str, Any], feature_spec: Any, gbm_store: Any = None) -> GlmJob:
         job = GlmJob(id=uuid4().hex)
         with self._lock:
             self._jobs[job.id] = job
-        thread = threading.Thread(target=self._run_tabulations, args=(job.id, dataset, store, payload, feature_spec), daemon=True)
+        thread = threading.Thread(target=self._run_tabulations, args=(job.id, dataset, store, payload, feature_spec, gbm_store), daemon=True)
         thread.start()
         return job
 
@@ -71,15 +71,15 @@ class GlmJobManager:
         self.update_progress(job_id, {"phase": "succeeded", "message": "GLM training complete", "percent": 100})
         self._update(job_id, status="succeeded", result=result)
 
-    def _run_tabulations(self, job_id: str, dataset: Dataset, store: GlmModelStore, payload: dict[str, Any], feature_spec: Any) -> None:
+    def _run_tabulations(self, job_id: str, dataset: Dataset, store: GlmModelStore, payload: dict[str, Any], feature_spec: Any, gbm_store: Any = None) -> None:
         self._update(job_id, status="running")
         try:
-            result = build_tabulations(dataset, store, payload, feature_spec, progress_callback=lambda progress: self.update_progress(job_id, progress))
+            result = build_tabulations(dataset, store, payload, feature_spec, progress_callback=lambda progress: self.update_progress(job_id, progress), gbm_store=gbm_store)
         except Exception as exc:
             self.update_progress(job_id, {"phase": "failed", "message": str(exc)})
             self._update(job_id, status="failed", error=str(exc))
             return
-        self.update_progress(job_id, {"phase": "succeeded", "message": "GLM tabulation complete", "percent": 100})
+        self.update_progress(job_id, {"phase": "succeeded", "message": "Model tabulation complete", "percent": 100})
         self._update(job_id, status="succeeded", result=result)
 
     def update_progress(self, job_id: str, progress: dict[str, Any]) -> None:
