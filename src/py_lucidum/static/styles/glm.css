@@ -113,7 +113,9 @@
 
       .glm-formula-panel,
       .glm-coefficient-panel,
-      .glm-model-navigator {
+      .glm-model-navigator,
+      .glm-tabulation-sidebar,
+      .glm-tabulation-main {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -315,6 +317,11 @@
         opacity: 1;
       }
 
+      #glmBuildTabulationsBtn {
+        min-height: 26px;
+        padding: 2px 7px;
+      }
+
       .glm-editor-shell {
         flex: 1 1 auto;
         min-height: 0;
@@ -478,6 +485,236 @@
         border-radius: 4px;
       }
 
+      .glm-tabulation-layout {
+        display: grid;
+        flex: 1 1 auto;
+        gap: 0;
+        grid-template-columns: minmax(240px, var(--glm-tabulation-sidebar-width, 320px)) 12px minmax(0, 1fr);
+        height: auto;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .glm-tabulations-panel {
+        display: flex;
+        flex: 1 1 auto;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .glm-tabulation-sidebar,
+      .glm-tabulation-main {
+        min-height: 0;
+      }
+
+      .glm-tabulation-label {
+        color: var(--muted);
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+        padding: 8px 12px 4px;
+      }
+
+      .glm-tabulation-list {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        margin: 0 12px;
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .glm-tabulation-model-list {
+        flex: 0 0 132px;
+      }
+
+      .glm-tabulation-table-list {
+        flex: 1 1 auto;
+        min-height: 132px;
+      }
+
+      .glm-tabulation-list-row {
+        align-items: center;
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
+        color: var(--text);
+        cursor: pointer;
+        display: flex;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 400;
+        gap: 10px;
+        justify-content: space-between;
+        line-height: 1.15;
+        min-height: 20px;
+        padding: 1px 6px;
+        text-align: left;
+        width: 100%;
+      }
+
+      .glm-tabulation-list-row:hover,
+      .glm-tabulation-list-row:focus-visible {
+        background: color-mix(in srgb, var(--line) 34%, var(--panel));
+        outline: none;
+      }
+
+      .glm-tabulation-list-row.selected {
+        background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+      }
+
+      .glm-tabulation-row-main {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .glm-tabulation-row-meta {
+        color: var(--muted);
+        flex: 0 0 auto;
+        font-size: 9px;
+        line-height: 1.1;
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .glm-tabulation-diagnostics {
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        flex: 0 0 auto;
+        font-size: 11px;
+        line-height: 1.25;
+        margin-top: 0;
+        max-height: 34%;
+        min-height: 0;
+        overflow: auto;
+        padding: 8px 12px;
+      }
+
+      .glm-tabulation-model-diagnostic {
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        padding: 6px 0;
+      }
+
+      .glm-tabulation-model-diagnostic:first-child {
+        padding-top: 0;
+      }
+
+      .glm-tabulation-model-diagnostic strong {
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .glm-tabulation-warning {
+        color: var(--danger);
+        overflow-wrap: anywhere;
+      }
+
+      .glm-tabulation-controls {
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex: 0 0 auto;
+        flex-wrap: nowrap;
+        gap: 8px;
+        min-width: 0;
+        padding: 8px 12px;
+      }
+
+      .glm-tabulation-controls .segmented button {
+        min-height: 26px;
+      }
+
+      .glm-tabulation-check,
+      .glm-tabulation-crosstab-label {
+        align-items: center;
+        color: var(--muted);
+        display: inline-flex;
+        font-size: 11px;
+        font-weight: 700;
+        gap: 5px;
+        line-height: 1.2;
+      }
+
+      .glm-tabulation-crosstab-group {
+        align-items: center;
+        display: inline-flex;
+        flex: 0 1 auto;
+        gap: 6px;
+        margin-left: auto;
+        min-width: 0;
+      }
+
+      .glm-tabulation-crosstab {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        font-size: 12px;
+        height: 26px;
+        max-width: 240px;
+        min-width: 0;
+        width: clamp(150px, 18vw, 240px);
+      }
+
+      .glm-tabulation-inline-notice {
+        color: var(--danger);
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.25;
+        min-height: 0;
+        overflow-wrap: anywhere;
+        padding: 0 12px 6px;
+      }
+
+      .glm-tabulation-inline-notice:empty {
+        display: none;
+      }
+
+      .glm-tabulation-view-shell {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+        padding: 0 12px 12px;
+      }
+
+      .glm-tabulation-grid,
+      .glm-tabulation-fallback,
+      .glm-tabulation-plot {
+        height: 100%;
+        min-height: 0;
+        width: 100%;
+      }
+
+      .glm-tabulation-plot {
+        background: var(--panel);
+        border: 1px solid var(--glm-table-border);
+        border-radius: 6px;
+      }
+
+      .glm-tabulation-fallback {
+        overflow: auto;
+      }
+
+      .glm-tabulation-fallback-table {
+        min-width: 520px;
+      }
+
+      .glm-grid .tabulator-row .tabulator-cell.glm-tabulation-na-cell,
+      .glm-tabulation-na-cell {
+        background: color-mix(in srgb, var(--line) 42%, var(--panel)) !important;
+        color: var(--muted) !important;
+      }
+
       .glm-grid {
         background: var(--panel);
         border: 1px solid var(--glm-table-border);
@@ -485,6 +722,10 @@
         color: var(--text);
         min-height: 220px;
         overflow: hidden;
+      }
+
+      .glm-tabulation-sidebar .glm-panel-header {
+        align-items: center;
       }
 
       .glm-grid.tabulator {
@@ -549,6 +790,10 @@
       .glm-grid .tabulator-row:hover,
       .glm-grid .tabulator-row:hover .tabulator-cell {
         background: var(--panel) !important;
+      }
+
+      .glm-grid .tabulator-row .tabulator-cell.glm-tabulation-colour-cell {
+        background: var(--glm-tabulation-cell-bg, inherit) !important;
       }
 
       .glm-model-grid .tabulator-row,
@@ -740,7 +985,13 @@
           grid-template-rows: minmax(340px, 1fr) minmax(280px, 1fr);
         }
 
-        .glm-builder-resizer {
+        .glm-tabulation-layout {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
+        }
+
+        .glm-builder-resizer,
+        .glm-tabulation-resizer {
           display: none;
         }
       }

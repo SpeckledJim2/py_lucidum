@@ -58,6 +58,7 @@ class FormulaParts:
     response_column: str
     rhs_formula: str
     fitted_formula: str
+    offset_terms: list[str]
 
 
 def family_options_payload() -> list[dict[str, Any]]:
@@ -308,6 +309,115 @@ def find_formula_split(formula: str) -> int:
     return -1
 
 
+def matching_call_end(text: str, open_index: int) -> int:
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote in {"'", '"'}:
+            escaped = True
+            continue
+        if char in {"'", '"', "`"}:
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            continue
+        if quote is not None:
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    raise ValueError("Formula has an unclosed offset(...) term")
+
+
+def find_offset_call(text: str, start: int = 0) -> tuple[int, int, int, str] | None:
+    quote: str | None = None
+    escaped = False
+    index = max(0, start)
+    while index < len(text):
+        char = text[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote in {"'", '"'}:
+            escaped = True
+            index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            index += 1
+            continue
+        if quote is None and text[index : index + 6].lower() == "offset":
+            before = text[index - 1] if index > 0 else ""
+            if before and (before.isalnum() or before in {"_", "."}):
+                index += 1
+                continue
+            cursor = index + 6
+            while cursor < len(text) and text[cursor].isspace():
+                cursor += 1
+            if cursor >= len(text) or text[cursor] != "(":
+                index += 1
+                continue
+            end = matching_call_end(text, cursor)
+            return index, cursor, end, text[cursor + 1 : end - 1].strip()
+        index += 1
+    return None
+
+
+def remove_offset_span(text: str, start: int, end: int) -> str:
+    left = start
+    while left > 0 and text[left - 1].isspace():
+        left -= 1
+    right = end
+    while right < len(text) and text[right].isspace():
+        right += 1
+    next_nonspace = right
+    while next_nonspace < len(text) and text[next_nonspace].isspace():
+        next_nonspace += 1
+    if left > 0 and text[left - 1] == "+":
+        return f"{text[:left - 1]} {text[right:]}"
+    if next_nonspace < len(text) and text[next_nonspace] == "+":
+        return f"{text[:left]} {text[next_nonspace + 1:]}"
+    return f"{text[:left]} {text[right:]}"
+
+
+def normalise_rhs_formula(rhs: str) -> str:
+    text = re.sub(r"\s+", " ", str(rhs or "")).strip()
+    text = re.sub(r"^\+\s*", "", text)
+    text = re.sub(r"\s*\+$", "", text).strip()
+    text = re.sub(r"\+\s*\+", "+", text)
+    return text or "1"
+
+
+def strip_offset_terms(rhs: str) -> tuple[str, list[str]]:
+    remaining = str(rhs or "")
+    offset_terms: list[str] = []
+    while True:
+        match = find_offset_call(remaining)
+        if match is None:
+            break
+        start, _open, end, expression = match
+        if not expression:
+            raise ValueError("offset(...) terms must contain an expression")
+        if error := unsafe_formula_error(expression):
+            raise ValueError(error)
+        offset_terms.append(expression)
+        remaining = remove_offset_span(remaining, start, end)
+    return normalise_rhs_formula(remaining), offset_terms
+
+
 def unquote_formula_name(value: str) -> str:
     text = str(value or "").strip()
     if len(text) >= 2 and text[0] == "`" and text[-1] == "`":
@@ -334,12 +444,14 @@ def parse_formula(raw_formula: Any, response_column: Any) -> FormulaParts:
         raise ValueError("Choose a response column or enter a full response ~ terms formula")
     if not rhs:
         raise ValueError("Enter the right-hand side of the GLM formula")
+    fitted_rhs, offset_terms = strip_offset_terms(rhs)
     return FormulaParts(
         raw_formula=raw,
         stripped_formula=stripped,
         response_column=response,
         rhs_formula=rhs,
-        fitted_formula=f"{TARGET_COLUMN} ~ {rhs}",
+        fitted_formula=f"{TARGET_COLUMN} ~ {fitted_rhs}",
+        offset_terms=offset_terms,
     )
 
 
@@ -463,6 +575,7 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
             "stripped": formula.stripped_formula,
             "rhs": formula.rhs_formula,
             "fitted": formula.fitted_formula,
+            "offset_terms": formula.offset_terms,
         }
     return result
 

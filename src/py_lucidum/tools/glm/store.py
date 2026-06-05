@@ -19,10 +19,13 @@ from .validation import denominator_valid_sql, dataset_relation_sql
 
 ARTIFACT_FILES = {
     "manifest": "manifest.json",
+    "estimator": "estimator.pkl",
     "formula": "formula.txt",
     "coefficients": "coefficients.parquet",
     "predictions": "predictions.parquet",
     "diagnostics": "diagnostics.json",
+    "tabulation_manifest": "tabulation_manifest.json",
+    "tabulated_predictions": "tabulated_predictions.parquet",
 }
 SOURCE_KINDS = {
     "predictions": {
@@ -73,9 +76,11 @@ def row_number_source_projection_sql(source_columns: list[str]) -> str:
     return f"ROW_NUMBER() OVER () AS __lucidum_row_id{suffix}"
 
 
-def prediction_source_select_sql(source_columns: list[str]) -> str:
+def prediction_source_select_sql(source_columns: list[str], *, include_tabulated: bool = False) -> str:
     parts = [f"base.{quote_ident(name)}" for name in source_columns]
     parts.append("prediction.glm_prediction")
+    if include_tabulated:
+        parts.append("tabulated.glm_tabulated_prediction")
     return ",\n  ".join(parts)
 
 
@@ -115,6 +120,9 @@ class GlmModelStore:
 
     def artifact_path(self, model_id: str, artifact: str) -> Path:
         return self.model_dir(model_id) / ARTIFACT_FILES[artifact]
+
+    def tabulations_dir(self, model_id: str) -> Path:
+        return self.model_dir(model_id) / "tabulations"
 
     def write_json(self, path: Path, payload: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -288,11 +296,18 @@ class GlmModelStore:
             raise ValueError("Choose a valid data source")
         manifest = self.manifest(ref.model_id)
         prediction_path = self.source_path(ref.model_id, "predictions")
+        tabulated_prediction_path = self.artifact_path(ref.model_id, "tabulated_predictions")
+        include_tabulated = tabulated_prediction_path.exists()
         denominator_col = str(manifest.get("denominator_column") or "").strip()
         where_sql = f"\n  WHERE {denominator_valid_sql(denominator_col)}" if denominator_col else ""
         source_columns = self.source_columns(manifest)
-        select_sql = prediction_source_select_sql(source_columns)
+        select_sql = prediction_source_select_sql(source_columns, include_tabulated=include_tabulated)
         base_projection_sql = row_number_source_projection_sql(source_columns)
+        tabulated_join_sql = (
+            f"\nLEFT JOIN read_parquet({sql_literal(str(tabulated_prediction_path))}) tabulated USING (__lucidum_row_id)"
+            if include_tabulated
+            else ""
+        )
         return f"""(
 SELECT
   {select_sql}
@@ -306,6 +321,7 @@ FROM (
   ) dataset_rows{where_sql}
 ) base
 INNER JOIN read_parquet({sql_literal(str(prediction_path))}) prediction USING (__lucidum_row_id)
+{tabulated_join_sql}
 )"""
 
     def read_parquet_records(self, path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
@@ -354,10 +370,21 @@ class GlmSourceProvider:
         if ref is None:
             return None
         source_path = self.store.source_path(ref.model_id, "predictions")
+        tabulated_path = self.store.artifact_path(ref.model_id, "tabulated_predictions")
+        relation_sql = f"read_parquet({sql_literal(str(source_path))})"
+        if tabulated_path.exists():
+            relation_sql = f"""(
+SELECT
+  prediction.__lucidum_row_id,
+  prediction.glm_prediction,
+  tabulated.glm_tabulated_prediction
+FROM read_parquet({sql_literal(str(source_path))}) prediction
+LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lucidum_row_id)
+)"""
         return ModelPredictionSource(
             source_id=source_id,
             column="glm_prediction",
-            relation_sql=f"read_parquet({sql_literal(str(source_path))})",
+            relation_sql=relation_sql,
             active=self.store.active_model_id() == ref.model_id,
         )
 

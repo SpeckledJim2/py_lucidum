@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 import json
 import math
+import pickle
 import subprocess
 import sys
 import tempfile
@@ -197,6 +198,26 @@ def finite_mask(np: Any, values: Any) -> Any:
     return values.notna() & np.isfinite(values.astype(float))
 
 
+def offset_values_for_frame(frame: Any, offset_terms: list[str], context: dict[str, Any], np: Any, pd: Any) -> Any | None:
+    terms = [str(term or "").strip() for term in offset_terms if str(term or "").strip()]
+    if not terms:
+        return None
+    local_context = dict(context)
+    for column in frame.columns:
+        local_context[str(column)] = frame[column]
+    values = pd.Series(0.0, index=frame.index, dtype=float)
+    for term in terms:
+        try:
+            evaluated = eval(term, {"__builtins__": {}}, local_context)
+        except Exception as exc:
+            raise ValueError(f"Could not evaluate GLM offset expression `{term}`: {exc}") from exc
+        if not hasattr(evaluated, "__len__") or isinstance(evaluated, (str, bytes)):
+            evaluated = np.full(len(frame), evaluated)
+        series = pd.Series(evaluated, index=frame.index)
+        values = values + pd.to_numeric(series, errors="coerce")
+    return values
+
+
 def check_target_range(np: Any, family: str, y: Any) -> None:
     values = np.asarray(y, dtype=float)
     if family in {"poisson", "negative.binomial", "tweedie"} and np.any(values < 0):
@@ -286,8 +307,21 @@ def safe_metric(callable_metric: Any, *args: Any, **kwargs: Any) -> float | None
         return None
 
 
-def diagnostics_payload(model: Any, fit_frame: Any, y_fit: Any, fit_weight: Any, context: dict[str, Any], np: Any, coefficient_count: int) -> dict[str, Any]:
-    mu = model.predict(fit_frame, context=context)
+def diagnostics_payload(
+    model: Any,
+    fit_frame: Any,
+    y_fit: Any,
+    fit_weight: Any,
+    context: dict[str, Any],
+    np: Any,
+    coefficient_count: int,
+    *,
+    offset_values: Any | None = None,
+) -> dict[str, Any]:
+    predict_kwargs = {"context": context}
+    if offset_values is not None:
+        predict_kwargs["offset"] = offset_values
+    mu = model.predict(fit_frame, **predict_kwargs)
     family = model.family_instance
     parameters = max(1, coefficient_count)
     deviance = safe_metric(family.deviance, y_fit, mu, sample_weight=fit_weight)
@@ -295,17 +329,27 @@ def diagnostics_payload(model: Any, fit_frame: Any, y_fit: Any, fit_weight: Any,
     mean_target = float(np.average(np.asarray(y_fit, dtype=float), weights=np.asarray(fit_weight, dtype=float))) if fit_weight is not None else float(np.mean(y_fit))
     null_mu = np.full_like(np.asarray(y_fit, dtype=float), mean_target, dtype=float)
     null_deviance = safe_metric(family.deviance, y_fit, null_mu, sample_weight=fit_weight)
+    metric_kwargs = dict(predict_kwargs)
     return {
         "deviance": deviance,
         "null_deviance": null_deviance,
-        "aic": safe_metric(getattr(model, "aic", None), fit_frame, y_fit, fit_weight, context=context),
-        "aicc": safe_metric(getattr(model, "aicc", None), fit_frame, y_fit, fit_weight, context=context),
-        "bic": safe_metric(getattr(model, "bic", None), fit_frame, y_fit, fit_weight, context=context),
+        "aic": safe_metric(getattr(model, "aic", None), fit_frame, y_fit, fit_weight, **metric_kwargs),
+        "aicc": safe_metric(getattr(model, "aicc", None), fit_frame, y_fit, fit_weight, **metric_kwargs),
+        "bic": safe_metric(getattr(model, "bic", None), fit_frame, y_fit, fit_weight, **metric_kwargs),
         "dispersion": dispersion,
     }
 
 
-def build_predictions_frame(frame: Any, model: Any, denominator_column: str, context: dict[str, Any], np: Any, pd: Any) -> tuple[Any, int, int]:
+def build_predictions_frame(
+    frame: Any,
+    model: Any,
+    denominator_column: str,
+    context: dict[str, Any],
+    np: Any,
+    pd: Any,
+    *,
+    offset_values: Any | None = None,
+) -> tuple[Any, int, int]:
     score_frame = frame.copy()
     score_frame[TARGET_COLUMN] = np.nan
     if denominator_column:
@@ -314,9 +358,14 @@ def build_predictions_frame(frame: Any, model: Any, denominator_column: str, con
     else:
         denominator = None
         score_mask = pd.Series(True, index=score_frame.index)
+    if offset_values is not None:
+        score_mask = score_mask & finite_mask(np, offset_values)
 
     output = score_frame.loc[score_mask, ["__lucidum_row_id"]].copy()
-    predictions = model.predict(score_frame.loc[score_mask].copy(), context=context)
+    predict_kwargs = {"context": context}
+    if offset_values is not None:
+        predict_kwargs["offset"] = offset_values.loc[score_mask].astype(float).to_numpy()
+    predictions = model.predict(score_frame.loc[score_mask].copy(), **predict_kwargs)
     prediction_values = pd.to_numeric(predictions, errors="coerce")
     if denominator is not None:
         prediction_values = prediction_values * denominator.loc[score_mask].to_numpy(dtype=float)
@@ -382,6 +431,8 @@ def _train_model_impl(
     is_penalized = regularization_mode != "none"
     formula = validation["formula"]
     context = formula_context(np)
+    offset_terms = [str(term) for term in formula.get("offset_terms", [])]
+    offset_values = offset_values_for_frame(frame, offset_terms, context, np, pd)
 
     response = pd.to_numeric(frame[response_column], errors="coerce")
     if denominator_column:
@@ -403,6 +454,8 @@ def _train_model_impl(
 
     if fit_weight is not None:
         fit_mask = fit_mask & finite_mask(np, fit_weight) & (fit_weight.astype(float) > 0)
+    if offset_values is not None:
+        fit_mask = fit_mask & finite_mask(np, offset_values)
 
     if int(fit_mask.sum()) < 2:
         raise ValueError("GLM fitting needs at least two valid rows")
@@ -412,6 +465,7 @@ def _train_model_impl(
     fit_frame = frame.loc[fit_mask].copy()
     fit_frame[TARGET_COLUMN] = y_fit.to_numpy(dtype=float)
     fit_weight_values = fit_weight.loc[fit_mask].astype(float).to_numpy() if fit_weight is not None else None
+    fit_offset_values = offset_values.loc[fit_mask].astype(float).to_numpy() if offset_values is not None else None
 
     progress({"phase": "fitting", "message": "Fitting GLM", "percent": 35, "training_rows": int(fit_mask.sum())})
     estimator_kwargs = {
@@ -447,12 +501,13 @@ def _train_model_impl(
             sample_weight=fit_weight_values,
             store_covariance_matrix=not is_penalized,
             context=context,
+            offset=fit_offset_values,
         )
     regularization = regularization_summary(estimator, regularization, np)
 
     progress({"phase": "scoring", "message": "Scoring GLM predictions", "percent": 70})
     with _suppress_tabmat_mixed_dtype_warning():
-        predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pd)
+        predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pd, offset_values=offset_values)
         coefficients = coefficient_rows(
             estimator,
             fit_frame,
@@ -463,7 +518,16 @@ def _train_model_impl(
             pd,
             include_inference=not is_penalized,
         )
-        diagnostics = diagnostics_payload(estimator, fit_frame, y_fit.to_numpy(dtype=float), fit_weight_values, context, np, len(coefficients))
+        diagnostics = diagnostics_payload(
+            estimator,
+            fit_frame,
+            y_fit.to_numpy(dtype=float),
+            fit_weight_values,
+            context,
+            np,
+            len(coefficients),
+            offset_values=fit_offset_values,
+        )
     diagnostics.update(
         {
             "training_rows": int(fit_mask.sum()),
@@ -490,6 +554,7 @@ def _train_model_impl(
         "response_column": response_column,
         "denominator_column": denominator_column,
         "offset_column": denominator_column,
+        "offset_terms": jsonable(offset_terms, np, pd),
         "training_scope": training_scope,
         "sample_column": sample_column,
         "formula": {
@@ -497,6 +562,7 @@ def _train_model_impl(
             "stripped": formula["stripped"],
             "rhs": formula["rhs"],
             "fitted": formula["fitted"],
+            "offset_terms": offset_terms,
         },
         "diagnostics": jsonable(diagnostics, np, pd),
         "source_columns": source_columns,
@@ -513,6 +579,8 @@ def _train_model_impl(
     coefficient_frame = pd.DataFrame(coefficients)
     write_dataframe_parquet(coefficient_frame, store.artifact_path(model_id, "coefficients"))
     write_dataframe_parquet(predictions, store.artifact_path(model_id, "predictions"))
+    with store.artifact_path(model_id, "estimator").open("wb") as handle:
+        pickle.dump(estimator, handle, protocol=pickle.HIGHEST_PROTOCOL)
     store.artifact_path(model_id, "formula").write_text(str(formula["raw"]), encoding="utf-8")
     store.write_json(store.artifact_path(model_id, "diagnostics"), manifest["diagnostics"])
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)

@@ -8,6 +8,7 @@ from py_lucidum.app.context import AppContext
 
 from .jobs import GlmJobManager
 from .store import GlmModelNameError, GlmModelStore, GlmSourceProvider
+from .tabulation import tabulation_config, tabulation_plot, tabulation_table
 from .training import MissingGlmDependency, glm_dependencies
 from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payload, regularization_options_payload, sample_metadata, validate_request
 
@@ -80,6 +81,45 @@ def register(app: FastAPI, context: AppContext) -> None:
         if not job:
             raise HTTPException(status_code=404, detail="Choose a valid GLM job")
         return job.as_payload()
+
+    @app.post("/api/glm/tabulations/build")
+    async def tabulation_build_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        try:
+            glm_dependencies()
+            job = jobs.start_tabulations(context.dataset, store, payload, getattr(app.state, "feature_spec", {}))
+            return job.as_payload()
+        except MissingGlmDependency as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/glm/tabulations/jobs/{job_id}")
+    async def tabulation_job_endpoint(request: Request, job_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Choose a valid GLM tabulation job")
+        return job.as_payload()
+
+    @app.post("/api/glm/tabulations/config")
+    async def tabulation_config_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        return tabulation_config(store, payload)
+
+    @app.post("/api/glm/tabulations/table")
+    async def tabulation_table_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        return tabulation_table(store, payload)
+
+    @app.post("/api/glm/tabulations/plot")
+    async def tabulation_plot_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        return tabulation_plot(store, payload)
 
     @app.get("/api/glm/models/{model_id}")
     async def model_endpoint(request: Request, model_id: str) -> dict[str, Any]:

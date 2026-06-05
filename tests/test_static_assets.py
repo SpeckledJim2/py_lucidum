@@ -169,7 +169,7 @@ const schema = {{
   data_sources: [
     {{ id: "dataset", columns: [{{ name: "Actual", kind: "numeric" }}] }},
     {{ id: "gbm:one:predictions", kind: "gbm_predictions", active: true, columns: [{{ name: "gbm_prediction", kind: "numeric" }}] }},
-    {{ id: "glm:one:predictions", kind: "glm_predictions", active: true, columns: [{{ name: "glm_prediction", kind: "numeric" }}] }},
+    {{ id: "glm:one:predictions", kind: "glm_predictions", active: true, columns: [{{ name: "glm_prediction", kind: "numeric" }}, {{ name: "glm_tabulated_prediction", kind: "numeric" }}] }},
   ],
 }};
 if (dataSourceForId(schema, "dataset").id !== "dataset") throw new Error("dataSourceForId failed");
@@ -177,7 +177,7 @@ if (!dataSourceHasColumn(schema, "gbm:one:predictions", "gbm_prediction")) throw
 if (sourceColumns(schema, "dataset").length !== 1) throw new Error("sourceColumns failed");
 if (!toolEnabled(schema, "line_bar")) throw new Error("toolEnabled failed");
 if (!isModelTool("gbm") || !isModelTool("glm") || isModelTool("line_bar")) throw new Error("isModelTool failed");
-if (!isModelPredictionColumn({{ name: "gbm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction" }})) throw new Error("isModelPredictionColumn failed");
+if (!isModelPredictionColumn({{ name: "gbm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_tabulated_prediction" }})) throw new Error("isModelPredictionColumn failed");
 if (preferredStartupSource(schema.data_sources, "missing") !== "gbm:one:predictions") throw new Error("preferredStartupSource failed");
 schema.data_sources[1].active = false;
 if (preferredStartupSource(schema.data_sources, "missing") !== "glm:one:predictions") throw new Error("preferredStartupSource GLM fallback failed");
@@ -610,6 +610,11 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("export function createGlmTool", js)
         self.assertIn('api("/api/glm/config"', js)
         self.assertIn('api("/api/glm/build"', js)
+        self.assertIn('api("/api/glm/tabulations/config"', js)
+        self.assertIn('api("/api/glm/tabulations/build"', js)
+        self.assertIn('api("/api/glm/tabulations/table"', js)
+        self.assertIn('api("/api/glm/tabulations/plot"', js)
+        self.assertIn('`/api/glm/tabulations/jobs/${encodeURIComponent(jobId)}`', js)
         self.assertIn('`/api/glm/jobs/${encodeURIComponent(jobId)}`', js)
         self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}/activate`', js)
         self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}/rename`', js)
@@ -619,6 +624,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('aceEditor.session.setMode("ace/mode/r");', js)
         self.assertIn('data-glm-tab="builder">Formula builder', js)
         self.assertIn('data-glm-tab="models">Model navigator', js)
+        self.assertIn('data-glm-tab="tabulations">Tabulations', js)
         self.assertIn('<h3 class="glm-panel-title">GLM formula</h3>', js)
         self.assertNotIn("Formula and family", js)
         self.assertIn('id="glmFormulaEditor"', js)
@@ -641,6 +647,11 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("glm-header-scope-control", glm_js)
         self.assertIn('id="glmBuilderResizer" class="glm-builder-resizer"', glm_js)
         self.assertIn("function bindBuilderResizer()", glm_js)
+        self.assertIn('const GLM_TABULATION_SPLIT_STORAGE_KEY = "py_lucidum_glm_tabulation_sidebar_width";', glm_js)
+        self.assertIn('const GLM_TABULATION_MODEL_CROSSTAB = "__model__";', glm_js)
+        self.assertIn('id="glmTabulationResizer" class="glm-builder-resizer glm-tabulation-resizer"', glm_js)
+        self.assertIn("function bindTabulationResizer()", glm_js)
+        self.assertIn('layout.style.setProperty("--glm-tabulation-sidebar-width"', glm_js)
         self.assertIn('data-glm-scope="training"', js)
         self.assertIn('id="glmBuildBtn"', js)
         self.assertIn('id="glmCoefficientTable"', js)
@@ -670,7 +681,32 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("function restoreModelSelection(ids)", glm_js)
         self.assertIn("const commandSelection = event.metaKey || event.ctrlKey;", glm_js)
         self.assertIn("if (event.shiftKey) {", glm_js)
-        self.assertNotIn('type="checkbox"', glm_js)
+        self.assertIn('id="glmTabulationColor" type="checkbox"', glm_js)
+        self.assertIn('id="glmTabulationModelSelect"', glm_js)
+        self.assertIn('id="glmTabulationTableSelect"', glm_js)
+        self.assertIn('id="glmTabulationCrosstab"', glm_js)
+        self.assertIn('let tabulationCrosstab = "";', glm_js)
+        self.assertNotIn('localStorage.getItem("py_lucidum_glm_tabulation_crosstab")', glm_js)
+        self.assertIn('const options = [{ value: "", label: "No crosstab" }];', glm_js)
+        self.assertIn('options.push({ value: GLM_TABULATION_MODEL_CROSSTAB, label: "Model" });', glm_js)
+        self.assertIn("features.forEach((feature) => options.push({ value: feature, label: feature }));", glm_js)
+        self.assertIn('if (!values.has(tabulationCrosstab)) tabulationCrosstab = "";', glm_js)
+        self.assertIn("const payload = { model_ids, table_id, scale: tabulationScale, crosstab: tabulationCrosstab };", glm_js)
+        self.assertIn('data-glm-tabulation-model-id', glm_js)
+        self.assertIn('data-glm-tabulation-table-id', glm_js)
+        self.assertIn('glm-tabulation-row-meta', glm_js)
+        self.assertIn('glm-tabulation-crosstab-group', glm_js)
+        self.assertIn("function selectTabulationModel(modelId, event = {})", glm_js)
+        self.assertIn("const commandSelection = Boolean(event.metaKey || event.ctrlKey);", glm_js)
+        self.assertIn("if (event.shiftKey) {", glm_js)
+        self.assertIn("tabulationSelectionAnchorModelId = modelId;", glm_js)
+        self.assertIn("tabulationConfig?.all_models", glm_js)
+        self.assertIn('element.style.setProperty("background", color, "important");', glm_js)
+        self.assertIn("Boolean(column.tabulation_value)", glm_js)
+        self.assertIn('const statusField = String(column.status_field || `__status__${field}`);', glm_js)
+        self.assertIn('glm-tabulation-colour-cell', glm_js)
+        self.assertNotIn('id="glmRefreshTabulationsBtn"', glm_js)
+        self.assertNotIn('>Refresh</button>', glm_js)
         self.assertNotIn('["Training rows", diagnostics.training_rows]', glm_js)
         self.assertNotIn('["Null deviance", diagnostics.null_deviance]', glm_js)
         self.assertNotIn('["BIC", diagnostics.bic]', glm_js)
@@ -679,6 +715,11 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertNotIn("GLM modelling will be added in a later slice", js)
         self.assertIn(".glm-tool", css)
         self.assertIn(".glm-builder-layout", css)
+        self.assertIn(".glm-tabulations-panel", css)
+        self.assertIn(".glm-tabulation-list-row", css)
+        self.assertIn(".glm-tabulation-crosstab-group", css)
+        self.assertIn("--glm-tabulation-sidebar-width", css)
+        self.assertIn(".glm-tabulation-resizer", css)
         self.assertIn(".glm-formula-editor", css)
         self.assertIn(".glm-coefficient-panel", css)
         self.assertIn(".glm-builder-control-stack", css)
@@ -1455,7 +1496,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("training_mode: source.training_mode", js)
         self.assertIn("function sourceColumns()", js)
         self.assertIn("function isModelPredictionColumn(column)", js)
-        self.assertIn('return ["gbm_prediction", "glm_prediction"].includes(String(column?.name || ""));', js)
+        self.assertIn('return ["gbm_prediction", "glm_prediction", "glm_tabulated_prediction"].includes(String(column?.name || ""));', js)
         self.assertIn("function expectedColumns()", js)
         self.assertIn("function expectedPredictionColumns()", js)
         self.assertIn("option.dataset.sourceId = col.source_id || state.source || \"dataset\";", js)

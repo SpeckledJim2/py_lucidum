@@ -106,7 +106,7 @@ class DemoDatasetTests(unittest.TestCase):
             rows = list(reader)
 
         self.assertGreater(len(rows), 0)
-        self.assertEqual(reader.fieldnames, ["Feature", "Grouping", "Base", "scenario1", "scenario2", "scenario3"])
+        self.assertEqual(reader.fieldnames, ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1", "scenario2", "scenario3"])
         scenario_sets = {
             scenario: {
                 row["Feature"]
@@ -122,6 +122,11 @@ class DemoDatasetTests(unittest.TestCase):
             with self.subTest(feature=row["Feature"]):
                 self.assertIn(row["Feature"], dataset_columns)
                 self.assertTrue(row["Base"].strip())
+                tabulation_values = [row["min"].strip(), row["max"].strip(), row["banding"].strip()]
+                if any(tabulation_values):
+                    self.assertTrue(all(tabulation_values))
+                    self.assertGreater(float(row["max"]), float(row["min"]))
+                    self.assertGreater(float(row["banding"]), 0)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,12 @@ from typing import Any
 
 FEATURE_SPEC_REQUIRED_COLUMNS = ["Feature", "Grouping"]
 FEATURE_SPEC_BASE_COLUMN = "Base"
+FEATURE_SPEC_METADATA_COLUMNS = {
+    "Base": "base",
+    "min": "min",
+    "max": "max",
+    "banding": "banding",
+}
 
 
 def resolve_features_path(features_path: str | Path | None, use_features: bool = True) -> Path | None:
@@ -33,8 +39,18 @@ def load_features(features_path: str | Path | None, use_features: bool = True) -
         fieldnames = list(reader.fieldnames or [])
         if fieldnames[:2] != FEATURE_SPEC_REQUIRED_COLUMNS:
             raise ValueError("feature_spec.csv must start with these columns: Feature,Grouping")
-        has_base_column = len(fieldnames) > 2 and fieldnames[2] == FEATURE_SPEC_BASE_COLUMN
-        scenario_names = fieldnames[3:] if has_base_column else fieldnames[2:]
+        metadata_columns: list[tuple[str, str]] = []
+        scenario_start = 2
+        seen_metadata: set[str] = set()
+        while scenario_start < len(fieldnames):
+            raw_name = fieldnames[scenario_start]
+            key = FEATURE_SPEC_METADATA_COLUMNS.get(raw_name)
+            if key is None or raw_name in seen_metadata:
+                break
+            metadata_columns.append((raw_name, key))
+            seen_metadata.add(raw_name)
+            scenario_start += 1
+        scenario_names = fieldnames[scenario_start:]
         rows: list[dict[str, Any]] = []
         scenario_features: dict[str, list[str]] = {name: [] for name in scenario_names}
         for row in reader:
@@ -42,7 +58,6 @@ def load_features(features_path: str | Path | None, use_features: bool = True) -
             if not feature:
                 continue
             grouping = str(row.get("Grouping") or "").strip()
-            base = str(row.get(FEATURE_SPEC_BASE_COLUMN) or "").strip() if has_base_column else ""
             scenarios: dict[str, bool] = {}
             for scenario_name in scenario_names:
                 selected = "feature" in str(row.get(scenario_name) or "").strip().lower()
@@ -50,8 +65,8 @@ def load_features(features_path: str | Path | None, use_features: bool = True) -
                 if selected:
                     scenario_features[scenario_name].append(feature)
             row_payload = {"feature": feature, "grouping": grouping, "scenarios": scenarios}
-            if has_base_column:
-                row_payload["base"] = base
+            for column_name, payload_key in metadata_columns:
+                row_payload[payload_key] = str(row.get(column_name) or "").strip()
             rows.append(row_payload)
         return {
             "rows": rows,

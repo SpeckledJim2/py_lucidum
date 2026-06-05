@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import duckdb
 import json
 import time
 import unittest
@@ -11,8 +12,9 @@ from typing import Any
 from unittest.mock import patch
 
 from py_lucidum.app import create_app
-from py_lucidum.core import Dataset
+from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
+from py_lucidum.tools.glm.tabulation import build_tabulations, tabulation_config, tabulation_plot, tabulation_table
 from py_lucidum.tools.glm.training import (
     MissingGlmDependency,
     _suppress_tabmat_mixed_dtype_warning,
@@ -172,6 +174,11 @@ class GlmToolTests(unittest.TestCase):
         self.assertIn("/api/glm/validate", paths)
         self.assertIn("/api/glm/build", paths)
         self.assertIn("/api/glm/jobs/{job_id}", paths)
+        self.assertIn("/api/glm/tabulations/build", paths)
+        self.assertIn("/api/glm/tabulations/jobs/{job_id}", paths)
+        self.assertIn("/api/glm/tabulations/config", paths)
+        self.assertIn("/api/glm/tabulations/table", paths)
+        self.assertIn("/api/glm/tabulations/plot", paths)
         self.assertIn("/api/glm/models/{model_id}", paths)
         self.assertIn("/api/glm/models/{model_id}/activate", paths)
         self.assertIn("/api/glm/models/{model_id}/rename", paths)
@@ -237,6 +244,14 @@ class GlmToolTests(unittest.TestCase):
                 "training_scope": "all",
             },
         )
+        offset = validate_request(
+            dataset,
+            {
+                "formula": "actualNumerator ~ Age + offset(log(denominator))",
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
 
         self.assertTrue(rhs["ok"], rhs)
         self.assertEqual(rhs["formula"]["stripped"], "pmin(Age, 60) + ifelse(Segment == 'A', 1, 0)")
@@ -247,6 +262,10 @@ class GlmToolTests(unittest.TestCase):
         self.assertEqual(full["formula"]["rhs"], "ns(Age, df=3) + C(Segment)")
         self.assertFalse(unsafe["ok"])
         self.assertIn("unsafe", unsafe["errors"][0])
+        self.assertTrue(offset["ok"], offset)
+        self.assertEqual(offset["formula"]["rhs"], "Age + offset(log(denominator))")
+        self.assertEqual(offset["formula"]["fitted"], "__lucidum_glm_target ~ Age")
+        self.assertEqual(offset["formula"]["offset_terms"], ["log(denominator)"])
 
     def test_regularization_validation_defaults_and_rejects_invalid_manual_values(self) -> None:
         dataset = Dataset(self.data_path)
@@ -317,6 +336,7 @@ class GlmToolTests(unittest.TestCase):
         self.assertEqual(manifest["diagnostics"]["training_rows"], 4)
         self.assertIn("deviance", manifest["diagnostics"])
         self.assertTrue(store.artifact_path(model_id, "formula").exists())
+        self.assertTrue(store.artifact_path(model_id, "estimator").exists())
         self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
         self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
@@ -339,6 +359,232 @@ class GlmToolTests(unittest.TestCase):
         with dataset.lock:
             row = dataset.con.execute(f"SELECT COUNT(*), COUNT(glm_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
         self.assertEqual(row, (6, 6))
+
+    def test_glm_training_with_offset_stores_terms_and_predicts(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "actualNumerator ~ Age + offset(log(denominator))",
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        model_id = result["model_id"]
+        manifest = store.manifest(model_id)
+
+        self.assertEqual(manifest["formula"]["fitted"], "__lucidum_glm_target ~ Age")
+        self.assertEqual(manifest["offset_terms"], ["log(denominator)"])
+        with dataset.lock:
+            rows = dataset.con.execute(
+                f"SELECT COUNT(*), COUNT(glm_prediction) FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'predictions')))})"
+            ).fetchone()
+        self.assertEqual(rows, (6, 6))
+
+    def test_glm_tabulations_persist_predictions_and_publish_source_column(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "Age + C(Segment)", "response_column": "actualNumerator", "family": "normal", "training_scope": "all"},
+        )
+        model_id = result["model_id"]
+        feature_spec = {
+            "rows": [
+                {"feature": "Age", "grouping": "Driver", "base": "40", "min": "30", "max": "70", "banding": "5"},
+                {"feature": "Segment", "grouping": "Driver", "base": "A"},
+            ]
+        }
+
+        payload = build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertEqual(payload["model_ids"], [model_id])
+        self.assertTrue(store.artifact_path(model_id, "tabulated_predictions").exists())
+        self.assertIn("linear_sd_error", tab_manifest["diagnostics"])
+        self.assertIn("base", [table["table_id"] for table in tab_manifest["tables"]])
+        self.assertIn("Age", [table["table_id"] for table in tab_manifest["tables"]])
+
+        dataset.register_data_source_provider(GlmSourceProvider(store))
+        source_id = store.source_id(model_id)
+        columns = [column["name"] for column in dataset.schema_for_source(source_id)["columns"]]
+        self.assertIn("glm_prediction", columns)
+        self.assertIn("glm_tabulated_prediction", columns)
+        with dataset.lock:
+            rows = dataset.con.execute(f"SELECT COUNT(glm_tabulated_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
+        self.assertGreater(rows[0], 0)
+
+    def test_glm_tabulation_config_returns_all_model_statuses(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        first = train_model(
+            dataset,
+            store,
+            {"formula": "Age", "response_column": "actualNumerator", "family": "normal", "training_scope": "all"},
+            activate=False,
+        )
+        second = train_model(
+            dataset,
+            store,
+            {"formula": "Age + C(Segment)", "response_column": "actualNumerator", "family": "normal", "training_scope": "all"},
+        )
+        feature_spec = {"rows": [{"feature": "Age", "grouping": "Driver", "base": "40", "min": "30", "max": "70", "banding": "5"}]}
+        build_tabulations(dataset, store, {"model_ids": [first["model_id"]]}, feature_spec)
+
+        payload = tabulation_config(store, {"model_ids": [second["model_id"]]})
+
+        self.assertEqual([model["model_id"] for model in payload["models"]], [second["model_id"]])
+        all_statuses = {model["model_id"]: model for model in payload["all_models"]}
+        self.assertEqual(set(all_statuses), {first["model_id"], second["model_id"]})
+        self.assertTrue(all_statuses[first["model_id"]]["tabulated"])
+        self.assertGreater(len(all_statuses[first["model_id"]]["tables"]), 0)
+        self.assertFalse(all_statuses[second["model_id"]]["tabulated"])
+        self.assertTrue(all_statuses[second["model_id"]]["tabulatable"])
+
+    def test_glm_tabulation_plot_sorts_numeric_axes_numerically(self) -> None:
+        store = GlmModelStore(self.data_path)
+        model_id = "numeric-sort"
+        store.model_dir(model_id).mkdir(parents=True)
+        store.write_json(
+            store.artifact_path(model_id, "tabulation_manifest"),
+            {
+                "tables": [
+                    {
+                        "table_id": "POSTCODE_CATEGORY",
+                        "label": "POSTCODE_CATEGORY",
+                        "index": 1,
+                        "features": ["POSTCODE_CATEGORY"],
+                        "cell_count": 4,
+                        "skipped": False,
+                        "path": "tabulations/POSTCODE_CATEGORY.parquet",
+                    },
+                    {
+                        "table_id": "Age__Segment",
+                        "label": "Age:Segment",
+                        "index": 2,
+                        "features": ["Age", "Segment"],
+                        "cell_count": 6,
+                        "skipped": False,
+                        "path": "tabulations/Age__Segment.parquet",
+                    },
+                ],
+                "warnings": [],
+                "diagnostics": {},
+            },
+        )
+        store.tabulations_dir(model_id).mkdir(parents=True)
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                """
+                CREATE TABLE postcode AS
+                SELECT * FROM (VALUES
+                    (10, 1.0, 'ok'),
+                    (1, 0.1, 'ok'),
+                    (3, 0.3, 'ok'),
+                    (2, 0.2, 'ok')
+                ) AS rows(POSTCODE_CATEGORY, tabulated_linear, status)
+                """
+            )
+            con.execute(f"COPY postcode TO {sql_literal(str(store.tabulations_dir(model_id) / 'POSTCODE_CATEGORY.parquet'))} (FORMAT PARQUET)")
+            con.execute(
+                """
+                CREATE TABLE age_segment AS
+                SELECT * FROM (VALUES
+                    (10, 'A', 1.0, 'ok'),
+                    (1, 'A', 0.1, 'ok'),
+                    (2, 'A', 0.2, 'ok'),
+                    (10, 'B', 1.1, 'ok'),
+                    (1, 'B', 0.15, 'ok'),
+                    (2, 'B', 0.25, 'ok')
+                ) AS rows(Age, Segment, tabulated_linear, status)
+                """
+            )
+            con.execute(f"COPY age_segment TO {sql_literal(str(store.tabulations_dir(model_id) / 'Age__Segment.parquet'))} (FORMAT PARQUET)")
+        finally:
+            con.close()
+
+        one_dimensional = tabulation_plot(store, {"model_ids": [model_id], "table_id": "POSTCODE_CATEGORY"})
+        self.assertEqual(one_dimensional["x_axis"], [1, 2, 3, 10])
+        self.assertEqual(one_dimensional["series"][0]["data"], [0.1, 0.2, 0.3, 1.0])
+
+        two_dimensional = tabulation_plot(store, {"model_ids": [model_id], "table_id": "Age__Segment", "crosstab": "Segment"})
+        self.assertEqual(two_dimensional["x_axis"], [1, 2, 10])
+        no_crosstab = tabulation_plot(store, {"model_ids": [model_id], "table_id": "Age__Segment", "crosstab": ""})
+        self.assertFalse(no_crosstab["plottable"])
+        model_crosstab = tabulation_plot(store, {"model_ids": [model_id], "table_id": "Age__Segment", "crosstab": "__model__"})
+        self.assertFalse(model_crosstab["plottable"])
+
+    def test_glm_tabulation_table_crosstab_pivots_models_and_features(self) -> None:
+        store = GlmModelStore(self.data_path)
+        model_ids = ["tab-model-1", "tab-model-2"]
+        for model_id in model_ids:
+            store.model_dir(model_id).mkdir(parents=True)
+            store.write_json(
+                store.artifact_path(model_id, "tabulation_manifest"),
+                {
+                    "tables": [
+                        {
+                            "table_id": "Age__Segment",
+                            "label": "Age:Segment",
+                            "index": 1,
+                            "features": ["Age", "Segment"],
+                            "cell_count": 4,
+                            "skipped": False,
+                            "path": "tabulations/Age__Segment.parquet",
+                        }
+                    ],
+                    "warnings": [],
+                    "diagnostics": {},
+                },
+            )
+            store.tabulations_dir(model_id).mkdir(parents=True)
+        con = duckdb.connect(database=":memory:")
+        try:
+            for model_id, offset in [("tab-model-1", 0.0), ("tab-model-2", 1.0)]:
+                con.execute(
+                    f"""
+                    CREATE OR REPLACE TABLE table_rows AS
+                    SELECT * FROM (VALUES
+                        (1, 'A', {0.1 + offset}, 'ok'),
+                        (1, 'B', {0.2 + offset}, 'missing'),
+                        (2, 'A', {0.3 + offset}, 'ok'),
+                        (2, 'B', {0.4 + offset}, 'ok')
+                    ) AS rows(Age, Segment, tabulated_linear, status)
+                    """
+                )
+                con.execute(f"COPY table_rows TO {sql_literal(str(store.tabulations_dir(model_id) / 'Age__Segment.parquet'))} (FORMAT PARQUET)")
+        finally:
+            con.close()
+
+        long_payload = tabulation_table(store, {"model_ids": model_ids, "table_id": "Age__Segment"})
+        self.assertEqual([column["field"] for column in long_payload["columns"]], ["Age", "Segment", "tab-model-1", "tab-model-2"])
+        self.assertTrue(all(column.get("tabulation_value") for column in long_payload["columns"][2:]))
+        self.assertEqual(long_payload["min"], 0.1)
+        self.assertEqual(long_payload["max"], 1.4)
+
+        model_payload = tabulation_table(store, {"model_ids": model_ids, "table_id": "Age__Segment", "crosstab": "__model__"})
+        self.assertEqual([column["field"] for column in model_payload["columns"]], ["Age", "Segment", "tab-model-1", "tab-model-2"])
+        self.assertEqual(model_payload["crosstab"], "__model__")
+
+        feature_payload = tabulation_table(store, {"model_ids": model_ids, "table_id": "Age__Segment", "crosstab": "Segment"})
+        self.assertEqual([column["field"] for column in feature_payload["columns"][:2]], ["Age", "model"])
+        self.assertEqual([column["title"] for column in feature_payload["columns"][2:]], ["A", "B"])
+        self.assertTrue(all(column.get("tabulation_value") for column in feature_payload["columns"][2:]))
+        self.assertTrue(all(column.get("status_field") for column in feature_payload["columns"][2:]))
+        row = next(item for item in feature_payload["rows"] if item["Age"] == 1 and item["model"] == "tab-model-1")
+        self.assertEqual(row["__pivot__0"], 0.1)
+        self.assertEqual(row["__pivot__1"], 0.2)
+        self.assertEqual(row["__status____pivot__1"], "missing")
+        self.assertEqual(feature_payload["min"], 0.1)
+        self.assertEqual(feature_payload["max"], 1.4)
 
     def test_glm_auto_regularization_stores_selected_penalty(self) -> None:
         self.require_glm_dependencies()
@@ -429,6 +675,46 @@ class GlmToolTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(payload["status"], "succeeded", payload)
         model_id = payload["result"]["model_id"]
+
+        status, body = asgi_post_json(app, "/api/glm/tabulations/config", {"model_ids": [model_id]})
+        tab_config = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(tab_config["models"][0]["tabulatable"])
+        self.assertFalse(tab_config["models"][0]["tabulated"])
+
+        status, body = asgi_post_json(app, "/api/glm/tabulations/build", {"model_ids": [model_id]})
+        tab_job = json.loads(body)
+        self.assertEqual(status, 200)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status, body = asgi_get(app, f"/api/glm/tabulations/jobs/{tab_job['job_id']}")
+            tab_payload = json.loads(body)
+            if tab_payload["status"] not in {"queued", "running"}:
+                break
+            time.sleep(0.05)
+        self.assertEqual(tab_payload["status"], "succeeded", tab_payload)
+
+        status, body = asgi_post_json(app, "/api/glm/tabulations/config", {"model_ids": [model_id]})
+        tab_config = json.loads(body)
+        self.assertEqual(status, 200)
+        table_ids = [table["table_id"] for table in tab_config["tables"]]
+        self.assertIn("base", table_ids)
+        self.assertIn("Age", table_ids)
+
+        status, body = asgi_post_json(app, "/api/glm/tabulations/table", {"model_ids": [model_id], "table_id": "Age"})
+        table_payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(table_payload["rows"])
+
+        status, body = asgi_post_json(app, "/api/glm/tabulations/plot", {"model_ids": [model_id], "table_id": "Age"})
+        plot_payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(plot_payload["series"])
+
+        status, body = asgi_get(app, "/api/schema")
+        schema = json.loads(body)
+        source = next(item for item in schema["data_sources"] if item.get("model_id") == model_id)
+        self.assertIn("glm_tabulated_prediction", [column["name"] for column in source["columns"]])
 
         status, body = asgi_get(app, f"/api/glm/models/{model_id}")
         detail = json.loads(body)

@@ -218,12 +218,27 @@ def add_field_column(
     if not column_name:
         return
     prediction_source = dataset.model_prediction_source(source_id)
-    if prediction_source is not None and column_name == prediction_source.column:
-        if not prediction_source.column or not prediction_source.relation_sql:
-            raise ValueError("Choose a valid model prediction source")
-        prediction_sources[prediction_source.source_id] = prediction_source
-        columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
-        return
+    if prediction_source is not None:
+        source_columns = dataset.column_map_for_source(source_id)
+        source_column = source_columns.get(column_name)
+        model_prediction_columns = {"gbm_prediction", "glm_prediction", "glm_tabulated_prediction"}
+        if column_name in model_prediction_columns and source_column is not None and is_numeric_kind(source_column.kind):
+            if not prediction_source.relation_sql:
+                raise ValueError("Choose a valid model prediction source")
+            prediction_sources[f"{prediction_source.source_id}:{column_name}"] = ModelPredictionSource(
+                source_id=prediction_source.source_id,
+                column=column_name,
+                relation_sql=prediction_source.relation_sql,
+                active=prediction_source.active,
+            )
+            columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
+            return
+        if column_name == prediction_source.column:
+            if not prediction_source.column or not prediction_source.relation_sql:
+                raise ValueError("Choose a valid model prediction source")
+            prediction_sources[prediction_source.source_id] = prediction_source
+            columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
+            return
     if column_name in dataset_columns:
         columns[column_name] = dataset_columns[column_name]
 

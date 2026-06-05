@@ -9,6 +9,7 @@ from uuid import uuid4
 from py_lucidum.core import Dataset
 
 from .store import GlmModelStore
+from .tabulation import build_tabulations
 from .training import train_model
 
 
@@ -47,6 +48,14 @@ class GlmJobManager:
         thread.start()
         return job
 
+    def start_tabulations(self, dataset: Dataset, store: GlmModelStore, payload: dict[str, Any], feature_spec: Any) -> GlmJob:
+        job = GlmJob(id=uuid4().hex)
+        with self._lock:
+            self._jobs[job.id] = job
+        thread = threading.Thread(target=self._run_tabulations, args=(job.id, dataset, store, payload, feature_spec), daemon=True)
+        thread.start()
+        return job
+
     def get(self, job_id: str) -> GlmJob | None:
         with self._lock:
             return self._jobs.get(job_id)
@@ -60,6 +69,17 @@ class GlmJobManager:
             self._update(job_id, status="failed", error=str(exc))
             return
         self.update_progress(job_id, {"phase": "succeeded", "message": "GLM training complete", "percent": 100})
+        self._update(job_id, status="succeeded", result=result)
+
+    def _run_tabulations(self, job_id: str, dataset: Dataset, store: GlmModelStore, payload: dict[str, Any], feature_spec: Any) -> None:
+        self._update(job_id, status="running")
+        try:
+            result = build_tabulations(dataset, store, payload, feature_spec, progress_callback=lambda progress: self.update_progress(job_id, progress))
+        except Exception as exc:
+            self.update_progress(job_id, {"phase": "failed", "message": str(exc)})
+            self._update(job_id, status="failed", error=str(exc))
+            return
+        self.update_progress(job_id, {"phase": "succeeded", "message": "GLM tabulation complete", "percent": 100})
         self._update(job_id, status="succeeded", result=result)
 
     def update_progress(self, job_id: str, progress: dict[str, Any]) -> None:

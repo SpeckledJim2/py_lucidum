@@ -67,6 +67,59 @@ class FeatureSpecTests(unittest.TestCase):
             ],
         )
 
+    def test_feature_spec_parses_tabulation_metadata_before_scenarios(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "feature_spec.csv"
+            path.write_text(
+                "Feature,Grouping,Base,min,max,banding,scenario1,scenario two\n"
+                "Age,DRIVER,40,17,96,1,Feature,\n"
+                "Segment,POSTCODE,B,,,,,use as FEATURE\n"
+                "Mileage,VEHICLE,5000,1000,30000,1000,,\n",
+                encoding="utf-8",
+            )
+
+            spec = load_features(path)
+
+        self.assertEqual(
+            spec["rows"],
+            [
+                {
+                    "feature": "Age",
+                    "grouping": "DRIVER",
+                    "base": "40",
+                    "min": "17",
+                    "max": "96",
+                    "banding": "1",
+                    "scenarios": {"scenario1": True, "scenario two": False},
+                },
+                {
+                    "feature": "Segment",
+                    "grouping": "POSTCODE",
+                    "base": "B",
+                    "min": "",
+                    "max": "",
+                    "banding": "",
+                    "scenarios": {"scenario1": False, "scenario two": True},
+                },
+                {
+                    "feature": "Mileage",
+                    "grouping": "VEHICLE",
+                    "base": "5000",
+                    "min": "1000",
+                    "max": "30000",
+                    "banding": "1000",
+                    "scenarios": {"scenario1": False, "scenario two": False},
+                },
+            ],
+        )
+        self.assertEqual(
+            spec["scenarios"],
+            [
+                {"name": "scenario1", "features": ["Age"]},
+                {"name": "scenario two", "features": ["Segment"]},
+            ],
+        )
+
     def test_default_feature_spec_falls_back_to_specs_directory(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

@@ -5,6 +5,8 @@ const GLM_QUEUED_POLL_MS = 1000;
 const GLM_MODEL_LIST_POLL_MS = 2000;
 const ACE_BASE_PATH = "/static/vendor/ace";
 const GLM_BUILDER_SPLIT_STORAGE_KEY = "py_lucidum_glm_formula_panel_width";
+const GLM_TABULATION_SPLIT_STORAGE_KEY = "py_lucidum_glm_tabulation_sidebar_width";
+const GLM_TABULATION_MODEL_CROSSTAB = "__model__";
 
 function glmAutoModelTimeLabel(date = new Date()) {
   const hour = String(date.getHours()).padStart(2, "0");
@@ -133,11 +135,24 @@ export function createGlmTool({
   let modelTableRenderSeq = 0;
   let modelRows = [];
   let selectedModelIds = new Set();
+  let selectedTabulationModelIds = new Set();
+  let tabulationSelectionAnchorModelId = "";
   let pollTimer = null;
+  let tabulationPollTimer = null;
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
   let isBuilding = false;
+  let isTabulating = false;
   let liveProgress = null;
+  let tabulationConfig = null;
+  let tabulationTable = null;
+  let tabulationChart = null;
+  let tabulationRenderSeq = 0;
+  let selectedTabulationTableId = localStorage.getItem("py_lucidum_glm_tabulation_table") || "base";
+  let tabulationView = localStorage.getItem("py_lucidum_glm_tabulation_view") || "table";
+  let tabulationScale = localStorage.getItem("py_lucidum_glm_tabulation_scale") || "linear";
+  let tabulationColor = localStorage.getItem("py_lucidum_glm_tabulation_color") === "true";
+  let tabulationCrosstab = "";
   let aceEditor = null;
   let editorInitialisedFor = null;
   let editorFontSize = Number(localStorage.getItem("py_lucidum_glm_font_size")) || 14;
@@ -204,12 +219,17 @@ export function createGlmTool({
     modelRows = normaliseModels(data.models || []);
     const availableModelIds = new Set(modelRows.map((model) => model.model_id));
     selectedModelIds = new Set(Array.from(selectedModelIds).filter((modelId) => availableModelIds.has(modelId)));
+    selectedTabulationModelIds = new Set(Array.from(selectedTabulationModelIds).filter((modelId) => availableModelIds.has(modelId)));
+    if (tabulationSelectionAnchorModelId && !availableModelIds.has(tabulationSelectionAnchorModelId)) tabulationSelectionAnchorModelId = "";
+    if (!selectedTabulationModelIds.size && data.active_model_id) selectedTabulationModelIds.add(data.active_model_id);
     const groupMeta = "";
     setGroupMeta(tool, groupMeta);
     setStatus("");
     setChartMessage("");
     disposeEditor();
+    disposeTabulationChart();
     modelTable = null;
+    tabulationTable = null;
     const mount = el("modelToolWrap");
     if (!mount) return;
     mount.innerHTML = shellHtml(data);
@@ -217,12 +237,15 @@ export function createGlmTool({
     bindBuilderControls();
     bindBuilderResizer();
     bindModelActions();
+    bindTabulationControls();
+    bindTabulationResizer();
     renderModelTable(modelRows, data.active_model_id);
     syncSidebarModelChooser(modelRows, data.active_model_id);
     renderCoefficientTable(coefficientRowsForActiveModel(data.active_model_id));
     initEditor();
     if (data.active_model_id) loadModelDetail(data.active_model_id);
     if (liveProgress) renderLiveProgress(liveProgress);
+    if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
     setDuckDbTiming(tool, data.timings || {});
     setClientTiming(tool, data.client_timings || {});
     setRenderTiming(tool, 0);
@@ -243,6 +266,7 @@ export function createGlmTool({
           <div class="glm-tabs tabs workspace-tabs">
             <button class="tab ${activeTab === "builder" ? "active" : ""}" type="button" data-glm-tab="builder">Formula builder</button>
             <button class="tab ${activeTab === "models" ? "active" : ""}" type="button" data-glm-tab="models">Model navigator</button>
+            <button class="tab ${activeTab === "tabulations" ? "active" : ""}" type="button" data-glm-tab="tabulations">Tabulations</button>
           </div>
           <div id="glmBuildStatus" class="glm-build-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${buildStatusHtml(liveProgress)}</div>
         </div>
@@ -320,8 +344,527 @@ export function createGlmTool({
             <div id="glmModelFallback" class="glm-model-fallback"></div>
           </div>
         </div>
+        <div class="glm-tab-panel ${activeTab === "tabulations" ? "" : "hidden"}" data-glm-panel="tabulations">
+          <div id="glmTabulationsPanel" class="glm-tabulations-panel">
+            ${tabulationsPanelHtml()}
+          </div>
+        </div>
       </div>
     `;
+  }
+
+  function tabulationsPanelHtml() {
+    const selectedIds = tabulationSelectedModelIds();
+    const tables = Array.isArray(tabulationConfig?.tables) ? tabulationConfig.tables : [];
+    if (tables.length && !tables.some((table) => String(table.table_id || "") === selectedTabulationTableId)) {
+      selectedTabulationTableId = String(tables[0]?.table_id || "base");
+    }
+    const activeTable = activeTabulationTable();
+    const features = Array.isArray(activeTable?.features) ? activeTable.features : [];
+    const crosstabOptions = tabulationCrosstabOptions(features, selectedIds);
+    normaliseTabulationCrosstab(crosstabOptions);
+    const diagnostics = tabulationDiagnosticsHtml();
+    return `
+      <div class="glm-tabulation-layout" style="${savedTabulationSplitWidthStyle()}">
+        <section class="glm-tabulation-sidebar">
+          <div class="glm-panel-header">
+            <h3 class="glm-panel-title">Tabulations</h3>
+            <button id="glmBuildTabulationsBtn" class="tab glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !modelRows.length ? "disabled" : ""}>${isTabulating ? "Building..." : "Build"}</button>
+          </div>
+          <label class="glm-tabulation-label" for="glmTabulationModelSelect">Select models</label>
+          <div id="glmTabulationModelSelect" class="glm-tabulation-list glm-tabulation-model-list" role="listbox" aria-label="Select GLM models" aria-multiselectable="true">
+            ${modelRows.length ? modelRows.map((model) => tabulationModelRowHtml(model, selectedIds.includes(model.model_id))).join("") : '<div class="glm-empty-state">No GLM models</div>'}
+          </div>
+          <label class="glm-tabulation-label" for="glmTabulationTableSelect">Select table</label>
+          <div id="glmTabulationTableSelect" class="glm-tabulation-list glm-tabulation-table-list" role="listbox" aria-label="Select tabulated table">
+            ${tables.length ? tables.map((table) => tabulationTableRowHtml(table, String(table.table_id) === selectedTabulationTableId)).join("") : '<div class="glm-empty-state">No tabulations built</div>'}
+          </div>
+          <div id="glmTabulationDiagnostics" class="glm-tabulation-diagnostics">${diagnostics}</div>
+        </section>
+        <div id="glmTabulationResizer" class="glm-builder-resizer glm-tabulation-resizer" role="separator" aria-orientation="vertical" aria-label="Resize GLM tabulations and table panels" tabindex="0"></div>
+        <section class="glm-tabulation-main">
+          <div class="glm-tabulation-controls">
+            <div class="segmented glm-tabulation-view-toggle" role="group" aria-label="Tabulation view">
+              <button type="button" data-glm-tabulation-view="table" class="${tabulationView === "table" ? "active" : ""}">Table</button>
+              <button type="button" data-glm-tabulation-view="plot" class="${tabulationView === "plot" ? "active" : ""}" ${features.length > 2 ? "disabled" : ""}>Plot</button>
+            </div>
+            <div class="segmented glm-tabulation-scale-toggle" role="group" aria-label="Tabulation display scale">
+              <button type="button" data-glm-tabulation-scale="linear" class="${tabulationScale === "linear" ? "active" : ""}">linear</button>
+              <button type="button" data-glm-tabulation-scale="exp" class="${tabulationScale === "exp" ? "active" : ""}">exp</button>
+            </div>
+            <label class="glm-tabulation-check"><input id="glmTabulationColor" type="checkbox" ${tabulationColor ? "checked" : ""} /> colour</label>
+            <div class="glm-tabulation-crosstab-group">
+              <label class="glm-tabulation-crosstab-label" for="glmTabulationCrosstab">crosstab</label>
+              <select id="glmTabulationCrosstab" class="glm-tabulation-crosstab" ${crosstabOptions.length > 1 ? "" : "disabled"}>
+                ${tabulationCrosstabOptionsHtml(crosstabOptions)}
+              </select>
+            </div>
+          </div>
+          <div id="glmTabulationNotice" class="glm-tabulation-inline-notice"></div>
+          <div class="glm-tabulation-view-shell ${tabulationView === "table" ? "" : "hidden"}" data-glm-tabulation-view-panel="table">
+            <div id="glmTabulationTable" class="glm-grid glm-tabulation-grid"></div>
+            <div id="glmTabulationFallback" class="glm-tabulation-fallback"></div>
+          </div>
+          <div class="glm-tabulation-view-shell ${tabulationView === "plot" ? "" : "hidden"}" data-glm-tabulation-view-panel="plot">
+            <div id="glmTabulationPlot" class="glm-tabulation-plot"></div>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
+  function tabulationSelectedModelIds() {
+    const availableModelIds = new Set(modelRows.map((model) => model.model_id));
+    const ids = Array.from(selectedTabulationModelIds).filter((modelId) => availableModelIds.has(modelId));
+    if (ids.length) return [...new Set(ids)];
+    const active = config?.active_model_id || modelRows.find((model) => model.active)?.model_id || modelRows[0]?.model_id || "";
+    return active ? [active] : [];
+  }
+
+  function activeTabulationTable() {
+    return (tabulationConfig?.tables || []).find((table) => String(table.table_id || "") === selectedTabulationTableId) || null;
+  }
+
+  function tabulationTableLabel(table = {}) {
+    return String(table.label || table.table_id || "");
+  }
+
+  function tabulationModelRowHtml(model, selected) {
+    const modelId = String(model?.model_id || "");
+    return `
+      <button type="button" class="glm-tabulation-list-row ${selected ? "selected" : ""}" data-glm-tabulation-model-id="${escapeHtml(modelId)}" role="option" aria-selected="${selected ? "true" : "false"}">
+        <span class="glm-tabulation-row-main">${escapeHtml(modelLabel(model))}</span>
+        <span class="glm-tabulation-row-meta">${escapeHtml(tabulationModelStatus(modelId))}</span>
+      </button>
+    `;
+  }
+
+  function tabulationTableRowHtml(table, selected) {
+    const tableId = String(table?.table_id || "");
+    return `
+      <button type="button" class="glm-tabulation-list-row ${selected ? "selected" : ""}" data-glm-tabulation-table-id="${escapeHtml(tableId)}" role="option" aria-selected="${selected ? "true" : "false"}">
+        <span class="glm-tabulation-row-main">${escapeHtml(tabulationTableLabel(table))}</span>
+        <span class="glm-tabulation-row-meta">${escapeHtml(tabulationTableMeta(table))}</span>
+      </button>
+    `;
+  }
+
+  function tabulationConfigModel(modelId) {
+    const models = Array.isArray(tabulationConfig?.all_models) ? tabulationConfig.all_models : (tabulationConfig?.models || []);
+    return models.find((model) => String(model.model_id || "") === String(modelId || "")) || null;
+  }
+
+  function tabulationModelStatus(modelId) {
+    const model = tabulationConfigModel(modelId);
+    if (!model) return "Untabulated";
+    if (!model.tabulatable) return "Rebuild required";
+    if (!model.tabulated) return "Untabulated";
+    const tables = Array.isArray(model.tables) ? model.tables.length : 0;
+    return `Tabulated · ${tables.toLocaleString()} ${tables === 1 ? "table" : "tables"}`;
+  }
+
+  function tabulationTableMeta(table = {}) {
+    const dim = Array.isArray(table.features) ? table.features.length : 0;
+    const cells = Number(table.cell_count || 0);
+    const base = `dim ${dim} · cells ${cells.toLocaleString()}`;
+    return table.skipped ? `${base} · skipped` : base;
+  }
+
+  function tabulationCrosstabOptions(features = [], modelIds = tabulationSelectedModelIds()) {
+    const options = [{ value: "", label: "No crosstab" }];
+    if (modelIds.length > 1) options.push({ value: GLM_TABULATION_MODEL_CROSSTAB, label: "Model" });
+    features.forEach((feature) => options.push({ value: feature, label: feature }));
+    return options;
+  }
+
+  function normaliseTabulationCrosstab(options = []) {
+    const values = new Set(options.map((option) => option.value));
+    if (!values.has(tabulationCrosstab)) tabulationCrosstab = "";
+  }
+
+  function tabulationCrosstabOptionsHtml(options = []) {
+    return options.map((option) => `<option value="${escapeHtml(option.value)}" ${option.value === tabulationCrosstab ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
+  }
+
+  function tabulationDiagnosticsHtml() {
+    const models = Array.isArray(tabulationConfig?.models) ? tabulationConfig.models : [];
+    if (!models.length) return '<div class="glm-empty-state">No tabulations loaded</div>';
+    return models.map((model) => {
+      const diagnostics = model.diagnostics || {};
+      const warnings = Array.isArray(model.warnings) ? model.warnings : [];
+      const rows = [
+        ["linear SD error", diagnostics.linear_sd_error],
+        ["tabulated rows", diagnostics.tabulated_row_count],
+        ["missing", diagnostics.missing_tabulated_prediction_rows],
+      ].filter(([, value]) => value !== undefined && value !== null && value !== "");
+      return `
+        <div class="glm-tabulation-model-diagnostic">
+          <strong>${escapeHtml(model.label || model.model_id)}</strong>
+          ${rows.map(([label, value]) => `<span>${escapeHtml(label)}: ${escapeHtml(formatModelMetric(value))}</span>`).join("")}
+          ${model.tabulatable ? "" : '<span class="glm-tabulation-warning">rebuild required</span>'}
+          ${warnings.slice(0, 3).map((warning) => `<span class="glm-tabulation-warning">${escapeHtml(warning)}</span>`).join("")}
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderTabulationsPanel() {
+    const panel = el("glmTabulationsPanel");
+    if (!panel) return;
+    disposeTabulationChart();
+    tabulationTable = null;
+    panel.innerHTML = tabulationsPanelHtml();
+    bindTabulationControls();
+    bindTabulationResizer();
+  }
+
+  function selectTabulationModel(modelId, event = {}) {
+    const orderedIds = modelRows.map((model) => model.model_id).filter(Boolean);
+    if (!orderedIds.includes(modelId)) return;
+    const current = new Set(tabulationSelectedModelIds());
+    const commandSelection = Boolean(event.metaKey || event.ctrlKey);
+    let next;
+    if (event.shiftKey) {
+      const anchor = orderedIds.includes(tabulationSelectionAnchorModelId)
+        ? tabulationSelectionAnchorModelId
+        : (Array.from(current).find((candidate) => orderedIds.includes(candidate)) || modelId);
+      const start = orderedIds.indexOf(anchor);
+      const end = orderedIds.indexOf(modelId);
+      const min = Math.min(start, end);
+      const max = Math.max(start, end);
+      const range = orderedIds.slice(min, max + 1);
+      next = commandSelection ? new Set(current) : new Set();
+      range.forEach((candidate) => next.add(candidate));
+    } else if (commandSelection) {
+      next = new Set(current);
+      if (next.has(modelId)) next.delete(modelId);
+      else next.add(modelId);
+    } else {
+      next = new Set([modelId]);
+    }
+    if (!next.size) next.add(modelId);
+    selectedTabulationModelIds = next;
+    tabulationSelectionAnchorModelId = modelId;
+  }
+
+  function bindTabulationControls() {
+    document.querySelectorAll("[data-glm-tabulation-model-id]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        const modelId = String(button.dataset.glmTabulationModelId || "");
+        if (!modelId) return;
+        selectTabulationModel(modelId, event);
+        refreshTabulationConfig({ force: true });
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        const modelId = String(button.dataset.glmTabulationModelId || "");
+        if (!modelId) return;
+        selectTabulationModel(modelId, event);
+        refreshTabulationConfig({ force: true });
+      });
+    });
+    document.querySelectorAll("[data-glm-tabulation-table-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedTabulationTableId = button.dataset.glmTabulationTableId || "base";
+        localStorage.setItem("py_lucidum_glm_tabulation_table", selectedTabulationTableId);
+        const table = activeTabulationTable();
+        const features = Array.isArray(table?.features) ? table.features : [];
+        if (features.length > 2) tabulationView = "table";
+        renderTabulationsPanel();
+        loadTabulationView();
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        button.click();
+      });
+    });
+    document.querySelectorAll("[data-glm-tabulation-view]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.disabled) return;
+        tabulationView = button.dataset.glmTabulationView || "table";
+        localStorage.setItem("py_lucidum_glm_tabulation_view", tabulationView);
+        renderTabulationsPanel();
+        loadTabulationView();
+      });
+    });
+    document.querySelectorAll("[data-glm-tabulation-scale]").forEach((button) => {
+      button.addEventListener("click", () => {
+        tabulationScale = button.dataset.glmTabulationScale || "linear";
+        localStorage.setItem("py_lucidum_glm_tabulation_scale", tabulationScale);
+        renderTabulationsPanel();
+        loadTabulationView();
+      });
+    });
+    el("glmTabulationColor")?.addEventListener("change", (event) => {
+      tabulationColor = Boolean(event.target.checked);
+      localStorage.setItem("py_lucidum_glm_tabulation_color", String(tabulationColor));
+      loadTabulationView();
+    });
+    el("glmTabulationCrosstab")?.addEventListener("change", (event) => {
+      tabulationCrosstab = event.target.value || "";
+      loadTabulationView();
+    });
+    el("glmBuildTabulationsBtn")?.addEventListener("click", buildSelectedTabulations);
+  }
+
+  async function refreshTabulationConfig() {
+    const model_ids = tabulationSelectedModelIds();
+    selectedTabulationModelIds = new Set(model_ids);
+    if (!model_ids.length) {
+      tabulationConfig = { models: [], all_models: [], tables: [], warnings: [] };
+      renderTabulationsPanel();
+      return;
+    }
+    try {
+      tabulationConfig = await api("/api/glm/tabulations/config", { method: "POST", body: JSON.stringify({ model_ids }) });
+      const tables = Array.isArray(tabulationConfig?.tables) ? tabulationConfig.tables : [];
+      if (tables.length && !tables.some((table) => String(table.table_id || "") === selectedTabulationTableId)) {
+        selectedTabulationTableId = String(tables[0]?.table_id || "base");
+      }
+      renderTabulationsPanel();
+      setTabulationWarnings(tabulationConfig?.warnings || []);
+      await loadTabulationView();
+    } catch (error) {
+      setGlmNotice(error.message);
+    }
+  }
+
+  function setTabulationWarnings(warnings = []) {
+    const message = warnings.slice(0, 4).join(" ");
+    setGlmNotice(message);
+  }
+
+  async function buildSelectedTabulations() {
+    if (isTabulating) return;
+    const model_ids = tabulationSelectedModelIds();
+    if (!model_ids.length) {
+      setGlmNotice("Choose at least one GLM model to tabulate");
+      return;
+    }
+    isTabulating = true;
+    liveProgress = { phase: "queued", message: "Starting GLM tabulations" };
+    renderLiveProgress(liveProgress);
+    renderTabulationsPanel();
+    try {
+      const job = await api("/api/glm/tabulations/build", { method: "POST", body: JSON.stringify({ model_ids }) });
+      pollTabulationJob(job.job_id);
+    } catch (error) {
+      setTabulationFailure(error.message);
+    }
+  }
+
+  function pollTabulationJob(jobId) {
+    if (tabulationPollTimer) window.clearTimeout(tabulationPollTimer);
+    const poll = async () => {
+      try {
+        const job = await api(`/api/glm/tabulations/jobs/${encodeURIComponent(jobId)}`, { method: "GET" });
+        const progress = job.progress || { phase: job.status, message: job.status };
+        liveProgress = progress;
+        renderLiveProgress(liveProgress);
+        if (job.status === "queued" || job.status === "running") {
+          tabulationPollTimer = window.setTimeout(poll, job.status === "queued" ? GLM_QUEUED_POLL_MS : GLM_RUNNING_POLL_MS);
+          return;
+        }
+        tabulationPollTimer = null;
+        isTabulating = false;
+        if (job.status === "succeeded") {
+          liveProgress = null;
+          await reloadSchema(state.source || "dataset", { modelKind: "glm" });
+          clearCachesAfterGlmModelSourceChange();
+          renderExpectedNumerators();
+          renderFeatures();
+          updateAxisControls();
+          const latest = await api("/api/glm/config", { method: "GET", clientTiming: true });
+          config = latest;
+          modelRows = normaliseModels(latest.models || []);
+          setDatasetGlmCount(modelRows.length);
+          await refreshTabulationConfig({ force: true });
+          renderLiveProgress(liveProgress);
+          setAppReadyStatus("Ready");
+        } else {
+          setTabulationFailure(job.error || progress.message || "GLM tabulation failed");
+        }
+      } catch (error) {
+        setTabulationFailure(error.message);
+      }
+    };
+    poll();
+  }
+
+  function setTabulationFailure(message) {
+    if (tabulationPollTimer) {
+      window.clearTimeout(tabulationPollTimer);
+      tabulationPollTimer = null;
+    }
+    isTabulating = false;
+    liveProgress = { phase: "failed", message: String(message || "GLM tabulation failed") };
+    renderLiveProgress(liveProgress);
+    renderTabulationsPanel();
+  }
+
+  async function loadTabulationView() {
+    if (activeTab !== "tabulations") return;
+    const model_ids = tabulationSelectedModelIds();
+    const table_id = selectedTabulationTableId || "base";
+    if (!model_ids.length || !table_id || !(tabulationConfig?.tables || []).length) {
+      renderTabulationEmpty("Build tabulations to view rating tables");
+      return;
+    }
+    const seq = tabulationRenderSeq + 1;
+    tabulationRenderSeq = seq;
+    const payload = { model_ids, table_id, scale: tabulationScale, crosstab: tabulationCrosstab };
+    try {
+      if (tabulationView === "plot") {
+        const data = await api("/api/glm/tabulations/plot", { method: "POST", body: JSON.stringify(payload) });
+        if (seq !== tabulationRenderSeq) return;
+        renderTabulationPlot(data);
+      } else {
+        const data = await api("/api/glm/tabulations/table", { method: "POST", body: JSON.stringify(payload) });
+        if (seq !== tabulationRenderSeq) return;
+        renderTabulationTable(data);
+      }
+    } catch (error) {
+      renderTabulationEmpty(error.message);
+    }
+  }
+
+  function renderTabulationEmpty(message) {
+    const fallback = el("glmTabulationFallback");
+    const grid = el("glmTabulationTable");
+    const plot = el("glmTabulationPlot");
+    if (grid) grid.innerHTML = "";
+    if (fallback) fallback.innerHTML = `<div class="glm-empty-state">${escapeHtml(message)}</div>`;
+    if (plot) plot.innerHTML = `<div class="glm-empty-state">${escapeHtml(message)}</div>`;
+  }
+
+  async function renderTabulationTable(data = {}) {
+    const grid = el("glmTabulationTable");
+    const fallback = el("glmTabulationFallback");
+    if (!grid || !fallback) return;
+    grid.innerHTML = "";
+    fallback.innerHTML = "";
+    setInlineTabulationNotice(data.notices || []);
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    const columns = Array.isArray(data.columns) ? data.columns : [];
+    if (!rows.length || !columns.length) {
+      renderTabulationEmpty("No rows for this tabulation");
+      return;
+    }
+    try {
+      const Tabulator = await loadTabulator();
+      tabulationTable = new Tabulator("#glmTabulationTable", {
+        data: rows,
+        height: "100%",
+        layout: "fitDataStretch",
+        placeholder: "No rows",
+        columns: columns.map((column) => tabulationColumnDefinition(column, data)),
+      });
+    } catch (_) {
+      renderTabulationFallbackTable(columns, rows, data);
+    }
+  }
+
+  function tabulationColumnDefinition(column, data = {}) {
+    const field = String(column.field || "");
+    const numeric = Boolean(column.tabulation_value) || tabulationSelectedModelIds().includes(field);
+    const statusField = String(column.status_field || `__status__${field}`);
+    return {
+      ...column,
+      formatter: (cell) => {
+        if (!numeric) return escapeHtml(cell.getValue() ?? "");
+        const row = cell.getRow().getData();
+        const status = row[statusField] || "ok";
+        const value = cell.getValue();
+        const element = cell.getElement();
+        element.classList.toggle("glm-tabulation-na-cell", status !== "ok" || value === null || value === undefined);
+        if (tabulationColor && status === "ok" && value !== null && value !== undefined) {
+          const color = tabulationCellColor(value, data.min, data.max);
+          if (color) {
+            element.classList.add("glm-tabulation-colour-cell");
+            element.style.setProperty("--glm-tabulation-cell-bg", color);
+            element.style.setProperty("background", color, "important");
+            return value === null || value === undefined ? "NA" : escapeHtml(formatModelMetric(value));
+          }
+        }
+        element.classList.remove("glm-tabulation-colour-cell");
+        element.style.removeProperty("--glm-tabulation-cell-bg");
+        element.style.removeProperty("background");
+        return value === null || value === undefined ? "NA" : escapeHtml(formatModelMetric(value));
+      },
+      hozAlign: numeric ? "right" : "left",
+    };
+  }
+
+  function tabulationCellColor(value, min, max) {
+    const number = Number(value);
+    const lo = Number(min);
+    const hi = Number(max);
+    if (!Number.isFinite(number) || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return "";
+    const ratio = Math.max(0, Math.min(1, (number - lo) / (hi - lo)));
+    const hue = 130 - ratio * 130;
+    return `hsl(${hue} 78% 88%)`;
+  }
+
+  function renderTabulationFallbackTable(columns, rows, data = {}) {
+    const fallback = el("glmTabulationFallback");
+    if (!fallback) return;
+    fallback.innerHTML = `
+      <table class="glm-table glm-tabulation-fallback-table">
+        <thead><tr>${columns.map((column) => `<th>${escapeHtml(column.title || column.field)}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map((row) => `<tr>${columns.map((column) => {
+          const value = row[column.field];
+          const numeric = Boolean(column.tabulation_value) || tabulationSelectedModelIds().includes(column.field);
+          const status = row[column.status_field || `__status__${column.field}`] || "ok";
+          const style = numeric && tabulationColor && status === "ok" ? ` style="background:${tabulationCellColor(value, data.min, data.max)}"` : "";
+          return `<td class="${numeric ? "numeric" : ""}${status !== "ok" ? " glm-tabulation-na-cell" : ""}"${style}>${value === null || value === undefined ? "NA" : escapeHtml(numeric ? formatModelMetric(value) : value)}</td>`;
+        }).join("")}</tr>`).join("")}</tbody>
+      </table>
+    `;
+  }
+
+  function renderTabulationPlot(data = {}) {
+    const plot = el("glmTabulationPlot");
+    if (!plot) return;
+    setInlineTabulationNotice(data.notices || []);
+    disposeTabulationChart();
+    if (!data.plottable || !Array.isArray(data.series) || !data.series.length) {
+      plot.innerHTML = `<div class="glm-empty-state">${escapeHtml((data.notices || [])[0] || "Plot is unavailable for this table")}</div>`;
+      return;
+    }
+    if (!window.echarts) {
+      plot.innerHTML = `<div class="glm-empty-state">ECharts is not available</div>`;
+      return;
+    }
+    plot.innerHTML = "";
+    tabulationChart = window.echarts.init(plot);
+    tabulationChart.setOption({
+      animation: false,
+      tooltip: { trigger: "axis" },
+      legend: { type: "scroll", top: 4, right: 8 },
+      grid: { left: 54, right: 24, top: 48, bottom: 52 },
+      xAxis: { type: "category", data: data.x_axis || [], axisLabel: { hideOverlap: true } },
+      yAxis: { type: "value", name: data.scale === "exp" ? "exp(tabulated_glm)" : "tabulated_glm" },
+      series: data.series,
+    });
+  }
+
+  function disposeTabulationChart() {
+    if (!tabulationChart) return;
+    try {
+      tabulationChart.dispose();
+    } catch (_) {
+    }
+    tabulationChart = null;
+  }
+
+  function setInlineTabulationNotice(notices = []) {
+    const notice = el("glmTabulationNotice");
+    if (!notice) return;
+    const text = notices.filter(Boolean).join(" ");
+    notice.textContent = text;
+    notice.classList.toggle("hidden", !text);
   }
 
   function familyOptionsHtml(families = []) {
@@ -406,6 +949,7 @@ export function createGlmTool({
         mount.querySelectorAll("[data-glm-tab]").forEach((item) => item.classList.toggle("active", item === button));
         mount.querySelectorAll("[data-glm-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.glmPanel !== activeTab));
         if (activeTab === "models") refreshModelListIfNeeded();
+        if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
       });
     });
   }
@@ -456,6 +1000,11 @@ export function createGlmTool({
     return Number.isFinite(width) && width > 0 ? `--glm-formula-panel-width: ${Math.round(width)}px;` : "";
   }
 
+  function savedTabulationSplitWidthStyle() {
+    const width = Number(localStorage.getItem(GLM_TABULATION_SPLIT_STORAGE_KEY));
+    return Number.isFinite(width) && width > 0 ? `--glm-tabulation-sidebar-width: ${Math.round(width)}px;` : "";
+  }
+
   function bindBuilderResizer() {
     const layout = document.querySelector(".glm-builder-layout");
     const resizer = el("glmBuilderResizer");
@@ -499,6 +1048,54 @@ export function createGlmTool({
       event.preventDefault();
       const formulaPanel = layout.querySelector(".glm-formula-panel");
       const current = formulaPanel?.getBoundingClientRect().width || 0;
+      resizeTo(current + (event.key === "ArrowRight" ? 24 : -24));
+    });
+  }
+
+  function bindTabulationResizer() {
+    const layout = document.querySelector(".glm-tabulation-layout");
+    const resizer = el("glmTabulationResizer");
+    if (!layout || !resizer) return;
+
+    const resizeTo = (width, persist = true) => {
+      const layoutRect = layout.getBoundingClientRect();
+      const resizerWidth = resizer.getBoundingClientRect().width || 0;
+      const minLeft = 240;
+      const minRight = 420;
+      const maxLeft = Math.max(minLeft, layoutRect.width - resizerWidth - minRight);
+      const clamped = Math.max(minLeft, Math.min(maxLeft, width));
+      layout.style.setProperty("--glm-tabulation-sidebar-width", `${Math.round(clamped)}px`);
+      if (persist) localStorage.setItem(GLM_TABULATION_SPLIT_STORAGE_KEY, String(Math.round(clamped)));
+      tabulationChart?.resize?.();
+      tabulationTable?.redraw?.(true);
+    };
+
+    const resizeFromClientX = (clientX) => {
+      const layoutRect = layout.getBoundingClientRect();
+      resizeTo(clientX - layoutRect.left);
+    };
+
+    resizer.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      resizer.classList.add("dragging");
+      document.body.classList.add("glm-builder-resizing");
+      resizer.setPointerCapture?.(event.pointerId);
+      const onMove = (moveEvent) => resizeFromClientX(moveEvent.clientX);
+      const onUp = () => {
+        resizer.classList.remove("dragging");
+        document.body.classList.remove("glm-builder-resizing");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+    });
+
+    resizer.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const sidebar = layout.querySelector(".glm-tabulation-sidebar");
+      const current = sidebar?.getBoundingClientRect().width || 0;
       resizeTo(current + (event.key === "ArrowRight" ? 24 : -24));
     });
   }
@@ -733,7 +1330,8 @@ export function createGlmTool({
     if (!progress) return "";
     const main = String(progress.message || progress.phase || "");
     const rows = Number(progress.training_rows || 0);
-    const detail = rows ? `${rows.toLocaleString()} training rows` : "";
+    const cells = Number(progress.cells || 0);
+    const detail = rows ? `${rows.toLocaleString()} training rows` : (cells ? `${cells.toLocaleString()} cells` : "");
     return `<span class="glm-build-status-main">${escapeHtml(main)}</span>${detail ? `<span class="glm-build-status-detail">${escapeHtml(detail)}</span>` : ""}`;
   }
 
@@ -748,6 +1346,12 @@ export function createGlmTool({
       button.disabled = isBuilding;
       button.classList.toggle("building", isBuilding);
       button.textContent = isBuilding ? "Building..." : "Build GLM";
+    }
+    const tabulationButton = el("glmBuildTabulationsBtn");
+    if (tabulationButton) {
+      tabulationButton.disabled = isTabulating || !modelRows.length;
+      tabulationButton.classList.toggle("building", isTabulating);
+      tabulationButton.textContent = isTabulating ? "Building..." : "Build";
     }
   }
 
