@@ -132,6 +132,16 @@ class GlmToolTests(unittest.TestCase):
         except MissingGlmDependency as exc:
             self.skipTest(str(exc))
 
+    def spline_data_path(self) -> Path:
+        path = self.root / "spline.csv"
+        rows = ["y,x,Segment\n"]
+        for x_value in range(1, 51):
+            segment = "A" if x_value <= 30 else "B"
+            y_value = 100 + x_value + (5 if segment == "B" else 0)
+            rows.append(f"{y_value},{x_value},{segment}\n")
+        path.write_text("".join(rows), encoding="utf-8")
+        return path
+
     def test_glm_suppresses_only_tabmat_mixed_dtype_warning(self) -> None:
         with warnings.catch_warnings(record=True) as captured:
             warnings.simplefilter("always")
@@ -419,6 +429,109 @@ class GlmToolTests(unittest.TestCase):
         with dataset.lock:
             rows = dataset.con.execute(f"SELECT COUNT(glm_tabulated_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
         self.assertGreater(rows[0], 0)
+
+    def test_glm_tabulation_without_feature_spec_keeps_bs_grid_inside_bounds(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.spline_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "1 + bs(x, 3)", "response_column": "y", "family": "normal", "training_scope": "all"},
+        )
+        model_id = result["model_id"]
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, {"rows": []})
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertIn("x", [table["table_id"] for table in tab_manifest["tables"]])
+        meta = tab_manifest["feature_meta"]["x"]
+        self.assertEqual(meta["min"], 1.0)
+        self.assertEqual(meta["max"], 50.0)
+        self.assertEqual(meta["banding"], 1.0)
+        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "x.parquet")
+        levels = [row["x"] for row in table_rows if row["status"] == "ok"]
+        self.assertGreaterEqual(min(levels), 1)
+        self.assertLessEqual(max(levels), 50)
+        with dataset.lock:
+            row = dataset.con.execute(
+                f"SELECT COUNT(glm_tabulated_prediction) FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'tabulated_predictions')))})"
+            ).fetchone()
+        self.assertEqual(row[0], 50)
+
+    def test_glm_tabulation_estimates_blank_numeric_feature_spec_fields(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.spline_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "1 + bs(x, 3)", "response_column": "y", "family": "normal", "training_scope": "all"},
+        )
+        model_id = result["model_id"]
+        feature_spec = {"rows": [{"feature": "x", "grouping": "Test", "base": "", "min": "", "max": "", "banding": ""}]}
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        meta = tab_manifest["feature_meta"]["x"]
+        self.assertEqual(meta["base"], 25.5)
+        self.assertEqual(meta["min"], 1.0)
+        self.assertEqual(meta["max"], 50.0)
+        self.assertEqual(meta["banding"], 1.0)
+        warnings_text = "\n".join(tab_manifest["warnings"])
+        self.assertIn("Estimated min, max, banding", warnings_text)
+        self.assertIn("Estimated base", warnings_text)
+
+    def test_glm_tabulation_clips_out_of_bound_numeric_feature_spec_fields(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.spline_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "1 + bs(x, 3)", "response_column": "y", "family": "normal", "training_scope": "all"},
+        )
+        model_id = result["model_id"]
+        feature_spec = {"rows": [{"feature": "x", "grouping": "Test", "base": "0", "min": "0", "max": "100", "banding": "1"}]}
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        meta = tab_manifest["feature_meta"]["x"]
+        self.assertEqual(meta["base"], 1.0)
+        self.assertEqual(meta["min"], 1.0)
+        self.assertEqual(meta["max"], 50.0)
+        warnings_text = "\n".join(tab_manifest["warnings"])
+        self.assertIn("Clipped feature spec min", warnings_text)
+        self.assertIn("Clipped feature spec max", warnings_text)
+        self.assertIn("Clipped feature spec base", warnings_text)
+        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "x.parquet")
+        levels = [row["x"] for row in table_rows if row["status"] == "ok"]
+        self.assertEqual(min(levels), 1)
+        self.assertEqual(max(levels), 50)
+
+    def test_glm_tabulation_defaults_blank_categorical_base_to_modal_level(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.spline_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "C(Segment)", "response_column": "y", "family": "normal", "training_scope": "all"},
+        )
+        model_id = result["model_id"]
+        feature_spec = {"rows": [{"feature": "Segment", "grouping": "Test", "base": ""}]}
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertEqual(tab_manifest["feature_meta"]["Segment"]["base"], "A")
+        self.assertIn("Estimated base", "\n".join(tab_manifest["warnings"]))
 
     def test_glm_tabulation_config_returns_all_model_statuses(self) -> None:
         self.require_glm_dependencies()

@@ -115,38 +115,116 @@ def _fit_frame_for_levels(frame: Any, manifest: dict[str, Any], pd: Any) -> Any:
     return frame
 
 
-def _base_value(frame: Any, feature: str, kind: str, spec_row: dict[str, Any], pd: Any) -> Any:
+def _feature_transform_bounds(estimator: Any, source_columns: list[str]) -> dict[str, dict[str, float]]:
+    spec = getattr(estimator, "X_model_spec_", None)
+    transform_state = getattr(spec, "transform_state", {}) if spec is not None else {}
+    if not isinstance(transform_state, dict):
+        return {}
+    bounds: dict[str, dict[str, float]] = {}
+    for expression, state in transform_state.items():
+        if not isinstance(state, dict):
+            continue
+        lower = _as_number(state.get("lower_bound"))
+        upper = _as_number(state.get("upper_bound"))
+        if lower is None and upper is None:
+            continue
+        for feature in _column_tokens(str(expression), source_columns):
+            entry = bounds.setdefault(feature, {})
+            if lower is not None:
+                entry["lower_bound"] = max(float(lower), float(entry.get("lower_bound", lower)))
+            if upper is not None:
+                entry["upper_bound"] = min(float(upper), float(entry.get("upper_bound", upper)))
+    return bounds
+
+
+def _mode_value(series: Any) -> Any:
+    values = series.dropna()
+    if not len(values):
+        return ""
+    counts = values.map(_json_value).value_counts(dropna=True)
+    if not len(counts):
+        return ""
+    return _json_value(counts.index[0])
+
+
+def _clip_numeric_bound(
+    feature: str,
+    field: str,
+    value: float,
+    bounds: dict[str, float],
+    source: str,
+) -> tuple[float, dict[str, Any] | None]:
+    clipped = float(value)
+    bound_name = ""
+    lower = _as_number(bounds.get("lower_bound"))
+    upper = _as_number(bounds.get("upper_bound"))
+    if lower is not None and clipped < lower:
+        clipped = float(lower)
+        bound_name = "lower_bound"
+    if upper is not None and clipped > upper:
+        clipped = float(upper)
+        bound_name = "upper_bound"
+    if bound_name:
+        return clipped, {
+            "feature": feature,
+            "field": field,
+            "source": source,
+            "value": _round_grid_value(value),
+            "clipped": _round_grid_value(clipped),
+            "bound": bound_name,
+        }
+    return clipped, None
+
+
+def _base_value(
+    frame: Any,
+    fit_frame: Any,
+    feature: str,
+    kind: str,
+    spec_row: dict[str, Any],
+    bounds: dict[str, float],
+    pd: Any,
+) -> tuple[Any, dict[str, Any] | None, dict[str, Any] | None]:
     raw = str(spec_row.get("base") or "").strip()
-    if raw:
-        number = _as_number(raw)
-        if is_numeric_kind(kind) and number is not None:
-            return number
-        return raw
-    series = frame[feature].dropna() if feature in frame.columns else []
     if is_numeric_kind(kind):
         values = pd.to_numeric(frame[feature], errors="coerce").dropna() if feature in frame.columns else []
+        raw_number = _as_number(raw)
+        if raw and raw_number is not None:
+            value, clipped = _clip_numeric_bound(feature, "base", float(raw_number), bounds, "feature_spec")
+            return value, None, clipped
         if len(values):
-            return float(values.median())
-        return 0.0
-    if len(series):
-        return _json_value(series.iloc[0])
-    return ""
+            inferred = float(values.median())
+        else:
+            inferred = 0.0
+        value, clipped = _clip_numeric_bound(feature, "base", inferred, bounds, "inferred")
+        return value, {"feature": feature, "field": "base", "value": _json_value(value)}, clipped
+    series = fit_frame[feature].dropna() if feature in fit_frame.columns else []
+    seen_values = {_json_value(value) for value in series.unique()} if len(series) else set()
+    if raw and raw in seen_values:
+        return raw, None, None
+    inferred = _mode_value(series)
+    return inferred, {"feature": feature, "field": "base", "value": _json_value(inferred)}, None
 
 
-def _base_row(frame: Any, features: list[str], kinds: dict[str, str], spec_rows: dict[str, dict[str, Any]], pd: Any) -> dict[str, Any]:
+def _base_row(frame: Any) -> dict[str, Any]:
     row: dict[str, Any] = {}
     first = frame.iloc[0].to_dict() if len(frame) else {}
     for column in frame.columns:
         row[str(column)] = _json_value(first.get(column))
-    for feature in features:
-        if feature in frame.columns:
-            row[feature] = _base_value(frame, feature, kinds.get(feature, "categorical"), spec_rows.get(feature, {}), pd)
     row[TARGET_COLUMN] = 0.0
     return row
 
 
-def _estimated_numeric_spec(frame: Any, feature: str, kind: str, spec_row: dict[str, Any], np: Any, pd: Any) -> tuple[float, float, float, list[str]]:
+def _estimated_numeric_spec(
+    frame: Any,
+    feature: str,
+    kind: str,
+    spec_row: dict[str, Any],
+    bounds: dict[str, float],
+    pd: Any,
+) -> tuple[float, float, float, list[str], list[dict[str, Any]]]:
     warnings: list[str] = []
+    clipped_bounds: list[dict[str, Any]] = []
     values = pd.to_numeric(frame[feature], errors="coerce").dropna()
     data_min = float(values.min()) if len(values) else 0.0
     data_max = float(values.max()) if len(values) else data_min + 1.0
@@ -154,22 +232,29 @@ def _estimated_numeric_spec(frame: Any, feature: str, kind: str, spec_row: dict[
     raw_min = _as_number(spec_row.get("min"))
     raw_max = _as_number(spec_row.get("max"))
     raw_band = _as_number(spec_row.get("banding"))
-    band = raw_band if raw_band and raw_band > 0 else _as_number(suggested_band_width(stddev)) or 1.0
-    minimum = raw_min if raw_min is not None else math.floor(data_min / band) * band
-    maximum = raw_max if raw_max is not None else math.ceil(data_max / band) * band
+    if raw_band and raw_band > 0:
+        band = float(raw_band)
+    elif kind == "integer" and data_max - data_min < 120:
+        band = 1.0
+    else:
+        band = _as_number(suggested_band_width(stddev)) or 1.0
+    minimum = raw_min if raw_min is not None else data_min
+    maximum = raw_max if raw_max is not None else data_max
+    minimum, clipped = _clip_numeric_bound(feature, "min", float(minimum), bounds, "feature_spec" if raw_min is not None else "inferred")
+    if clipped:
+        clipped_bounds.append(clipped)
+    maximum, clipped = _clip_numeric_bound(feature, "max", float(maximum), bounds, "feature_spec" if raw_max is not None else "inferred")
+    if clipped:
+        clipped_bounds.append(clipped)
     if maximum < minimum:
         minimum, maximum = maximum, minimum
-    if maximum == minimum:
-        maximum = minimum + band
     if raw_min is None:
         warnings.append("min")
     if raw_max is None:
         warnings.append("max")
     if raw_band is None or raw_band <= 0:
         warnings.append("banding")
-    if is_numeric_kind(kind) and kind == "integer" and band >= 1:
-        band = int(round(band))
-    return float(minimum), float(maximum), float(band), warnings
+    return float(minimum), float(maximum), float(band), warnings, clipped_bounds
 
 
 def _round_grid_value(value: float) -> float | int:
@@ -209,18 +294,20 @@ def _feature_levels(
     kind: str,
     spec_row: dict[str, Any],
     base_value: Any,
+    bounds: dict[str, float],
     np: Any,
     pd: Any,
-) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     estimated: list[dict[str, Any]] = []
+    clipped_bounds: list[dict[str, Any]] = []
     unseen: list[dict[str, Any]] = []
     meta: dict[str, Any] = {"feature": feature, "kind": kind, "base": _json_value(base_value)}
     if is_numeric_kind(kind):
-        minimum, maximum, band, estimated_fields = _estimated_numeric_spec(frame, feature, kind, spec_row, np, pd)
+        minimum, maximum, band, estimated_fields, clipped_bounds = _estimated_numeric_spec(frame, feature, kind, spec_row, bounds, pd)
         if estimated_fields:
             estimated.append({"feature": feature, "fields": estimated_fields, "min": minimum, "max": maximum, "banding": band})
         meta.update({"min": minimum, "max": maximum, "banding": band})
-        return [{"value": value, "status": "ok"} for value in _numeric_levels(minimum, maximum, band, base_value)], meta, estimated, unseen
+        return [{"value": value, "status": "ok"} for value in _numeric_levels(minimum, maximum, band, base_value)], meta, estimated, clipped_bounds, unseen
     levels, seen = _categorical_levels(frame, fit_frame, feature, base_value, pd)
     rows: list[dict[str, Any]] = []
     for value in levels:
@@ -228,7 +315,7 @@ def _feature_levels(
         if status == "unseen":
             unseen.append({"feature": feature, "level": _json_value(value)})
         rows.append({"value": value, "status": status})
-    return rows, meta, estimated, unseen
+    return rows, meta, estimated, clipped_bounds, unseen
 
 
 def _cartesian_table(levels_by_feature: dict[str, list[dict[str, Any]]], pd: Any) -> Any:
@@ -294,6 +381,8 @@ def _scored_level(value: Any, meta: dict[str, Any]) -> Any:
     if number is None or minimum is None or maximum is None or not band or band <= 0:
         return None
     clipped = min(max(number, minimum), maximum)
+    if clipped >= maximum:
+        return _round_grid_value(maximum)
     index = math.floor((clipped - minimum) / band + 1e-9)
     return _round_grid_value(minimum + index * band)
 
@@ -331,9 +420,25 @@ def _build_model_tabulations(
     groups = _term_groups(estimator, offset_terms, source_columns)
     non_base_groups = {features: info for features, info in groups.items() if features}
     all_features = sorted({feature for features in non_base_groups for feature in features})
-    base = _base_row(frame, source_columns, kinds, spec_rows, pd)
+    transform_bounds = _feature_transform_bounds(estimator, source_columns)
+    base = _base_row(frame)
+    inferred_bases: list[dict[str, Any]] = []
+    clipped_bounds: list[dict[str, Any]] = []
     for feature in all_features:
-        base[feature] = _base_value(frame, feature, kinds.get(feature, "categorical"), spec_rows.get(feature, {}), pd)
+        value, inferred, clipped = _base_value(
+            frame,
+            fit_frame,
+            feature,
+            kinds.get(feature, "categorical"),
+            spec_rows.get(feature, {}),
+            transform_bounds.get(feature, {}),
+            pd,
+        )
+        base[feature] = value
+        if inferred:
+            inferred_bases.append(inferred)
+        if clipped:
+            clipped_bounds.append(clipped)
 
     warnings: list[str] = []
     estimated_specs: list[dict[str, Any]] = []
@@ -342,23 +447,33 @@ def _build_model_tabulations(
     feature_meta: dict[str, dict[str, Any]] = {}
     feature_levels: dict[str, list[dict[str, Any]]] = {}
     for feature in all_features:
-        levels, meta, estimated, unseen = _feature_levels(
+        levels, meta, estimated, clipped, unseen = _feature_levels(
             frame,
             fit_frame,
             feature,
             kinds.get(feature, "categorical"),
             spec_rows.get(feature, {}),
             base.get(feature),
+            transform_bounds.get(feature, {}),
             np,
             pd,
         )
         feature_levels[feature] = levels
         feature_meta[feature] = meta
         estimated_specs.extend(estimated)
+        clipped_bounds.extend(clipped)
         unseen_levels.extend(unseen)
     for entry in estimated_specs:
         fields = ", ".join(entry["fields"])
         warnings.append(f"Estimated {fields} for numeric GLM tabulation feature {entry['feature']} from scored rows.")
+    for entry in inferred_bases:
+        warnings.append(f"Estimated base for GLM tabulation feature {entry['feature']} from scored rows: {entry['value']}.")
+    for entry in clipped_bounds:
+        source = "feature spec" if entry.get("source") == "feature_spec" else "inferred"
+        warnings.append(
+            f"Clipped {source} {entry['field']} for GLM tabulation feature {entry['feature']} "
+            f"from {entry['value']} to {entry['clipped']} to stay within fitted {entry['bound']}."
+        )
     if unseen_levels:
         by_feature: dict[str, int] = defaultdict(int)
         for entry in unseen_levels:
@@ -508,6 +623,8 @@ def _build_model_tabulations(
         "tabulated_row_count": int(len(tabulated)),
         "missing_tabulated_prediction_rows": int(missing.sum()),
         "estimated_spec_fields": estimated_specs,
+        "estimated_base_fields": inferred_bases,
+        "clipped_spec_fields": clipped_bounds,
         "unseen_levels": unseen_levels,
         "skipped_oversized_tables": skipped_tables,
     }
