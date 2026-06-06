@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import duckdb
+import importlib.util
 import json
+import os
+import subprocess
+import sys
 import time
 import unittest
 import warnings
@@ -133,6 +137,15 @@ class GlmToolTests(unittest.TestCase):
         except MissingGlmDependency as exc:
             self.skipTest(str(exc))
 
+    def require_glm_and_gbm_dependencies(self) -> None:
+        missing = [
+            name
+            for name in ("glum", "lightgbm", "numpy", "pandas")
+            if importlib.util.find_spec(name) is None
+        ]
+        if missing:
+            self.skipTest(f"missing optional modelling dependencies: {', '.join(missing)}")
+
     def spline_data_path(self) -> Path:
         path = self.root / "spline.csv"
         rows = ["y,x,Segment\n"]
@@ -152,6 +165,61 @@ class GlmToolTests(unittest.TestCase):
             encoding="utf-8",
         )
         return path
+
+    def test_glm_dependency_load_order_keeps_threaded_lightgbm_stable(self) -> None:
+        self.require_glm_and_gbm_dependencies()
+        script = r"""
+import threading
+
+from py_lucidum.tools.glm.training import glm_dependencies
+
+glm_dependencies()
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(123)
+frame = pd.DataFrame({
+    "a": rng.normal(size=1000),
+    "b": rng.integers(0, 20, size=1000),
+    "c": rng.normal(size=1000),
+})
+target = np.exp(1 + 0.1 * frame["a"].to_numpy() - 0.02 * frame["b"].to_numpy())
+result = {}
+
+
+def run() -> None:
+    dataset = lgb.Dataset(frame, label=target, free_raw_data=False)
+    booster = lgb.train(
+        {"objective": "poisson", "metric": "mape", "verbosity": -1, "num_threads": 2},
+        dataset,
+        num_boost_round=10,
+        valid_sets=[dataset],
+        valid_names=["training"],
+        callbacks=[lgb.log_evaluation(period=0)],
+    )
+    result["iteration"] = booster.current_iteration()
+
+
+thread = threading.Thread(target=run)
+thread.start()
+thread.join()
+if result.get("iteration") != 10:
+    raise SystemExit(f"unexpected LightGBM iteration: {result!r}")
+"""
+        env = os.environ.copy()
+        env["PYTHONFAULTHANDLER"] = "1"
+        env["PYTHONUNBUFFERED"] = "1"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
 
     def test_glm_suppresses_only_tabmat_mixed_dtype_warning(self) -> None:
         with warnings.catch_warnings(record=True) as captured:

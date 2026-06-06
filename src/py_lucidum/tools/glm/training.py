@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 import json
 import math
+import os
 import pickle
 import subprocess
 import sys
@@ -47,9 +48,30 @@ class MissingGlmDependency(RuntimeError):
         self.hint = hint
 
 
+def preload_lightgbm_before_glum() -> bool:
+    """Load LightGBM first when it is installed to avoid a native load-order crash.
+
+    On macOS in the supported modelling environment, importing ``glum`` before
+    LightGBM can make a later multi-threaded LightGBM fit segfault inside native
+    dataset construction. GLM must still work in GLM-only installs, so failures
+    here are intentionally non-fatal and GBM training will report its own
+    dependency/runtime errors when requested.
+    """
+    if os.environ.get("PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD"):
+        return False
+    if "lightgbm" in sys.modules:
+        return True
+    try:
+        import lightgbm  # type: ignore[import-not-found]  # noqa: F401
+    except (ImportError, OSError):
+        return False
+    return True
+
+
 def glm_dependencies() -> tuple[Any, Any, Any, Any, Any]:
     global _GLUM_FIRST_IMPORT_SAW_LIGHTGBM
     missing: list[str] = []
+    preloaded_lightgbm = preload_lightgbm_before_glum()
     lightgbm_loaded = "lightgbm" in sys.modules
     try:
         import glum  # type: ignore[import-not-found]
@@ -73,7 +95,7 @@ def glm_dependencies() -> tuple[Any, Any, Any, Any, Any]:
     if missing:
         raise MissingGlmDependency(", ".join(missing))
     if _GLUM_FIRST_IMPORT_SAW_LIGHTGBM is None:
-        _GLUM_FIRST_IMPORT_SAW_LIGHTGBM = lightgbm_loaded
+        _GLUM_FIRST_IMPORT_SAW_LIGHTGBM = lightgbm_loaded or preloaded_lightgbm
     return glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd
 
 
@@ -109,6 +131,7 @@ def train_model_in_subprocess(
             check=False,
             capture_output=True,
             text=True,
+            env={**os.environ, "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1"},
         )
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()
