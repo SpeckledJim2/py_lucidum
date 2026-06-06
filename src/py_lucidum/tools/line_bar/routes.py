@@ -15,7 +15,7 @@ def register(app: FastAPI, context: AppContext) -> None:
         payload = await request.json()
         try:
             started = time.perf_counter_ns()
-            result = chart(context.dataset, payload)
+            result = chart(context.dataset, payload, feature_spec=getattr(app.state, "feature_spec", {}))
             elapsed_ns = time.perf_counter_ns() - started
             result["timings"] = {
                 "duckdb_ns": elapsed_ns,

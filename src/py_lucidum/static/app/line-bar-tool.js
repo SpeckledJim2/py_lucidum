@@ -55,6 +55,7 @@ export function createLineBarTool({
     ["p40", "p60", "SHAP 40-60", "rgba(209, 63, 63, 0.34)"],
   ];
   const SHAP_LINE_COLOR = "#d13f3f";
+  const GLM_LINE_COLOR = "#1f7a8c";
   const chart = echartsImpl.init(el("chart"));
 
   function isNumericKind(kind) {
@@ -114,6 +115,15 @@ export function createLineBarTool({
     group.querySelectorAll("button").forEach((button) => {
       button.classList.toggle("active", button.dataset.value === value);
     });
+  }
+
+  function selectedPartialDependenceMode() {
+    const mode = String(state.partialDependence || "none");
+    return ["none", "shap", "glm", "both"].includes(mode) ? mode : "none";
+  }
+
+  function shapPartialDependenceVisible() {
+    return selectedPartialDependenceMode() === "shap" || selectedPartialDependenceMode() === "both";
   }
 
   function formatBandWidth(value) {
@@ -227,7 +237,7 @@ export function createLineBarTool({
     const isNumeric = isNumericKind(kind);
     const isCategorical = kind === "categorical";
     const hasExpected = Boolean(el("expectedNumerator").value);
-    const shapSortAvailable = isCategorical && state.partialDependence === "shap" && shapOverlayAvailableForSelectedColumn();
+    const shapSortAvailable = isCategorical && shapPartialDependenceVisible() && shapOverlayAvailableForSelectedColumn();
     el("sortControl").classList.toggle("hidden", !isCategorical);
     el("expectedSortButton").classList.toggle("hidden", !hasExpected);
     el("shapSortButton")?.classList.toggle("hidden", !shapSortAvailable);
@@ -385,7 +395,7 @@ export function createLineBarTool({
       quantileMode: isNumeric ? state.quantileMode : "off",
       dateBucket: isDate ? state.dateBucket : "none",
       transform: state.transform,
-      partialDependence: { mode: state.partialDependence === "shap" ? "shap" : "none" },
+      partialDependence: { mode: selectedPartialDependenceMode() },
       base: selectedFeatureBase(),
       sigma: Number(state.sigma),
       filter: state.activeFilter,
@@ -469,10 +479,10 @@ export function createLineBarTool({
     const barLayout = getBarLayout(labels.length);
     const responseAxis = responseAxisOptions(data);
     const shapSeries = shapPartialDependenceSeries(data);
-    const shapLegendData = shapSeries.map((series) => series.name);
-    const hasShapSeries = shapSeries.length > 0;
+    const glmSeries = glmPartialDependenceSeries(data);
+    const overlayLegendData = [...shapSeries, ...glmSeries].map((series) => series.name);
+    const hasOverlaySeries = overlayLegendData.length > 0;
     const previousOption = chart.getOption();
-    const shapLegendSelection = matchingLegendSelection(previousOption, shapLegendData);
     const actualColor = getCss("--actual-line");
     const expectedColor = "#d13f3f";
     const responseColors = [actualColor, expectedColor];
@@ -483,6 +493,8 @@ export function createLineBarTool({
       ...data.responses.map((response) => response.label),
       { name: weightLabel, icon: "roundRect", itemStyle: { color: nColor, borderColor: nColor } },
     ];
+    const mainLegendSelection = matchingLegendSelection(previousOption, legendData);
+    const overlayLegendSelection = matchingLegendSelection(previousOption, overlayLegendData);
     const barSeries = {
       name: weightLabel,
       type: "bar",
@@ -563,8 +575,8 @@ export function createLineBarTool({
           trigger: "axis",
           formatter: (params) => formatChartTooltip(params, weightLabel),
         },
-        legend: lineBarLegendOptions(legendData, shapLegendData, shapLegendSelection),
-        grid: { left: 72, right: 76, top: hasShapSeries ? 82 : 56, bottom: xLabelPolicy.bottom, containLabel: false },
+        legend: lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection),
+        grid: { left: 72, right: 76, top: hasOverlaySeries ? 82 : 56, bottom: xLabelPolicy.bottom, containLabel: false },
         xAxis: {
           type: "category",
           name: data.x || "",
@@ -591,7 +603,7 @@ export function createLineBarTool({
           { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
         ],
         dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
-        series: [barSeries, ...shapSeries, ...lineSeries, ...customSeries],
+        series: [barSeries, ...shapSeries, ...glmSeries, ...lineSeries, ...customSeries],
       },
       true,
     );
@@ -599,14 +611,24 @@ export function createLineBarTool({
     return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-");
   }
 
-  function shapPartialDependenceSeries(data) {
-    const partial = data.partial_dependence;
-    const rows = Array.isArray(partial?.rows) ? partial.rows : [];
+  function partialDependenceOverlay(data, key) {
+    const partial = data.partial_dependence || {};
+    if (partial.overlays && partial.overlays[key]) return partial.overlays[key];
+    return partial.mode === key ? partial : {};
+  }
+
+  function indexedPartialDependenceRows(data, rows) {
     if (!rows.length) return [];
     const labelIndex = new Map((data.rows || []).map((row, index) => [String(row.x), index]));
-    const indexedRows = rows
+    return rows
       .map((row) => ({ ...row, index: labelIndex.get(String(row.x)) }))
       .filter((row) => Number.isInteger(row.index));
+  }
+
+  function shapPartialDependenceSeries(data) {
+    const partial = partialDependenceOverlay(data, "shap");
+    const rows = Array.isArray(partial?.rows) ? partial.rows : [];
+    const indexedRows = indexedPartialDependenceRows(data, rows);
     if (!indexedRows.length) return [];
     const series = [];
     SHAP_RIBBON_SERIES.forEach(([lowKey, highKey, label, color]) => {
@@ -634,6 +656,35 @@ export function createLineBarTool({
       label: { show: false },
     });
     return series;
+  }
+
+  function glmPartialDependenceSeries(data) {
+    const partial = partialDependenceOverlay(data, "glm");
+    const rows = Array.isArray(partial?.rows) ? partial.rows : [];
+    const indexedRows = indexedPartialDependenceRows(data, rows);
+    if (!indexedRows.length) return [];
+    return [
+      {
+        name: "GLM",
+        type: "line",
+        yAxisIndex: 0,
+        z: 2.9,
+        animation: false,
+        animationDuration: 0,
+        animationDurationUpdate: 0,
+        smooth: false,
+        showSymbol: (data.rows || []).length < 250,
+        symbolSize: 4,
+        lineStyle: { color: GLM_LINE_COLOR, width: 2, type: "dashed" },
+        itemStyle: { color: GLM_LINE_COLOR },
+        data: (data.rows || []).map((row) => {
+          const match = rows.find((partialRow) => String(partialRow.x) === String(row.x));
+          const value = Number(match?.p50);
+          return Number.isFinite(value) ? value : null;
+        }),
+        label: { show: false },
+      },
+    ];
   }
 
   function shapRibbonSeries(rows, lowKey, highKey, label, color) {
@@ -688,24 +739,25 @@ export function createLineBarTool({
     return segments;
   }
 
-  function lineBarLegendOptions(legendData, shapLegendData, shapLegendSelection) {
-    const textStyle = { color: getCss("--text"), fontWeight: 700 };
+  function lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection) {
+    const textStyle = { color: getCss("--text"), fontWeight: 700, fontSize: 13 };
+    const overlayTextStyle = { color: getCss("--text"), fontWeight: 400, fontSize: 12 };
     const mainLegend = {
       top: 0,
       data: legendData,
-      selectedMode: false,
+      selected: mainLegendSelection,
       textStyle,
     };
-    if (!shapLegendData.length) return mainLegend;
+    if (!overlayLegendData.length) return mainLegend;
     return [
       mainLegend,
       {
         top: 26,
         left: "center",
         type: "scroll",
-        data: shapLegendData,
-        selected: shapLegendSelection,
-        textStyle,
+        data: overlayLegendData,
+        selected: overlayLegendSelection,
+        textStyle: overlayTextStyle,
         pageIconColor: getCss("--text"),
         pageIconInactiveColor: getCss("--muted"),
         pageTextStyle: { color: getCss("--muted") },
@@ -714,16 +766,23 @@ export function createLineBarTool({
   }
 
   function matchingLegendSelection(option, entries) {
-    const defaults = Object.fromEntries(entries.map((entry) => [entry, true]));
+    const names = entries.map(legendEntryName).filter(Boolean);
+    const defaults = Object.fromEntries(names.map((entry) => [entry, true]));
     if (!entries.length) return defaults;
     const legends = Array.isArray(option?.legend) ? option.legend : (option?.legend ? [option.legend] : []);
     const previous = Object.assign({}, ...legends.map((legend) => legend?.selected || {}));
-    entries.forEach((entry) => {
+    names.forEach((entry) => {
       if (Object.prototype.hasOwnProperty.call(previous, entry)) {
         defaults[entry] = previous[entry] !== false;
       }
     });
     return defaults;
+  }
+
+  function legendEntryName(entry) {
+    if (typeof entry === "string") return entry;
+    if (entry && typeof entry === "object") return String(entry.name || "");
+    return "";
   }
 
   function chartDensityMessage(groupCount, xLabelsHidden, chartLabelsHidden) {
@@ -772,6 +831,14 @@ export function createLineBarTool({
     return responseAxisBounds(responseAxisExtent(data.rows, data.responses.length, data.partial_dependence)) || {};
   }
 
+  function partialDependenceOverlayList(partialDependence) {
+    if (!partialDependence) return [];
+    if (partialDependence.overlays) {
+      return Object.values(partialDependence.overlays).filter((overlay) => overlay && typeof overlay === "object");
+    }
+    return [partialDependence];
+  }
+
   function responseAxisExtent(rows, responseCount, partialDependence = null) {
     let min = Infinity;
     let max = -Infinity;
@@ -783,20 +850,22 @@ export function createLineBarTool({
         max = Math.max(max, value);
       }
     });
-    (partialDependence?.rows || []).forEach((row) => {
-      SHAP_RIBBON_SERIES.forEach(([lowKey, highKey]) => {
-        [row?.[lowKey], row?.[highKey]].forEach((rawValue) => {
-          const value = Number(rawValue);
-          if (!Number.isFinite(value)) return;
-          min = Math.min(min, value);
-          max = Math.max(max, value);
+    partialDependenceOverlayList(partialDependence).forEach((overlay) => {
+      (overlay?.rows || []).forEach((row) => {
+        SHAP_RIBBON_SERIES.forEach(([lowKey, highKey]) => {
+          [row?.[lowKey], row?.[highKey]].forEach((rawValue) => {
+            const value = Number(rawValue);
+            if (!Number.isFinite(value)) return;
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+          });
         });
+        const median = Number(row?.p50);
+        if (Number.isFinite(median)) {
+          min = Math.min(min, median);
+          max = Math.max(max, median);
+        }
       });
-      const median = Number(row?.p50);
-      if (Number.isFinite(median)) {
-        min = Math.min(min, median);
-        max = Math.max(max, median);
-      }
     });
     return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
   }

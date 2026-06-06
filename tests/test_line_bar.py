@@ -18,6 +18,8 @@ from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
 from py_lucidum.tools.gbm.sources import GbmSourceProvider
 from py_lucidum.tools.gbm.store import GbmModelStore
+from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
+from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
 from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count
 
 
@@ -213,6 +215,37 @@ COPY (
             con.close()
         store.activate_model(model_id)
         return store
+
+    def require_glm_dependencies(self) -> None:
+        try:
+            glm_dependencies()
+        except MissingGlmDependency as exc:
+            self.skipTest(str(exc))
+
+    def write_active_glm_for_overlay(
+        self,
+        dataset: Dataset,
+        *,
+        formula: str = "YoungestDriverAge",
+        denominator_column: str = "",
+    ) -> tuple[GlmModelStore, str]:
+        self.require_glm_dependencies()
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "overlay glm",
+                "formula": formula,
+                "response_column": "Actual",
+                "denominator_column": denominator_column,
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        model_id = str(result["model_id"])
+        dataset.register_data_source_provider(GlmSourceProvider(store))
+        return store, model_id
 
     def dataset_with_gbm_ribbons(
         self,
@@ -770,6 +803,143 @@ COPY (
 
         self.assertEqual(result["partial_dependence"]["rows"], [])
         self.assertIn("No active GBM SHAP values", result["warnings"][0])
+
+    def test_chart_glm_overlay_uses_base_profile_without_interactions(self) -> None:
+        dataset = Dataset(self.data_path)
+        _store, model_id = self.write_active_glm_for_overlay(dataset, formula="C(UseofVan) + YoungestDriverAge", denominator_column="Weight")
+        request = self.request()
+        request.update({"denominator": "Weight", "partialDependence": {"mode": "glm"}, "transform": "zero", "base": "Social"})
+        feature_spec = {
+            "rows": [
+                {"feature": "UseofVan", "base": "Social"},
+                {"feature": "YoungestDriverAge", "base": "45"},
+                {"feature": "Weight", "base": "20"},
+            ]
+        }
+
+        result = chart(dataset, request, feature_spec=feature_spec)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["mode"], "glm")
+        self.assertEqual(partial["model_id"], model_id)
+        self.assertEqual(partial["feature"], "UseofVan")
+        self.assertEqual(partial["method"], "base_profile")
+        self.assertEqual(partial["percentiles"], [50])
+        self.assertEqual(partial["transform"]["reference"], "base")
+        self.assertEqual(partial["transform"]["base_x"], "Social")
+        by_x = {row["x"]: row for row in partial["rows"]}
+        self.assertEqual(set(by_x), {"Business", "Social"})
+        self.assertAlmostEqual(by_x["Social"]["p50"], 0.0)
+        self.assertIsNotNone(by_x["Business"]["p50"])
+
+    def test_chart_glm_overlay_scales_base_profile_to_fitted_mean(self) -> None:
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "25,Social,2024-01-01,2000,100,95,5\n"
+            "30,Social,2024-01-02,2400,130,125,9\n"
+            "35,Business,2024-01-03,2800,180,175,8\n"
+            "40,Social,2024-01-04,3200,190,185,15\n"
+            "45,Business,2024-01-05,3600,260,255,14\n"
+            "50,Social,2024-01-06,4000,250,245,19\n"
+            "55,Business,2024-01-07,4400,330,325,22\n"
+            "60,Business,2024-01-08,4800,390,385,25\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        self.write_active_glm_for_overlay(dataset, formula="C(UseofVan) + YoungestDriverAge")
+        request = self.request()
+        request["partialDependence"] = {"mode": "glm"}
+
+        result = chart(dataset, request, feature_spec={"rows": [{"feature": "YoungestDriverAge", "base": "25"}]})
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["method"], "base_profile")
+        self.assertEqual(partial["scale"]["method"], "add")
+        self.assertNotAlmostEqual(partial["scale"]["source_mean"], partial["scale"]["target"])
+        scaled_mean = sum(row["p50"] * row["volume"] for row in partial["rows"]) / sum(row["volume"] for row in partial["rows"])
+        self.assertAlmostEqual(scaled_mean, partial["scale"]["target"])
+
+    def test_chart_glm_overlay_uses_sampled_marginal_with_interactions(self) -> None:
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "25,Social,2024-01-01,2000,100,95,5\n"
+            "30,Social,2024-01-02,2400,130,125,9\n"
+            "35,Business,2024-01-03,2800,140,135,8\n"
+            "40,Social,2024-01-04,3200,180,175,15\n"
+            "45,Business,2024-01-05,3600,210,205,14\n"
+            "50,Social,2024-01-06,4000,260,255,19\n"
+            "55,Business,2024-01-07,4400,270,265,22\n"
+            "60,Business,2024-01-08,4800,330,325,25\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        _store, model_id = self.write_active_glm_for_overlay(
+            dataset,
+            formula="YoungestDriverAge + Weight + YoungestDriverAge:Weight",
+        )
+        request = self.request()
+        request.update({"x": "YoungestDriverAge", "bandWidth": "10", "denominator": "Weight", "partialDependence": {"mode": "glm"}})
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["mode"], "glm")
+        self.assertEqual(partial["model_id"], model_id)
+        self.assertEqual(partial["feature"], "YoungestDriverAge")
+        self.assertEqual(partial["method"], "sampled_marginal")
+        self.assertEqual(partial["sample"]["population_row_count"], 8)
+        self.assertEqual(partial["sample"]["sample_row_count"], 8)
+        self.assertEqual(partial["sample"]["x_value_count"], 5)
+        self.assertEqual(partial["sample"]["prediction_cell_count"], 40)
+        self.assertEqual(partial["sample"]["max_sample_rows"], 100000)
+        self.assertEqual(partial["sample"]["max_prediction_cells"], 2000000)
+        self.assertEqual(partial["sample"]["seed"], 2026)
+        self.assertTrue(all(row["p50"] is not None for row in partial["rows"]))
+
+    def test_chart_both_mode_returns_shap_and_glm_overlays(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons(objective="regression")
+        _store, _model_id = self.write_active_glm_for_overlay(dataset)
+        request = self.request()
+        request["partialDependence"] = {"mode": "both"}
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["mode"], "both")
+        self.assertEqual(set(partial["overlays"]), {"shap", "glm"})
+        self.assertEqual(partial["overlays"]["shap"]["mode"], "shap")
+        self.assertEqual(partial["overlays"]["glm"]["mode"], "glm")
+        self.assertGreater(len(partial["overlays"]["shap"]["rows"]), 0)
+        self.assertGreater(len(partial["overlays"]["glm"]["rows"]), 0)
+        self.assertEqual([row["x"] for row in partial["overlays"]["shap"]["rows"]], [row["x"] for row in result["rows"]])
+        self.assertEqual([row["x"] for row in partial["overlays"]["glm"]["rows"]], [row["x"] for row in result["rows"]])
+
+    def test_chart_both_mode_keeps_glm_when_shap_unavailable(self) -> None:
+        dataset = Dataset(self.data_path)
+        self.write_active_glm_for_overlay(dataset)
+        request = self.request()
+        request["partialDependence"] = {"mode": "both"}
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["mode"], "both")
+        self.assertEqual(partial["overlays"]["shap"]["rows"], [])
+        self.assertGreater(len(partial["overlays"]["glm"]["rows"]), 0)
+        self.assertTrue(any("No active GBM SHAP values" in warning for warning in result["warnings"]))
+
+    def test_chart_both_mode_keeps_shap_when_glm_unavailable(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons(objective="regression")
+        request = self.request()
+        request["partialDependence"] = {"mode": "both"}
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["mode"], "both")
+        self.assertGreater(len(partial["overlays"]["shap"]["rows"]), 0)
+        self.assertEqual(partial["overlays"]["glm"]["rows"], [])
+        self.assertTrue(any("No active GLM" in warning for warning in result["warnings"]))
 
     def test_lazy_banding_suggestion_uses_x_source_for_prediction_axes(self) -> None:
         glm_path = self.root / "glm_banding_predictions.parquet"

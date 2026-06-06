@@ -31,7 +31,7 @@ from py_lucidum.tools.gbm.validation import CROSS_ENTROPY_OBJECTIVES, LOG_LINK_O
 BINARY_LINK_OBJECTIVES = {"binary", *CROSS_ENTROPY_OBJECTIVES}
 
 
-def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
+def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
     with dataset.lock:
         context = chart_context(dataset, request)
         source_id = context["source_id"]
@@ -79,6 +79,7 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         partial_dependence = build_partial_dependence_overlay(
             dataset,
             request,
+            feature_spec=feature_spec or {},
             columns=columns,
             x_col=x_col,
             x_sql=x_sql,
@@ -116,7 +117,7 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
                 band_width=request.get("bandWidth"),
             )
             order_partial_dependence_rows(partial_dependence, sorted_rows)
-            warnings.extend(partial_dependence.get("warnings") or [])
+            warnings.extend(partial_dependence_warnings(partial_dependence))
 
         payload = {
             "x": x_col,
@@ -736,6 +737,7 @@ def build_partial_dependence_overlay(
     dataset: Dataset,
     request: dict[str, Any],
     *,
+    feature_spec: Any,
     columns: dict[str, ColumnInfo],
     x_col: str,
     x_sql: dict[str, str],
@@ -743,25 +745,85 @@ def build_partial_dependence_overlay(
     responses: list[dict[str, str]],
     denominator: dict[str, str | None],
 ) -> dict[str, Any] | None:
-    if not partial_dependence_mode_is_shap(request.get("partialDependence")):
+    mode = partial_dependence_mode(request.get("partialDependence"))
+    if mode == "none":
         return None
+    overlays: dict[str, dict[str, Any]] = {}
+    if mode in {"shap", "both"}:
+        try:
+            overlays["shap"] = build_shap_partial_dependence_overlay(
+                dataset,
+                request,
+                columns=columns,
+                x_col=x_col,
+                x_sql=x_sql,
+                x_group_kind=x_group_kind,
+                responses=responses,
+                denominator=denominator,
+            )
+        except Exception as exc:
+            overlays["shap"] = empty_shap_partial_dependence_warning(f"SHAP overlay failed: {exc}")
+    if mode in {"glm", "both"}:
+        try:
+            from py_lucidum.tools.glm.overlay import build_glm_partial_dependence_overlay
+
+            overlays["glm"] = build_glm_partial_dependence_overlay(
+                dataset,
+                request,
+                feature_spec=feature_spec,
+                x_col=x_col,
+                x_sql=x_sql,
+                x_group_kind=x_group_kind,
+                denominator=denominator,
+            )
+        except Exception as exc:
+            from py_lucidum.tools.glm.overlay import empty_glm_partial_dependence_warning
+
+            overlays["glm"] = empty_glm_partial_dependence_warning(f"GLM overlay failed: {exc}")
+    if mode == "shap":
+        return overlays.get("shap")
+    if mode == "glm":
+        return overlays.get("glm")
+    warnings: list[str] = []
+    for overlay in overlays.values():
+        warnings.extend(str(warning) for warning in (overlay.get("warnings") or []) if warning)
+    return {
+        "mode": "both",
+        "overlays": overlays,
+        "rows": overlays.get("shap", {}).get("rows", []),
+        "warnings": warnings,
+        "transform": {"mode": str(request.get("transform") or "none")},
+    }
+
+
+def build_shap_partial_dependence_overlay(
+    dataset: Dataset,
+    request: dict[str, Any],
+    *,
+    columns: dict[str, ColumnInfo],
+    x_col: str,
+    x_sql: dict[str, str],
+    x_group_kind: str,
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+) -> dict[str, Any]:
     source = active_gbm_shap_source(dataset)
     if source is None:
-        return empty_partial_dependence_warning("No active GBM SHAP values are available.")
+        return empty_shap_partial_dependence_warning("No active GBM SHAP values are available.")
     model_id = str(source.get("model_id") or "")
     shap_source_id = str(source.get("id") or "")
     prediction_source = active_gbm_prediction_source(dataset, model_id)
     if not model_id or not shap_source_id or prediction_source is None:
-        return empty_partial_dependence_warning("The active GBM needs both SHAP values and predictions for SHAP ribbons.")
+        return empty_shap_partial_dependence_warning("The active GBM needs both SHAP values and predictions for SHAP ribbons.")
 
     shap_column = shap_value_column_for_feature(source, x_col)
     if not shap_column:
-        return empty_partial_dependence_warning(f"No active GBM SHAP values are available for {x_col}.")
+        return empty_shap_partial_dependence_warning(f"No active GBM SHAP values are available for {x_col}.")
     shap_source_columns = dataset.column_map_for_source(shap_source_id)
     if x_col not in shap_source_columns:
-        return empty_partial_dependence_warning(f"The active GBM SHAP source does not include {x_col}.")
+        return empty_shap_partial_dependence_warning(f"The active GBM SHAP source does not include {x_col}.")
     if "gbm_prediction" not in shap_source_columns:
-        return empty_partial_dependence_warning("The active GBM SHAP source does not include fitted predictions.")
+        return empty_shap_partial_dependence_warning("The active GBM SHAP source does not include fitted predictions.")
 
     overlay_responses = [response for response in responses if response.get("numerator") in shap_source_columns]
     overlay_denominator = normalise_overlay_denominator(denominator, shap_source_columns)
@@ -820,13 +882,18 @@ def build_partial_dependence_overlay(
     }
 
 
-def partial_dependence_mode_is_shap(raw: Any) -> bool:
+def partial_dependence_mode(raw: Any) -> str:
     if not isinstance(raw, dict):
-        return False
-    return str(raw.get("mode") or "none").strip().lower() == "shap"
+        return "none"
+    mode = str(raw.get("mode") or "none").strip().lower()
+    return mode if mode in {"none", "shap", "glm", "both"} else "none"
 
 
-def empty_partial_dependence_warning(message: str) -> dict[str, Any]:
+def partial_dependence_mode_is_shap(raw: Any) -> bool:
+    return partial_dependence_mode(raw) == "shap"
+
+
+def empty_shap_partial_dependence_warning(message: str) -> dict[str, Any]:
     return {
         "mode": "shap",
         "model_id": "",
@@ -1160,7 +1227,8 @@ def partial_dependence_medians(partial_dependence: dict[str, Any] | None) -> dic
     medians: dict[str, float] = {}
     if not partial_dependence:
         return medians
-    for row in partial_dependence.get("rows") or []:
+    overlay = shap_overlay(partial_dependence)
+    for row in overlay.get("rows") or []:
         if not isinstance(row, dict):
             continue
         median = json_number(row.get("p50"))
@@ -1178,21 +1246,39 @@ def transform_partial_dependence_overlay(
     base: Any,
     band_width: Any,
 ) -> None:
+    overlays = partial_dependence.get("overlays")
+    if isinstance(overlays, dict):
+        for key, overlay in overlays.items():
+            if isinstance(overlay, dict):
+                transform_partial_dependence_overlay(
+                    overlay,
+                    transform,
+                    warnings,
+                    x_kind=x_kind,
+                    base=base,
+                    band_width=band_width,
+                )
+                if key == "glm":
+                    overlay["mode"] = "glm"
+        partial_dependence["warnings"] = partial_dependence_warnings(partial_dependence)
+        partial_dependence["transform"] = {"mode": transform}
+        return
     rows = partial_dependence.get("rows")
     if not isinstance(rows, list):
         return
-    metadata = partial_dependence_transform_metadata(rows, transform, warnings, x_kind=x_kind, base=base, band_width=band_width)
+    overlay_label = "GLM overlay" if str(partial_dependence.get("mode") or "") == "glm" else "SHAP ribbon"
+    metadata = partial_dependence_transform_metadata(rows, transform, warnings, x_kind=x_kind, base=base, band_width=band_width, overlay_label=overlay_label)
     invalid_count = 0
     reference = json_number(metadata.get("value"))
+    keys = partial_dependence_value_keys(partial_dependence)
     for row in rows:
-        for percentile in SHAP_RIBBON_PERCENTILES:
-            key = percentile_key(percentile)
+        for key in keys:
             before = row.get(key)
             row[key] = transform_value(before, transform, reference)
             if before is not None and row[key] is None:
                 invalid_count += 1
     if invalid_count:
-        partial_dependence.setdefault("warnings", []).append(f"{invalid_count} SHAP ribbon values could not be shown because they are outside the {transform} transform domain.")
+        partial_dependence.setdefault("warnings", []).append(f"{invalid_count} {overlay_label} values could not be shown because they are outside the {transform} transform domain.")
     partial_dependence["transform"] = metadata
 
 
@@ -1204,6 +1290,7 @@ def partial_dependence_transform_metadata(
     x_kind: str,
     base: Any,
     band_width: Any,
+    overlay_label: str = "SHAP ribbon",
 ) -> dict[str, Any]:
     base_text = str(base or "").strip()
     average = weighted_average((row.get("p50"), row.get("volume")) for row in rows)
@@ -1220,17 +1307,25 @@ def partial_dependence_transform_metadata(
         return metadata
     base_row = base_reference_row(rows, x_kind=x_kind, base=base_text, band_width=band_width)
     if base_row is None:
-        warnings.append(f"Base value {base_text} could not be matched on the x-axis; using overall response averages for SHAP ribbon {transform} transform.")
+        warnings.append(f"Base value {base_text} could not be matched on the x-axis; using overall response averages for {overlay_label} {transform} transform.")
         return metadata
     reference = json_number(base_row.get("p50"))
     if reference is None or (transform == "one" and reference == 0):
-        warnings.append(f"Base value {base_text} has no usable SHAP ribbon reference; using overall response averages for the {transform} transform.")
+        warnings.append(f"Base value {base_text} has no usable {overlay_label} reference; using overall response averages for the {transform} transform.")
         return metadata
     metadata.update({"reference": "base", "base_x": base_row.get("x"), "value": reference})
     return metadata
 
 
 def order_partial_dependence_rows(partial_dependence: dict[str, Any], sorted_rows: list[dict[str, Any]]) -> None:
+    overlays = partial_dependence.get("overlays")
+    if isinstance(overlays, dict):
+        for overlay in overlays.values():
+            if isinstance(overlay, dict):
+                order_partial_dependence_rows(overlay, sorted_rows)
+        partial_dependence["rows"] = overlays.get("shap", {}).get("rows", []) if isinstance(overlays.get("shap"), dict) else []
+        partial_dependence["warnings"] = partial_dependence_warnings(partial_dependence)
+        return
     rows = [row for row in partial_dependence.get("rows") or [] if isinstance(row, dict)]
     by_x = {str(row.get("x")): row for row in rows}
     ordered: list[dict[str, Any]] = []
@@ -1243,7 +1338,34 @@ def order_partial_dependence_rows(partial_dependence: dict[str, Any], sorted_row
             seen.add(label)
     partial_dependence["rows"] = ordered
     if rows and not ordered:
-        partial_dependence.setdefault("warnings", []).append("SHAP ribbon groups did not match the rendered chart groups.")
+        label = "GLM overlay" if str(partial_dependence.get("mode") or "") == "glm" else "SHAP ribbon"
+        partial_dependence.setdefault("warnings", []).append(f"{label} groups did not match the rendered chart groups.")
+
+
+def shap_overlay(partial_dependence: dict[str, Any]) -> dict[str, Any]:
+    overlays = partial_dependence.get("overlays")
+    if isinstance(overlays, dict) and isinstance(overlays.get("shap"), dict):
+        return overlays["shap"]
+    return partial_dependence if str(partial_dependence.get("mode") or "") == "shap" else {}
+
+
+def partial_dependence_warnings(partial_dependence: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    overlays = partial_dependence.get("overlays")
+    if isinstance(overlays, dict):
+        for overlay in overlays.values():
+            if isinstance(overlay, dict):
+                warnings.extend(str(warning) for warning in (overlay.get("warnings") or []) if warning)
+        return warnings
+    return [str(warning) for warning in (partial_dependence.get("warnings") or []) if warning]
+
+
+def partial_dependence_value_keys(partial_dependence: dict[str, Any]) -> list[str]:
+    raw_percentiles = partial_dependence.get("percentiles")
+    if isinstance(raw_percentiles, list) and raw_percentiles:
+        keys = [percentile_key(int(number)) for percentile in raw_percentiles if (number := json_number(percentile)) is not None]
+        return keys or ["p50"]
+    return [percentile_key(percentile) for percentile in SHAP_RIBBON_PERCENTILES]
 
 
 def apply_transform(

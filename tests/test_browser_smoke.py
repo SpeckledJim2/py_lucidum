@@ -974,6 +974,102 @@ COPY (
                 self.assertEqual(gbm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
 
+                page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Age").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      ["actualNumerator", "glm_prediction", "denominator"].forEach((name) => {
+                        chart.dispatchAction({ type: "legendUnSelect", name });
+                      });
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const selected = Object.assign({}, ...chart.getOption().legend.map((legend) => legend.selected || {}));
+                      return selected.actualNumerator === false
+                        && selected.glm_prediction === false
+                        && selected.denominator === false;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Segment").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector("#lineBarGroupMeta")?.textContent || "";
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const selected = Object.assign({}, ...chart.getOption().legend.map((legend) => legend.selected || {}));
+                      return meta.includes("groups")
+                        && selected.actualNumerator === false
+                        && selected.glm_prediction === false
+                        && selected.denominator === false;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Age").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    timeout=10_000,
+                )
+                page.locator('.segmented[data-control="partialDependence"] button[data-value="both"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const option = chart.getOption();
+                      return option.series.some((series) => series.name === "SHAP median")
+                        && option.legend[1]?.textStyle?.fontWeight === 400
+                        && option.legend[1]?.textStyle?.fontSize === 12;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      chart.dispatchAction({ type: "legendUnSelect", name: "SHAP median" });
+                    }
+                    """
+                )
+                open_sidebar_section("#gbmModelCollapseBtn")
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000):
+                    page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
+                page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const selected = Object.assign({}, ...chart.getOption().legend.map((legend) => legend.selected || {}));
+                      return selected["SHAP median"] === false;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000):
+                    page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
+                page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const selected = Object.assign({}, ...chart.getOption().legend.map((legend) => legend.selected || {}));
+                      return selected["SHAP median"] === false;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
                 page.goto(f"{base_url}/?tool=glm", wait_until="domcontentloaded")
                 page.locator(".glm-tool").wait_for(timeout=10_000)
                 page.get_by_role("button", name="Model navigator").click()
