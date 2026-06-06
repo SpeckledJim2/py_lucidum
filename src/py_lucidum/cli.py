@@ -439,7 +439,11 @@ def main() -> int:
         action="store_true",
         help="Disable feature specs and skip default feature_spec.csv discovery.",
     )
-    parser.add_argument("--tools", default=None, help="Comma-separated tools to enable alongside mandatory Column Profile. Supports column-profile, line-bar, uk-map, glm, and gbm.")
+    parser.add_argument(
+        "--tools",
+        default=None,
+        help="Comma-separated tools to enable alongside mandatory Column Profile. Supports column-profile, line-bar, uk-map, glm, gbm, and models. Requesting gbm also enables glm.",
+    )
     args = parser.parse_args()
     if args.demo and args.path:
         parser.error("choose either a dataset path or --demo, not both")

@@ -18,6 +18,15 @@ TOOL_MODULES = (
     "py_lucidum.tools.gbm",
 )
 MANDATORY_TOOL_ID = "column_profile"
+TOOL_GROUP_ALIASES = {
+    "model": ("glm", "gbm"),
+    "models": ("glm", "gbm"),
+    "modelling": ("glm", "gbm"),
+    "modeling": ("glm", "gbm"),
+}
+TOOL_IMPLIED_IDS = {
+    "gbm": ("glm",),
+}
 
 
 @dataclass(frozen=True)
@@ -83,13 +92,25 @@ def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
         requested = default_tool_ids()
 
     enabled: list[str] = [MANDATORY_TOOL_ID]
+
+    def add_tool(tool_id: str) -> None:
+        for implied in TOOL_IMPLIED_IDS.get(tool_id, ()):
+            add_tool(implied)
+        if tool_id not in enabled:
+            enabled.append(tool_id)
+
     for name in requested:
-        canonical = aliases.get(name.lower())
+        key = name.lower()
+        group = TOOL_GROUP_ALIASES.get(key)
+        if group:
+            for canonical in group:
+                add_tool(canonical)
+            continue
+        canonical = aliases.get(key)
         if not canonical:
-            supported = ", ".join(sorted(aliases))
+            supported = ", ".join(sorted([*aliases, *TOOL_GROUP_ALIASES]))
             raise ValueError(f"Unknown tool '{name}'. Supported tools: {supported}")
-        if canonical not in enabled:
-            enabled.append(canonical)
+        add_tool(canonical)
     return enabled
 
 

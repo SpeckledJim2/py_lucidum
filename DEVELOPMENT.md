@@ -158,7 +158,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **GLM and GBM**
 
-- GLM and GBM are opt-in tools (`--tools glm,gbm`) and are not part of the default user-facing tool set. Column Profile is still enabled alongside them.
+- GLM and GBM are opt-in tools (`--tools glm,gbm` or `--tools models`) and are not part of the default user-facing tool set. Column Profile is still enabled alongside them. Requesting `gbm` also enables `glm`, because GBM workflows use the GLM tool for cross-model tabulation and comparison.
 - GLM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
 - GLM training imports `glum`, pandas, and numpy lazily through the `glm` optional extra. These packages must not become base install dependencies. Build routes should report missing GLM dependencies as an actionable install-extra error, not a server 500.
 - GLM accepts full `response ~ terms` formulas and RHS-only formulas using the sidebar Actual response. Raw formulas are stored with comments, but `#` comments outside quoted strings are stripped before fitting. The allowed formula context is intentionally narrow: `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms. Obvious unsafe text such as `__`, `import`, `eval`, `exec`, `open`, and statement separators is rejected before fitting. Explicit `offset(...)` terms are stripped from the fitted formula, stored in the manifest, evaluated with the same safe context, and passed to `glum.fit()`, prediction, and tabulation reconstruction.

@@ -99,7 +99,8 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(normalise_tools(None), ["column_profile", "line_bar", "uk_map"])
         self.assertEqual(normalise_tools("profile,line-bar"), ["column_profile", "line_bar"])
         self.assertEqual(normalise_tools("glm,gbm"), ["column_profile", "glm", "gbm"])
-        self.assertEqual(normalise_tools("gbm,line-bar,map"), ["column_profile", "gbm", "line_bar", "uk_map"])
+        self.assertEqual(normalise_tools("gbm,line-bar,map"), ["column_profile", "glm", "gbm", "line_bar", "uk_map"])
+        self.assertEqual(normalise_tools("models,line-bar,map"), ["column_profile", "glm", "gbm", "line_bar", "uk_map"])
 
         app = create_app(self.data_path, token="dev-token")
         paths = {route.path for route in app.routes}
@@ -135,6 +136,14 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["response"], "response_column")
         self.assertEqual(payload["denominator"], "denominator_column")
+
+    def test_gbm_tool_selection_also_registers_glm(self) -> None:
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        paths = {route.path for route in app.routes}
+
+        self.assertEqual(app.state.enabled_tools, ["column_profile", "glm", "gbm"])
+        self.assertIn("/api/glm/summary", paths)
+        self.assertIn("/api/gbm/summary", paths)
 
     def test_column_profile_can_be_enabled_alone(self) -> None:
         app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)
