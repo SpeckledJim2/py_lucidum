@@ -34,7 +34,5 @@ lucidum = "py_lucidum.cli:main"
 packages = ["src/py_lucidum"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/py_lucidum/static" = "py_lucidum/static"
-"src/py_lucidum/tools/uk_map/static" = "py_lucidum/tools/uk_map/static"
 "datasets/motor_premiums.parquet" = "py_lucidum/datasets/motor_premiums.parquet"
 "favicon.ico" = "py_lucidum/static/favicon.ico"

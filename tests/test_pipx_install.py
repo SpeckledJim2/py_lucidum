@@ -5,6 +5,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tomllib
 import time
 import unittest
 from pathlib import Path
@@ -16,6 +17,30 @@ RUN_PIPX_INSTALL_TESTS = os.environ.get("PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS") == 
 
 
 class PipxInstallTests(unittest.TestCase):
+    def test_wheel_force_include_does_not_duplicate_package_files(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+        force_include = (
+            pyproject.get("tool", {})
+            .get("hatch", {})
+            .get("build", {})
+            .get("targets", {})
+            .get("wheel", {})
+            .get("force-include", {})
+        )
+
+        duplicated_package_sources = [
+            source
+            for source in force_include
+            if Path(source).parts[:2] == ("src", "py_lucidum")
+        ]
+        self.assertEqual(
+            duplicated_package_sources,
+            [],
+            "Files under src/py_lucidum are already included by the wheel package mapping; "
+            "force-include them only from outside the package tree.",
+        )
+
     @unittest.skipUnless(RUN_PIPX_INSTALL_TESTS, "set PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 to run pipx install tests")
     def test_pipx_installed_lucidum_launches_project_csv(self) -> None:
         pipx = shutil.which("pipx")
