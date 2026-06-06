@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import os
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -940,6 +941,43 @@ COPY (
         self.assertGreater(len(partial["overlays"]["shap"]["rows"]), 0)
         self.assertEqual(partial["overlays"]["glm"]["rows"], [])
         self.assertTrue(any("No active GLM" in warning for warning in result["warnings"]))
+
+    def test_chart_glm_overlay_dispatches_to_worker_when_lightgbm_loaded(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request["partialDependence"] = {"mode": "glm"}
+        worker_result = {
+            "mode": "glm",
+            "model_id": "worker-model",
+            "feature": "UseofVan",
+            "method": "base_profile",
+            "percentiles": [50],
+            "rows": [],
+            "warnings": [],
+            "scale": {"method": "none", "target": None, "source_mean": None},
+            "sample": {},
+            "transform": {"mode": "none"},
+        }
+
+        with patch.dict(sys.modules, {"lightgbm": object()}):
+            with patch("py_lucidum.tools.glm.overlay.build_glm_partial_dependence_overlay_in_subprocess", return_value=worker_result) as worker:
+                result = chart(dataset, request)
+
+        worker.assert_called_once()
+        self.assertEqual(result["partial_dependence"]["model_id"], "worker-model")
+
+    def test_chart_glm_overlay_worker_returns_rows_when_lightgbm_loaded(self) -> None:
+        dataset = Dataset(self.data_path)
+        self.write_active_glm_for_overlay(dataset)
+        request = self.request()
+        request["partialDependence"] = {"mode": "glm"}
+
+        with patch.dict(sys.modules, {"lightgbm": object()}):
+            result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["mode"], "glm")
+        self.assertGreater(len(partial["rows"]), 0)
 
     def test_lazy_banding_suggestion_uses_x_source_for_prediction_axes(self) -> None:
         glm_path = self.root / "glm_banding_predictions.parquet"

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
+import os
 import pickle
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from py_lucidum.core import (
@@ -50,6 +56,98 @@ def empty_glm_partial_dependence_warning(message: str) -> dict[str, Any]:
 
 
 def build_glm_partial_dependence_overlay(
+    dataset: Dataset,
+    request: dict[str, Any],
+    *,
+    feature_spec: Any,
+    x_col: str,
+    x_sql: dict[str, str],
+    x_group_kind: str,
+    denominator: dict[str, str | None],
+) -> dict[str, Any]:
+    if should_isolate_glm_overlay():
+        return build_glm_partial_dependence_overlay_in_subprocess(
+            dataset,
+            request,
+            feature_spec=feature_spec,
+            x_col=x_col,
+            x_sql=x_sql,
+            x_group_kind=x_group_kind,
+            denominator=denominator,
+        )
+    return _build_glm_partial_dependence_overlay_impl(
+        dataset,
+        request,
+        feature_spec=feature_spec,
+        x_col=x_col,
+        x_sql=x_sql,
+        x_group_kind=x_group_kind,
+        denominator=denominator,
+    )
+
+
+def should_isolate_glm_overlay() -> bool:
+    return "lightgbm" in sys.modules and not os.environ.get("PY_LUCIDUM_GLM_OVERLAY_WORKER")
+
+
+def build_glm_partial_dependence_overlay_in_subprocess(
+    dataset: Dataset,
+    request: dict[str, Any],
+    *,
+    feature_spec: Any,
+    x_col: str,
+    x_sql: dict[str, str],
+    x_group_kind: str,
+    denominator: dict[str, str | None],
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="lucidum-glm-overlay-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        request_path = tmp_path / "request.json"
+        response_path = tmp_path / "response.json"
+        request_path.write_text(
+            json.dumps(
+                {
+                    "dataset_path": str(dataset.path),
+                    "request": request,
+                    "feature_spec": feature_spec,
+                    "x_col": x_col,
+                    "x_sql": x_sql,
+                    "x_group_kind": x_group_kind,
+                    "denominator": denominator,
+                },
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [sys.executable, "-m", "py_lucidum.tools.glm.overlay_worker", str(request_path), str(response_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1",
+                "PY_LUCIDUM_GLM_OVERLAY_WORKER": "1",
+            },
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            if len(detail) > 800:
+                detail = f"{detail[:800]}..."
+            suffix = f" {detail}" if detail else ""
+            return empty_glm_partial_dependence_warning(f"GLM overlay worker exited unexpectedly with code {completed.returncode}.{suffix}")
+        if not response_path.exists():
+            return empty_glm_partial_dependence_warning("GLM overlay worker exited without writing a response.")
+        response = json.loads(response_path.read_text(encoding="utf-8"))
+    if not response.get("ok"):
+        return empty_glm_partial_dependence_warning(str(response.get("error") or "GLM overlay worker failed."))
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return empty_glm_partial_dependence_warning("GLM overlay worker returned an invalid response.")
+    return result
+
+
+def _build_glm_partial_dependence_overlay_impl(
     dataset: Dataset,
     request: dict[str, Any],
     *,
