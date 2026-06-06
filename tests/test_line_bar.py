@@ -915,6 +915,39 @@ COPY (
         self.assertEqual([row["x"] for row in partial["overlays"]["shap"]["rows"]], [row["x"] for row in result["rows"]])
         self.assertEqual([row["x"] for row in partial["overlays"]["glm"]["rows"]], [row["x"] for row in result["rows"]])
 
+    def test_chart_both_mode_aligns_glm_overlay_to_shap_mean(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons(objective="regression")
+        request = self.request()
+        request["partialDependence"] = {"mode": "both"}
+        fake_glm = {
+            "mode": "glm",
+            "model_id": "fake-glm",
+            "feature": "UseofVan",
+            "method": "base_profile",
+            "percentiles": [50],
+            "rows": [
+                {"x": "Business", "x_sort": "Business", "original_order": 1, "volume": 1, "is_tail": False, "p50": 10.0},
+                {"x": "Social", "x_sort": "Social", "original_order": 2, "volume": 1, "is_tail": False, "p50": 20.0},
+            ],
+            "warnings": [],
+            "scale": {"method": "add", "target": 15.0, "source_mean": 15.0},
+            "sample": {},
+            "transform": {"mode": "none"},
+        }
+
+        with patch("py_lucidum.tools.glm.overlay.build_glm_partial_dependence_overlay", return_value=fake_glm):
+            result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        shap = partial["overlays"]["shap"]
+        glm = partial["overlays"]["glm"]
+        shap_mean = sum(row["p50"] * row["volume"] for row in shap["rows"]) / sum(row["volume"] for row in shap["rows"])
+        glm_mean = sum(row["p50"] * row["volume"] for row in glm["rows"]) / sum(row["volume"] for row in glm["rows"])
+        self.assertAlmostEqual(shap_mean, shap["scale"]["target"])
+        self.assertAlmostEqual(glm_mean, shap["scale"]["target"])
+        self.assertEqual(glm["scale"]["target"], shap["scale"]["target"])
+        self.assertEqual(glm["scale"]["native_target"], 15.0)
+
     def test_chart_both_mode_keeps_glm_when_shap_unavailable(self) -> None:
         dataset = Dataset(self.data_path)
         self.write_active_glm_for_overlay(dataset)

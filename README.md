@@ -231,7 +231,7 @@ Choosing one or more interaction groups constrains the currently selected traina
 
 When a saved model has both Gain and saved SHAP rows, the Feature table shows a Gain/SHAP toggle and displays one importance metric at a time; SHAP means mean absolute SHAP value over the saved SHAP rows. For saved EBM models, the same toggle also offers `EBM Gain`, replacing the Feature table with a tree-feature-combination gain summary built from the saved tree table.
 
-When an active GBM has both saved predictions and saved SHAP rows, Line and Bar can show `Partial dependancies > SHAP` ribbons for the selected x-axis feature. These ribbons use the same grouping, banding, filter, denominator, low-weight grouping, and response transform as the chart. The ribbon median is scaled to the active GBM fitted prediction mean for the current chart slice, using the selected Weight when present; categorical x-axes also offer a SHAP sort ordered by median SHAP.
+When an active GBM has both saved predictions and saved SHAP rows, Line and Bar can show `Partial dependancies > SHAP` ribbons for the selected x-axis feature. These ribbons use the same grouping, banding, filter, denominator, low-weight grouping, and response transform as the chart. The ribbon median is scaled to the active GBM fitted prediction mean for the current chart slice, using the selected Weight when present; when `Both` is selected, the GLM line is aligned to the same fitted-mean baseline for direct comparison. Categorical x-axes also offer a SHAP sort ordered by median SHAP.
 
 ### Training and artifacts
 

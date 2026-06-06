@@ -784,6 +784,7 @@ def build_partial_dependence_overlay(
         return overlays.get("shap")
     if mode == "glm":
         return overlays.get("glm")
+    align_both_overlay_means(overlays)
     warnings: list[str] = []
     for overlay in overlays.values():
         warnings.extend(str(warning) for warning in (overlay.get("warnings") or []) if warning)
@@ -794,6 +795,51 @@ def build_partial_dependence_overlay(
         "warnings": warnings,
         "transform": {"mode": str(request.get("transform") or "none")},
     }
+
+
+def align_both_overlay_means(overlays: dict[str, dict[str, Any]]) -> None:
+    shap = overlays.get("shap")
+    glm = overlays.get("glm")
+    if not isinstance(shap, dict) or not isinstance(glm, dict):
+        return
+    target = json_number((shap.get("scale") or {}).get("target"))
+    if target is None:
+        return
+    rows = glm.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return
+    align_overlay_to_target(glm, target, label="GLM overlay")
+
+
+def align_overlay_to_target(overlay: dict[str, Any], target: float | int, *, label: str) -> None:
+    rows = [row for row in overlay.get("rows") or [] if isinstance(row, dict)]
+    source_mean = weighted_average((row.get("p50"), row.get("volume")) for row in rows)
+    if source_mean is None:
+        overlay.setdefault("warnings", []).append(f"{label} could not be aligned to the comparison mean.")
+        return
+    scale = overlay.setdefault("scale", {})
+    native_target = scale.get("target")
+    if native_target is not None and "native_target" not in scale:
+        scale["native_target"] = native_target
+    scale["target"] = json_number(target)
+    method = str(scale.get("method") or "").strip().lower()
+    if method == "multiply":
+        if source_mean == 0:
+            overlay.setdefault("warnings", []).append(f"{label} could not be aligned because its mean is zero.")
+            return
+        factor = float(target) / float(source_mean)
+        for row in rows:
+            for key in partial_dependence_value_keys(overlay):
+                value = json_number(row.get(key))
+                row[key] = json_number(float(value) * factor) if value is not None else None
+        scale["comparison"] = {"method": "multiply", "source_mean": json_number(source_mean), "factor": json_number(factor)}
+        return
+    shift = float(target) - float(source_mean)
+    for row in rows:
+        for key in partial_dependence_value_keys(overlay):
+            value = json_number(row.get(key))
+            row[key] = json_number(float(value) + shift) if value is not None else None
+    scale["comparison"] = {"method": "add", "source_mean": json_number(source_mean), "shift": json_number(shift)}
 
 
 def build_shap_partial_dependence_overlay(
