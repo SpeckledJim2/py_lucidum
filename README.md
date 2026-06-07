@@ -233,6 +233,8 @@ When a saved model has both Gain and saved SHAP rows, the Feature table shows a 
 
 When an active GBM has both saved predictions and saved SHAP rows, Line and Bar can show `Partial dependancies > SHAP` ribbons for the selected x-axis feature. These ribbons use the same grouping, banding, filter, denominator, low-weight grouping, and response transform as the chart. The ribbon median is scaled to the active GBM fitted prediction mean for the current chart slice, using the selected Weight when present; when `Both` is selected, the GLM line is aligned to the same fitted-mean baseline for direct comparison. Categorical x-axes also offer a SHAP sort ordered by median SHAP.
 
+When an active GLM is available, Line and Bar can show a dashed GLM overlay line. Main-effect features use a fast base-profile grid over the rendered x-axis groups. Simple two-way interactions use a collapsed partner grid, and complex interactions fall back to the deterministic sampled marginal PDP. When an isolated worker is needed, the first GLM overlay starts a persistent hot worker that is reused for later overlay requests.
+
 ### Training and artifacts
 
 Parameter values can use grid-search braces, such as `{200, 300, 400}`, `{0.05, 0.3; 0.05}`, or `{bagging, goss}` for `data_sample_strategy`; the app samples the hypergrid deterministically, trains one model per valid sampled combination, skips invalid combinations with a notice, and activates the best completed model.

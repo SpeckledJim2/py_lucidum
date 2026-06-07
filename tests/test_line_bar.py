@@ -987,7 +987,8 @@ COPY (
             ]
         }
 
-        result = chart(dataset, request, feature_spec=feature_spec)
+        with patch("py_lucidum.tools.glm.overlay.glm_sample_frame", side_effect=AssertionError("base profile should not sample rows")):
+            result = chart(dataset, request, feature_spec=feature_spec)
 
         partial = result["partial_dependence"]
         self.assertEqual(partial["mode"], "glm")
@@ -995,12 +996,39 @@ COPY (
         self.assertEqual(partial["feature"], "UseofVan")
         self.assertEqual(partial["method"], "base_profile")
         self.assertEqual(partial["percentiles"], [50])
+        self.assertEqual(partial["sample"]["sample_row_count"], 0)
+        self.assertEqual(partial["sample"]["prediction_cell_count"], 2)
+        self.assertIn("elapsed_ms", partial["timings"])
         self.assertEqual(partial["transform"]["reference"], "base")
         self.assertEqual(partial["transform"]["base_x"], "Social")
         by_x = {row["x"]: row for row in partial["rows"]}
         self.assertEqual(set(by_x), {"Business", "Social"})
         self.assertAlmostEqual(by_x["Social"]["p50"], 0.0)
         self.assertIsNotNone(by_x["Business"]["p50"])
+
+    def test_chart_glm_overlay_infers_base_profile_values_from_filtered_relation(self) -> None:
+        dataset = Dataset(self.data_path)
+        store, model_id = self.write_active_glm_for_overlay(dataset, formula="YoungestDriverAge")
+        from py_lucidum.tools.glm.overlay import glm_base_row_from_relation, glm_overlay_relation_sql
+
+        manifest = store.manifest(model_id)
+        source_columns = store.source_columns(manifest)
+        relation = glm_overlay_relation_sql(store, model_id, manifest, source_columns)
+        filter_sql = dataset.normalise_filter_for_relation("UseofVan = 'Business'", relation)
+        base = glm_base_row_from_relation(
+            dataset,
+            relation,
+            ["UseofVan", "YoungestDriverAge"],
+            manifest,
+            denominator={"column": None, "label": "Average row value", "bar_label": "Row count"},
+            filter_sql=filter_sql,
+            kinds={column.name: column.kind for column in dataset.valid_schema_columns()},
+            spec_rows={},
+            transform_bounds={},
+        )
+
+        self.assertEqual(base["UseofVan"], "Business")
+        self.assertAlmostEqual(base["YoungestDriverAge"], 55.0)
 
     def test_chart_glm_overlay_scales_base_profile_to_fitted_mean(self) -> None:
         self.data_path.write_text(
@@ -1029,7 +1057,7 @@ COPY (
         scaled_mean = sum(row["p50"] * row["volume"] for row in partial["rows"]) / sum(row["volume"] for row in partial["rows"])
         self.assertAlmostEqual(scaled_mean, partial["scale"]["target"])
 
-    def test_chart_glm_overlay_uses_sampled_marginal_with_interactions(self) -> None:
+    def test_chart_glm_overlay_uses_collapsed_marginal_with_simple_two_way_interactions(self) -> None:
         self.data_path.write_text(
             "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
             "25,Social,2024-01-01,2000,100,95,5\n"
@@ -1056,15 +1084,47 @@ COPY (
         self.assertEqual(partial["mode"], "glm")
         self.assertEqual(partial["model_id"], model_id)
         self.assertEqual(partial["feature"], "YoungestDriverAge")
+        self.assertEqual(partial["method"], "collapsed_marginal")
+        self.assertEqual(partial["sample"]["sample_row_count"], 0)
+        self.assertEqual(partial["sample"]["context_row_count"], 8)
+        self.assertEqual(partial["sample"]["interaction_partners"], ["Weight"])
+        self.assertEqual(partial["sample"]["x_value_count"], 5)
+        self.assertEqual(partial["sample"]["prediction_cell_count"], 40)
+        self.assertEqual(partial["sample"]["max_collapsed_context_rows"], 2000)
+        self.assertEqual(partial["sample"]["max_collapsed_prediction_cells"], 250000)
+        self.assertTrue(all(row["p50"] is not None for row in partial["rows"]))
+
+    def test_chart_glm_overlay_falls_back_to_sampled_marginal_for_higher_order_interactions(self) -> None:
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "25,Social,2024-01-01,2000,100,95,5\n"
+            "30,Social,2024-01-02,2400,130,125,9\n"
+            "35,Business,2024-01-03,2800,140,135,8\n"
+            "40,Social,2024-01-04,3200,180,175,15\n"
+            "45,Business,2024-01-05,3600,210,205,14\n"
+            "50,Social,2024-01-06,4000,260,255,19\n"
+            "55,Business,2024-01-07,4400,270,265,22\n"
+            "60,Business,2024-01-08,4800,330,325,25\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        self.write_active_glm_for_overlay(
+            dataset,
+            formula="YoungestDriverAge + Weight + `Gross.Weight` + YoungestDriverAge:Weight:`Gross.Weight`",
+        )
+        request = self.request()
+        request.update({"x": "YoungestDriverAge", "bandWidth": "10", "denominator": "Weight", "partialDependence": {"mode": "glm"}})
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
         self.assertEqual(partial["method"], "sampled_marginal")
         self.assertEqual(partial["sample"]["population_row_count"], 8)
         self.assertEqual(partial["sample"]["sample_row_count"], 8)
-        self.assertEqual(partial["sample"]["x_value_count"], 5)
+        self.assertEqual(partial["sample"]["interaction_partners"], ["Gross.Weight", "Weight"])
         self.assertEqual(partial["sample"]["prediction_cell_count"], 40)
-        self.assertEqual(partial["sample"]["max_sample_rows"], 100000)
-        self.assertEqual(partial["sample"]["max_prediction_cells"], 2000000)
-        self.assertEqual(partial["sample"]["seed"], 2026)
-        self.assertTrue(all(row["p50"] is not None for row in partial["rows"]))
+        self.assertIn("complex interaction terms", partial["sample"]["fallback_reason"])
+        self.assertTrue(any("complex interaction terms" in warning for warning in partial["warnings"]))
 
     def test_chart_both_mode_returns_shap_and_glm_overlays(self) -> None:
         dataset = self.dataset_with_gbm_ribbons(objective="regression")
@@ -1197,17 +1257,29 @@ COPY (
         self.assertEqual(result["partial_dependence"]["model_id"], "worker-model")
 
     def test_chart_glm_overlay_worker_returns_rows_when_lightgbm_loaded(self) -> None:
+        from py_lucidum.tools.glm.overlay import stop_persistent_glm_overlay_worker
+
         dataset = Dataset(self.data_path)
         self.write_active_glm_for_overlay(dataset)
         request = self.request()
         request["partialDependence"] = {"mode": "glm"}
 
-        with patch.dict(sys.modules, {"lightgbm": object()}):
-            result = chart(dataset, request)
+        stop_persistent_glm_overlay_worker()
+        try:
+            with patch.dict(sys.modules, {"lightgbm": object()}):
+                result = chart(dataset, request)
+                second = chart(dataset, request)
+        finally:
+            stop_persistent_glm_overlay_worker()
 
         partial = result["partial_dependence"]
         self.assertEqual(partial["mode"], "glm")
         self.assertGreater(len(partial["rows"]), 0)
+        self.assertEqual(partial["timings"]["worker_mode"], "persistent")
+        self.assertTrue(partial["timings"]["worker_started"])
+        second_partial = second["partial_dependence"]
+        self.assertEqual(second_partial["timings"]["worker_mode"], "persistent")
+        self.assertFalse(second_partial["timings"]["worker_started"])
 
     def test_chart_glm_overlay_fresh_process_survives_with_lightgbm_importable(self) -> None:
         if importlib.util.find_spec("lightgbm") is None:
