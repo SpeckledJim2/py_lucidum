@@ -25,7 +25,9 @@ from py_lucidum.tools.glm.training import (
     _suppress_tabmat_mixed_dtype_warning,
     glm_dependencies,
     glm_feature_importance_rows,
+    stop_persistent_glm_fit_worker,
     train_model,
+    train_model_in_subprocess,
 )
 from py_lucidum.tools.glm.validation import strip_formula_comments, validate_request
 
@@ -119,6 +121,7 @@ class GlmToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(stop_persistent_glm_fit_worker)
         self.root = Path(self.tmp.name)
         self.data_path = self.root / "sample.csv"
         self.data_path.write_text(
@@ -146,6 +149,25 @@ class GlmToolTests(unittest.TestCase):
         ]
         if missing:
             self.skipTest(f"missing optional modelling dependencies: {', '.join(missing)}")
+
+    def assert_glm_timing_metadata(self, timings: dict[str, Any]) -> None:
+        for key in (
+            "elapsed_ms",
+            "dependency_ms",
+            "data_load_ms",
+            "prep_ms",
+            "fit_ms",
+            "score_ms",
+            "artifact_write_ms",
+            "worker_total_ms",
+            "worker_mode",
+            "worker_started",
+        ):
+            self.assertIn(key, timings)
+        self.assertIn(timings["worker_mode"], {"in_process", "one_shot", "persistent", "one_shot_fallback"})
+        self.assertIsInstance(timings["worker_started"], bool)
+        for key in ("elapsed_ms", "dependency_ms", "data_load_ms", "prep_ms", "fit_ms", "score_ms", "artifact_write_ms", "worker_total_ms"):
+            self.assertGreaterEqual(float(timings[key]), 0.0)
 
     def spline_data_path(self) -> Path:
         path = self.root / "spline.csv"
@@ -221,6 +243,86 @@ if result.get("iteration") != 10:
             timeout=30,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+
+    def test_glm_subprocess_adds_worker_timing_metadata(self) -> None:
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        model_id = "mock-glm-worker-timings"
+        store.create_model_dir(model_id)
+        store.write_json(
+            store.artifact_path(model_id, "manifest"),
+            {
+                "model_id": model_id,
+                "tool": "glm",
+                "timings": {"dependency_ms": 12.3, "fit_ms": 45.6},
+            },
+        )
+        progress: list[dict[str, Any]] = []
+
+        def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            self.assertEqual(kwargs["env"]["PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD"], "1")
+            response_path = Path(cmd[-1])
+            response_path.write_text(
+                json.dumps({"ok": True, "result": {"model_id": model_id, "timings": {"dependency_ms": 12.3, "fit_ms": 45.6}}}),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.dict(os.environ, {"PY_LUCIDUM_GLM_FIT_ONE_SHOT": "1"}):
+            with patch("py_lucidum.tools.glm.training.subprocess.run", side_effect=fake_run):
+                result = train_model_in_subprocess(
+                    dataset,
+                    store,
+                    {"formula": "Age", "response_column": "actualNumerator", "family": "normal"},
+                    progress_callback=progress.append,
+                    parent_dependency_ms=7.7,
+                )
+
+        timings = result["timings"]
+        self.assertEqual(timings["worker_mode"], "one_shot")
+        self.assertTrue(timings["worker_started"])
+        self.assertGreaterEqual(float(timings["worker_total_ms"]), 0.0)
+        self.assertEqual(timings["parent_dependency_ms"], 7.7)
+        self.assertEqual(timings["worker_dependency_ms"], 12.3)
+        self.assertEqual(timings["dependency_ms"], 20.0)
+        self.assertEqual(store.manifest(model_id)["timings"]["worker_mode"], "one_shot")
+        self.assertEqual(progress[0]["message"], "Running isolated GLM fit worker")
+        self.assertEqual(progress[-1]["timings"]["dependency_ms"], 20.0)
+
+    def test_glm_persistent_worker_reuses_process_when_isolation_required(self) -> None:
+        self.require_glm_dependencies()
+        stop_persistent_glm_fit_worker()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        payload = {"formula": "Age + C(Segment)", "response_column": "actualNumerator", "family": "normal", "training_scope": "all"}
+        progress: list[dict[str, Any]] = []
+
+        with patch("py_lucidum.tools.glm.training.should_isolate_glm_fit", return_value=True):
+            first = train_model(dataset, store, {**payload, "label": "fit-worker-first"}, progress_callback=progress.append, activate=False)
+            second = train_model(dataset, store, {**payload, "label": "fit-worker-second"}, progress_callback=progress.append, activate=False)
+
+        self.assertEqual(first["timings"]["worker_mode"], "persistent")
+        self.assertEqual(second["timings"]["worker_mode"], "persistent")
+        self.assertTrue(first["timings"]["worker_started"])
+        self.assertFalse(second["timings"]["worker_started"])
+        self.assertGreaterEqual(float(second["timings"]["worker_total_ms"]), 0.0)
+        self.assertEqual(store.manifest(second["model_id"])["timings"]["worker_started"], False)
+
+    def test_glm_training_dispatches_to_worker_when_isolation_required(self) -> None:
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        payload = {"formula": "Age", "response_column": "actualNumerator", "family": "normal", "training_scope": "all"}
+        worker_result = {"model_id": "mock", "timings": {}}
+
+        with patch("py_lucidum.tools.glm.training.glm_dependencies", return_value=(None, None, None, None, None)):
+            with patch("py_lucidum.tools.glm.training.should_isolate_glm_fit", return_value=True):
+                with patch("py_lucidum.tools.glm.training.train_model_in_subprocess", return_value=worker_result) as worker:
+                    result = train_model(dataset, store, payload)
+
+        self.assertEqual(result, worker_result)
+        worker.assert_called_once()
+        self.assertEqual(worker.call_args.args[:3], (dataset, store, payload))
+        self.assertIn("parent_dependency_ms", worker.call_args.kwargs)
 
     def test_glm_suppresses_only_tabmat_mixed_dtype_warning(self) -> None:
         with warnings.catch_warnings(record=True) as captured:
@@ -434,6 +536,8 @@ if result.get("iteration") != 10:
         self.assertEqual(manifest["feature_importance_metric"]["interaction_allocation"], "split_evenly")
         self.assertTrue(manifest["feature_importance"])
         self.assertTrue({row["feature"] for row in manifest["feature_importance"]}.issubset({"Age", "Segment"}))
+        self.assert_glm_timing_metadata(manifest["timings"])
+        self.assertEqual(result["timings"]["worker_mode"], manifest["timings"]["worker_mode"])
 
         detail = store.model_detail(model_id)
         self.assertTrue(detail["coefficients"])
@@ -1090,6 +1194,9 @@ if result.get("iteration") != 10:
             time.sleep(0.05)
         self.assertEqual(payload["status"], "succeeded", payload)
         model_id = payload["result"]["model_id"]
+        self.assert_glm_timing_metadata(payload["result"]["timings"])
+        self.assertIn("timings", payload["progress"])
+        self.assertIn("worker_total_ms", payload["progress"]["timings"])
 
         status, body = asgi_post_json(app, "/api/glm/tabulations/config", {"model_ids": [model_id]})
         tab_config = json.loads(body)

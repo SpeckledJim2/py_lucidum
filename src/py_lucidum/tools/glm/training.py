@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import atexit
 from collections.abc import Iterator
 from contextlib import contextmanager
 import json
 import math
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import warnings
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 import duckdb
 
@@ -27,6 +31,44 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 _GLUM_FIRST_IMPORT_SAW_LIGHTGBM: bool | None = None
 FEATURE_IMPORTANCE_METRIC = "weighted_mean_abs_centered_linear_predictor_contribution"
 FEATURE_IMPORTANCE_METRIC_LABEL = "GLM eta MAD"
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 1)
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _result_timings(result: dict[str, Any]) -> dict[str, Any]:
+    timings = result.get("timings")
+    if not isinstance(timings, dict):
+        timings = {}
+        result["timings"] = timings
+    return timings
+
+
+def _merge_result_timings(result: dict[str, Any], timings: dict[str, Any]) -> dict[str, Any]:
+    result_timings = _result_timings(result)
+    result_timings.update(timings)
+    return result_timings
+
+
+def _persist_manifest_timings(store: GlmModelStore, result: dict[str, Any], timings: dict[str, Any]) -> None:
+    model_id = str(result.get("model_id") or "").strip()
+    if not model_id:
+        return
+    manifest = store.manifest(model_id)
+    manifest_timings = manifest.get("timings")
+    if not isinstance(manifest_timings, dict):
+        manifest_timings = {}
+        manifest["timings"] = manifest_timings
+    manifest_timings.update(timings)
+    store.write_json(store.artifact_path(model_id, "manifest"), manifest)
 
 
 @contextmanager
@@ -108,13 +150,47 @@ def should_isolate_glm_fit() -> bool:
 
 def train_model_in_subprocess(
     dataset: Dataset,
+    store: GlmModelStore,
     payload: dict[str, Any],
     *,
     progress_callback: ProgressCallback | None = None,
     activate: bool = True,
+    parent_dependency_ms: float = 0.0,
+) -> dict[str, Any]:
+    if not os.environ.get("PY_LUCIDUM_GLM_FIT_ONE_SHOT"):
+        result, _started = persistent_glm_fit_worker().request(
+            dataset,
+            store,
+            payload,
+            progress_callback=progress_callback,
+            activate=activate,
+            parent_dependency_ms=parent_dependency_ms,
+        )
+        return result
+    return train_model_in_subprocess_one_shot(
+        dataset,
+        store,
+        payload,
+        progress_callback=progress_callback,
+        activate=activate,
+        parent_dependency_ms=parent_dependency_ms,
+        worker_mode="one_shot",
+    )
+
+
+def train_model_in_subprocess_one_shot(
+    dataset: Dataset,
+    store: GlmModelStore,
+    payload: dict[str, Any],
+    *,
+    progress_callback: ProgressCallback | None = None,
+    activate: bool = True,
+    parent_dependency_ms: float = 0.0,
+    worker_mode: str = "one_shot",
 ) -> dict[str, Any]:
     progress = progress_callback or (lambda _progress: None)
-    progress({"phase": "fitting", "message": "Starting isolated GLM worker", "percent": 30})
+    progress({"phase": "fitting", "message": "Running isolated GLM fit worker", "percent": 30, "worker_mode": worker_mode})
+    worker_started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="lucidum-glm-worker-") as tmp_dir:
         tmp_path = Path(tmp_dir)
         request_path = tmp_path / "request.json"
@@ -145,14 +221,223 @@ def train_model_in_subprocess(
         if not response_path.exists():
             raise RuntimeError("GLM worker exited without writing a response")
         response = json.loads(response_path.read_text(encoding="utf-8"))
+    worker_total_ms = _elapsed_ms(worker_started)
     if not response.get("ok"):
         error = str(response.get("error") or "GLM worker failed")
         raise RuntimeError(error)
     result = response.get("result")
     if not isinstance(result, dict):
         raise RuntimeError("GLM worker returned an invalid response")
-    progress({"phase": "writing", "message": "GLM worker saved artifacts", "percent": 90})
+    timings = _result_timings(result)
+    worker_dependency_ms = _safe_float(timings.get("dependency_ms"))
+    worker_timings = {
+        "worker_mode": worker_mode,
+        "worker_started": True,
+        "worker_total_ms": worker_total_ms,
+        "parent_dependency_ms": round(parent_dependency_ms, 1),
+        "worker_dependency_ms": round(worker_dependency_ms, 1),
+        "dependency_ms": round(parent_dependency_ms + worker_dependency_ms, 1),
+    }
+    _merge_result_timings(result, worker_timings)
+    _persist_manifest_timings(store, result, worker_timings)
+    progress({"phase": "writing", "message": "GLM worker saved artifacts", "percent": 90, "timings": result.get("timings")})
     return result
+
+
+class _GlmFitWorkerResponseError(RuntimeError):
+    pass
+
+
+class PersistentGlmFitWorker:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._process: subprocess.Popen[str] | None = None
+        self._tmp_dir: Path | None = None
+
+    def request(
+        self,
+        dataset: Dataset,
+        store: GlmModelStore,
+        payload: dict[str, Any],
+        *,
+        progress_callback: ProgressCallback | None = None,
+        activate: bool = True,
+        parent_dependency_ms: float = 0.0,
+    ) -> tuple[dict[str, Any], bool]:
+        progress = progress_callback or (lambda _progress: None)
+        progress({"phase": "fitting", "message": "Running isolated GLM fit worker", "percent": 30, "worker_mode": "persistent"})
+        request_path: Path | None = None
+        response_path: Path | None = None
+        with self._lock:
+            try:
+                process, started = self._ensure_process()
+                request_id = uuid4().hex
+                tmp_dir = self._tmp_dir
+                if tmp_dir is None:
+                    raise RuntimeError("GLM fit worker temporary directory is not available.")
+                request_path = tmp_dir / f"{request_id}.request.json"
+                response_path = tmp_dir / f"{request_id}.response.json"
+                request_path.write_text(
+                    json.dumps(
+                        {
+                            "dataset_path": str(dataset.path),
+                            "payload": payload,
+                            "activate": activate,
+                        },
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                if process.stdin is None or process.stdout is None:
+                    raise RuntimeError("GLM fit worker pipes are not available.")
+                worker_started = time.perf_counter()
+                process.stdin.write(json.dumps({"request_id": request_id, "request_path": str(request_path), "response_path": str(response_path)}) + "\n")
+                process.stdin.flush()
+                self._wait_for_ack(process, request_id)
+                worker_total_ms = _elapsed_ms(worker_started)
+                if not response_path.exists():
+                    raise RuntimeError("GLM fit worker did not write a response.")
+                response = json.loads(response_path.read_text(encoding="utf-8"))
+                if not response.get("ok"):
+                    raise _GlmFitWorkerResponseError(str(response.get("error") or "GLM worker failed"))
+                result = response.get("result")
+                if not isinstance(result, dict):
+                    raise RuntimeError("GLM fit worker returned an invalid response.")
+                self._annotate_result(
+                    store,
+                    result,
+                    worker_mode="persistent",
+                    worker_started=started,
+                    worker_total_ms=worker_total_ms,
+                    parent_dependency_ms=parent_dependency_ms,
+                )
+                progress({"phase": "writing", "message": "GLM worker saved artifacts", "percent": 90, "timings": result.get("timings")})
+                return result, started
+            except _GlmFitWorkerResponseError:
+                raise
+            except Exception:
+                self.stop()
+                fallback = train_model_in_subprocess_one_shot(
+                    dataset,
+                    store,
+                    payload,
+                    progress_callback=progress_callback,
+                    activate=activate,
+                    parent_dependency_ms=parent_dependency_ms,
+                    worker_mode="one_shot_fallback",
+                )
+                return fallback, True
+            finally:
+                for path in (request_path, response_path):
+                    if isinstance(path, Path):
+                        try:
+                            path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+
+    def _annotate_result(
+        self,
+        store: GlmModelStore,
+        result: dict[str, Any],
+        *,
+        worker_mode: str,
+        worker_started: bool,
+        worker_total_ms: float,
+        parent_dependency_ms: float,
+    ) -> None:
+        timings = _result_timings(result)
+        worker_dependency_ms = _safe_float(timings.get("dependency_ms"))
+        worker_timings = {
+            "worker_mode": worker_mode,
+            "worker_started": bool(worker_started),
+            "worker_total_ms": round(worker_total_ms, 1),
+            "parent_dependency_ms": round(parent_dependency_ms, 1),
+            "worker_dependency_ms": round(worker_dependency_ms, 1),
+            "dependency_ms": round(parent_dependency_ms + worker_dependency_ms, 1),
+        }
+        _merge_result_timings(result, worker_timings)
+        _persist_manifest_timings(store, result, worker_timings)
+
+    def _ensure_process(self) -> tuple[subprocess.Popen[str], bool]:
+        process = self._process
+        if process is not None and process.poll() is None:
+            return process, False
+        self.stop()
+        tmp_dir = Path(tempfile.mkdtemp(prefix="lucidum-glm-fit-hot-"))
+        process = subprocess.Popen(
+            [sys.executable, "-m", "py_lucidum.tools.glm.worker", "--server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            env={
+                **os.environ,
+                "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1",
+                "PY_LUCIDUM_GLM_FIT_WORKER": "1",
+            },
+        )
+        self._tmp_dir = tmp_dir
+        self._process = process
+        return process, True
+
+    def _wait_for_ack(self, process: subprocess.Popen[str], request_id: str) -> None:
+        if process.stdout is None:
+            raise RuntimeError("GLM fit worker stdout is not available.")
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                raise RuntimeError(f"GLM fit worker exited unexpectedly with code {process.poll()}.")
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(message.get("request_id") or "") != request_id:
+                continue
+            if not message.get("ok", True):
+                raise RuntimeError(str(message.get("error") or "GLM fit worker failed."))
+            return
+
+    def stop(self) -> None:
+        process = self._process
+        self._process = None
+        if process is not None and process.poll() is None:
+            try:
+                if process.stdin is not None:
+                    process.stdin.write(json.dumps({"command": "shutdown"}) + "\n")
+                    process.stdin.flush()
+                process.wait(timeout=2)
+            except Exception:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except Exception:
+                    process.kill()
+        if process is not None:
+            for pipe in (process.stdin, process.stdout):
+                try:
+                    if pipe is not None:
+                        pipe.close()
+                except OSError:
+                    pass
+        tmp_dir = self._tmp_dir
+        self._tmp_dir = None
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+_PERSISTENT_GLM_FIT_WORKER = PersistentGlmFitWorker()
+
+
+def persistent_glm_fit_worker() -> PersistentGlmFitWorker:
+    return _PERSISTENT_GLM_FIT_WORKER
+
+
+def stop_persistent_glm_fit_worker() -> None:
+    _PERSISTENT_GLM_FIT_WORKER.stop()
+
+
+atexit.register(stop_persistent_glm_fit_worker)
 
 
 def write_dataframe_parquet(frame: Any, path: Path) -> None:
@@ -500,10 +785,32 @@ def train_model(
     progress_callback: ProgressCallback | None = None,
     activate: bool = True,
 ) -> dict[str, Any]:
+    dependency_started = time.perf_counter()
     glm_dependencies()
+    parent_dependency_ms = _elapsed_ms(dependency_started)
     if should_isolate_glm_fit():
-        return train_model_in_subprocess(dataset, payload, progress_callback=progress_callback, activate=activate)
-    return _train_model_impl(dataset, store, payload, progress_callback=progress_callback, activate=activate)
+        return train_model_in_subprocess(
+            dataset,
+            store,
+            payload,
+            progress_callback=progress_callback,
+            activate=activate,
+            parent_dependency_ms=parent_dependency_ms,
+        )
+    return _train_model_impl(
+        dataset,
+        store,
+        payload,
+        progress_callback=progress_callback,
+        activate=activate,
+        overall_started=dependency_started,
+        base_timings={
+            "worker_mode": "in_process",
+            "worker_started": False,
+            "worker_total_ms": 0.0,
+            "parent_dependency_ms": parent_dependency_ms,
+        },
+    )
 
 
 def _train_model_impl(
@@ -513,16 +820,31 @@ def _train_model_impl(
     *,
     progress_callback: ProgressCallback | None = None,
     activate: bool = True,
+    overall_started: float | None = None,
+    base_timings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    started = overall_started if overall_started is not None else time.perf_counter()
+    timings = dict(base_timings or {})
+    dependency_started = time.perf_counter()
     glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd = glm_dependencies()
+    local_dependency_ms = _elapsed_ms(dependency_started)
+    parent_dependency_ms = _safe_float(timings.get("parent_dependency_ms"))
+    timings["dependency_ms"] = round(parent_dependency_ms + local_dependency_ms, 1)
+    if parent_dependency_ms:
+        timings["training_dependency_ms"] = local_dependency_ms
+
+    prep_started = time.perf_counter()
     validation = validate_request(dataset, payload)
     if not validation["ok"]:
         raise ValueError("; ".join(validation["errors"]))
+    timings["validation_ms"] = _elapsed_ms(prep_started)
 
     progress = progress_callback or (lambda _progress: None)
     progress({"phase": "loading", "message": "Loading GLM training data", "percent": 5})
-    started = time.perf_counter()
+    data_load_started = time.perf_counter()
     frame, source_columns = data_frame_from_dataset(dataset)
+    timings["data_load_ms"] = _elapsed_ms(data_load_started)
+    prep_started = time.perf_counter()
 
     response_column = str(validation["response_column"])
     denominator_column = str(validation["denominator_column"] or "")
@@ -598,6 +920,8 @@ def _train_model_impl(
             alpha=0,
             **estimator_kwargs,
         )
+    timings["prep_ms"] = _elapsed_ms(prep_started)
+    fit_started = time.perf_counter()
     with _suppress_tabmat_mixed_dtype_warning():
         estimator.fit(
             fit_frame,
@@ -606,9 +930,11 @@ def _train_model_impl(
             context=context,
             offset=fit_offset_values,
         )
+    timings["fit_ms"] = _elapsed_ms(fit_started)
     regularization = regularization_summary(estimator, regularization, np)
 
     progress({"phase": "scoring", "message": "Scoring GLM predictions", "percent": 70})
+    score_started = time.perf_counter()
     with _suppress_tabmat_mixed_dtype_warning():
         predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pd, offset_values=offset_values)
         coefficients = coefficient_rows(
@@ -640,6 +966,7 @@ def _train_model_impl(
             len(coefficients),
             offset_values=fit_offset_values,
         )
+    timings["score_ms"] = _elapsed_ms(score_started)
     diagnostics.update(
         {
             "training_rows": int(fit_mask.sum()),
@@ -692,10 +1019,11 @@ def _train_model_impl(
         "scored_rows": scored_rows,
         "fitted_na_rows": fitted_na_rows,
         "coefficient_count": len(coefficients),
-        "timings": {"elapsed_ms": round((time.perf_counter() - started) * 1000, 1)},
+        "timings": timings,
     }
 
     progress({"phase": "writing", "message": "Saving GLM artifacts", "percent": 90})
+    artifact_write_started = time.perf_counter()
     coefficient_frame = pd.DataFrame(coefficients)
     feature_importance_frame = pd.DataFrame(
         feature_importance,
@@ -708,6 +1036,9 @@ def _train_model_impl(
         pickle.dump(estimator, handle, protocol=pickle.HIGHEST_PROTOCOL)
     store.artifact_path(model_id, "formula").write_text(str(formula["raw"]), encoding="utf-8")
     store.write_json(store.artifact_path(model_id, "diagnostics"), manifest["diagnostics"])
+    timings["artifact_write_ms"] = _elapsed_ms(artifact_write_started)
+    timings["elapsed_ms"] = _elapsed_ms(started)
+    progress({"phase": "writing", "message": "Saved GLM artifacts", "percent": 95, "timings": timings})
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
 
     result = store.activate_model(model_id) if activate else manifest

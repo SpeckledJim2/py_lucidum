@@ -212,6 +212,8 @@ The Penalty selector defaults to `None` for the existing unregularized fit. `Aut
 
 `All` fits all valid rows. `Training` fits only rows where a physical `SAMPLE` column equals `training`, case-insensitively; GLM does not create generated sample splits.
 
+GLM model manifests include build timing diagnostics for dependency setup, data loading, formula prep, fitting, scoring, artifact writes, and isolated worker elapsed time. When LightGBM/glum load-order protection is required, GLM fitting stays isolated in a hot worker that is reused after the first build; set `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` to force the old one-shot worker path for debugging.
+
 ## GBM Models
 
 The GBM tool is opt-in. Column Profile remains enabled and opens first. Requesting `gbm` also enables the GLM tool so the shared tabulation/comparison workflow is available:
