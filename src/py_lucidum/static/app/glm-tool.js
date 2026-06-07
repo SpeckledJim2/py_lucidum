@@ -163,6 +163,7 @@ export function createGlmTool({
   let selectedRegularizationAlpha = localStorage.getItem("py_lucidum_glm_regularization_alpha") || "0.01";
   let formulaDraft = localStorage.getItem("py_lucidum_glm_formula")
     || "# GLM formula\n# Enter RHS terms, or response ~ terms\n";
+  let builderDraftSourceModelId = "";
 
   function buildRequest() {
     if (!state.schema) return null;
@@ -215,8 +216,11 @@ export function createGlmTool({
   }
 
   function render(data = {}) {
+    captureBuilderDraft();
     config = data;
     modelRows = normaliseModels(data.models || []);
+    const activeModelId = currentActiveModelId(data);
+    if (!activeModelId) builderDraftSourceModelId = "";
     const availableModelIds = new Set(modelRows.map((model) => model.model_id));
     selectedModelIds = new Set(Array.from(selectedModelIds).filter((modelId) => availableModelIds.has(modelId)));
     const availableTabulationRefs = new Set(tabulationAvailableModels().map((model) => tabulationModelRef(model)).filter(Boolean));
@@ -244,7 +248,7 @@ export function createGlmTool({
     syncSidebarModelChooser(modelRows, data.active_model_id);
     renderCoefficientTable(coefficientRowsForActiveModel(data.active_model_id));
     initEditor();
-    if (data.active_model_id) loadModelDetail(data.active_model_id);
+    if (activeModelId) loadModelDetail(activeModelId);
     if (liveProgress) renderLiveProgress(liveProgress);
     if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
     setDuckDbTiming(tool, data.timings || {});
@@ -1230,6 +1234,7 @@ export function createGlmTool({
   function disposeEditor() {
     if (!aceEditor) return;
     formulaDraft = aceEditor.getValue();
+    localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
     try {
       aceEditor.destroy();
     } catch (_) {
@@ -1239,9 +1244,7 @@ export function createGlmTool({
   }
 
   function getFormulaText() {
-    if (aceEditor) formulaDraft = aceEditor.getValue();
-    else if (el("glmFormulaText")) formulaDraft = el("glmFormulaText").value;
-    localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
+    captureBuilderDraft();
     return formulaDraft;
   }
 
@@ -1265,7 +1268,46 @@ export function createGlmTool({
     if (el("glmFormulaText")) el("glmFormulaText").style.fontSize = `${editorFontSize}px`;
   }
 
+  function captureBuilderDraft() {
+    if (aceEditor) formulaDraft = aceEditor.getValue();
+    else if (el("glmFormulaText")) formulaDraft = el("glmFormulaText").value;
+    localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
+
+    const familySelect = el("glmFamilySelect");
+    if (familySelect?.value) {
+      selectedFamily = familySelect.value;
+      localStorage.setItem("py_lucidum_glm_family", selectedFamily);
+    }
+    const familyParameter = el("glmFamilyParameter");
+    if (familyParameter && familyParameterConfig(selectedFamily)) {
+      localStorage.setItem(`py_lucidum_glm_family_parameter_${selectedFamily}`, familyParameter.value.trim());
+    }
+
+    const activeScope = document.querySelector("[data-glm-scope].active")?.dataset?.glmScope;
+    if (activeScope === "all" || activeScope === "training") {
+      selectedTrainingScope = activeScope;
+      localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
+    }
+
+    const regularizationMode = el("glmRegularizationMode");
+    if (regularizationMode?.value) {
+      selectedRegularizationMode = regularizationMode.value || "none";
+      localStorage.setItem("py_lucidum_glm_regularization_mode", selectedRegularizationMode);
+    }
+    const regularizationMix = el("glmRegularizationMix");
+    if (regularizationMix?.value) {
+      selectedRegularizationMix = regularizationMix.value || "0.5";
+      localStorage.setItem("py_lucidum_glm_regularization_mix", selectedRegularizationMix);
+    }
+    const regularizationAlpha = el("glmRegularizationAlpha");
+    if (regularizationAlpha) {
+      selectedRegularizationAlpha = regularizationAlpha.value.trim();
+      localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
+    }
+  }
+
   function buildPayload() {
+    captureBuilderDraft();
     const actual = el("actualNumerator")?.value || "";
     const denominator = el("denominator")?.value || "__none__";
     const family = el("glmFamilySelect")?.value || selectedFamily || "normal";
@@ -1489,7 +1531,8 @@ export function createGlmTool({
     ].filter(Boolean).join("");
   }
 
-  function syncBuilderFromModelDetail(detail = {}) {
+  function syncBuilderFromModelDetail(detail = {}, options = {}) {
+    if (options.syncBuilderDraft === false) return;
     const manifest = detail?.manifest || {};
     const rawFormula = detail?.formula ?? manifest?.formula?.raw;
     if (rawFormula !== undefined && rawFormula !== null) setFormulaText(String(rawFormula));
@@ -1621,7 +1664,9 @@ export function createGlmTool({
       activeDetail = await api(`/api/glm/models/${encodeURIComponent(modelId)}`, { method: "GET" });
       const detailModelId = String(activeDetail?.manifest?.model_id || modelId || "");
       if (detailModelId !== String(config?.active_model_id || modelId || "")) return;
-      syncBuilderFromModelDetail(activeDetail);
+      const syncBuilderDraft = detailModelId !== builderDraftSourceModelId;
+      syncBuilderFromModelDetail(activeDetail, { syncBuilderDraft });
+      if (syncBuilderDraft) builderDraftSourceModelId = detailModelId;
       const diagnostics = activeDetail?.diagnostics || activeDetail?.manifest?.diagnostics || {};
       const meta = el("glmCoefficientMeta");
       if (meta) meta.innerHTML = diagnosticsHtml(diagnostics, activeDetail?.manifest || {});
@@ -1893,7 +1938,7 @@ export function createGlmTool({
         method: "POST",
         body: JSON.stringify({ new_model_id: trimmed }),
       });
-      await applyModelMutationResult(result);
+      await applyModelMutationResult(result, { renamedFrom: modelId });
     } catch (error) {
       setGlmNotice(error.message);
     }
@@ -1925,10 +1970,17 @@ export function createGlmTool({
     }
   }
 
-  async function applyModelMutationResult(result) {
+  async function applyModelMutationResult(result, options = {}) {
+    captureBuilderDraft();
     const nextConfig = result.config || config || {};
+    const renamedFrom = String(options?.renamedFrom || "");
+    const renamedTo = String(result?.model?.model_id || "");
+    if (renamedFrom && renamedTo && builderDraftSourceModelId === renamedFrom) {
+      builderDraftSourceModelId = renamedTo;
+    }
     await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "glm" });
     const preserveProfile = clearCachesAfterGlmModelSourceChange();
+    if (!currentActiveModelId(nextConfig)) builderDraftSourceModelId = "";
     activeDetail = null;
     coefficientRows = [];
     setDatasetGlmCount(Array.isArray(nextConfig?.models) ? nextConfig.models.length : null);
@@ -1967,6 +2019,10 @@ export function createGlmTool({
 
   function dataSourceById(sourceId) {
     return (state.schema?.data_sources || []).find((source) => source.id === sourceId) || null;
+  }
+
+  function currentActiveModelId(data = config) {
+    return String(data?.active_model_id || (data?.models || []).find((model) => model.active)?.model_id || "");
   }
 
   function normaliseModels(models = []) {

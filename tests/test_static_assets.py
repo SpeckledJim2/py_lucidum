@@ -669,8 +669,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('setAppReadyStatus("Ready");', glm_js)
         self.assertNotIn('setAppReadyStatus("GLM built")', glm_js)
         self.assertNotIn('setGlmNotice(job.error || "GLM build failed");', glm_js)
-        self.assertIn("function syncBuilderFromModelDetail(detail = {})", glm_js)
-        self.assertIn("syncBuilderFromModelDetail(activeDetail);", glm_js)
+        self.assertIn("function syncBuilderFromModelDetail(detail = {}, options = {})", glm_js)
+        self.assertIn("syncBuilderFromModelDetail(activeDetail, { syncBuilderDraft });", glm_js)
         self.assertIn('class="glm-model-active-dot"', glm_js)
         self.assertIn('class="glm-model-name-cell"><span class="glm-model-name-main"', glm_js)
         self.assertIn("<th>created</th>", glm_js)
@@ -823,23 +823,78 @@ syncBuilderFromModelDetail({
     family: "tweedie",
     family_parameter: 1.3,
     training_scope: "training",
+    regularization: { mode: "manual", l1_ratio: 0.25, alpha: "0.07" },
     formula: { raw: "fallback formula" },
   },
-});
+}, { syncBuilderDraft: true });
 if (formulaText !== "Age + C(Segment)") throw new Error(`formula ${formulaText}`);
 if (selectedFamily !== "tweedie") throw new Error(`family ${selectedFamily}`);
 if (nodes.glmFamilySelect.value !== "tweedie") throw new Error(`select ${nodes.glmFamilySelect.value}`);
 if (nodes.glmFamilyParameter.value !== "1.3") throw new Error(`parameter ${nodes.glmFamilyParameter.value}`);
 if (selectedTrainingScope !== "training") throw new Error(`scope ${selectedTrainingScope}`);
 if (allButton.active || !trainingButton.active) throw new Error("scope buttons not synced");
-if (!nodes.glmRegularizationMix.disabled) throw new Error("mix should be disabled outside manual");
-if (!nodes.glmRegularizationAlpha.disabled) throw new Error("alpha should be disabled outside manual");
-if (!nodes.glmRegularizationManualControls.disabledClass) throw new Error("manual controls should be muted outside manual");
+if (selectedRegularizationMode !== "manual") throw new Error(`mode ${selectedRegularizationMode}`);
+if (nodes.glmRegularizationMode.value !== "manual") throw new Error(`mode select ${nodes.glmRegularizationMode.value}`);
+if (selectedRegularizationMix !== "0.25") throw new Error(`mix ${selectedRegularizationMix}`);
+if (nodes.glmRegularizationMix.value !== "0.25") throw new Error(`mix input ${nodes.glmRegularizationMix.value}`);
+if (selectedRegularizationAlpha !== "0.07") throw new Error(`alpha ${selectedRegularizationAlpha}`);
+if (nodes.glmRegularizationAlpha.value !== "0.07") throw new Error(`alpha input ${nodes.glmRegularizationAlpha.value}`);
+if (nodes.glmRegularizationMix.disabled) throw new Error("mix should be enabled for manual");
+if (nodes.glmRegularizationAlpha.disabled) throw new Error("alpha should be enabled for manual");
+if (nodes.glmRegularizationManualControls.disabledClass) throw new Error("manual controls should not be muted for manual");
 if (nodes.glmRegularizationManualControls.hidden) throw new Error("manual controls should remain visible");
 if (localStorage.getItem("py_lucidum_glm_formula") !== "Age + C(Segment)") throw new Error("formula storage failed");
 if (localStorage.getItem("py_lucidum_glm_family") !== "tweedie") throw new Error("family storage failed");
 if (localStorage.getItem("py_lucidum_glm_family_parameter_tweedie") !== "1.3") throw new Error("parameter storage failed");
 if (localStorage.getItem("py_lucidum_glm_training_scope") !== "training") throw new Error("scope storage failed");
+if (localStorage.getItem("py_lucidum_glm_regularization_mode") !== "manual") throw new Error("mode storage failed");
+if (localStorage.getItem("py_lucidum_glm_regularization_mix") !== "0.25") throw new Error("mix storage failed");
+if (localStorage.getItem("py_lucidum_glm_regularization_alpha") !== "0.07") throw new Error("alpha storage failed");
+
+setFormulaText("draft formula");
+selectedFamily = "negative.binomial";
+nodes.glmFamilySelect.value = "negative.binomial";
+nodes.glmFamilyParameter.value = "2.7";
+localStorage.setItem("py_lucidum_glm_family", selectedFamily);
+localStorage.setItem("py_lucidum_glm_family_parameter_negative.binomial", "2.7");
+selectedTrainingScope = "all";
+allButton.active = true;
+trainingButton.active = false;
+localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
+selectedRegularizationMode = "manual";
+selectedRegularizationMix = "1";
+selectedRegularizationAlpha = "0.09";
+nodes.glmRegularizationMode.value = "manual";
+nodes.glmRegularizationMix.value = "1";
+nodes.glmRegularizationAlpha.value = "0.09";
+localStorage.setItem("py_lucidum_glm_regularization_mode", selectedRegularizationMode);
+localStorage.setItem("py_lucidum_glm_regularization_mix", selectedRegularizationMix);
+localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
+syncBuilderFromModelDetail({
+  formula: "different model formula",
+  manifest: {
+    family: "gamma",
+    family_parameter: null,
+    training_scope: "training",
+    regularization: { mode: "none" },
+  },
+}, { syncBuilderDraft: false });
+if (formulaText !== "draft formula") throw new Error(`draft formula overwritten: ${formulaText}`);
+if (selectedFamily !== "negative.binomial") throw new Error(`draft family overwritten: ${selectedFamily}`);
+if (nodes.glmFamilySelect.value !== "negative.binomial") throw new Error(`draft select overwritten: ${nodes.glmFamilySelect.value}`);
+if (nodes.glmFamilyParameter.value !== "2.7") throw new Error(`draft parameter overwritten: ${nodes.glmFamilyParameter.value}`);
+if (selectedTrainingScope !== "all") throw new Error(`draft scope overwritten: ${selectedTrainingScope}`);
+if (!allButton.active || trainingButton.active) throw new Error("draft scope buttons overwritten");
+if (selectedRegularizationMode !== "manual") throw new Error(`draft mode overwritten: ${selectedRegularizationMode}`);
+if (selectedRegularizationMix !== "1") throw new Error(`draft mix overwritten: ${selectedRegularizationMix}`);
+if (selectedRegularizationAlpha !== "0.09") throw new Error(`draft alpha overwritten: ${selectedRegularizationAlpha}`);
+if (localStorage.getItem("py_lucidum_glm_formula") !== "draft formula") throw new Error("draft formula storage overwritten");
+if (localStorage.getItem("py_lucidum_glm_family") !== "negative.binomial") throw new Error("draft family storage overwritten");
+if (localStorage.getItem("py_lucidum_glm_family_parameter_negative.binomial") !== "2.7") throw new Error("draft parameter storage overwritten");
+if (localStorage.getItem("py_lucidum_glm_training_scope") !== "all") throw new Error("draft scope storage overwritten");
+if (localStorage.getItem("py_lucidum_glm_regularization_mode") !== "manual") throw new Error("draft mode storage overwritten");
+if (localStorage.getItem("py_lucidum_glm_regularization_mix") !== "1") throw new Error("draft mix storage overwritten");
+if (localStorage.getItem("py_lucidum_glm_regularization_alpha") !== "0.09") throw new Error("draft alpha storage overwritten");
 """
         self.run_node_script(script)
 

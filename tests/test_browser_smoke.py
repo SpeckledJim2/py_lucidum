@@ -258,6 +258,11 @@ COPY (
                 "Browser smoke GLM",
                 "2026-05-25T00:00:02Z",
                 [0.15, 0.25, 0.35],
+                formula="actualNumerator ~ 1 + Age + Segment",
+                family="tweedie",
+                family_parameter=1.5,
+                training_scope="all",
+                regularization={"mode": "none"},
             )
             self.write_glm_prediction_model(
                 glm_store,
@@ -265,6 +270,11 @@ COPY (
                 "Second smoke GLM",
                 "2026-05-25T00:00:03Z",
                 [0.45, 0.55, 0.65],
+                formula="actualNumerator ~ 1 + Age",
+                family="normal",
+                family_parameter=None,
+                training_scope="training",
+                regularization={"mode": "manual", "l1_ratio": 1, "alpha": "0.07"},
             )
             self.write_glm_prediction_model(
                 glm_store,
@@ -541,30 +551,36 @@ COPY (
         label: str,
         created_at: str,
         predictions: list[float],
+        *,
+        formula: str = "actualNumerator ~ 1 + Age + Segment",
+        family: str = "tweedie",
+        family_parameter: float | str | None = 1.5,
+        training_scope: str = "all",
+        regularization: dict[str, Any] | None = None,
     ) -> None:
         model_dir = store.create_model_dir(model_id)
         diagnostics = {"aic": 123.45, "deviance": 67.89, "dispersion": 1.2, "na_in_fitted": 0}
-        store.write_json(
-            model_dir / "manifest.json",
-            {
-                "model_id": model_id,
-                "label": label,
-                "created_at": created_at,
-                "family": "tweedie",
-                "link": "auto",
-                "family_parameter": 1.5,
-                "response_column": "actualNumerator",
-                "denominator_column": "denominator",
-                "training_scope": "all",
-                "training_rows": 2,
-                "scored_rows": len(predictions),
-                "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
-                "sources": {"predictions": store.source_id(model_id)},
-                "diagnostics": diagnostics,
-            },
-        )
+        manifest = {
+            "model_id": model_id,
+            "label": label,
+            "created_at": created_at,
+            "family": family,
+            "link": "auto",
+            "response_column": "actualNumerator",
+            "denominator_column": "denominator",
+            "training_scope": training_scope,
+            "training_rows": 2,
+            "scored_rows": len(predictions),
+            "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
+            "sources": {"predictions": store.source_id(model_id)},
+            "diagnostics": diagnostics,
+            "regularization": regularization or {"mode": "none"},
+        }
+        if family_parameter is not None:
+            manifest["family_parameter"] = family_parameter
+        store.write_json(model_dir / "manifest.json", manifest)
         store.write_json(model_dir / "diagnostics.json", diagnostics)
-        (model_dir / "formula.txt").write_text("actualNumerator ~ 1 + Age + Segment", encoding="utf-8")
+        (model_dir / "formula.txt").write_text(formula, encoding="utf-8")
         prediction_rows = "\n  UNION ALL\n  ".join(
             f"SELECT {index + 1} AS __lucidum_row_id, {float(value)} AS glm_prediction"
             for index, value in enumerate(predictions)
@@ -786,6 +802,96 @@ COPY (
                     "gamma · iter 3 · train 0.61 · test 0.61",
                 )
 
+                def glm_builder_state() -> dict[str, Any]:
+                    return page.evaluate(
+                        """
+                        () => {
+                          const editorNode = document.querySelector("#glmFormulaEditor");
+                          const aceEditor = editorNode?.env?.editor || null;
+                          const formula = aceEditor
+                            ? aceEditor.getValue()
+                            : (document.querySelector("#glmFormulaText")?.value || "");
+                          return {
+                            formula,
+                            family: document.querySelector("#glmFamilySelect")?.value || "",
+                            familyParameter: document.querySelector("#glmFamilyParameter")?.value || "",
+                            familyParameterDisabled: document.querySelector("#glmFamilyParameter")?.disabled ?? null,
+                            scope: document.querySelector("[data-glm-scope].active")?.dataset?.glmScope || "",
+                            regularizationMode: document.querySelector("#glmRegularizationMode")?.value || "",
+                            regularizationMix: document.querySelector("#glmRegularizationMix")?.value || "",
+                            regularizationAlpha: document.querySelector("#glmRegularizationAlpha")?.value || "",
+                            regularizationMixDisabled: document.querySelector("#glmRegularizationMix")?.disabled ?? null,
+                            regularizationAlphaDisabled: document.querySelector("#glmRegularizationAlpha")?.disabled ?? null,
+                          };
+                        }
+                        """
+                    )
+
+                def wait_for_glm_builder_state(expected: dict[str, Any]) -> dict[str, Any]:
+                    page.wait_for_function(
+                        """
+                        (expected) => {
+                          const editorNode = document.querySelector("#glmFormulaEditor");
+                          const aceEditor = editorNode?.env?.editor || null;
+                          const state = {
+                            formula: aceEditor ? aceEditor.getValue() : (document.querySelector("#glmFormulaText")?.value || ""),
+                            family: document.querySelector("#glmFamilySelect")?.value || "",
+                            familyParameter: document.querySelector("#glmFamilyParameter")?.value || "",
+                            familyParameterDisabled: document.querySelector("#glmFamilyParameter")?.disabled ?? null,
+                            scope: document.querySelector("[data-glm-scope].active")?.dataset?.glmScope || "",
+                            regularizationMode: document.querySelector("#glmRegularizationMode")?.value || "",
+                            regularizationMix: document.querySelector("#glmRegularizationMix")?.value || "",
+                            regularizationAlpha: document.querySelector("#glmRegularizationAlpha")?.value || "",
+                            regularizationMixDisabled: document.querySelector("#glmRegularizationMix")?.disabled ?? null,
+                            regularizationAlphaDisabled: document.querySelector("#glmRegularizationAlpha")?.disabled ?? null,
+                          };
+                          return Object.entries(expected).every(([key, value]) => state[key] === value);
+                        }
+                        """,
+                        arg=expected,
+                        timeout=10_000,
+                    )
+                    return glm_builder_state()
+
+                def set_glm_builder_draft(draft: dict[str, Any]) -> None:
+                    page.evaluate(
+                        """
+                        (draft) => {
+                          const change = (node) => node?.dispatchEvent(new Event("change", { bubbles: true }));
+                          const input = (node) => node?.dispatchEvent(new Event("input", { bubbles: true }));
+                          const editorNode = document.querySelector("#glmFormulaEditor");
+                          const aceEditor = editorNode?.env?.editor || null;
+                          if (aceEditor) aceEditor.setValue(draft.formula, -1);
+                          const fallback = document.querySelector("#glmFormulaText");
+                          if (fallback) {
+                            fallback.value = draft.formula;
+                            input(fallback);
+                          }
+                          const family = document.querySelector("#glmFamilySelect");
+                          if (family) {
+                            family.value = draft.family;
+                            change(family);
+                          }
+                          const familyParameter = document.querySelector("#glmFamilyParameter");
+                          if (familyParameter) familyParameter.value = draft.familyParameter;
+                          document.querySelector(`[data-glm-scope="${draft.scope}"]`)?.click();
+                          const mode = document.querySelector("#glmRegularizationMode");
+                          if (mode) {
+                            mode.value = draft.regularizationMode;
+                            change(mode);
+                          }
+                          const mix = document.querySelector("#glmRegularizationMix");
+                          if (mix) {
+                            mix.value = draft.regularizationMix;
+                            change(mix);
+                          }
+                          const alpha = document.querySelector("#glmRegularizationAlpha");
+                          if (alpha) alpha.value = draft.regularizationAlpha;
+                        }
+                        """,
+                        draft,
+                    )
+
                 profile_requests_before = profile_requests
                 profile_detail_requests_before = profile_detail_requests
                 open_sidebar_section("#gbmModelCollapseBtn")
@@ -807,6 +913,101 @@ COPY (
                 page.wait_for_timeout(250)
                 self.assertEqual(profile_requests, profile_requests_before)
                 self.assertEqual(profile_detail_requests, profile_detail_requests_before)
+
+                page.locator("#glmTool").click()
+                page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
+                page.get_by_role("button", name="Formula builder").click()
+                self.assertEqual(
+                    wait_for_glm_builder_state(
+                        {
+                            "formula": "actualNumerator ~ 1 + Age + Segment",
+                            "family": "tweedie",
+                            "familyParameter": "1.5",
+                            "familyParameterDisabled": False,
+                            "scope": "all",
+                            "regularizationMode": "none",
+                            "regularizationMix": "0.5",
+                            "regularizationAlpha": "0.01",
+                            "regularizationMixDisabled": True,
+                            "regularizationAlphaDisabled": True,
+                        }
+                    ),
+                    {
+                        "formula": "actualNumerator ~ 1 + Age + Segment",
+                        "family": "tweedie",
+                        "familyParameter": "1.5",
+                        "familyParameterDisabled": False,
+                        "scope": "all",
+                        "regularizationMode": "none",
+                        "regularizationMix": "0.5",
+                        "regularizationAlpha": "0.01",
+                        "regularizationMixDisabled": True,
+                        "regularizationAlphaDisabled": True,
+                    },
+                )
+                edited_glm_draft = {
+                    "formula": "actualNumerator ~ 1 + Age + C(Segment)",
+                    "family": "tweedie",
+                    "familyParameter": "1.7",
+                    "familyParameterDisabled": False,
+                    "scope": "training",
+                    "regularizationMode": "manual",
+                    "regularizationMix": "1",
+                    "regularizationAlpha": "0.09",
+                    "regularizationMixDisabled": False,
+                    "regularizationAlphaDisabled": False,
+                }
+                set_glm_builder_draft(edited_glm_draft)
+                self.assertEqual(wait_for_glm_builder_state(edited_glm_draft), edited_glm_draft)
+                page.locator("#lineBarTool").click()
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#glmTool").click()
+                page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
+                page.get_by_role("button", name="Formula builder").click()
+                self.assertEqual(wait_for_glm_builder_state(edited_glm_draft), edited_glm_draft)
+
+                open_sidebar_section("#glmModelCollapseBtn")
+                page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm-2"]').click()
+                page.locator("#glmModelSelectedMeta", has_text="Second smoke GLM").wait_for(timeout=10_000)
+                self.assertEqual(
+                    wait_for_glm_builder_state(
+                        {
+                            "formula": "actualNumerator ~ 1 + Age",
+                            "family": "normal",
+                            "familyParameter": "",
+                            "familyParameterDisabled": True,
+                            "scope": "training",
+                            "regularizationMode": "manual",
+                            "regularizationMix": "1",
+                            "regularizationAlpha": "0.07",
+                            "regularizationMixDisabled": False,
+                            "regularizationAlphaDisabled": False,
+                        }
+                    ),
+                    {
+                        "formula": "actualNumerator ~ 1 + Age",
+                        "family": "normal",
+                        "familyParameter": "",
+                        "familyParameterDisabled": True,
+                        "scope": "training",
+                        "regularizationMode": "manual",
+                        "regularizationMix": "1",
+                        "regularizationAlpha": "0.07",
+                        "regularizationMixDisabled": False,
+                        "regularizationAlphaDisabled": False,
+                    },
+                )
+                page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm"]').click()
+                page.locator("#glmModelSelectedMeta", has_text="Browser smoke GLM").wait_for(timeout=10_000)
+                wait_for_glm_builder_state(
+                    {
+                        "formula": "actualNumerator ~ 1 + Age + Segment",
+                        "family": "tweedie",
+                        "familyParameter": "1.5",
+                        "scope": "all",
+                        "regularizationMode": "none",
+                    }
+                )
 
                 chart_url = (
                     f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model%3Apredictions"
