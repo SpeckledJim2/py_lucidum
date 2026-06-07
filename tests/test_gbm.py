@@ -2937,6 +2937,8 @@ COPY (
                 result = build_gbm_tabulations(dataset, store, "tab-gbm", feature_spec)
 
         self.assertEqual(result["status"], "tabulated")
+        self.assertEqual(result["diagnostics"]["mean_linear_error"], 0.0)
+        self.assertEqual(result["diagnostics"]["linear_sd_error"], 0.0)
         self.assertEqual(len(captured_columns), 1)
         self.assertCountEqual(captured_columns[0], ["Age", "denominator"])
         self.assertNotIn("Segment", captured_columns[0])

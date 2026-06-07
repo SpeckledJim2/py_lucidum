@@ -7,6 +7,7 @@ const ACE_BASE_PATH = "/static/vendor/ace";
 const GLM_BUILDER_SPLIT_STORAGE_KEY = "py_lucidum_glm_formula_panel_width";
 const GLM_TABULATION_SPLIT_STORAGE_KEY = "py_lucidum_glm_tabulation_sidebar_width";
 const GLM_TABULATION_MODEL_CROSSTAB = "__model__";
+const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
 
 function glmAutoModelTimeLabel(date = new Date()) {
   const hour = String(date.getHours()).padStart(2, "0");
@@ -147,6 +148,7 @@ export function createGlmTool({
   let tabulationConfig = null;
   let tabulationTable = null;
   let tabulationChart = null;
+  let tabulationPayload = null;
   let tabulationRenderSeq = 0;
   let selectedTabulationTableId = localStorage.getItem("py_lucidum_glm_tabulation_table") || "base";
   let tabulationView = localStorage.getItem("py_lucidum_glm_tabulation_view") || "table";
@@ -550,23 +552,40 @@ export function createGlmTool({
   function tabulationDiagnosticsHtml() {
     const models = Array.isArray(tabulationConfig?.models) ? tabulationConfig.models : [];
     if (!models.length) return '<div class="glm-empty-state">No tabulations loaded</div>';
-    return models.map((model) => {
-      const diagnostics = model.diagnostics || {};
-      const warnings = Array.isArray(model.warnings) ? model.warnings : [];
-      const rows = [
-        ["linear SD error", diagnostics.linear_sd_error],
-        ["tabulated rows", diagnostics.tabulated_row_count],
-        ["missing", diagnostics.missing_tabulated_prediction_rows],
-      ].filter(([, value]) => value !== undefined && value !== null && value !== "");
-      return `
-        <div class="glm-tabulation-model-diagnostic">
-          <strong>${escapeHtml(tabulationModelLabel(model))}</strong>
-          ${rows.map(([label, value]) => `<span>${escapeHtml(label)}: ${escapeHtml(formatModelMetric(value))}</span>`).join("")}
-          ${model.tabulatable ? "" : '<span class="glm-tabulation-warning">rebuild required</span>'}
-          ${warnings.slice(0, 3).map((warning) => `<span class="glm-tabulation-warning">${escapeHtml(warning)}</span>`).join("")}
-        </div>
-      `;
-    }).join("");
+    if (models.length > 1) {
+      return `<div class="glm-tabulation-model-diagnostic"><span>${models.length.toLocaleString()} models selected</span></div>`;
+    }
+    const model = models[0];
+    const diagnostics = model.diagnostics || {};
+    const warnings = Array.isArray(model.warnings) ? model.warnings : [];
+    const rows = [
+      ["mean error", diagnostics.mean_linear_error],
+      ["linear SD error", diagnostics.linear_sd_error],
+      ["span", tabulationSpanValue(tabulationPayload)],
+      ["tabulated rows", diagnostics.tabulated_row_count],
+      ["missing", diagnostics.missing_tabulated_prediction_rows],
+    ].filter(([, value]) => value !== undefined && value !== null && value !== "");
+    return `
+      <div class="glm-tabulation-model-diagnostic">
+        <strong>${escapeHtml(tabulationModelLabel(model))}</strong>
+        ${rows.map(([label, value]) => `<span>${escapeHtml(label)}: ${escapeHtml(formatModelMetric(value))}</span>`).join("")}
+        ${model.tabulatable ? "" : '<span class="glm-tabulation-warning">rebuild required</span>'}
+        ${warnings.slice(0, 3).map((warning) => `<span class="glm-tabulation-warning">${escapeHtml(warning)}</span>`).join("")}
+      </div>
+    `;
+  }
+
+  function tabulationSpanValue(payload = null) {
+    const lo = Number(payload?.min);
+    const hi = Number(payload?.max);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+    if ((payload?.scale || tabulationScale) === "exp") return lo > 0 ? hi / lo : null;
+    return hi - lo;
+  }
+
+  function refreshTabulationDiagnostics() {
+    const diagnostics = el("glmTabulationDiagnostics");
+    if (diagnostics) diagnostics.innerHTML = tabulationDiagnosticsHtml();
   }
 
   function renderTabulationsPanel() {
@@ -674,6 +693,7 @@ export function createGlmTool({
   async function refreshTabulationConfig() {
     const model_ids = tabulationSelectedModelIds();
     selectedTabulationModelIds = new Set(model_ids);
+    tabulationPayload = null;
     if (!model_ids.length) {
       tabulationConfig = { models: [], all_models: [], tables: [], warnings: [] };
       renderTabulationsPanel();
@@ -685,17 +705,12 @@ export function createGlmTool({
       if (tables.length && !tables.some((table) => String(table.table_id || "") === selectedTabulationTableId)) {
         selectedTabulationTableId = String(tables[0]?.table_id || "base");
       }
+      setGlmNotice("");
       renderTabulationsPanel();
-      setTabulationWarnings(tabulationConfig?.warnings || []);
       await loadTabulationView();
     } catch (error) {
       setGlmNotice(error.message);
     }
-  }
-
-  function setTabulationWarnings(warnings = []) {
-    const message = warnings.slice(0, 4).join(" ");
-    setGlmNotice(message);
   }
 
   async function buildSelectedTabulations() {
@@ -771,9 +786,13 @@ export function createGlmTool({
     const model_ids = tabulationSelectedModelIds();
     const table_id = selectedTabulationTableId || "base";
     if (!model_ids.length || !table_id || !(tabulationConfig?.tables || []).length) {
+      tabulationPayload = null;
+      refreshTabulationDiagnostics();
       renderTabulationEmpty("Build tabulations to view rating tables");
       return;
     }
+    tabulationPayload = null;
+    refreshTabulationDiagnostics();
     const seq = tabulationRenderSeq + 1;
     tabulationRenderSeq = seq;
     const payload = { model_refs: model_ids, table_id, scale: tabulationScale, crosstab: tabulationCrosstab };
@@ -781,13 +800,19 @@ export function createGlmTool({
       if (tabulationView === "plot") {
         const data = await api("/api/glm/tabulations/plot", { method: "POST", body: JSON.stringify(payload) });
         if (seq !== tabulationRenderSeq) return;
+        tabulationPayload = data;
+        refreshTabulationDiagnostics();
         renderTabulationPlot(data);
       } else {
         const data = await api("/api/glm/tabulations/table", { method: "POST", body: JSON.stringify(payload) });
         if (seq !== tabulationRenderSeq) return;
+        tabulationPayload = data;
+        refreshTabulationDiagnostics();
         renderTabulationTable(data);
       }
     } catch (error) {
+      tabulationPayload = null;
+      refreshTabulationDiagnostics();
       renderTabulationEmpty(error.message);
     }
   }
@@ -796,6 +821,8 @@ export function createGlmTool({
     const fallback = el("glmTabulationFallback");
     const grid = el("glmTabulationTable");
     const plot = el("glmTabulationPlot");
+    tabulationPayload = null;
+    refreshTabulationDiagnostics();
     if (grid) grid.innerHTML = "";
     if (fallback) fallback.innerHTML = `<div class="glm-empty-state">${escapeHtml(message)}</div>`;
     if (plot) plot.innerHTML = `<div class="glm-empty-state">${escapeHtml(message)}</div>`;
@@ -875,6 +902,99 @@ export function createGlmTool({
     return `hsl(${hue} 78% 88%)`;
   }
 
+  function niceTabulationAxisStep(span) {
+    if (!Number.isFinite(span) || span <= 0) return 1;
+    const roughStep = span / GLM_TABULATION_Y_AXIS_TARGET_INTERVALS;
+    const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+    const normalized = roughStep / magnitude;
+    const multiplier = [1, 2, 5, 10].find((candidate) => normalized <= candidate) || 10;
+    return multiplier * magnitude;
+  }
+
+  function roundTabulationAxisValue(value, step) {
+    if (!Number.isFinite(value)) return value;
+    const precision = Math.min(12, Math.max(0, Math.ceil(-Math.log10(Math.abs(step))) + 3));
+    return Number(value.toFixed(precision));
+  }
+
+  function formatTabulationUpliftPercent(value) {
+    if (value === null || value === undefined || Number.isNaN(value)) return "";
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    let percent = Number(((number - 1) * 100).toFixed(10));
+    if (Math.abs(percent) < 1e-9) percent = 0;
+    const abs = Math.abs(percent);
+    let fractionDigits = 0;
+    if (abs !== 0 && abs < 0.01) fractionDigits = 4;
+    else if (abs !== 0 && abs < 1) fractionDigits = 2;
+    else if (abs !== 0 && abs < 10) fractionDigits = 1;
+    const formatted = percent.toLocaleString(undefined, {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    });
+    const sign = percent > 0 ? "+" : "";
+    return `${sign}${formatted}%`;
+  }
+
+  function formatTabulationAxisTick(value, scale = "linear") {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    if (scale === "exp") return formatTabulationUpliftPercent(number);
+    return number.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  }
+
+  function tabulationYAxisOptions(data = {}) {
+    const name = data.scale === "exp" ? "exp(tabulated)" : "tabulated";
+    let min = Number(data.min);
+    let max = Number(data.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      return {
+        type: "value",
+        name,
+        scale: true,
+        splitNumber: GLM_TABULATION_Y_AXIS_TARGET_INTERVALS,
+        axisLabel: { formatter: (value) => formatTabulationAxisTick(value, data.scale) },
+      };
+    }
+    if (max < min) [min, max] = [max, min];
+    const dataMin = min;
+    const dataMax = max;
+    if (min === max) {
+      const pad = data.scale === "exp"
+        ? Math.max(Math.abs(min) * 0.02, 0.01)
+        : Math.max(Math.abs(min) * 0.02, 0.1);
+      min -= pad;
+      max += pad;
+    }
+    const span = Math.max(max - min, Number.EPSILON);
+    const paddedMin = min - span * 0.06;
+    const paddedMax = max + span * 0.06;
+    const step = niceTabulationAxisStep(paddedMax - paddedMin);
+    let axisMin = Math.floor(paddedMin / step) * step;
+    let axisMax = Math.ceil(paddedMax / step) * step;
+    if (data.scale === "exp") {
+      axisMin = Math.floor(dataMin / step) * step;
+      if (axisMin > min) axisMin = Math.max(step, axisMin - step);
+      if (axisMin <= 0) axisMin = Math.max(step, Math.floor(dataMin / step) * step);
+    } else if (dataMin > 0 && axisMin <= 0) {
+      axisMin = Math.floor(dataMin / step) * step;
+      if (axisMin <= 0) axisMin = step;
+    } else if (dataMax < 0 && axisMax >= 0) {
+      axisMax = Math.ceil(dataMax / step) * step;
+      if (axisMax >= 0) axisMax = dataMax;
+    }
+    return {
+      type: "value",
+      name,
+      scale: true,
+      splitNumber: GLM_TABULATION_Y_AXIS_TARGET_INTERVALS,
+      min: roundTabulationAxisValue(axisMin, step),
+      max: roundTabulationAxisValue(axisMax, step),
+      interval: roundTabulationAxisValue(step, step),
+      axisLabel: { formatter: (value) => formatTabulationAxisTick(value, data.scale) },
+    };
+  }
+
   function renderTabulationFallbackTable(columns, rows, data = {}) {
     const fallback = el("glmTabulationFallback");
     if (!fallback) return;
@@ -910,11 +1030,11 @@ export function createGlmTool({
     tabulationChart = window.echarts.init(plot);
     tabulationChart.setOption({
       animation: false,
-      tooltip: { trigger: "axis" },
+      tooltip: { trigger: "axis", valueFormatter: (value) => formatTabulationAxisTick(value, data.scale) },
       legend: { type: "scroll", top: 4, right: 8 },
       grid: { left: 54, right: 24, top: 48, bottom: 52 },
       xAxis: { type: "category", data: data.x_axis || [], axisLabel: { hideOverlap: true } },
-      yAxis: { type: "value", name: data.scale === "exp" ? "exp(tabulated)" : "tabulated" },
+      yAxis: tabulationYAxisOptions(data),
       series: data.series,
     });
   }

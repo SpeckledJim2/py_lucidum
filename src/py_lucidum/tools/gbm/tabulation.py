@@ -586,9 +586,12 @@ def build_gbm_tabulations(
 
     exact_linear = _prediction_to_linear(np, pd, frame["gbm_prediction"], transform)
     error = exact_linear - tabulated["gbm_tabulated_linear_prediction"]
-    linear_sd_error = json_safe_number(float(error.dropna().std())) if len(error.dropna()) > 1 else 0.0
+    finite_error = error.dropna()
+    mean_linear_error = json_safe_number(float(finite_error.mean())) if len(finite_error) else None
+    linear_sd_error = json_safe_number(float(finite_error.std())) if len(finite_error) > 1 else 0.0
     _write_dataframe_parquet(tabulated, store.artifact_path(model_id, "tabulated_predictions"))
     diagnostics = {
+        "mean_linear_error": mean_linear_error,
         "linear_sd_error": linear_sd_error,
         "scored_rows": int(finite_linear.sum()),
         "tabulated_row_count": int(len(tabulated)),

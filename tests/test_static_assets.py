@@ -800,6 +800,28 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("if (event.shiftKey) {", glm_js)
         self.assertIn("tabulationSelectionAnchorModelId = modelRef;", glm_js)
         self.assertIn("tabulationConfig?.all_models", glm_js)
+        self.assertIn("let tabulationPayload = null;", glm_js)
+        self.assertIn("function tabulationSpanValue(payload = null)", glm_js)
+        self.assertIn("function niceTabulationAxisStep(span)", glm_js)
+        self.assertIn("function roundTabulationAxisValue(value, step)", glm_js)
+        self.assertIn("function formatTabulationUpliftPercent(value)", glm_js)
+        self.assertIn('function formatTabulationAxisTick(value, scale = "linear")', glm_js)
+        self.assertIn("function tabulationYAxisOptions(data = {})", glm_js)
+        self.assertIn("const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;", glm_js)
+        self.assertIn("yAxis: tabulationYAxisOptions(data)", glm_js)
+        self.assertIn("scale: true,", glm_js)
+        self.assertIn("splitNumber: GLM_TABULATION_Y_AXIS_TARGET_INTERVALS", glm_js)
+        self.assertIn("min: roundTabulationAxisValue(axisMin, step)", glm_js)
+        self.assertIn("max: roundTabulationAxisValue(axisMax, step)", glm_js)
+        self.assertIn("interval: roundTabulationAxisValue(step, step)", glm_js)
+        self.assertIn("axisLabel: { formatter: (value) => formatTabulationAxisTick(value, data.scale) }", glm_js)
+        self.assertIn('tooltip: { trigger: "axis", valueFormatter: (value) => formatTabulationAxisTick(value, data.scale) }', glm_js)
+        self.assertIn('["mean error", diagnostics.mean_linear_error]', glm_js)
+        self.assertIn('["linear SD error", diagnostics.linear_sd_error]', glm_js)
+        self.assertIn('["span", tabulationSpanValue(tabulationPayload)]', glm_js)
+        self.assertIn("${models.length.toLocaleString()} models selected", glm_js)
+        self.assertNotIn("setTabulationWarnings", glm_js)
+        self.assertNotIn("setTabulationWarnings(tabulationConfig?.warnings", glm_js)
         self.assertIn('element.style.setProperty("background", color, "important");', glm_js)
         self.assertIn("Boolean(column.tabulation_value)", glm_js)
         self.assertIn("function formatTabulationValue(value)", glm_js)
@@ -813,6 +835,21 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertNotIn('["Training rows", diagnostics.training_rows]', glm_js)
         self.assertNotIn('["Null deviance", diagnostics.null_deviance]', glm_js)
         self.assertNotIn('["BIC", diagnostics.bic]', glm_js)
+        self.run_node_script(f"""
+const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
+{self.js_function_source(glm_js, "niceTabulationAxisStep")}
+{self.js_function_source(glm_js, "roundTabulationAxisValue")}
+{self.js_function_source(glm_js, "formatTabulationUpliftPercent")}
+{self.js_function_source(glm_js, "formatTabulationAxisTick")}
+{self.js_function_source(glm_js, "tabulationYAxisOptions")}
+const expAxis = tabulationYAxisOptions({{ scale: "exp", min: 1, max: 2.2114 }});
+if (expAxis.interval !== 0.1) throw new Error(`expected 0.1 exp interval, got ${{expAxis.interval}}`);
+if (expAxis.min !== 1 || expAxis.max !== 2.3) throw new Error(`unexpected exp bounds ${{expAxis.min}}..${{expAxis.max}}`);
+if (expAxis.axisLabel.formatter(1) !== "0%") throw new Error("exp base tick should be 0%");
+if (expAxis.axisLabel.formatter(1.25) !== "+25%") throw new Error("exp tick should be uplift percent");
+if (expAxis.axisLabel.formatter(0.9) !== "-10%") throw new Error("negative uplift should be shown from base");
+if (formatTabulationAxisTick(1.2, "linear") !== "1.2") throw new Error("linear ticks should stay numeric");
+""")
         self.assertIn("syncSidebarModelChooser", js)
         self.assertIn("glm_prediction", js)
         self.assertNotIn("GLM modelling will be added in a later slice", js)

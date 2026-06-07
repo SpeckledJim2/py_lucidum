@@ -701,12 +701,16 @@ def _build_model_tabulations(
             offset=offset_values.loc[score_mask].astype(float).to_numpy() if offset_values is not None else None,
         )
         error = exact_eta - tabulated["glm_tabulated_linear_prediction"]
-        linear_sd_error = json_safe_number(float(error.dropna().std())) if len(error.dropna()) > 1 else 0.0
+        finite_error = error.dropna()
+        mean_linear_error = json_safe_number(float(finite_error.mean())) if len(finite_error) else None
+        linear_sd_error = json_safe_number(float(finite_error.std())) if len(finite_error) > 1 else 0.0
     except Exception:
+        mean_linear_error = None
         linear_sd_error = None
 
     write_dataframe_parquet(tabulated, store.artifact_path(model_id, "tabulated_predictions"))
     diagnostics = {
+        "mean_linear_error": mean_linear_error,
         "linear_sd_error": linear_sd_error,
         "scored_rows": int(finite_eta.sum()),
         "tabulated_row_count": int(len(tabulated)),
@@ -1170,6 +1174,12 @@ def tabulation_plot(store: GlmModelStore, payload: dict[str, Any], *, gbm_store:
                 )
         else:
             notices.append(f"{table_id} has {len(features)} features; plot view is available only for 1D or 2D tables.")
+    values = [
+        value
+        for item in series
+        for value in (item.get("data") or [])
+        if isinstance(value, (int, float))
+    ]
     return {
         "table_id": table_id,
         "scale": scale,
@@ -1178,6 +1188,8 @@ def tabulation_plot(store: GlmModelStore, payload: dict[str, Any], *, gbm_store:
         "series": series,
         "notices": notices,
         "plottable": bool(series),
+        "min": min(values) if values else None,
+        "max": max(values) if values else None,
     }
 
 

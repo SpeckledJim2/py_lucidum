@@ -5,6 +5,7 @@ import duckdb
 import importlib.util
 import json
 import os
+import pickle
 import subprocess
 import sys
 import time
@@ -23,13 +24,14 @@ from py_lucidum.tools.glm.tabulation import build_tabulations, tabulation_config
 from py_lucidum.tools.glm.training import (
     MissingGlmDependency,
     _suppress_tabmat_mixed_dtype_warning,
+    formula_context,
     glm_dependencies,
     glm_feature_importance_rows,
     stop_persistent_glm_fit_worker,
     train_model,
     train_model_in_subprocess,
 )
-from py_lucidum.tools.glm.validation import strip_formula_comments, validate_request
+from py_lucidum.tools.glm.validation import TARGET_COLUMN, strip_formula_comments, validate_request
 
 
 def asgi_get(app: Any, path: str) -> tuple[int, bytes]:
@@ -656,7 +658,31 @@ if result.get("iteration") != 10:
 
         self.assertEqual(payload["model_ids"], [model_id])
         self.assertTrue(store.artifact_path(model_id, "tabulated_predictions").exists())
-        self.assertIn("linear_sd_error", tab_manifest["diagnostics"])
+        diagnostics = tab_manifest["diagnostics"]
+        self.assertIn("mean_linear_error", diagnostics)
+        self.assertIn("linear_sd_error", diagnostics)
+        _, _, _, np, pd = glm_dependencies()
+        with store.artifact_path(model_id, "estimator").open("rb") as handle:
+            estimator = pickle.load(handle)
+        score_frame = glm_tabulation._tabulation_frame_from_dataset(dataset, ["Age", "Segment"])
+        exact_frame = score_frame.copy()
+        exact_frame[TARGET_COLUMN] = 0.0
+        exact_eta = pd.Series(
+            estimator.linear_predictor(exact_frame, context=formula_context(np)),
+            index=exact_frame.index,
+            dtype=float,
+        )
+        tabulated_frame = pd.DataFrame(store.read_parquet_records(store.artifact_path(model_id, "tabulated_predictions")))
+        comparison = score_frame[["__lucidum_row_id"]].copy()
+        comparison["exact"] = exact_eta
+        comparison = comparison.merge(
+            tabulated_frame[["__lucidum_row_id", "glm_tabulated_linear_prediction"]],
+            on="__lucidum_row_id",
+        )
+        error = comparison["exact"] - comparison["glm_tabulated_linear_prediction"]
+        finite_error = error.dropna()
+        self.assertAlmostEqual(diagnostics["mean_linear_error"], float(finite_error.mean()))
+        self.assertAlmostEqual(diagnostics["linear_sd_error"], float(finite_error.std()))
         self.assertIn("base", [table["table_id"] for table in tab_manifest["tables"]])
         self.assertIn("Age", [table["table_id"] for table in tab_manifest["tables"]])
 
