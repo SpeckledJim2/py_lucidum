@@ -155,7 +155,8 @@
         white-space: nowrap;
       }
 
-      .dataset-meta-gbm-link {
+      .dataset-meta-gbm-link,
+      .dataset-meta-glm-link {
         border: 0;
         background: transparent;
         color: var(--accent);
@@ -167,7 +168,8 @@
         text-underline-offset: 2px;
       }
 
-      .dataset-meta-gbm-link:hover {
+      .dataset-meta-gbm-link:hover,
+      .dataset-meta-glm-link:hover {
         color: var(--accent-2);
       }
 

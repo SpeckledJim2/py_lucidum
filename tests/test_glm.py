@@ -509,6 +509,42 @@ if result.get("iteration") != 10:
             rows = dataset.con.execute(f"SELECT COUNT(glm_tabulated_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
         self.assertGreater(rows[0], 0)
 
+    def test_glm_tabulation_dispatches_to_worker_when_lightgbm_loaded(self) -> None:
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        worker_result = {"models": [], "model_ids": ["glm-test"], "gbm_model_ids": [], "model_refs": ["glm:glm-test"]}
+
+        with patch.dict(sys.modules, {"lightgbm": object()}):
+            with patch("py_lucidum.tools.glm.tabulation.build_tabulations_in_subprocess", return_value=worker_result) as worker:
+                result = glm_tabulation.build_tabulations(dataset, store, {"model_ids": ["glm-test"]}, {"rows": []})
+
+        worker.assert_called_once()
+        self.assertEqual(result, worker_result)
+
+    def test_glm_tabulation_worker_returns_payload_when_lightgbm_loaded(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "Age + C(Segment)", "response_column": "actualNumerator", "family": "normal", "training_scope": "all"},
+        )
+        model_id = result["model_id"]
+        feature_spec = {
+            "rows": [
+                {"feature": "Age", "grouping": "Driver", "base": "40", "min": "30", "max": "70", "banding": "5"},
+                {"feature": "Segment", "grouping": "Driver", "base": "A"},
+            ]
+        }
+
+        with patch.dict(sys.modules, {"lightgbm": object()}):
+            payload = glm_tabulation.build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+
+        self.assertEqual(payload["model_ids"], [model_id])
+        self.assertTrue(store.artifact_path(model_id, "tabulation_manifest").exists())
+        self.assertTrue(store.artifact_path(model_id, "tabulated_predictions").exists())
+
     def test_glm_tabulation_without_feature_spec_keeps_bs_grid_inside_bounds(self) -> None:
         self.require_glm_dependencies()
         data_path = self.spline_data_path()
@@ -634,7 +670,7 @@ if result.get("iteration") != 10:
             patch.object(pd.DataFrame, "iterrows", side_effect=AssertionError("tabulation scoring must not iterate rows")),
             patch("py_lucidum.tools.glm.tabulation.data_frame_from_dataset", side_effect=AssertionError("tabulation must not use the broad loader"), create=True),
         ):
-            build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+            glm_tabulation._build_tabulations_impl(dataset, store, {"model_ids": [model_id]}, feature_spec)
 
         with dataset.lock:
             rows = dataset.con.execute(
@@ -667,7 +703,7 @@ if result.get("iteration") != 10:
             return original_loader(load_dataset, columns)
 
         with patch("py_lucidum.tools.glm.tabulation._tabulation_frame_from_dataset", side_effect=capture_frame):
-            build_tabulations(dataset, store, {"model_ids": [result["model_id"]]}, {"rows": []})
+            glm_tabulation._build_tabulations_impl(dataset, store, {"model_ids": [result["model_id"]]}, {"rows": []})
 
         self.assertEqual(captured_columns, [["Age"]])
 

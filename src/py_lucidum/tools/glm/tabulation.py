@@ -3,10 +3,16 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+import importlib.util
+import json
 import itertools
 import math
+import os
 import pickle
 import re
+import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -763,7 +769,96 @@ def _build_model_tabulations(
     return manifest_payload
 
 
+def should_isolate_glm_tabulation(model_refs: list[_TabulationModelRef]) -> bool:
+    return (
+        any(model_ref.kind == "glm" for model_ref in model_refs)
+        and ("lightgbm" in sys.modules or importlib.util.find_spec("lightgbm") is not None)
+        and not os.environ.get("PY_LUCIDUM_GLM_TABULATION_WORKER")
+    )
+
+
+def build_tabulations_in_subprocess(
+    dataset: Dataset,
+    payload: dict[str, Any],
+    feature_spec: Any,
+    *,
+    progress_callback: ProgressCallback | None = None,
+    gbm_available: bool = False,
+) -> dict[str, Any]:
+    progress = progress_callback or (lambda _progress: None)
+    progress({"phase": "starting", "message": "Starting isolated GLM tabulation worker"})
+    with tempfile.TemporaryDirectory(prefix="lucidum-glm-tabulation-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        request_path = tmp_path / "request.json"
+        response_path = tmp_path / "response.json"
+        request_path.write_text(
+            json.dumps(
+                {
+                    "dataset_path": str(dataset.path),
+                    "payload": payload,
+                    "feature_spec": feature_spec,
+                    "gbm_available": gbm_available,
+                },
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [sys.executable, "-m", "py_lucidum.tools.glm.tabulation_worker", str(request_path), str(response_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1",
+                "PY_LUCIDUM_GLM_TABULATION_WORKER": "1",
+            },
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            if len(detail) > 800:
+                detail = f"{detail[:800]}..."
+            suffix = f" {detail}" if detail else ""
+            raise RuntimeError(f"GLM tabulation worker exited unexpectedly with code {completed.returncode}.{suffix}")
+        if not response_path.exists():
+            raise RuntimeError("GLM tabulation worker exited without writing a response")
+        response = json.loads(response_path.read_text(encoding="utf-8"))
+    if not response.get("ok"):
+        error = str(response.get("error") or "GLM tabulation worker failed")
+        raise RuntimeError(error)
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("GLM tabulation worker returned an invalid response")
+    dataset.reload()
+    progress({"phase": "writing", "message": "GLM tabulation worker saved artifacts"})
+    return result
+
+
 def build_tabulations(
+    dataset: Dataset,
+    store: GlmModelStore,
+    payload: dict[str, Any],
+    feature_spec: Any,
+    *,
+    progress_callback: ProgressCallback | None = None,
+    gbm_store: Any = None,
+) -> dict[str, Any]:
+    progress = progress_callback or (lambda _progress: None)
+    model_refs = _requested_model_refs(payload, for_build=True, store=store)
+    if not model_refs:
+        raise ValueError("Choose at least one model to tabulate")
+    if should_isolate_glm_tabulation(model_refs):
+        return build_tabulations_in_subprocess(
+            dataset,
+            payload,
+            feature_spec,
+            progress_callback=progress,
+            gbm_available=gbm_store is not None,
+        )
+    return _build_tabulations_impl(dataset, store, payload, feature_spec, progress_callback=progress, gbm_store=gbm_store)
+
+
+def _build_tabulations_impl(
     dataset: Dataset,
     store: GlmModelStore,
     payload: dict[str, Any],

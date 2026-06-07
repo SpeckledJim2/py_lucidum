@@ -807,7 +807,7 @@
           target.append(document.createTextNode(" · "));
           const button = document.createElement("button");
           button.type = "button";
-          button.className = "dataset-meta-gbm-link dataset-meta-glm-link";
+          button.className = "dataset-meta-glm-link";
           button.textContent = `GLMs (${datasetGlmCount.toLocaleString()})`;
           button.title = "Open GLM Model navigator";
           button.setAttribute("aria-label", `Open saved GLMs, ${datasetGlmCount.toLocaleString()} models`);
