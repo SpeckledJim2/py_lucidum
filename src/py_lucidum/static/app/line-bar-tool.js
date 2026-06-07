@@ -57,6 +57,11 @@ export function createLineBarTool({
   const SHAP_LINE_COLOR = "#d13f3f";
   const GLM_LINE_COLOR = "#1f7a8c";
   const chart = echartsImpl.init(el("chart"));
+  let featureImportanceData = null;
+  let featureImportanceKey = "";
+  let featureImportancePendingKey = "";
+  let featureImportanceRequestSeq = 0;
+  let featureImportanceError = "";
 
   function isNumericKind(kind) {
     return kind === "numeric" || kind === "integer";
@@ -115,6 +120,71 @@ export function createLineBarTool({
     group.querySelectorAll("button").forEach((button) => {
       button.classList.toggle("active", button.dataset.value === value);
     });
+  }
+
+  function featureImportanceCacheKey() {
+    const sources = state.schema?.data_sources || [];
+    const activeSourceId = (kind) => sources.find((source) => source.kind === kind && source.active)?.model_id || "";
+    const dataset = dataSourceForId("dataset") || {};
+    return JSON.stringify([
+      activeSourceId("gbm_predictions"),
+      activeSourceId("glm_predictions"),
+      dataset.row_count || state.schema?.row_count || 0,
+      state.schema?.path || "",
+    ]);
+  }
+
+  function currentFeatureImportanceData() {
+    return featureImportanceKey && featureImportanceKey === featureImportanceCacheKey() ? featureImportanceData : null;
+  }
+
+  function featureImportanceHasRows(data = currentFeatureImportanceData()) {
+    const gbmRows = data?.models?.gbm?.rows;
+    const glmRows = data?.models?.glm?.rows;
+    return Boolean((Array.isArray(gbmRows) && gbmRows.length) || (Array.isArray(glmRows) && glmRows.length));
+  }
+
+  function syncFeatureImportanceButton(data = currentFeatureImportanceData()) {
+    const button = document.querySelector('.segmented[data-control="featureSort"] button[data-value="importance"]');
+    if (!button) return;
+    const visible = featureImportanceHasRows(data) || state.featureSort === "importance";
+    button.classList.toggle("hidden", !visible);
+    button.classList.toggle("active", state.featureSort === "importance");
+  }
+
+  async function ensureFeatureImportance() {
+    if (!state.schema) return null;
+    const key = featureImportanceCacheKey();
+    if (featureImportanceKey === key && featureImportanceData) {
+      syncFeatureImportanceButton(featureImportanceData);
+      return featureImportanceData;
+    }
+    if (featureImportancePendingKey === key) return null;
+    const requestSeq = featureImportanceRequestSeq + 1;
+    featureImportanceRequestSeq = requestSeq;
+    featureImportancePendingKey = key;
+    featureImportanceError = "";
+    syncFeatureImportanceButton(null);
+    try {
+      const data = await api("/api/line-bar/feature-importance");
+      if (requestSeq !== featureImportanceRequestSeq || featureImportancePendingKey !== key) return null;
+      featureImportanceData = data;
+      featureImportanceKey = key;
+      featureImportancePendingKey = "";
+      featureImportanceError = "";
+      syncFeatureImportanceButton(data);
+      if (state.featureSort === "importance") renderFeatures();
+      return data;
+    } catch (error) {
+      if (requestSeq !== featureImportanceRequestSeq || featureImportancePendingKey !== key) return null;
+      featureImportanceData = null;
+      featureImportanceKey = key;
+      featureImportancePendingKey = "";
+      featureImportanceError = error.message || "Feature importances unavailable.";
+      syncFeatureImportanceButton(null);
+      if (state.featureSort === "importance") renderFeatures();
+      return null;
+    }
   }
 
   function selectedPartialDependenceMode() {
@@ -314,6 +384,12 @@ export function createLineBarTool({
     const query = el("featureSearch").value.trim().toLowerCase();
     const list = el("featureList");
     list.innerHTML = "";
+    syncFeatureImportanceButton();
+    ensureFeatureImportance();
+    if (state.featureSort === "importance") {
+      renderFeatureImportanceRows(query, list);
+      return;
+    }
     const columns = [...sourceColumns()];
     if (state.featureSort === "alpha") {
       columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
@@ -335,6 +411,153 @@ export function createLineBarTool({
       });
       list.append(button);
     }
+  }
+
+  function renderFeatureImportanceRows(query, list) {
+    const data = currentFeatureImportanceData();
+    if (!data) {
+      addFeatureListMessage(list, featureImportanceError || "Loading feature importances...");
+      return;
+    }
+    const datasetColumns = datasetFeatureColumns(data);
+    const datasetByName = new Map(datasetColumns.map((column) => [column.name, column]));
+    const usedFeatures = new Set();
+    const renderedAny = [
+      renderImportanceGroup(list, "GBM", data.models?.gbm, query, datasetByName, usedFeatures),
+      renderImportanceGroup(list, "GLM", data.models?.glm, query, datasetByName, usedFeatures),
+    ].some(Boolean);
+    const notUsed = datasetColumns
+      .filter((column) => !usedFeatures.has(column.name))
+      .map((column) => ({ feature: column.name, importance: null, kind: column.kind }));
+    renderNotUsedGroup(list, notUsed, query);
+    if (!renderedAny && !featureImportanceHasRows(data)) {
+      list.innerHTML = "";
+      addFeatureListMessage(list, "No active GBM or GLM importances are available.");
+    }
+  }
+
+  function datasetFeatureColumns(data) {
+    const rows = Array.isArray(data?.dataset_features) ? data.dataset_features : [];
+    if (rows.length) return rows.map((column) => ({ ...column, source_id: "dataset" }));
+    return (dataSourceForId("dataset")?.columns || []).map((column) => ({ ...column, source_id: "dataset" }));
+  }
+
+  function renderImportanceGroup(list, label, model, query, datasetByName, usedFeatures) {
+    const rows = Array.isArray(model?.rows) ? model.rows : [];
+    rows.forEach((row) => {
+      if (row?.feature) usedFeatures.add(String(row.feature));
+    });
+    const filtered = rows.filter((row) => featureMatchesQuery(row.feature, query));
+    const message = String(model?.message || "");
+    if (!filtered.length && (!message || query)) return false;
+    addFeatureListHeader(list, importanceGroupLabel(label, model));
+    if (!filtered.length && message) {
+      addFeatureListMessage(list, message);
+      return true;
+    }
+    for (const row of filtered) {
+      const column = datasetByName.get(String(row.feature)) || { name: String(row.feature), kind: String(row.kind || "") };
+      addFeatureButton(list, {
+        label: column.name,
+        detail: featureImportanceDetail(row, model?.metric),
+        sourceId: "dataset",
+        extraClass: "line-bar-importance-row",
+        onClick: () => selectDatasetFeature(column.name),
+      });
+    }
+    return true;
+  }
+
+  function renderNotUsedGroup(list, rows, query) {
+    const filtered = rows.filter((row) => featureMatchesQuery(row.feature, query));
+    if (!filtered.length) return;
+    addFeatureListHeader(list, "Not used");
+    for (const row of filtered) {
+      addFeatureButton(list, {
+        label: row.feature,
+        detail: row.kind || "",
+        sourceId: "dataset",
+        extraClass: "line-bar-not-used-row",
+        onClick: () => selectDatasetFeature(row.feature),
+      });
+    }
+  }
+
+  function importanceGroupLabel(label, model) {
+    const metric = String(model?.metric_label || "");
+    return metric ? `${label} (${metric})` : label;
+  }
+
+  function addFeatureListHeader(list, label) {
+    const header = document.createElement("div");
+    header.className = "feature-list-section-header";
+    header.textContent = label;
+    list.append(header);
+  }
+
+  function addFeatureListMessage(list, message) {
+    const item = document.createElement("div");
+    item.className = "feature-list-message";
+    item.textContent = message;
+    list.append(item);
+  }
+
+  function addFeatureButton(list, { label, detail, sourceId, extraClass = "", onClick }) {
+    const activeSource = state.xSource || state.source || "dataset";
+    const active = label === state.x && activeSource === sourceId;
+    const button = document.createElement("button");
+    button.className = `feature ${extraClass} ${active ? "active" : ""}`.trim();
+    button.dataset.sourceId = sourceId;
+    button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(detail)}</span>`;
+    button.addEventListener("click", onClick);
+    list.append(button);
+  }
+
+  function selectDatasetFeature(featureName) {
+    state.source = "dataset";
+    state.x = featureName;
+    state.xSource = "dataset";
+    renderFeatures();
+    renderExpectedNumerators();
+    updateAxisControls();
+    refreshChart({ force: true });
+  }
+
+  function featureMatchesQuery(featureName, query) {
+    return !query || String(featureName || "").toLowerCase().includes(query);
+  }
+
+  function formatFeatureImportance(value, metric) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    if (metric === "gain") return formatGain(number);
+    return formatCompactImportance(number);
+  }
+
+  function featureImportanceDetail(row, metric) {
+    const value = formatFeatureImportance(row?.importance, metric);
+    const rank = Number(row?.rank);
+    const prefix = Number.isFinite(rank) ? `Rank ${rank}` : "";
+    return value ? `${prefix} · ${value}` : prefix;
+  }
+
+  function formatCompactImportance(number) {
+    const magnitude = Math.abs(number);
+    if (magnitude < 0.00005) return "0.0000";
+    if (magnitude >= 1000) return Math.round(number).toLocaleString();
+    if (magnitude >= 10) return number.toFixed(1);
+    if (magnitude >= 1) return number.toFixed(3);
+    return number.toFixed(4);
+  }
+
+  function formatGain(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0.000";
+    const magnitude = Math.abs(number);
+    if (magnitude < 0.0005) return "0.000";
+    if (magnitude >= 1000) return Math.round(number).toLocaleString();
+    if (magnitude >= 10) return number.toFixed(1);
+    return number.toFixed(3);
   }
 
   function clearSearchInput(inputId, render) {

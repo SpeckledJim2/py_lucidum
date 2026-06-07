@@ -2299,6 +2299,26 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn('el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));', js)
         self.assertIn("input.focus();", js)
 
+    def test_line_bar_feature_importance_sort_control_contract(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        html = html_body.decode("utf-8")
+        js = self.app_js_contract()
+        css = self.app_css_contract()
+
+        self.assertIn('<button data-value="importance" class="hidden">Imp</button>', html)
+        self.assertLess(html.index('data-value="importance"'), html.index('data-value="original" class="active"'))
+        self.assertIn('/api/line-bar/feature-importance', js)
+        self.assertIn('function renderFeatureImportanceRows(query, list)', js)
+        self.assertIn('function featureImportanceDetail(row, metric)', js)
+        self.assertIn('addFeatureListHeader(list, importanceGroupLabel(label, model));', js)
+        self.assertIn('addFeatureListHeader(list, "Not used");', js)
+        self.assertIn('return value ? `${prefix} · ${value}` : prefix;', js)
+        self.assertIn('state.source = "dataset";', js)
+        self.assertIn('No active GBM or GLM importances are available.', js)
+        self.assertIn('.feature-list-section-header {', css)
+        self.assertIn('.feature-list-message {', css)
+        self.assertIn('.line-bar-importance-row .kind {', css)
+
     def test_date_x_axis_labels_are_month_aware(self) -> None:
         js = self.app_js_contract()
 

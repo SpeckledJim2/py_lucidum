@@ -19,11 +19,14 @@ import duckdb
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 
 from .store import GlmModelStore, json_safe_number
+from .terms import model_matrix, term_groups
 from .validation import TARGET_COLUMN, physical_sample_column, validate_request
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 _GLUM_FIRST_IMPORT_SAW_LIGHTGBM: bool | None = None
+FEATURE_IMPORTANCE_METRIC = "weighted_mean_abs_centered_linear_predictor_contribution"
+FEATURE_IMPORTANCE_METRIC_LABEL = "GLM eta MAD"
 
 
 @contextmanager
@@ -323,6 +326,83 @@ def coefficient_rows(
     ]
 
 
+def glm_feature_importance_rows(
+    model: Any,
+    fit_frame: Any,
+    source_columns: list[str],
+    fit_weight: Any,
+    context: dict[str, Any],
+    np: Any,
+    pd: Any,
+) -> list[dict[str, Any]]:
+    groups = term_groups(model, [], source_columns)
+    if not groups:
+        return []
+    matrix = np.asarray(model_matrix(model, fit_frame, context), dtype=float)
+    if matrix.ndim != 2 or matrix.shape[0] == 0:
+        return []
+    coefficients = np.asarray(getattr(model, "coef_", []), dtype=float)
+    if coefficients.size == 0:
+        return []
+
+    weights = (
+        np.asarray(fit_weight, dtype=float)
+        if fit_weight is not None
+        else np.ones(matrix.shape[0], dtype=float)
+    )
+    if weights.shape[0] != matrix.shape[0]:
+        weights = np.ones(matrix.shape[0], dtype=float)
+    base_mask = np.isfinite(weights) & (weights > 0)
+    if not bool(base_mask.any()):
+        return []
+
+    contributions: dict[str, Any] = {}
+    term_counts: dict[str, int] = {}
+    for variables, info in groups.items():
+        features = [str(feature) for feature in variables if str(feature).strip()]
+        if not features:
+            continue
+        raw_indices = [int(index) for index in info.get("term_indices", [])]
+        indices = [
+            index
+            for index in raw_indices
+            if 0 <= index < matrix.shape[1] and index < coefficients.size
+        ]
+        if not indices:
+            continue
+        contribution = matrix[:, indices].dot(coefficients[indices])
+        finite_mask = base_mask & np.isfinite(contribution)
+        if not bool(finite_mask.any()):
+            continue
+        center = float(np.average(contribution[finite_mask], weights=weights[finite_mask]))
+        centered = np.where(np.isfinite(contribution), contribution - center, 0.0)
+        share = centered / float(len(features))
+        for feature in features:
+            if feature not in contributions:
+                contributions[feature] = np.zeros(matrix.shape[0], dtype=float)
+                term_counts[feature] = 0
+            contributions[feature] = contributions[feature] + share
+            term_counts[feature] += 1
+
+    rows: list[dict[str, Any]] = []
+    for feature, contribution in contributions.items():
+        finite_mask = base_mask & np.isfinite(contribution)
+        if not bool(finite_mask.any()):
+            continue
+        importance = float(np.average(np.abs(contribution[finite_mask]), weights=weights[finite_mask]))
+        if not math.isfinite(importance):
+            continue
+        rows.append(
+            {
+                "feature": feature,
+                "importance": jsonable(importance, np, pd),
+                "term_count": int(term_counts.get(feature, 0)),
+                "metric": FEATURE_IMPORTANCE_METRIC,
+            }
+        )
+    return sorted(rows, key=lambda row: (-float(row["importance"] or 0.0), str(row["feature"]).lower()))
+
+
 def safe_metric(callable_metric: Any, *args: Any, **kwargs: Any) -> float | None:
     try:
         return json_safe_number(callable_metric(*args, **kwargs))
@@ -541,6 +621,15 @@ def _train_model_impl(
             pd,
             include_inference=not is_penalized,
         )
+        feature_importance = glm_feature_importance_rows(
+            estimator,
+            fit_frame,
+            source_columns,
+            fit_weight_values,
+            context,
+            np,
+            pd,
+        )
         diagnostics = diagnostics_payload(
             estimator,
             fit_frame,
@@ -588,6 +677,14 @@ def _train_model_impl(
             "offset_terms": offset_terms,
         },
         "diagnostics": jsonable(diagnostics, np, pd),
+        "feature_importance": jsonable(feature_importance, np, pd),
+        "feature_importance_metric": {
+            "name": FEATURE_IMPORTANCE_METRIC,
+            "label": FEATURE_IMPORTANCE_METRIC_LABEL,
+            "scale": "linear_predictor",
+            "description": "Weighted mean absolute centered feature contribution on the GLM linear predictor scale.",
+            "interaction_allocation": "split_evenly",
+        },
         "source_columns": source_columns,
         "sources": {"predictions": store.source_id(model_id)},
         "row_count": int(len(frame)),
@@ -600,7 +697,12 @@ def _train_model_impl(
 
     progress({"phase": "writing", "message": "Saving GLM artifacts", "percent": 90})
     coefficient_frame = pd.DataFrame(coefficients)
+    feature_importance_frame = pd.DataFrame(
+        feature_importance,
+        columns=["feature", "importance", "term_count", "metric"],
+    )
     write_dataframe_parquet(coefficient_frame, store.artifact_path(model_id, "coefficients"))
+    write_dataframe_parquet(feature_importance_frame, store.artifact_path(model_id, "feature_importance"))
     write_dataframe_parquet(predictions, store.artifact_path(model_id, "predictions"))
     with store.artifact_path(model_id, "estimator").open("wb") as handle:
         pickle.dump(estimator, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -610,7 +712,16 @@ def _train_model_impl(
 
     result = store.activate_model(model_id) if activate else manifest
     result["coefficients"] = coefficients
+    result["feature_importance"] = feature_importance
     result["diagnostics"] = manifest["diagnostics"]
     result["model_dir"] = str(model_dir)
     return result
-__all__ = ["MissingGlmDependency", "glm_dependencies", "train_model", "write_dataframe_parquet"]
+__all__ = [
+    "FEATURE_IMPORTANCE_METRIC",
+    "FEATURE_IMPORTANCE_METRIC_LABEL",
+    "MissingGlmDependency",
+    "glm_dependencies",
+    "glm_feature_importance_rows",
+    "train_model",
+    "write_dataframe_parquet",
+]

@@ -24,6 +24,7 @@ from py_lucidum.tools.glm.training import (
     MissingGlmDependency,
     _suppress_tabmat_mixed_dtype_warning,
     glm_dependencies,
+    glm_feature_importance_rows,
     train_model,
 )
 from py_lucidum.tools.glm.validation import strip_formula_comments, validate_request
@@ -427,11 +428,16 @@ if result.get("iteration") != 10:
         self.assertTrue(store.artifact_path(model_id, "formula").exists())
         self.assertTrue(store.artifact_path(model_id, "estimator").exists())
         self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
+        self.assertTrue(store.artifact_path(model_id, "feature_importance").exists())
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
         self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
+        self.assertEqual(manifest["feature_importance_metric"]["interaction_allocation"], "split_evenly")
+        self.assertTrue(manifest["feature_importance"])
+        self.assertTrue({row["feature"] for row in manifest["feature_importance"]}.issubset({"Age", "Segment"}))
 
         detail = store.model_detail(model_id)
         self.assertTrue(detail["coefficients"])
+        self.assertTrue(detail["feature_importance"])
         self.assertEqual(detail["coefficients"][0]["term"], "(Intercept)")
 
         dataset.register_data_source_provider(GlmSourceProvider(store))
@@ -448,6 +454,56 @@ if result.get("iteration") != 10:
         with dataset.lock:
             row = dataset.con.execute(f"SELECT COUNT(*), COUNT(glm_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
         self.assertEqual(row, (6, 6))
+
+    def test_glm_feature_importance_splits_interaction_terms_across_features(self) -> None:
+        try:
+            import numpy as np
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class FakeSpec:
+            terms = ["Age", "Segment", "Age:Segment"]
+            term_variables = {
+                "Age": {"Age"},
+                "Segment": {"Segment"},
+                "Age:Segment": {"Age", "Segment"},
+            }
+            term_indices = {
+                "Age": [0],
+                "Segment": [1],
+                "Age:Segment": [2],
+            }
+
+            def get_model_matrix(self, frame: Any, context: dict[str, Any]) -> Any:
+                return np.asarray(
+                    [
+                        [1.0, 0.0, 0.0],
+                        [2.0, 1.0, 2.0],
+                        [3.0, 0.0, 4.0],
+                    ]
+                )
+
+        class FakeModel:
+            X_model_spec_ = FakeSpec()
+            coef_ = np.asarray([2.0, 4.0, 6.0])
+
+        rows = glm_feature_importance_rows(
+            FakeModel(),
+            pd.DataFrame({"Age": [1, 2, 3], "Segment": ["A", "B", "A"]}),
+            ["Age", "Segment"],
+            None,
+            {},
+            np,
+            pd,
+        )
+        by_feature = {row["feature"]: row for row in rows}
+
+        self.assertEqual(set(by_feature), {"Age", "Segment"})
+        self.assertAlmostEqual(by_feature["Age"]["importance"], 16 / 3)
+        self.assertAlmostEqual(by_feature["Segment"]["importance"], 44 / 9)
+        self.assertGreater(by_feature["Age"]["importance"], by_feature["Segment"]["importance"])
+        self.assertTrue(all(":" not in row["feature"] for row in rows))
 
     def test_glm_training_with_offset_stores_terms_and_predicts(self) -> None:
         self.require_glm_dependencies()

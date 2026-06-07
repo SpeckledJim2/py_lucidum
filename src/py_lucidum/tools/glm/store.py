@@ -22,6 +22,7 @@ ARTIFACT_FILES = {
     "estimator": "estimator.pkl",
     "formula": "formula.txt",
     "coefficients": "coefficients.parquet",
+    "feature_importance": "feature_importance.parquet",
     "predictions": "predictions.parquet",
     "diagnostics": "diagnostics.json",
     "tabulation_manifest": "tabulation_manifest.json",
@@ -341,6 +342,7 @@ INNER JOIN read_parquet({sql_literal(str(prediction_path))}) prediction USING (_
         return {
             "manifest": manifest,
             "coefficients": self.read_parquet_records(self.artifact_path(model_id, "coefficients")),
+            "feature_importance": self.read_parquet_records(self.artifact_path(model_id, "feature_importance")),
             "diagnostics": self.model_diagnostics(model_id, manifest),
             "formula": self.artifact_path(model_id, "formula").read_text(encoding="utf-8") if self.artifact_path(model_id, "formula").exists() else "",
             "active": self.active_model_id() == model_id,

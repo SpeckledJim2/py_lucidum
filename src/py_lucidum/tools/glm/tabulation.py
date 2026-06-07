@@ -22,6 +22,9 @@ import duckdb
 from py_lucidum.core import Dataset, is_numeric_kind, quote_ident, sql_literal, suggested_band_width
 
 from .store import GlmModelStore, json_safe_number
+from .terms import column_tokens as _column_tokens
+from .terms import model_matrix as _model_matrix
+from .terms import term_groups as _term_groups
 from .training import formula_context, glm_dependencies, offset_values_for_frame, write_dataframe_parquet
 from .validation import TARGET_COLUMN
 
@@ -94,38 +97,6 @@ def _feature_spec_map(feature_spec: Any) -> dict[str, dict[str, Any]]:
 def _schema_columns_and_kinds(dataset: Dataset) -> tuple[list[str], dict[str, str]]:
     columns = dataset.valid_schema_columns()
     return [column.name for column in columns], {column.name: column.kind for column in columns}
-
-
-def _column_tokens(expression: str, columns: list[str]) -> list[str]:
-    found: list[str] = []
-    for column in sorted(columns, key=len, reverse=True):
-        pattern = rf"(?<![A-Za-z0-9_]){re.escape(column)}(?![A-Za-z0-9_])"
-        if re.search(pattern, expression):
-            found.append(column)
-    return sorted(set(found))
-
-
-def _term_groups(estimator: Any, offset_terms: list[str], source_columns: list[str]) -> dict[tuple[str, ...], dict[str, Any]]:
-    groups: dict[tuple[str, ...], dict[str, Any]] = {}
-    spec = getattr(estimator, "X_model_spec_", None)
-    source_set = set(source_columns)
-    if spec is not None:
-        term_variables = getattr(spec, "term_variables", {}) or {}
-        term_indices = getattr(spec, "term_indices", {}) or {}
-        for term in getattr(spec, "terms", []) or []:
-            indices = list(term_indices.get(term, []) or [])
-            if not indices:
-                continue
-            variables = tuple(sorted(str(name) for name in (term_variables.get(term, set()) or set()) if str(name) in source_set))
-            if not variables:
-                continue
-            entry = groups.setdefault(variables, {"variables": list(variables), "term_indices": [], "offset_terms": []})
-            entry["term_indices"].extend(indices)
-    for expression in offset_terms:
-        variables = tuple(_column_tokens(expression, source_columns))
-        entry = groups.setdefault(variables, {"variables": list(variables), "term_indices": [], "offset_terms": []})
-        entry["offset_terms"].append(expression)
-    return groups
 
 
 def _fit_frame_for_levels(frame: Any, manifest: dict[str, Any], pd: Any) -> Any:
@@ -375,15 +346,6 @@ def _cartesian_table(levels_by_feature: dict[str, list[dict[str, Any]]], pd: Any
         row["__status"] = "unseen" if any(status != "ok" for status in statuses) else "ok"
         rows.append(row)
     return pd.DataFrame(rows)
-
-
-def _model_matrix(estimator: Any, frame: Any, context: dict[str, Any]) -> Any:
-    matrix = estimator.X_model_spec_.get_model_matrix(frame, context=context)
-    if hasattr(matrix, "toarray"):
-        return matrix.toarray()
-    if hasattr(matrix, "to_numpy"):
-        return matrix.to_numpy()
-    return matrix
 
 
 def _group_contribution(

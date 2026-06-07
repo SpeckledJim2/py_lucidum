@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
 
+from .importance import feature_importance_payload
 from .query import chart
 
 
@@ -27,3 +28,12 @@ def register(app: FastAPI, context: AppContext) -> None:
 
     app.add_api_route("/api/chart", chart_endpoint, methods=["POST"])
     app.add_api_route("/api/line-bar/chart", chart_endpoint, methods=["POST"])
+
+    @app.get("/api/line-bar/feature-importance")
+    async def feature_importance_endpoint(request: Request) -> dict:
+        context.check_token(request)
+        return feature_importance_payload(
+            context.dataset,
+            gbm_store=getattr(app.state, "gbm_store", None),
+            glm_store=getattr(app.state, "glm_store", None),
+        )
