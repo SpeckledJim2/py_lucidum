@@ -1113,9 +1113,9 @@ def partial_group_map_cte(group_mapping: list[dict[str, Any]] | None) -> str:
         return ""
     values = ",\n    ".join(
         "("
-        f"{sql_literal(str(row.get('source_x') or ''))}, "
-        f"{sql_literal(str(row.get('final_x') or ''))}, "
-        f"{sql_literal(str(row.get('final_x_sort') or ''))}, "
+        f"{partial_group_map_literal(row.get('source_x'))}, "
+        f"{partial_group_map_literal(row.get('final_x'))}, "
+        f"{partial_group_map_literal(row.get('final_x_sort'))}, "
         f"{int(row.get('final_original_order') or 0)}, "
         f"{'TRUE' if row.get('final_is_tail') else 'FALSE'}"
         ")"
@@ -1126,6 +1126,10 @@ group_map(source_label, final_label, final_x_sort, final_original_order, final_i
   VALUES
     {values}
 )"""
+
+
+def partial_group_map_literal(value: Any) -> str:
+    return sql_literal("" if value is None else str(value))
 
 
 def normalise_partial_dependence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

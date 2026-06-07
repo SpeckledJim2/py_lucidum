@@ -918,6 +918,38 @@ COPY (
         self.assertAlmostEqual(by_x["Social"]["p50"], 0.0)
         self.assertGreater(by_x["Business"]["p50"], 0)
 
+    def test_chart_shap_ribbons_one_transform_preserves_zero_numeric_base(self) -> None:
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "0,Social,2024-01-01,2500,100,100,1\n"
+            "1,Social,2024-01-02,2500,100,100,1\n"
+            "2,Social,2024-01-03,2500,100,100,1\n",
+            encoding="utf-8",
+        )
+        dataset = self.dataset_with_gbm_ribbons(
+            predictions=[(1, 100.0), (2, 100.0), (3, 100.0)],
+            shap_values=[(1, 0.0, 0.0), (2, 0.0, 1.0), (3, 0.0, 2.0)],
+        )
+        request = self.request()
+        request.update(
+            {
+                "x": "YoungestDriverAge",
+                "bandWidth": "1",
+                "partialDependence": {"mode": "shap"},
+                "transform": "one",
+                "base": "0",
+            }
+        )
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        by_x = {row["x"]: row for row in partial["rows"]}
+        self.assertEqual(partial["transform"]["reference"], "base")
+        self.assertEqual(partial["transform"]["base_x"], "0")
+        self.assertAlmostEqual(by_x["0"]["p50"], 1.0)
+        self.assertAlmostEqual(by_x["1"]["p50"], math.e)
+
     def test_chart_shap_ribbons_use_additive_scaling_for_identity_objective(self) -> None:
         dataset = self.dataset_with_gbm_ribbons(objective="regression")
         request = self.request()
