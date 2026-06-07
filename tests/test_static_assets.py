@@ -1410,6 +1410,8 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("#gbmModelFallback {\n        flex: 1 1 auto;", css)
         self.assertIn("function syncRenderedTab(mount, nextTab)", js)
         self.assertIn("syncRenderedTab(mount, activeTab);\n      scheduleGbmTableRedraws();\n      refreshModelList({ force: true });\n      return;", js)
+        self.assertIn("function syncDatasetGbmCountFromConfig(data = {})", js)
+        self.assertIn("syncDatasetGbmCountFromConfig(nextConfig);", js)
         self.assertIn(".gbm-model-table {\n        font-size: 11px;\n        line-height: 1.15;", css)
         self.assertIn("min-width: 1620px;", css)
         self.assertIn(".gbm-model-table td {\n        border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent);", css)

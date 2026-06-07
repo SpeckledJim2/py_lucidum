@@ -1201,6 +1201,7 @@ COPY (
                       && !document.body.textContent.includes("Disposable smoke GLM A")
                       && !document.body.textContent.includes("Disposable smoke GLM B")
                       && document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Browser smoke GLM")
+                      && document.querySelector(".dataset-meta-glm-link")?.textContent.trim() === "GLMs (2)"
                     """,
                     timeout=10_000,
                 )
@@ -2415,6 +2416,7 @@ COPY (
                       && !document.body.textContent.includes("Disposable smoke model A")
                       && !document.body.textContent.includes("Disposable smoke model B")
                       && document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
+                      && document.querySelector(".dataset-meta-gbm-link")?.textContent.trim() === "GBMs (2)"
                     """,
                     timeout=10_000,
                 )
@@ -3635,6 +3637,22 @@ COPY (
                 self.assertIn("Monotonicity", layout["featureHeaders"])
                 self.assertEqual(sum(header in layout["featureHeaders"] for header in ("Gain", "SHAP")), 1)
                 self.assertNotIn("Type", layout["featureHeaders"])
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
+                final_model_count = page.locator("#gbmModelGrid .tabulator-row").count()
+                self.assertGreater(final_model_count, 0)
+                page.locator("#gbmModelGrid .tabulator-row").first.click()
+                if final_model_count > 1:
+                    page.locator("#gbmModelGrid .tabulator-row").nth(final_model_count - 1).click(modifiers=["Shift"])
+                page.evaluate("() => { window.confirm = () => true; }")
+                page.locator("#gbmDeleteModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll("#gbmModelGrid .tabulator-row").length === 0
+                      && document.querySelector(".dataset-meta-gbm-link")?.textContent.trim() === "GBMs (0)"
+                    """,
+                    timeout=10_000,
+                )
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()
