@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import math
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -999,6 +1001,34 @@ COPY (
         worker.assert_called_once()
         self.assertEqual(result["partial_dependence"]["model_id"], "worker-model")
 
+    def test_chart_glm_overlay_dispatches_to_worker_when_lightgbm_importable_before_loaded(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request["partialDependence"] = {"mode": "glm"}
+        worker_result = {
+            "mode": "glm",
+            "model_id": "worker-model",
+            "feature": "UseofVan",
+            "method": "base_profile",
+            "percentiles": [50],
+            "rows": [],
+            "warnings": [],
+            "scale": {"method": "none", "target": None, "source_mean": None},
+            "sample": {},
+            "transform": {"mode": "none"},
+        }
+        saved_lightgbm = sys.modules.pop("lightgbm", None)
+        try:
+            with patch("py_lucidum.tools.glm.overlay.importlib.util.find_spec", return_value=object()):
+                with patch("py_lucidum.tools.glm.overlay.build_glm_partial_dependence_overlay_in_subprocess", return_value=worker_result) as worker:
+                    result = chart(dataset, request)
+        finally:
+            if saved_lightgbm is not None:
+                sys.modules["lightgbm"] = saved_lightgbm
+
+        worker.assert_called_once()
+        self.assertEqual(result["partial_dependence"]["model_id"], "worker-model")
+
     def test_chart_glm_overlay_worker_returns_rows_when_lightgbm_loaded(self) -> None:
         dataset = Dataset(self.data_path)
         self.write_active_glm_for_overlay(dataset)
@@ -1011,6 +1041,58 @@ COPY (
         partial = result["partial_dependence"]
         self.assertEqual(partial["mode"], "glm")
         self.assertGreater(len(partial["rows"]), 0)
+
+    def test_chart_glm_overlay_fresh_process_survives_with_lightgbm_importable(self) -> None:
+        if importlib.util.find_spec("lightgbm") is None:
+            self.skipTest("lightgbm is not installed")
+        dataset = Dataset(self.data_path)
+        self.write_active_glm_for_overlay(dataset)
+        request = self.request()
+        request["partialDependence"] = {"mode": "glm"}
+        repo_root = Path(__file__).resolve().parents[1]
+        env = os.environ.copy()
+        src_path = str(repo_root / "src")
+        env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+        env["PYTHONFAULTHANDLER"] = "1"
+        script = f"""
+from pathlib import Path
+import json
+import sys
+
+from py_lucidum.app import create_app
+from py_lucidum.tools.line_bar.query import chart
+
+if "lightgbm" in sys.modules:
+    raise SystemExit("lightgbm was loaded before the chart request")
+
+app = create_app(
+    Path({str(self.data_path)!r}),
+    token="",
+    tools=["line_bar", "glm", "gbm"],
+    use_saved_filters=False,
+    use_kpis=False,
+    use_features=False,
+)
+request = json.loads({json.dumps(request)!r})
+result = chart(app.state.dataset, request, feature_spec={{}})
+partial = result.get("partial_dependence") or {{}}
+if partial.get("mode") != "glm":
+    raise SystemExit(f"unexpected partial dependence payload: {{partial!r}}")
+rows = partial.get("rows")
+if not isinstance(rows, list) or not rows:
+    raise SystemExit(f"missing GLM overlay rows: {{partial!r}}")
+print(len(rows))
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=repo_root,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0, f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}")
 
     def test_lazy_banding_suggestion_uses_x_source_for_prediction_axes(self) -> None:
         glm_path = self.root / "glm_banding_predictions.parquet"

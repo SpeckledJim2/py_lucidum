@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import math
 import os
@@ -87,7 +88,10 @@ def build_glm_partial_dependence_overlay(
 
 
 def should_isolate_glm_overlay() -> bool:
-    return "lightgbm" in sys.modules and not os.environ.get("PY_LUCIDUM_GLM_OVERLAY_WORKER")
+    return (
+        ("lightgbm" in sys.modules or importlib.util.find_spec("lightgbm") is not None)
+        and not os.environ.get("PY_LUCIDUM_GLM_OVERLAY_WORKER")
+    )
 
 
 def build_glm_partial_dependence_overlay_in_subprocess(
