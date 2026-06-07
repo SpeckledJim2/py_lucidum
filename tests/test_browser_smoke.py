@@ -235,6 +235,13 @@ COPY (
                 "30,300,50,C,training\n",
                 encoding="utf-8",
             )
+            features_path = Path(tmp_dir) / "feature_spec.csv"
+            features_path.write_text(
+                "Feature,Grouping,Base,scenario1\n"
+                "Age,DRIVER,40,feature\n"
+                "Segment,VEHICLE,B,feature\n",
+                encoding="utf-8",
+            )
             store = GbmModelStore(data_path)
             self.write_gbm_prediction_model(
                 store,
@@ -291,7 +298,7 @@ COPY (
                 [0.19, 0.29, 0.39],
             )
             glm_store.activate_model("browser-smoke-glm")
-            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "glm", "gbm"])
+            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "glm", "gbm"], features_path=features_path)
             try:
                 self.exercise_gbm_profile_cache_and_model_chart_refresh(base_url)
             finally:
@@ -1180,6 +1187,40 @@ COPY (
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                     timeout=10_000,
                 )
+                axis_shrink_state = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const option = chart.getOption();
+                      const candidates = (option.series || [])
+                        .filter((series) => series.yAxisIndex === 0 && series.type === "line")
+                        .filter((series) => !String(series.name || "").startsWith("SHAP") && series.name !== "GLM")
+                        .map((series) => ({
+                          name: series.name,
+                          max: Math.max(...(series.data || []).map((value) => Array.isArray(value) ? value[1] : value).map(Number).filter(Number.isFinite)),
+                        }))
+                        .filter((series) => Number.isFinite(series.max))
+                        .sort((left, right) => right.max - left.max);
+                      const target = candidates[0]?.name || "";
+                      const beforeMax = Number(option.yAxis?.[0]?.max);
+                      if (target) chart.dispatchAction({ type: "legendUnSelect", name: target });
+                      return { target, beforeMax };
+                    }
+                    """
+                )
+                self.assertTrue(axis_shrink_state["target"])
+                page.wait_for_function(
+                    """
+                    ({ target, beforeMax }) => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const option = chart.getOption();
+                      const selected = Object.assign({}, ...chart.getOption().legend.map((legend) => legend.selected || {}));
+                      return selected[target] === false && Number(option.yAxis?.[0]?.max) < beforeMax;
+                    }
+                    """,
+                    arg=axis_shrink_state,
+                    timeout=10_000,
+                )
                 page.evaluate(
                     """
                     () => {
@@ -1222,6 +1263,56 @@ COPY (
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                     timeout=10_000,
                 )
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000):
+                    page.locator('.segmented[data-control="transform"] button[data-value="one"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const option = chart.getOption();
+                      const baseColor = getComputedStyle(document.body).getPropertyValue("--base-bar").trim();
+                      const barSeries = (option.series || []).find((series) => series.type === "bar");
+                      const baseline = (option.series || []).find((series) => series.name === "0% uplift baseline");
+                      const axisFormatter = option.yAxis?.[0]?.axisLabel?.formatter;
+                      return (barSeries?.data || []).some((item) => item?.itemStyle?.color === baseColor)
+                        && baseline?.markLine?.data?.[0]?.yAxis === 1
+                        && axisFormatter?.(1) === "0%";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                base_emphasis_state = page.evaluate(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const option = chart.getOption();
+                      const baseColor = getComputedStyle(document.body).getPropertyValue("--base-bar").trim();
+                      const barColor = getComputedStyle(document.body).getPropertyValue("--bar").trim();
+                      const barSeries = (option.series || []).find((series) => series.type === "bar");
+                      const baseline = (option.series || []).find((series) => series.name === "0% uplift baseline");
+                      const axisFormatter = option.yAxis?.[0]?.axisLabel?.formatter;
+                      return {
+                        baseColor,
+                        barColor,
+                        baseColoredBars: (barSeries?.data || []).filter((item) => item?.itemStyle?.color === baseColor).length,
+                        baselineY: baseline?.markLine?.data?.[0]?.yAxis,
+                        baselineWidth: baseline?.markLine?.lineStyle?.width,
+                        baselineSilent: baseline?.markLine?.silent,
+                        axisBaseLabel: axisFormatter?.(1) || "",
+                        axisMin: Number(option.yAxis?.[0]?.min),
+                        axisMax: Number(option.yAxis?.[0]?.max),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(base_emphasis_state["baseColoredBars"], 1)
+                self.assertNotEqual(base_emphasis_state["baseColor"], base_emphasis_state["barColor"])
+                self.assertEqual(base_emphasis_state["baselineY"], 1)
+                self.assertGreater(base_emphasis_state["baselineWidth"], 1)
+                self.assertTrue(base_emphasis_state["baselineSilent"])
+                self.assertEqual(base_emphasis_state["axisBaseLabel"], "0%")
+                self.assertLessEqual(base_emphasis_state["axisMin"], 1)
+                self.assertGreaterEqual(base_emphasis_state["axisMax"], 1)
                 page.locator('.segmented[data-control="partialDependence"] button[data-value="both"]').click()
                 page.wait_for_function(
                     """
@@ -1230,7 +1321,7 @@ COPY (
                       const option = chart.getOption();
                       return option.series.some((series) => series.name === "SHAP median")
                         && option.legend[1]?.textStyle?.fontWeight === 400
-                        && option.legend[1]?.textStyle?.fontSize === 12;
+                        && option.legend[1]?.textStyle?.fontSize === 11;
                     }
                     """,
                     timeout=10_000,
@@ -2229,6 +2320,33 @@ COPY (
                 self.assertIn("Median", tooltip_text)
                 self.assertNotIn("45-55", tooltip_text)
                 self.assertIsNone(re.search(r"\d+\.\d{5,}", tooltip_text))
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
+                    page.locator('[data-gbm-shap-rescale="1"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && option.yAxis?.[0]?.axisLabel?.formatter?.(1) === "0%"
+                        && option.yAxis?.[0]?.axisLabel?.formatter?.(1.25) === "+25%";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
+                    page.locator('[data-gbm-shap-rescale="-"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const option = chart?.getOption();
+                      return option?.title?.[0]?.text?.includes("SHAP flame plot: Age")
+                        && option.yAxis?.[0]?.axisLabel?.formatter?.(1) === "1";
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.evaluate(
                     """
                     () => {

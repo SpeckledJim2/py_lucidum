@@ -392,7 +392,7 @@ for (const value of [4, 7, 12]) {
         script = f"""
 import fs from "node:fs";
 const source = fs.readFileSync({str(chart_path)!r}, "utf8").replaceAll("export ", "");
-eval(source + "\\nglobalThis.__shapChartOption = shapChartOption;");
+eval(source + "\\nglobalThis.__shapChartOption = shapChartOption;\\nglobalThis.__formatUpliftPercent = formatUpliftPercent;");
 const rows = [
   {{ x: 18, p0: 0.1, p5: 0.11, p10: 0.12, p20: 0.13, p30: 0.14, p40: 0.15, p50: 0.16, p60: 0.17, p70: 0.18, p80: 0.19, p90: 0.2, p95: 0.21, p100: 0.22 }},
   {{ x: 83, p0: -0.2, p5: -0.19, p10: -0.18, p20: -0.17, p30: -0.16, p40: -0.15, p50: -0.14, p60: -0.13, p70: -0.12, p80: -0.11, p90: -0.1, p95: -0.09, p100: -0.08 }},
@@ -421,12 +421,100 @@ const responseOption = globalThis.__shapChartOption({{
   x_domain: [18, 83],
   y_domain: [-0.2, 1.2],
   rescale: {{ mode: "1" }},
-  rows,
+  rows: [
+    {{ x: 18, p0: 0.8, p5: 0.9, p10: 0.95, p20: 1, p30: 1.1, p40: 1.2, p50: 1.25, p60: 1.3, p70: 1.35, p80: 1.4, p90: 1.45, p95: 1.5, p100: 1.6 }},
+    {{ x: 83, p0: 0.7, p5: 0.75, p10: 0.8, p20: 0.85, p30: 0.9, p40: 0.95, p50: 1, p60: 1.05, p70: 1.1, p80: 1.15, p90: 1.2, p95: 1.25, p100: 1.3 }},
+  ],
 }}, {{}});
 const median = responseOption.series.find((series) => series.name === "Median");
 if (!median?.markLine?.data || median.markLine.data[0].yAxis !== 1) {{
   throw new Error("rescale=1 SHAP mark line should be drawn at 1");
 }}
+if (globalThis.__formatUpliftPercent(1) !== "0%") throw new Error("base uplift should be 0%");
+if (globalThis.__formatUpliftPercent(1.25) !== "+25%") throw new Error("positive uplift should include plus sign");
+if (globalThis.__formatUpliftPercent(0.9) !== "-10%") throw new Error("negative uplift should be shown from base");
+if (responseOption.yAxis.interval !== 0.1) throw new Error(`expected finer y-axis ticks, got ${{responseOption.yAxis.interval}}`);
+if (responseOption.yAxis.axisLabel.formatter(1) !== "0%") throw new Error("rescale y-axis should show uplift percent at base");
+if (responseOption.yAxis.axisLabel.formatter(1.25) !== "+25%") throw new Error("rescale y-axis should show positive uplift");
+const responseTooltip = responseOption.tooltip.formatter([{{ axisValue: 18, value: [18, 1.25] }}]);
+if (!responseTooltip.includes("+25%")) throw new Error(`rescale tooltip should show uplift percent: ${{responseTooltip}}`);
+"""
+        self.run_node_script(script)
+
+    def test_line_bar_uplift_formatting_and_visible_axis_bounds(self) -> None:
+        js = self.app_js_contract()
+        script = f"""
+const state = {{ transform: "none" }};
+const css = {{
+  "--bar": "#bar",
+  "--base-bar": "#base",
+  "--tail": "#tail",
+  "--text": "#text",
+}};
+function getCss(name) {{ return css[name] || name; }}
+const RESPONSE_AXIS_PADDING = 0.08;
+const RESPONSE_AXIS_TARGET_INTERVALS = 15;
+const SHAP_RIBBON_SERIES = [
+  ["p0", "p100", "SHAP Min-Max"],
+  ["p5", "p95", "SHAP 5-95"],
+  ["p10", "p90", "SHAP 10-90"],
+  ["p20", "p80", "SHAP 20-80"],
+  ["p30", "p70", "SHAP 30-70"],
+  ["p40", "p60", "SHAP 40-60"],
+];
+{self.js_function_source(js, "formatUpliftPercent")}
+{self.js_function_source(js, "isUpliftTransform")}
+{self.js_function_source(js, "isBaseReferenceTransform")}
+{self.js_function_source(js, "isBaseWeightBar")}
+{self.js_function_source(js, "weightBarColor")}
+{self.js_function_source(js, "upliftBaselineSeries")}
+{self.js_function_source(js, "responseAxisOptions")}
+{self.js_function_source(js, "withUpliftBaselineExtent")}
+{self.js_function_source(js, "partialDependenceOverlayEntries")}
+{self.js_function_source(js, "responseAxisExtent")}
+{self.js_function_source(js, "responseAxisSpan")}
+{self.js_function_source(js, "niceAxisStep")}
+{self.js_function_source(js, "roundAxisValue")}
+{self.js_function_source(js, "responseAxisBounds")}
+{self.js_function_source(js, "matchingLegendSelection")}
+{self.js_function_source(js, "legendEntryName")}
+if (formatUpliftPercent(1) !== "0%") throw new Error("base uplift should be 0%");
+if (formatUpliftPercent(1.25) !== "+25%") throw new Error("positive uplift should include plus sign");
+if (formatUpliftPercent(0.9) !== "-10%") throw new Error("negative uplift should be shown from base");
+const data = {{
+  rows: [
+    {{ resp0: 100, resp1: 10 }},
+    {{ resp0: 200, resp1: 20 }},
+  ],
+  responses: [{{ label: "Actual" }}, {{ label: "Expected" }}],
+}};
+const full = responseAxisOptions(data, {{ Actual: true, Expected: true }});
+const expectedOnly = responseAxisOptions(data, {{ Actual: false, Expected: true }});
+const fallback = responseAxisOptions(data, {{ Actual: false, Expected: false }});
+if (!(expectedOnly.max < full.max)) throw new Error(`expected hidden response to shrink y-axis ${{expectedOnly.max}} vs ${{full.max}}`);
+if (fallback.max !== full.max || fallback.min !== full.min) throw new Error("all-hidden axis should fall back to full extent");
+state.transform = "one";
+const upliftBounds = responseAxisOptions({{
+  rows: [{{ resp0: 1.2 }}, {{ resp0: 1.3 }}],
+  responses: [{{ label: "Actual" }}],
+}}, {{ Actual: true }});
+if (upliftBounds.min > 1 || upliftBounds.max <= 1) throw new Error(`uplift axis should include raw baseline 1: ${{upliftBounds.min}}..${{upliftBounds.max}}`);
+const baseline = upliftBaselineSeries({{ rows: [{{}}, {{}}, {{}}] }});
+if (baseline?.markLine?.data?.[0]?.yAxis !== 1) throw new Error("uplift baseline should be drawn at raw y=1");
+if ((baseline?.markLine?.lineStyle?.width || 0) <= 1) throw new Error("uplift baseline should be thicker than grid lines");
+const baseData = {{ transform: {{ reference: "base", base_x: "40" }} }};
+if (!isBaseWeightBar(baseData, {{ x: 40 }})) throw new Error("numeric base x should match string metadata");
+if (weightBarColor(baseData, {{ x: "40" }}) !== "#base") throw new Error("base row should use base bar color");
+if (weightBarColor(baseData, {{ x: "40", is_tail: true }}) !== "#tail") throw new Error("tail color should still take precedence");
+state.transform = "zero";
+if (weightBarColor(baseData, {{ x: "40" }}) !== "#base") throw new Error("zero transform should also use base bar color");
+state.transform = "none";
+if (isBaseWeightBar(baseData, {{ x: "40" }})) throw new Error("base bar should only apply to base transforms");
+const persisted = matchingLegendSelection({{ legend: [{{ selected: {{ Actual: false, Weight: false }} }}] }}, [
+  {{ name: "Actual" }},
+  {{ name: "Weight" }},
+]);
+if (persisted.Actual !== false || persisted.Weight !== false) throw new Error("legend selection should persist by matching name");
 """
         self.run_node_script(script)
 
@@ -2474,14 +2562,15 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn("function shapRibbonSeries(rows, lowKey, highKey, label, color)", js)
         self.assertIn("function lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection)", js)
         self.assertIn("const textStyle = { color: getCss(\"--text\"), fontWeight: 700, fontSize: 13 };", js)
-        self.assertIn("const overlayTextStyle = { color: getCss(\"--text\"), fontWeight: 400, fontSize: 12 };", js)
+        self.assertIn("const overlayTextStyle = { color: getCss(\"--text\"), fontWeight: 400, fontSize: 11 };", js)
+        self.assertIn("--base-bar:", self.app_css_contract())
         self.assertIn("selected: mainLegendSelection", js)
         self.assertNotIn("selectedMode: false", js)
         self.assertIn("function legendEntryName(entry)", js)
         self.assertIn("const names = entries.map(legendEntryName).filter(Boolean);", js)
         self.assertIn("matchingLegendSelection(previousOption, legendData)", js)
         self.assertIn("matchingLegendSelection(previousOption, overlayLegendData)", js)
-        self.assertIn("series: [barSeries, ...shapSeries, ...glmSeries, ...lineSeries, ...customSeries]", js)
+        self.assertIn("series: [barSeries, ...shapSeries, ...glmSeries, ...lineSeries, ...(upliftBaseline ? [upliftBaseline] : []), ...customSeries]", js)
         self.assertIn("grid: { left: 72, right: 76, top: hasOverlaySeries ? 82 : 56", js)
 
     def test_gbm_shap_banding_uses_lazy_suggestion_without_auto_control(self) -> None:

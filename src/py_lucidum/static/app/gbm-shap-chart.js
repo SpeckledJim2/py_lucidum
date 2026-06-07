@@ -9,6 +9,7 @@ const SHAP_RED_RIBBONS = [
 ];
 const LINE_COLORS = ["#4fb99f", "#ff7f50", "#8aa1d6", "#b779d6", "#e7b84b", "#5aa2d6", "#d96a8a", "#84b547"];
 const AXIS_TARGET_INTERVALS = 6;
+const SHAP_VALUE_AXIS_TARGET_INTERVALS = 20;
 const SURFACE_AXIS_LABEL_FONT_SIZE = 10;
 const SURFACE_AXIS_NAME_FONT_SIZE = 11;
 const SURFACE_BOX_WIDTH = 100;
@@ -114,7 +115,7 @@ function flameOption(payload, common, theme) {
     legend: centeredLegend(common.legend),
     tooltip: { trigger: "axis", confine: true, formatter: flameTooltipFormatter(rows, payload) },
     xAxis: valueAxis(payload.x_feature, theme, payload.x_domain, { exactDomain: true }),
-    yAxis: valueAxis(payload.y_label || "SHAP", theme, payload.y_domain),
+    yAxis: shapValueAxis(payload, payload.y_label || "SHAP", theme, payload.y_domain),
     series,
   };
 }
@@ -127,9 +128,9 @@ function boxOption(payload, common, theme) {
     ...common,
     legend: { show: false },
     grid: { ...common.grid, top: 56 },
-    tooltip: { trigger: "item", confine: true, formatter: (params) => boxTooltip(params, rows, feature) },
+    tooltip: { trigger: "item", confine: true, formatter: (params) => boxTooltip(params, rows, feature, payload) },
     xAxis: categoryAxis(labels, payload.x_feature, theme, feature, { axis: "x" }),
-    yAxis: valueAxis(payload.y_label || "SHAP", theme, payload.y_domain),
+    yAxis: shapValueAxis(payload, payload.y_label || "SHAP", theme, payload.y_domain),
     dataZoom: labels.length > 60 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
     series: [
       {
@@ -166,7 +167,7 @@ function surfaceOption(payload, common, theme) {
       min: extent.min,
       max: extent.max,
       calculable: true,
-      formatter: formatVisualMapNumber,
+      formatter: (value) => formatVisualMapValue(value, payload),
       right: 10,
       top: 80,
       inRange: { color: ["#1d4ed8", "#f8fafc", "#b91c1c"] },
@@ -185,7 +186,7 @@ function surfaceOption(payload, common, theme) {
     },
     xAxis3D: axis3D(payload.x_feature, theme, payload.x_domain),
     yAxis3D: axis3D(payload.y_feature, theme, payload.y_domain),
-    zAxis3D: axis3D(payload.z_label || "SHAP", theme),
+    zAxis3D: axis3D(payload.z_label || "SHAP", theme, null, { formatter: valueFormatterForPayload(payload), targetIntervals: SHAP_VALUE_AXIS_TARGET_INTERVALS }),
     series: [
       {
         type: "surface",
@@ -207,9 +208,9 @@ function linesOption(payload, common, theme) {
   }
   return {
     ...common,
-    tooltip: { trigger: "axis", confine: true, valueFormatter: formatTooltipNumber },
+    tooltip: { trigger: "axis", confine: true, valueFormatter: (value) => formatShapValue(value, payload) },
     xAxis: valueAxis(payload.x_feature, theme, payload.x_domain),
-    yAxis: valueAxis(payload.y_label || "SHAP", theme, payload.y_domain),
+    yAxis: shapValueAxis(payload, payload.y_label || "SHAP", theme, payload.y_domain),
     series: [...seriesRows.entries()].map(([name, data]) => ({
       name,
       type: "line",
@@ -244,7 +245,7 @@ function heatmapOption(payload, common, theme) {
       min: extent.min,
       max: extent.max,
       calculable: true,
-      formatter: formatVisualMapNumber,
+      formatter: (value) => formatVisualMapValue(value, payload),
       orient: "vertical",
       right: 8,
       top: 90,
@@ -270,17 +271,26 @@ function valueAxis(name, theme, domain = null, options = {}) {
     nameLocation: "middle",
     nameGap: 34,
     axisLine: { lineStyle: { color: theme.line || "#cbd5e1" } },
-    axisLabel: { color: theme.text || "#334155", formatter: compactNumber },
+    axisLabel: { color: theme.text || "#334155", formatter: options.formatter || compactNumber },
     splitLine: { lineStyle: { color: theme.grid || "#e5e7eb" } },
     nameTextStyle: { color: theme.text || "#334155", fontWeight: 700 },
   };
-  const bounds = options.exactDomain ? exactAxisBounds(domain) : niceAxisBounds(domain);
+  const bounds = options.exactDomain
+    ? exactAxisBounds(domain, options.targetIntervals)
+    : niceAxisBounds(domain, options.targetIntervals);
   if (bounds) {
     axis.min = bounds.min;
     axis.max = bounds.max;
     axis.interval = bounds.interval;
   }
   return axis;
+}
+
+function shapValueAxis(payload, name, theme, domain = null) {
+  return valueAxis(name, theme, domain, {
+    formatter: valueFormatterForPayload(payload),
+    targetIntervals: SHAP_VALUE_AXIS_TARGET_INTERVALS,
+  });
 }
 
 function categoryAxis(labels, name, theme, feature = null, options = {}) {
@@ -308,16 +318,16 @@ function categoryAxisNameGap(rotate, options = {}) {
   return options.axis === "x" && Number(rotate) > 0 ? 88 : 34;
 }
 
-function axis3D(name, theme, domain = null) {
+function axis3D(name, theme, domain = null, options = {}) {
   const axis = {
     type: "value",
     name,
     nameTextStyle: { color: theme.text || "#334155", fontWeight: 700, fontSize: SURFACE_AXIS_NAME_FONT_SIZE },
-    axisLabel: { color: theme.text || "#334155", fontSize: SURFACE_AXIS_LABEL_FONT_SIZE, formatter: compactNumber },
+    axisLabel: { color: theme.text || "#334155", fontSize: SURFACE_AXIS_LABEL_FONT_SIZE, formatter: options.formatter || compactNumber },
     axisLine: { lineStyle: { color: theme.line || "#cbd5e1" } },
     splitLine: { lineStyle: { color: theme.grid || "#e5e7eb" } },
   };
-  const bounds = niceAxisBounds(domain);
+  const bounds = niceAxisBounds(domain, options.targetIntervals);
   if (bounds) {
     axis.min = bounds.min;
     axis.max = bounds.max;
@@ -377,29 +387,29 @@ function flameTooltipFormatter(rows, payload) {
     if (!row) return "";
     return [
       `${payload.x_feature}: ${formatTooltipNumber(row.x)}`,
-      `Median: ${formatTooltipNumber(row.p50)}`,
-      `40-60: ${formatTooltipRange(row.p40, row.p60)}`,
-      `5-95: ${formatTooltipRange(row.p5, row.p95)}`,
-      `Min-Max: ${formatTooltipRange(row.p0, row.p100)}`,
+      `Median: ${formatShapValue(row.p50, payload)}`,
+      `40-60: ${formatTooltipRange(row.p40, row.p60, payload)}`,
+      `5-95: ${formatTooltipRange(row.p5, row.p95, payload)}`,
+      `Min-Max: ${formatTooltipRange(row.p0, row.p100, payload)}`,
     ].join("<br>");
   };
 }
 
-function boxTooltip(params, rows, feature = null) {
+function boxTooltip(params, rows, feature = null, payload = null) {
   const row = rows?.[params?.dataIndex];
   if (!row) return "";
   const label = formatCategoryLabel(row.level, feature);
   if (params?.seriesName === "Mean") {
-    return `${label}<br>Mean: ${formatTooltipNumber(row.mean)}`;
+    return `${label}<br>Mean: ${formatShapValue(row.mean, payload)}`;
   }
   return [
     `${label}`,
-    `min: ${formatTooltipNumber(row.p0)}`,
-    `Q1: ${formatTooltipNumber(row.p25)}`,
-    `median: ${formatTooltipNumber(row.p50)}`,
-    `Q3: ${formatTooltipNumber(row.p75)}`,
-    `max: ${formatTooltipNumber(row.p100)}`,
-    `mean: ${formatTooltipNumber(row.mean)}`,
+    `min: ${formatShapValue(row.p0, payload)}`,
+    `Q1: ${formatShapValue(row.p25, payload)}`,
+    `median: ${formatShapValue(row.p50, payload)}`,
+    `Q3: ${formatShapValue(row.p75, payload)}`,
+    `max: ${formatShapValue(row.p100, payload)}`,
+    `mean: ${formatShapValue(row.mean, payload)}`,
   ].join("<br>");
 }
 
@@ -407,7 +417,7 @@ function heatmapTooltip(params, payload, xLabels, yLabels, xFeature = null, yFea
   const value = Array.isArray(params?.value) ? params.value : [];
   const xLabel = formatCategoryLabel(xLabels[value[0]] ?? "", xFeature);
   const yLabel = formatCategoryLabel(yLabels[value[1]] ?? "", yFeature);
-  return `${payload.x_feature}: ${xLabel}<br>${payload.y_feature}: ${yLabel}<br>SHAP: ${formatTooltipNumber(value[2])}`;
+  return `${payload.x_feature}: ${xLabel}<br>${payload.y_feature}: ${yLabel}<br>SHAP: ${formatShapValue(value[2], payload)}`;
 }
 
 function surfaceDataShape(payload, rows) {
@@ -448,8 +458,8 @@ function nearestRow(rows, xValue) {
   return best;
 }
 
-function formatTooltipRange(low, high) {
-  return `${formatTooltipNumber(low)} to ${formatTooltipNumber(high)}`;
+function formatTooltipRange(low, high, payload = null) {
+  return `${formatShapValue(low, payload)} to ${formatShapValue(high, payload)}`;
 }
 
 function referenceLineValue(payload) {
@@ -482,13 +492,13 @@ function numericExtent(values) {
   return { min, max };
 }
 
-function exactAxisBounds(domain) {
+function exactAxisBounds(domain, targetIntervals = AXIS_TARGET_INTERVALS) {
   if (!Array.isArray(domain) || domain.length < 2) return null;
   const min = numberOrNull(domain[0]);
   const max = numberOrNull(domain[1]);
   if (min === null || max === null) return null;
-  if (min === max) return niceAxisBounds(domain);
-  const step = niceAxisStep(max - min);
+  if (min === max) return niceAxisBounds(domain, targetIntervals);
+  const step = niceAxisStep(max - min, targetIntervals);
   return {
     min: roundAxisValue(min, step),
     max: roundAxisValue(max, step),
@@ -496,7 +506,7 @@ function exactAxisBounds(domain) {
   };
 }
 
-function niceAxisBounds(domain) {
+function niceAxisBounds(domain, targetIntervals = AXIS_TARGET_INTERVALS) {
   if (!Array.isArray(domain) || domain.length < 2) return null;
   const min = numberOrNull(domain[0]);
   const max = numberOrNull(domain[1]);
@@ -508,7 +518,7 @@ function niceAxisBounds(domain) {
     lower = min - pad;
     upper = max + pad;
   }
-  const step = niceAxisStep(upper - lower);
+  const step = niceAxisStep(upper - lower, targetIntervals);
   let axisMin = Math.floor(lower / step) * step;
   let axisMax = Math.ceil(upper / step) * step;
   if (min >= 0) axisMin = Math.max(0, axisMin);
@@ -637,6 +647,40 @@ function compactNumber(value) {
   return Number(number.toPrecision(4)).toString();
 }
 
+function valueFormatterForPayload(payload) {
+  return isUpliftRescale(payload) ? formatUpliftPercent : compactNumber;
+}
+
+function formatShapValue(value, payload = null) {
+  return isUpliftRescale(payload) ? formatUpliftPercent(value) : formatTooltipNumber(value);
+}
+
+function formatVisualMapValue(value, payload = null) {
+  return isUpliftRescale(payload) ? formatUpliftPercent(value) : formatVisualMapNumber(value);
+}
+
+function isUpliftRescale(payload) {
+  return payload?.rescale?.mode === "1";
+}
+
+function formatUpliftPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  let percent = Number(((number - 1) * 100).toFixed(10));
+  if (Math.abs(percent) < 1e-9) percent = 0;
+  const abs = Math.abs(percent);
+  let fractionDigits = 0;
+  if (abs !== 0 && abs < 0.01) fractionDigits = 4;
+  else if (abs !== 0 && abs < 1) fractionDigits = 2;
+  else if (abs !== 0 && abs < 10) fractionDigits = 1;
+  const formatted = percent.toLocaleString(undefined, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+  const sign = percent > 0 ? "+" : "";
+  return `${sign}${formatted}%`;
+}
+
 function formatTooltipNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
@@ -654,5 +698,5 @@ function formatVisualMapNumber(value) {
 function surfaceTooltip(params, payload) {
   const value = Array.isArray(params?.value) ? params.value : [];
   const z = numberOrNull(value[2]);
-  return `${payload.x_feature}: ${formatTooltipNumber(value[0])}<br>${payload.y_feature}: ${formatTooltipNumber(value[1])}<br>SHAP: ${z === null ? "No data" : formatTooltipNumber(z)}`;
+  return `${payload.x_feature}: ${formatTooltipNumber(value[0])}<br>${payload.y_feature}: ${formatTooltipNumber(value[1])}<br>SHAP: ${z === null ? "No data" : formatShapValue(z, payload)}`;
 }

@@ -700,7 +700,6 @@ export function createLineBarTool({
     const showBarLabels = dataLabelsAllowed && (labelMode === "bar" || labelMode === "all");
     const showLineLabels = dataLabelsAllowed && (labelMode === "line" || labelMode === "all");
     const barLayout = getBarLayout(labels.length);
-    const responseAxis = responseAxisOptions(data);
     const shapSeries = shapPartialDependenceSeries(data);
     const glmSeries = glmPartialDependenceSeries(data);
     const overlayLegendData = [...shapSeries, ...glmSeries].map((series) => series.name);
@@ -718,6 +717,7 @@ export function createLineBarTool({
     ];
     const mainLegendSelection = matchingLegendSelection(previousOption, legendData);
     const overlayLegendSelection = matchingLegendSelection(previousOption, overlayLegendData);
+    const responseAxis = responseAxisOptions(data, { ...mainLegendSelection, ...overlayLegendSelection });
     const barSeries = {
       name: weightLabel,
       type: "bar",
@@ -730,7 +730,7 @@ export function createLineBarTool({
       animationDurationUpdate: 0,
       data: data.rows.map((r) => ({
         value: r.volume,
-        itemStyle: { color: r.is_tail ? getCss("--tail") : getCss("--bar") },
+        itemStyle: { color: weightBarColor(data, r) },
       })),
       label: { show: showBarLabels, position: "top", fontSize: 10, formatter: formatChartLabel },
       barWidth: barLayout.width,
@@ -752,8 +752,9 @@ export function createLineBarTool({
       itemStyle: { color: responseColors[index] || actualColor },
       data: data.rows.map((r) => r[`resp${index}`]),
       showAllSymbol: true,
-      label: { show: showLineLabels, fontSize: 10, formatter: formatLineLabel },
+      label: { show: showLineLabels, fontSize: 10, formatter: formatResponseLabel },
     }));
+    const upliftBaseline = upliftBaselineSeries(data);
 
     const customSeries = [];
     if (Number(state.sigma) > 0 && data.responses.length >= 2) {
@@ -822,11 +823,11 @@ export function createLineBarTool({
           axisLine: { lineStyle: { color: getCss("--line") } },
         },
         yAxis: [
-          { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatLineValue(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
+          { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatResponseValue(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
           { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
         ],
         dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
-        series: [barSeries, ...shapSeries, ...glmSeries, ...lineSeries, ...customSeries],
+        series: [barSeries, ...shapSeries, ...glmSeries, ...lineSeries, ...(upliftBaseline ? [upliftBaseline] : []), ...customSeries],
       },
       true,
     );
@@ -964,7 +965,7 @@ export function createLineBarTool({
 
   function lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection) {
     const textStyle = { color: getCss("--text"), fontWeight: 700, fontSize: 13 };
-    const overlayTextStyle = { color: getCss("--text"), fontWeight: 400, fontSize: 12 };
+    const overlayTextStyle = { color: getCss("--text"), fontWeight: 400, fontSize: 11 };
     const mainLegend = {
       top: 0,
       data: legendData,
@@ -1037,7 +1038,7 @@ export function createLineBarTool({
     const lines = [escapeHtml(items[0].axisValueLabel ?? items[0].name ?? "")];
     items.forEach((item) => {
       const value = Array.isArray(item.value) ? item.value[1] : item.value;
-      const formatter = item.seriesName === weightLabel ? formatNumber : formatLineValue;
+      const formatter = item.seriesName === weightLabel ? formatNumber : formatResponseValue;
       lines.push(`${item.marker || ""}${escapeHtml(item.seriesName)}: ${escapeHtml(formatter(value))}`);
     });
     return lines.join("<br/>");
@@ -1050,47 +1051,166 @@ export function createLineBarTool({
     renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
   }
 
-  function responseAxisOptions(data) {
-    return responseAxisBounds(responseAxisExtent(data.rows, data.responses.length, data.partial_dependence)) || {};
+  function formatResponseLabel(params) {
+    const value = Array.isArray(params.value) ? params.value[1] : params.value;
+    return formatResponseValue(value);
   }
 
-  function partialDependenceOverlayList(partialDependence) {
+  function formatResponseValue(value) {
+    return isUpliftTransform() ? formatUpliftPercent(value) : formatLineValue(value);
+  }
+
+  function isUpliftTransform() {
+    return String(state.transform || "none") === "one";
+  }
+
+  function isBaseReferenceTransform() {
+    return ["zero", "one"].includes(String(state.transform || "none"));
+  }
+
+  function isBaseWeightBar(data, row) {
+    if (!isBaseReferenceTransform()) return false;
+    if (String(data?.transform?.reference || "") !== "base") return false;
+    const baseX = data?.transform?.base_x;
+    if (baseX === null || baseX === undefined) return false;
+    return String(row?.x) === String(baseX);
+  }
+
+  function weightBarColor(data, row) {
+    if (row?.is_tail) return getCss("--tail");
+    return isBaseWeightBar(data, row) ? getCss("--base-bar") : getCss("--bar");
+  }
+
+  function upliftBaselineSeries(data) {
+    if (!isUpliftTransform()) return null;
+    return {
+      name: "0% uplift baseline",
+      type: "line",
+      yAxisIndex: 0,
+      z: 2.7,
+      silent: true,
+      legendHoverLink: false,
+      animation: false,
+      animationDuration: 0,
+      animationDurationUpdate: 0,
+      showSymbol: false,
+      symbolSize: 0,
+      lineStyle: { opacity: 0 },
+      itemStyle: { opacity: 0 },
+      tooltip: { show: false },
+      data: (data.rows || []).map(() => 1),
+      markLine: {
+        silent: true,
+        symbol: "none",
+        label: { show: false },
+        lineStyle: { color: getCss("--text"), width: 2, type: "solid", opacity: 0.5 },
+        data: [{ yAxis: 1 }],
+      },
+    };
+  }
+
+  function formatUpliftPercent(value) {
+    if (value === null || value === undefined || Number.isNaN(value)) return "";
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    let percent = Number(((number - 1) * 100).toFixed(10));
+    if (Math.abs(percent) < 1e-9) percent = 0;
+    const abs = Math.abs(percent);
+    let fractionDigits = 0;
+    if (abs !== 0 && abs < 0.01) fractionDigits = 4;
+    else if (abs !== 0 && abs < 1) fractionDigits = 2;
+    else if (abs !== 0 && abs < 10) fractionDigits = 1;
+    const formatted = percent.toLocaleString(undefined, {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    });
+    const sign = percent > 0 ? "+" : "";
+    return `${sign}${formatted}%`;
+  }
+
+  function responseAxisOptions(data, selected = null) {
+    const extent = withUpliftBaselineExtent(
+      responseAxisExtent(data.rows, data.responses, data.partial_dependence, selected)
+        || responseAxisExtent(data.rows, data.responses, data.partial_dependence),
+    );
+    return responseAxisBounds(extent) || {};
+  }
+
+  function withUpliftBaselineExtent(extent) {
+    if (!extent || !isUpliftTransform()) return extent;
+    return {
+      min: Math.min(Number(extent.min), 1),
+      max: Math.max(Number(extent.max), 1),
+    };
+  }
+
+  function partialDependenceOverlayEntries(partialDependence) {
     if (!partialDependence) return [];
     if (partialDependence.overlays) {
-      return Object.values(partialDependence.overlays).filter((overlay) => overlay && typeof overlay === "object");
+      return Object.entries(partialDependence.overlays).filter((entry) => entry[1] && typeof entry[1] === "object");
     }
-    return [partialDependence];
+    return [[partialDependence.mode || "", partialDependence]];
   }
 
-  function responseAxisExtent(rows, responseCount, partialDependence = null) {
+  function responseAxisExtent(rows, responses, partialDependence = null, selected = null) {
     let min = Infinity;
     let max = -Infinity;
+    const responseList = Array.isArray(responses)
+      ? responses
+      : Array.from({ length: Number(responses) || 0 }, (_, index) => ({ label: `resp${index}` }));
+    const selectedVisible = (name) => !selected || selected[String(name)] !== false;
+    const addValue = (rawValue) => {
+      const value = Number(rawValue);
+      if (!Number.isFinite(value)) return;
+      min = Math.min(min, value);
+      max = Math.max(max, value);
+    };
     rows.forEach((row) => {
-      for (let index = 0; index < responseCount; index += 1) {
-        const value = Number(row[`resp${index}`]);
-        if (!Number.isFinite(value)) continue;
-        min = Math.min(min, value);
-        max = Math.max(max, value);
-      }
+      responseList.forEach((response, index) => {
+        if (!selectedVisible(response?.label)) return;
+        addValue(row[`resp${index}`]);
+      });
     });
-    partialDependenceOverlayList(partialDependence).forEach((overlay) => {
+    partialDependenceOverlayEntries(partialDependence).forEach(([key, overlay]) => {
+      const overlayKey = String(key || overlay?.mode || "");
       (overlay?.rows || []).forEach((row) => {
-        SHAP_RIBBON_SERIES.forEach(([lowKey, highKey]) => {
-          [row?.[lowKey], row?.[highKey]].forEach((rawValue) => {
-            const value = Number(rawValue);
-            if (!Number.isFinite(value)) return;
-            min = Math.min(min, value);
-            max = Math.max(max, value);
+        if (overlayKey === "shap") {
+          SHAP_RIBBON_SERIES.forEach(([lowKey, highKey, label]) => {
+            if (!selectedVisible(label)) return;
+            [row?.[lowKey], row?.[highKey]].forEach(addValue);
           });
-        });
-        const median = Number(row?.p50);
-        if (Number.isFinite(median)) {
-          min = Math.min(min, median);
-          max = Math.max(max, median);
+          if (selectedVisible("SHAP median")) addValue(row?.p50);
+          return;
         }
+        if (overlayKey === "glm") {
+          if (selectedVisible("GLM")) addValue(row?.p50);
+          return;
+        }
+        SHAP_RIBBON_SERIES.forEach(([lowKey, highKey, label]) => {
+          if (!selectedVisible(label)) return;
+          [row?.[lowKey], row?.[highKey]].forEach(addValue);
+        });
+        if (selectedVisible("SHAP median") || selectedVisible("GLM")) addValue(row?.p50);
       });
     });
     return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+  }
+
+  function legendSelectionFromOption(option) {
+    const legends = Array.isArray(option?.legend) ? option.legend : (option?.legend ? [option.legend] : []);
+    return Object.assign({}, ...legends.map((legend) => legend?.selected || {}));
+  }
+
+  function updateResponseAxisForLegendSelection() {
+    if (!state.lastData) return;
+    const responseAxis = responseAxisOptions(state.lastData, legendSelectionFromOption(chart.getOption()));
+    chart.setOption({
+      yAxis: [{
+        min: responseAxis.min,
+        max: responseAxis.max,
+        interval: responseAxis.interval,
+      }],
+    });
   }
 
   function responseAxisSpan(value) {
@@ -1312,12 +1432,12 @@ export function createLineBarTool({
     const pageRows = needsPagination ? data.rows.slice(start, start + TABLE_PAGE_SIZE) : data.rows;
     const rows = pageRows
       .map((r) => {
-        const values = data.responses.map((_, i) => `<td>${formatLineValue(r[`resp${i}`])}</td>`).join("");
+        const values = data.responses.map((_, i) => `<td>${formatResponseValue(r[`resp${i}`])}</td>`).join("");
         return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
       })
       .join("");
     const summary = buildTableSummary(data);
-    const summaryValues = summary.responses.map((value) => `<td>${formatLineValue(value)}</td>`).join("");
+    const summaryValues = summary.responses.map((value) => `<td>${formatResponseValue(value)}</td>`).join("");
     const footer = `<tfoot><tr class="line-bar-summary-row"><td>Total</td><td>${formatNumber(summary.volume)}</td>${summaryValues}</tr></tfoot>`;
     const pager = needsPagination
       ? `<div class="table-pagination">
@@ -1354,6 +1474,7 @@ export function createLineBarTool({
   }
 
   function bindControls() {
+    chart.on("legendselectchanged", updateResponseAxisForLegendSelection);
     const lineBarControls = new Set(["sort", "lowGroup", "labels", "bandWidth", "quantileMode", "dateBucket", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
     document.querySelectorAll(".segmented").forEach((group) => {
       if (!lineBarControls.has(group.dataset.control)) return;
