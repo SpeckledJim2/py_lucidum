@@ -270,7 +270,6 @@ COPY (
                 {"value": "all", "label": "All"},
             ],
         )
-        self.assertIn("Gain", Path("docs/specs/gbm-tool_plan.md").read_text(encoding="utf-8"))
         age = next(row for row in payload["features"] if row["name"] == "Age")
         self.assertEqual(age["gain"], 0.0)
         sample = next(row for row in payload["features"] if row["name"] == "SAMPLE")

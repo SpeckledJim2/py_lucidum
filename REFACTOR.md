@@ -1,5 +1,7 @@
 # REFACTOR.md
 
+**Status:** Historical completed refactor ledger. All listed phases were completed on 2026-06-08; future agents should use `AGENTS.md` for navigation and `DEVELOPMENT.md` for active architecture, behavior, and testing guidance.
+
 ## Purpose
 
 This file records the refactor order for `py_lucidum`. Each phase should be done in a fresh context, one step at a time, with tests run for the touched surface before moving on.

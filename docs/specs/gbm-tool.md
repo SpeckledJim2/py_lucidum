@@ -1,5 +1,7 @@
 # GBM Tool Spec
 
+**Status:** Product intent/background. `DEVELOPMENT.md` is the durable current behavior contract for implemented GBM behavior; use this file for product context and confirm details against the current code and maintainer docs before treating them as active requirements.
+
 The GBM tool should be selected from the sidebar, like the other app tools - pick a suitable sidebar icon.
 
 It should be optional and the libraries it uses should only be loaded if the tool is required.
