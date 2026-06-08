@@ -20,9 +20,9 @@ This file gives future coding agents the shortest reliable path into `py_lucidum
 - Frontend shell and tool modules live under `src/py_lucidum/static/app/`.
 - `src/py_lucidum/static/app/main.js` is the frontend coordinator only: schema/defaults, KPI controls, saved filters, sidebar/footer layout, tool selection, cross-tool invalidation, reload orchestration, and boot flow.
 - Frontend tool ownership is split by file: `column-profile-tool.js`, `line-bar-tool.js`, `uk-map-tool.js`, `glm-tool.js`, `glm-formula-builder.js`, `glm-model-navigator.js`, `glm-tabulations.js`, `gbm-tool.js`, `gbm-feature-parameter-controls.js`, `gbm-evaluation-chart.js`, `gbm-model-navigator.js`, `gbm-tab-orchestration.js`, `gbm-shap-tool.js`, `gbm-shap-chart.js`, `gbm-stacked-shap-tool.js`, `gbm-stacked-shap-chart.js`, `gbm-tree-viewer.js`, and `model-tool-shell.js`.
-- Import-safe shared frontend helpers live under `src/py_lucidum/static/app/shared/`: API calls, formatters, schema/source helpers, and action timing.
+- Import-safe shared frontend helpers live under `src/py_lucidum/static/app/shared/`: API calls, formatters, schema/source helpers, Tabulator lazy loading, and action timing.
 - `src/py_lucidum/static/app.css` is only the stable linked CSS manifest. Actual app styles live under `src/py_lucidum/static/styles/` by shell/tool boundary.
-- Vendored browser libraries live under `src/py_lucidum/static/vendor/` and should be lazy-loaded by the tools that need them.
+- Vendored browser libraries live under `src/py_lucidum/static/vendor/`. ECharts and Leaflet load from `index.html` because default tools need them at startup; Ace, Tabulator, D3, and ECharts GL are lazy-loaded by the tools/views that need them.
 
 ## Read The Smallest Useful Surface
 
@@ -63,6 +63,7 @@ node --check src/py_lucidum/static/app/shared/api.js
 node --check src/py_lucidum/static/app/shared/format.js
 node --check src/py_lucidum/static/app/shared/model-ui.js
 node --check src/py_lucidum/static/app/shared/schema.js
+node --check src/py_lucidum/static/app/shared/tabulator.js
 node --check src/py_lucidum/static/app/shared/timing.js
 node --check src/py_lucidum/static/app/glm-tool.js
 node --check src/py_lucidum/static/app/glm-formula-builder.js
