@@ -2994,6 +2994,15 @@ COPY (
         store = self.write_gbm_tabulation_artifacts(tree_sql=tree_sql, predictions=[1.0, 2.0, 3.0])
         dataset = Dataset(self.data_path)
 
+        status = gbm_tabulation.tabulation_model_status(store, store.list_models()[0])
+        self.assertFalse(status["tabulatable"])
+        self.assertFalse(status["tabulated"])
+        self.assertEqual(status["tables"], [])
+        self.assertIn("blocking_warnings", status["diagnostics"])
+        status_warning_text = " ".join(status["warnings"])
+        self.assertIn("4 leaves", status_warning_text)
+        self.assertIn("uses 3 features", status_warning_text)
+
         result = build_gbm_tabulations(dataset, store, "tab-gbm", {"rows": []})
 
         self.assertEqual(result["status"], "not_tabulatable")

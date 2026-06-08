@@ -5,7 +5,7 @@ const GLM_QUEUED_POLL_MS = 1000;
 const GLM_MODEL_LIST_POLL_MS = 2000;
 const ACE_BASE_PATH = "/static/vendor/ace";
 const GLM_BUILDER_SPLIT_STORAGE_KEY = "py_lucidum_glm_formula_panel_width";
-const GLM_TABULATION_SPLIT_STORAGE_KEY = "py_lucidum_glm_tabulation_sidebar_width";
+const GLM_TABULATION_SPLIT_STORAGE_KEY = "py_lucidum_glm_tabulation_sidebar_width_v2";
 const GLM_TABULATION_MODEL_CROSSTAB = "__model__";
 const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
 
@@ -146,10 +146,17 @@ export function createGlmTool({
   let isTabulating = false;
   let liveProgress = null;
   let tabulationConfig = null;
+  let tabulationModelTable = null;
+  let tabulationCommonTable = null;
+  let tabulationOtherTable = null;
   let tabulationTable = null;
   let tabulationChart = null;
   let tabulationPayload = null;
   let tabulationRenderSeq = 0;
+  let tabulationSelectorRenderSeq = 0;
+  let tabulationBlockedPopoverTimer = null;
+  let tabulationResizeObserver = null;
+  let tabulationResizeFrame = null;
   let selectedTabulationTableId = localStorage.getItem("py_lucidum_glm_tabulation_table") || "base";
   let tabulationView = localStorage.getItem("py_lucidum_glm_tabulation_view") || "table";
   let tabulationScale = localStorage.getItem("py_lucidum_glm_tabulation_scale") || "linear";
@@ -234,9 +241,11 @@ export function createGlmTool({
     setStatus("");
     setChartMessage("");
     disposeEditor();
+    disconnectTabulationResizeObserver();
     disposeTabulationChart();
+    disposeTabulationTable();
+    disposeTabulationSelectorTables();
     modelTable = null;
-    tabulationTable = null;
     const mount = el("modelToolWrap");
     if (!mount) return;
     mount.innerHTML = shellHtml(data);
@@ -379,15 +388,15 @@ export function createGlmTool({
             <h3 class="glm-panel-title">Tabulations</h3>
             <button id="glmBuildTabulationsBtn" class="tab glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !availableModels.length ? "disabled" : ""}>${isTabulating ? "Tabulating..." : "Tabulate"}</button>
           </div>
-          <label class="glm-tabulation-label" for="glmTabulationModelSelect">Select models</label>
-          <div id="glmTabulationModelSelect" class="glm-tabulation-list glm-tabulation-model-list" role="listbox" aria-label="Select models" aria-multiselectable="true">
-            ${tabulationModelListHtml(availableModels, selectedIds)}
+          <label id="glmTabulationModelLabel" class="glm-tabulation-label">Select models</label>
+          <div id="glmTabulationModelGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-model-list" aria-labelledby="glmTabulationModelLabel"></div>
+          <div id="glmTabulationModelFallback" class="glm-tabulation-selector-fallback"></div>
+          <div id="glmTabulationBlockedPopover" class="glm-tabulation-blocked-popover hidden" role="status" aria-live="polite"></div>
+          <label id="glmTabulationTableLabel" class="glm-tabulation-label">Select table</label>
+          <div id="glmTabulationTableSections" class="glm-tabulation-table-sections ${selectedIds.length > 1 ? "multi" : "single"}" aria-labelledby="glmTabulationTableLabel">
+            ${tabulationTableSelectorShellHtml(selectedIds)}
           </div>
-          <label class="glm-tabulation-label" for="glmTabulationTableSelect">Select table</label>
-          <div id="glmTabulationTableSelect" class="glm-tabulation-list glm-tabulation-table-list" role="listbox" aria-label="Select tabulated table">
-            ${tables.length ? tables.map((table) => tabulationTableRowHtml(table, String(table.table_id) === selectedTabulationTableId)).join("") : '<div class="glm-empty-state">No tabulations built</div>'}
-          </div>
-          <div id="glmTabulationDiagnostics" class="glm-tabulation-diagnostics">${diagnostics}</div>
+          <div id="glmTabulationDiagnostics" class="glm-tabulation-diagnostics ${diagnostics ? "" : "hidden"}">${diagnostics}</div>
         </section>
         <div id="glmTabulationResizer" class="glm-builder-resizer glm-tabulation-resizer" role="separator" aria-orientation="vertical" aria-label="Resize GLM tabulations and table panels" tabindex="0"></div>
         <section class="glm-tabulation-main">
@@ -429,10 +438,11 @@ export function createGlmTool({
 
   function tabulationSelectedModelIds() {
     const availableModels = tabulationAvailableModels();
-    const availableModelIds = new Set(availableModels.map((model) => tabulationModelRef(model)).filter(Boolean));
+    const selectableModels = availableModels.filter((model) => !tabulationModelIsBlocked(model));
+    const availableModelIds = new Set(selectableModels.map((model) => tabulationModelRef(model)).filter(Boolean));
     const ids = Array.from(selectedTabulationModelIds).map(normaliseTabulationRef).filter((modelId) => availableModelIds.has(modelId));
     if (ids.length) return [...new Set(ids)];
-    const active = availableModels.find((model) => model.active) || (config?.active_model_id ? { model_kind: "glm", model_id: config.active_model_id } : null) || availableModels[0] || null;
+    const active = selectableModels.find((model) => model.active) || (config?.active_model_id ? { model_kind: "glm", model_id: config.active_model_id } : null) || selectableModels[0] || null;
     const activeRef = active ? tabulationModelRef(active) : "";
     return activeRef ? [activeRef] : [];
   }
@@ -461,21 +471,25 @@ export function createGlmTool({
     return modelRows.map((model) => ({ ...model, model_kind: "glm", model_ref: `glm:${model.model_id}` }));
   }
 
-  function tabulationModelListHtml(models = [], selectedIds = []) {
-    const groups = [
-      { kind: "glm", label: "GLMs", models: models.filter((model) => String(model.model_kind || "glm").toLowerCase() !== "gbm") },
-      { kind: "gbm", label: "GBMs", models: models.filter((model) => String(model.model_kind || "glm").toLowerCase() === "gbm") },
-    ];
-    const html = groups
-      .filter((group) => group.models.length)
-      .map((group) => `
-        <div class="saved-filter-theme glm-tabulation-model-group" data-glm-tabulation-model-group="${group.kind}" role="presentation">
-          <span class="saved-filter-theme-label">${escapeHtml(group.label)}</span>
-        </div>
-        ${group.models.map((model) => tabulationModelRowHtml(model, selectedIds.includes(tabulationModelRef(model)))).join("")}
-      `)
-      .join("");
-    return html || '<div class="glm-empty-state">No models</div>';
+  function tabulationTableSelectorShellHtml(selectedIds = []) {
+    if (selectedIds.length > 1) {
+      return `
+        <section class="glm-tabulation-table-section">
+          <div class="glm-tabulation-section-title">Common tables</div>
+          <div id="glmTabulationCommonTableGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-table-list"></div>
+          <div id="glmTabulationCommonTableFallback" class="glm-tabulation-selector-fallback"></div>
+        </section>
+        <section class="glm-tabulation-table-section">
+          <div class="glm-tabulation-section-title">Other tables</div>
+          <div id="glmTabulationOtherTableGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-table-list"></div>
+          <div id="glmTabulationOtherTableFallback" class="glm-tabulation-selector-fallback"></div>
+        </section>
+      `;
+    }
+    return `
+      <div id="glmTabulationTableGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-table-list"></div>
+      <div id="glmTabulationTableFallback" class="glm-tabulation-selector-fallback"></div>
+    `;
   }
 
   function activeTabulationTable() {
@@ -486,29 +500,9 @@ export function createGlmTool({
     return String(table.label || table.table_id || "");
   }
 
-  function tabulationModelRowHtml(model, selected) {
-    const modelId = tabulationModelRef(model);
-    return `
-      <button type="button" class="glm-tabulation-list-row ${selected ? "selected" : ""}" data-glm-tabulation-model-id="${escapeHtml(modelId)}" role="option" aria-selected="${selected ? "true" : "false"}">
-        <span class="glm-tabulation-row-main">${escapeHtml(tabulationModelLabel(model))}</span>
-        <span class="glm-tabulation-row-meta">${escapeHtml(tabulationModelStatus(modelId))}</span>
-      </button>
-    `;
-  }
-
   function tabulationModelLabel(model = {}) {
     const kind = String(model.model_kind || "glm").toUpperCase();
     return `${kind} · ${modelLabel(model)}`;
-  }
-
-  function tabulationTableRowHtml(table, selected) {
-    const tableId = String(table?.table_id || "");
-    return `
-      <button type="button" class="glm-tabulation-list-row ${selected ? "selected" : ""}" data-glm-tabulation-table-id="${escapeHtml(tableId)}" role="option" aria-selected="${selected ? "true" : "false"}">
-        <span class="glm-tabulation-row-main">${escapeHtml(tabulationTableLabel(table))}</span>
-        <span class="glm-tabulation-row-meta">${escapeHtml(tabulationTableMeta(table))}</span>
-      </button>
-    `;
   }
 
   function tabulationConfigModel(modelId) {
@@ -517,20 +511,133 @@ export function createGlmTool({
     return models.find((model) => tabulationModelRef(model) === ref || String(model.model_id || "") === String(modelId || "")) || null;
   }
 
-  function tabulationModelStatus(modelId) {
-    const model = tabulationConfigModel(modelId);
-    if (!model) return "Untabulated";
-    if (!model.tabulatable) return "Rebuild required";
-    if (!model.tabulated) return "Untabulated";
-    const tables = Array.isArray(model.tables) ? model.tables.length : 0;
-    return `Tabulated · ${tables.toLocaleString()} ${tables === 1 ? "table" : "tables"}`;
+  function tabulationModelRows(models = tabulationAvailableModels()) {
+    return models.map((model) => {
+      const modelRef = tabulationModelRef(model);
+      const kind = String(model.model_kind || "glm").toLowerCase() === "gbm" ? "GBM" : "GLM";
+      const diagnostics = model.diagnostics || {};
+      const tables = Array.isArray(model.tables) ? model.tables : [];
+      const blockedMessage = tabulationBlockedModelMessage(model, kind);
+      return {
+        model_ref: modelRef,
+        model_name: modelLabel(model),
+        model_type: kind,
+        table_count: tables.length,
+        tabulation_blocked_message: blockedMessage,
+        tabulation_blocked_title: tabulationBlockedModelTitle(model, blockedMessage),
+        mean_error: modelNumberOrNull(diagnostics.mean_linear_error),
+        linear_sd_error: modelNumberOrNull(diagnostics.linear_sd_error),
+        missing: modelNumberOrNull(diagnostics.missing_tabulated_prediction_rows),
+        tabulated: Boolean(model.tabulated),
+        tabulatable: Boolean(model.tabulatable),
+      };
+    }).filter((row) => row.model_ref);
   }
 
-  function tabulationTableMeta(table = {}) {
-    const dim = Array.isArray(table.features) ? table.features.length : 0;
-    const cells = Number(table.cell_count || 0);
-    const base = `dim ${dim} · cells ${cells.toLocaleString()}`;
-    return table.skipped ? `${base} · skipped` : base;
+  function tabulationBlockedModelMessage(model = {}, kind = "") {
+    if (kind !== "GBM") return "";
+    const diagnostics = model.diagnostics || {};
+    const warnings = [
+      ...(Array.isArray(diagnostics.blocking_warnings) ? diagnostics.blocking_warnings : []),
+      ...(Array.isArray(model.warnings) ? model.warnings : []),
+    ].map((warning) => String(warning || ""));
+    const warningText = warnings.join(" ").toLowerCase();
+    const blockedByTreeShape = warningText.includes("leaves") || warningText.includes("1d and 2d") || warningText.includes("features");
+    return blockedByTreeShape ? "n/a: >3 leaves" : "";
+  }
+
+  function tabulationModelIsBlocked(model = {}) {
+    const kind = String(model.model_kind || "glm").toLowerCase() === "gbm" ? "GBM" : "GLM";
+    return Boolean(tabulationBlockedModelMessage(model, kind));
+  }
+
+  function tabulationBlockedModelTitle(model = {}, fallback = "") {
+    const diagnostics = model.diagnostics || {};
+    const warnings = [
+      ...(Array.isArray(diagnostics.blocking_warnings) ? diagnostics.blocking_warnings : []),
+      ...(Array.isArray(model.warnings) ? model.warnings : []),
+    ].map((warning) => String(warning || "").trim()).filter(Boolean);
+    return warnings.join(" ") || fallback;
+  }
+
+  function tabulationTableGroups() {
+    const models = Array.isArray(tabulationConfig?.models) ? tabulationConfig.models : [];
+    if (models.length <= 1) {
+      const tables = models.length ? modelTabulationTables(models[0]) : (Array.isArray(tabulationConfig?.tables) ? tabulationConfig.tables : []);
+      return {
+        single: sortedTabulationTables(tables).map((table) => tabulationTableSelectorRow(table, "single")),
+        common: [],
+        other: [],
+      };
+    }
+    const byTable = new Map();
+    models.forEach((model) => {
+      const seen = new Set();
+      modelTabulationTables(model).forEach((table) => {
+        const tableId = String(table.table_id || "");
+        if (!tableId || seen.has(tableId)) return;
+        seen.add(tableId);
+        const entry = byTable.get(tableId) || { table: table, count: 0, dims: new Set(), indexes: [] };
+        entry.count += 1;
+        entry.dims.add(tabulationTableDim(table));
+        entry.indexes.push(tabulationTableIndex(table));
+        byTable.set(tableId, entry);
+      });
+    });
+    const rows = Array.from(byTable.entries()).map(([, entry]) => {
+      const dim = entry.dims.size === 1 ? Array.from(entry.dims)[0] : null;
+      const index = Math.min(...entry.indexes.filter((value) => Number.isFinite(value)));
+      return {
+        ...tabulationTableSelectorRow(entry.table, entry.count === models.length && dim !== null ? "common" : "other"),
+        dim,
+        sort_index: Number.isFinite(index) ? index : tabulationTableIndex(entry.table),
+      };
+    });
+    rows.sort(compareTabulationSelectorRows);
+    return {
+      single: [],
+      common: rows.filter((row) => row.section === "common"),
+      other: rows.filter((row) => row.section === "other"),
+    };
+  }
+
+  function modelTabulationTables(model = {}) {
+    return Array.isArray(model.tables) ? model.tables : [];
+  }
+
+  function sortedTabulationTables(tables = []) {
+    return [...tables].sort((left, right) => compareTabulationSelectorRows(tabulationTableSelectorRow(left), tabulationTableSelectorRow(right)));
+  }
+
+  function compareTabulationSelectorRows(left, right) {
+    return (left.sort_index - right.sort_index) || String(left.table_name || "").localeCompare(String(right.table_name || ""));
+  }
+
+  function tabulationTableSelectorRow(table = {}, section = "single") {
+    const min = modelNumberOrNull(table.min);
+    const max = modelNumberOrNull(table.max);
+    const span = min !== null && max !== null ? max - min : null;
+    return {
+      table_id: String(table.table_id || ""),
+      table_name: tabulationTableLabel(table),
+      dim: tabulationTableDim(table),
+      cells: Number(table.cell_count || 0),
+      min,
+      max,
+      span,
+      skipped: Boolean(table.skipped),
+      section,
+      sort_index: tabulationTableIndex(table),
+    };
+  }
+
+  function tabulationTableDim(table = {}) {
+    return Array.isArray(table.features) ? table.features.length : 0;
+  }
+
+  function tabulationTableIndex(table = {}) {
+    const index = Number(table.index);
+    return Number.isFinite(index) ? index : 9999;
   }
 
   function tabulationCrosstabOptions(features = [], modelIds = tabulationSelectedModelIds()) {
@@ -551,57 +658,49 @@ export function createGlmTool({
 
   function tabulationDiagnosticsHtml() {
     const models = Array.isArray(tabulationConfig?.models) ? tabulationConfig.models : [];
-    if (!models.length) return '<div class="glm-empty-state">No tabulations loaded</div>';
-    if (models.length > 1) {
-      return `<div class="glm-tabulation-model-diagnostic"><span>${models.length.toLocaleString()} models selected</span></div>`;
-    }
-    const model = models[0];
-    const diagnostics = model.diagnostics || {};
-    const warnings = Array.isArray(model.warnings) ? model.warnings : [];
-    const rows = [
-      ["mean error", diagnostics.mean_linear_error],
-      ["linear SD error", diagnostics.linear_sd_error],
-      ["span", tabulationSpanValue(tabulationPayload)],
-      ["tabulated rows", diagnostics.tabulated_row_count],
-      ["missing", diagnostics.missing_tabulated_prediction_rows],
-    ].filter(([, value]) => value !== undefined && value !== null && value !== "");
-    return `
-      <div class="glm-tabulation-model-diagnostic">
-        <strong>${escapeHtml(tabulationModelLabel(model))}</strong>
-        ${rows.map(([label, value]) => `<span>${escapeHtml(label)}: ${escapeHtml(formatModelMetric(value))}</span>`).join("")}
-        ${model.tabulatable ? "" : '<span class="glm-tabulation-warning">rebuild required</span>'}
-        ${warnings.slice(0, 3).map((warning) => `<span class="glm-tabulation-warning">${escapeHtml(warning)}</span>`).join("")}
-      </div>
-    `;
-  }
-
-  function tabulationSpanValue(payload = null) {
-    const lo = Number(payload?.min);
-    const hi = Number(payload?.max);
-    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
-    if ((payload?.scale || tabulationScale) === "exp") return lo > 0 ? hi / lo : null;
-    return hi - lo;
+    const rows = models
+      .map((model) => {
+        const warnings = Array.isArray(model.warnings) ? model.warnings.filter(Boolean) : [];
+        if (!model.tabulatable && !warnings.length) warnings.push("rebuild required");
+        if (!warnings.length) return "";
+        return `
+          <div class="glm-tabulation-model-diagnostic">
+            <strong>${escapeHtml(tabulationModelLabel(model))}</strong>
+            ${warnings.slice(0, 3).map((warning) => `<span class="glm-tabulation-warning">${escapeHtml(warning)}</span>`).join("")}
+          </div>
+        `;
+      })
+      .filter(Boolean)
+      .join("");
+    return rows;
   }
 
   function refreshTabulationDiagnostics() {
     const diagnostics = el("glmTabulationDiagnostics");
-    if (diagnostics) diagnostics.innerHTML = tabulationDiagnosticsHtml();
+    if (!diagnostics) return;
+    const html = tabulationDiagnosticsHtml();
+    diagnostics.innerHTML = html;
+    diagnostics.classList.toggle("hidden", !html);
   }
 
   function renderTabulationsPanel() {
     const panel = el("glmTabulationsPanel");
     if (!panel) return;
+    disconnectTabulationResizeObserver();
     disposeTabulationChart();
-    tabulationTable = null;
+    disposeTabulationTable();
+    disposeTabulationSelectorTables();
     panel.innerHTML = tabulationsPanelHtml();
     bindTabulationControls();
     bindTabulationResizer();
+    observeTabulationLayoutResize();
+    renderTabulationSelectorTables();
   }
 
   function selectTabulationModel(modelId, event = {}) {
     const modelRef = normaliseTabulationRef(modelId);
-    const orderedIds = tabulationAvailableModels().map((model) => tabulationModelRef(model)).filter(Boolean);
-    if (!orderedIds.includes(modelRef)) return;
+    const orderedIds = tabulationAvailableModels().filter((model) => !tabulationModelIsBlocked(model)).map((model) => tabulationModelRef(model)).filter(Boolean);
+    if (!orderedIds.includes(modelRef)) return false;
     const current = new Set(tabulationSelectedModelIds());
     const commandSelection = Boolean(event.metaKey || event.ctrlKey);
     let next;
@@ -626,41 +725,11 @@ export function createGlmTool({
     if (!next.size) next.add(modelRef);
     selectedTabulationModelIds = next;
     tabulationSelectionAnchorModelId = modelRef;
+    return true;
   }
 
   function bindTabulationControls() {
-    document.querySelectorAll("[data-glm-tabulation-model-id]").forEach((button) => {
-      button.addEventListener("click", (event) => {
-        const modelId = String(button.dataset.glmTabulationModelId || "");
-        if (!modelId) return;
-        selectTabulationModel(modelId, event);
-        refreshTabulationConfig({ force: true });
-      });
-      button.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        const modelId = String(button.dataset.glmTabulationModelId || "");
-        if (!modelId) return;
-        selectTabulationModel(modelId, event);
-        refreshTabulationConfig({ force: true });
-      });
-    });
-    document.querySelectorAll("[data-glm-tabulation-table-id]").forEach((button) => {
-      button.addEventListener("click", () => {
-        selectedTabulationTableId = button.dataset.glmTabulationTableId || "base";
-        localStorage.setItem("py_lucidum_glm_tabulation_table", selectedTabulationTableId);
-        const table = activeTabulationTable();
-        const features = Array.isArray(table?.features) ? table.features : [];
-        if (features.length > 2) tabulationView = "table";
-        renderTabulationsPanel();
-        loadTabulationView();
-      });
-      button.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        button.click();
-      });
-    });
+    bindTabulationFallbackSelectors();
     document.querySelectorAll("[data-glm-tabulation-view]").forEach((button) => {
       button.addEventListener("click", () => {
         if (button.disabled) return;
@@ -688,6 +757,359 @@ export function createGlmTool({
       loadTabulationView();
     });
     el("glmBuildTabulationsBtn")?.addEventListener("click", buildSelectedTabulations);
+  }
+
+  function bindTabulationFallbackSelectors() {
+    document.querySelectorAll("[data-glm-tabulation-model-id]").forEach((row) => {
+      row.addEventListener("click", (event) => {
+        if (row.dataset.glmTabulationBlocked === "true") {
+          showTabulationBlockedPopover(event);
+          return;
+        }
+        const modelId = String(row.dataset.glmTabulationModelId || "");
+        if (!modelId) return;
+        if (selectTabulationModel(modelId, event)) refreshTabulationConfig({ force: true });
+      });
+      row.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        if (row.dataset.glmTabulationBlocked === "true") {
+          showTabulationBlockedPopover(event);
+          return;
+        }
+        const modelId = String(row.dataset.glmTabulationModelId || "");
+        if (!modelId) return;
+        if (selectTabulationModel(modelId, event)) refreshTabulationConfig({ force: true });
+      });
+    });
+    document.querySelectorAll("[data-glm-tabulation-table-id]").forEach((row) => {
+      row.addEventListener("click", () => selectTabulationTable(row.dataset.glmTabulationTableId || "base"));
+      row.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        selectTabulationTable(row.dataset.glmTabulationTableId || "base");
+      });
+    });
+  }
+
+  function selectTabulationTable(tableId) {
+    selectedTabulationTableId = String(tableId || "base") || "base";
+    localStorage.setItem("py_lucidum_glm_tabulation_table", selectedTabulationTableId);
+    const table = activeTabulationTable();
+    const features = Array.isArray(table?.features) ? table.features : [];
+    if (features.length > 2) tabulationView = "table";
+    renderTabulationsPanel();
+    loadTabulationView();
+  }
+
+  function showTabulationBlockedPopover(event = null) {
+    const popover = el("glmTabulationBlockedPopover");
+    const sidebar = document.querySelector(".glm-tabulation-sidebar");
+    if (!popover || !sidebar) return;
+    const anchor = event?.target?.closest?.(".tabulator-row, [data-glm-tabulation-model-id]");
+    const sidebarRect = sidebar.getBoundingClientRect();
+    const anchorRect = anchor?.getBoundingClientRect?.();
+    popover.textContent = "Tabulations are limited to GBMs with <=3 leaves.";
+    if (anchorRect) popover.style.top = `${Math.max(8, anchorRect.bottom - sidebarRect.top + 4)}px`;
+    else popover.style.top = "56px";
+    popover.classList.remove("hidden");
+    window.clearTimeout(tabulationBlockedPopoverTimer);
+    tabulationBlockedPopoverTimer = window.setTimeout(() => popover.classList.add("hidden"), 2600);
+  }
+
+  async function renderTabulationSelectorTables() {
+    const seq = tabulationSelectorRenderSeq + 1;
+    tabulationSelectorRenderSeq = seq;
+    const modelRows = tabulationModelRows();
+    const tableGroups = tabulationTableGroups();
+    clearTabulationSelectorFallbacks();
+    try {
+      const Tabulator = await loadTabulator();
+      if (seq !== tabulationSelectorRenderSeq) return;
+      renderTabulationModelSelectorGrid(Tabulator, modelRows);
+      renderTabulationTableSelectorGrids(Tabulator, tableGroups);
+    } catch (_) {
+      if (seq !== tabulationSelectorRenderSeq) return;
+      renderTabulationModelSelectorFallback(modelRows);
+      renderTabulationTableSelectorFallbacks(tableGroups);
+    }
+  }
+
+  function renderTabulationModelSelectorGrid(Tabulator, rows = []) {
+    const target = el("glmTabulationModelGrid");
+    if (!target) return;
+    target.classList.remove("hidden");
+    tabulationModelTable = new Tabulator(target, {
+      data: rows,
+      index: "model_ref",
+      height: "100%",
+      layout: "fitColumns",
+      placeholder: "No models",
+      selectableRows: true,
+      selectableRowsCheck: (row) => !row.getData()?.tabulation_blocked_message,
+      rowFormatter: formatTabulationModelSelectorRow,
+      columns: [
+        { title: "Model name", field: "model_name", sorter: "string", formatter: tabulationTextFormatter, minWidth: 150, widthGrow: 1 },
+        { title: "Model type", field: "model_type", sorter: "string", formatter: tabulationTextFormatter, width: 78 },
+        { title: "Number of tables", field: "table_count", sorter: "number", formatter: tabulationTableCountFormatter, hozAlign: "right", headerHozAlign: "right", width: 112 },
+        { title: "Mean error", field: "mean_error", sorter: "number", formatter: tabulationModelMetricFormatter, hozAlign: "right", headerHozAlign: "right", width: 96 },
+        { title: "linear SD error", field: "linear_sd_error", sorter: "number", formatter: tabulationModelMetricFormatter, hozAlign: "right", headerHozAlign: "right", width: 112 },
+        { title: "missing", field: "missing", sorter: "number", formatter: tabulationModelIntegerFormatter, hozAlign: "right", headerHozAlign: "right", width: 78 },
+      ],
+    });
+    tabulationModelTable.on("rowClick", (event, row) => {
+      const data = row.getData() || {};
+      if (data.tabulation_blocked_message) {
+        showTabulationBlockedPopover(event);
+        syncTabulationModelSelectorSelection();
+        return;
+      }
+      const modelRef = String(data.model_ref || "");
+      if (!modelRef) return;
+      selectTabulationModel(modelRef, event);
+      syncTabulationModelSelectorSelection();
+      refreshTabulationConfig({ force: true });
+    });
+    tabulationModelTable.on("tableBuilt", syncTabulationModelSelectorSelection);
+    syncTabulationModelSelectorSelection();
+    window.setTimeout(syncTabulationModelSelectorSelection, 0);
+  }
+
+  function formatTabulationModelSelectorRow(row) {
+    const data = row.getData() || {};
+    const element = row.getElement();
+    const blocked = Boolean(data.tabulation_blocked_message);
+    element.classList.toggle("glm-tabulation-model-untabulated", !data.tabulated);
+    element.classList.toggle("glm-tabulation-model-blocked", blocked);
+    if (blocked) element.setAttribute("aria-disabled", "true");
+    else element.removeAttribute("aria-disabled");
+  }
+
+  function renderTabulationTableSelectorGrids(Tabulator, groups = tabulationTableGroups()) {
+    if (tabulationSelectedModelIds().length > 1) {
+      tabulationCommonTable = renderTabulationTableSelectorGrid(Tabulator, "glmTabulationCommonTableGrid", tabulationDisplayTableRows(groups.common), true, "No common tables");
+      tabulationOtherTable = renderTabulationTableSelectorGrid(Tabulator, "glmTabulationOtherTableGrid", tabulationDisplayTableRows(groups.other), true, "No other tables");
+    } else {
+      tabulationCommonTable = renderTabulationTableSelectorGrid(Tabulator, "glmTabulationTableGrid", tabulationDisplayTableRows(groups.single), false, "No tabulations built");
+      tabulationOtherTable = null;
+    }
+    syncTabulationTableSelectorSelection();
+  }
+
+  function renderTabulationTableSelectorGrid(Tabulator, elementId, rows = [], multiModel = false, placeholder = "No tables") {
+    const target = el(elementId);
+    if (!target) return null;
+    target.classList.remove("hidden");
+    const columns = multiModel
+      ? [
+        { title: "Table name", field: "table_name", sorter: "string", formatter: tabulationTextFormatter, minWidth: 180, widthGrow: 2 },
+        { title: "Dim", field: "dim", sorter: "number", formatter: tabulationDimFormatter, hozAlign: "right", headerHozAlign: "right", width: 54 },
+      ]
+      : [
+        { title: "Table name", field: "table_name", sorter: "string", formatter: tabulationTextFormatter, minWidth: 180, widthGrow: 2 },
+        { title: "Dim", field: "dim", sorter: "number", formatter: tabulationDimFormatter, hozAlign: "right", headerHozAlign: "right", width: 54 },
+        { title: "Cells", field: "cells", sorter: "number", formatter: tabulationIntegerFormatter, hozAlign: "right", headerHozAlign: "right", width: 78 },
+        { title: "Min", field: "display_min", sorter: "number", formatter: tabulationMetricFormatter, hozAlign: "right", headerHozAlign: "right", width: 86 },
+        { title: "Max", field: "display_max", sorter: "number", formatter: tabulationMetricFormatter, hozAlign: "right", headerHozAlign: "right", width: 86 },
+        { title: "Span", field: "display_span", sorter: "number", formatter: tabulationMetricFormatter, hozAlign: "right", headerHozAlign: "right", width: 86 },
+      ];
+    const table = new Tabulator(target, {
+      data: rows,
+      index: "table_id",
+      height: "100%",
+      layout: "fitColumns",
+      placeholder,
+      selectableRows: 1,
+      columns,
+    });
+    table.on("rowClick", (_, row) => {
+      const tableId = String(row.getData()?.table_id || "");
+      if (tableId) selectTabulationTable(tableId);
+    });
+    table.on("tableBuilt", syncTabulationTableSelectorSelection);
+    window.setTimeout(syncTabulationTableSelectorSelection, 0);
+    return table;
+  }
+
+  function tabulationDisplayTableRows(rows = []) {
+    return rows.map((row) => ({
+      ...row,
+      display_min: tabulationDisplayTableValue(row.min),
+      display_max: tabulationDisplayTableValue(row.max),
+      display_span: tabulationDisplayTableSpan(row.min, row.max),
+    }));
+  }
+
+  function tabulationDisplayTableValue(value) {
+    const number = modelNumberOrNull(value);
+    if (number === null) return null;
+    if (tabulationScale !== "exp") return number;
+    const expValue = Math.exp(number);
+    return Number.isFinite(expValue) ? expValue : null;
+  }
+
+  function tabulationDisplayTableSpan(min, max) {
+    const lo = modelNumberOrNull(min);
+    const hi = modelNumberOrNull(max);
+    if (lo === null || hi === null) return null;
+    if (tabulationScale !== "exp") return hi - lo;
+    const ratio = Math.exp(hi - lo);
+    return Number.isFinite(ratio) ? ratio : null;
+  }
+
+  function syncTabulationModelSelectorSelection() {
+    if (!tabulationModelTable) return;
+    const selected = new Set(tabulationSelectedModelIds());
+    try {
+      tabulationModelTable.deselectRow();
+      selected.forEach((modelRef) => tabulationModelTable.selectRow(modelRef));
+    } catch (_) {
+    }
+  }
+
+  function syncTabulationTableSelectorSelection() {
+    [tabulationCommonTable, tabulationOtherTable].forEach((table) => {
+      if (!table) return;
+      try {
+        table.deselectRow();
+        table.selectRow(selectedTabulationTableId);
+      } catch (_) {
+      }
+    });
+  }
+
+  function clearTabulationSelectorFallbacks() {
+    ["glmTabulationModelFallback", "glmTabulationTableFallback", "glmTabulationCommonTableFallback", "glmTabulationOtherTableFallback"].forEach((id) => {
+      const target = el(id);
+      if (target) target.innerHTML = "";
+    });
+  }
+
+  function renderTabulationModelSelectorFallback(rows = []) {
+    const grid = el("glmTabulationModelGrid");
+    const target = el("glmTabulationModelFallback");
+    if (grid) grid.classList.add("hidden");
+    if (!target) return;
+    if (!rows.length) {
+      target.innerHTML = '<div class="glm-empty-state">No models</div>';
+      return;
+    }
+    const selected = new Set(tabulationSelectedModelIds());
+    target.innerHTML = `
+      <table class="glm-table glm-tabulation-selector-table">
+        <thead><tr><th>Model name</th><th>Model type</th><th class="numeric">Number of tables</th><th class="numeric">Mean error</th><th class="numeric">linear SD error</th><th class="numeric">missing</th></tr></thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr data-glm-tabulation-model-id="${escapeHtml(row.model_ref)}" data-glm-tabulation-blocked="${row.tabulation_blocked_message ? "true" : "false"}" class="${!row.tabulated ? "untabulated " : ""}${row.tabulation_blocked_message ? "blocked " : ""}${selected.has(row.model_ref) ? "selected" : ""}" tabindex="0" aria-selected="${selected.has(row.model_ref) ? "true" : "false"}" ${row.tabulation_blocked_message ? 'aria-disabled="true"' : ""}>
+              <td>${escapeHtml(row.model_name)}</td>
+              <td>${escapeHtml(row.model_type)}</td>
+              ${row.tabulation_blocked_message ? `
+                <td class="glm-tabulation-blocked-fallback-cell" colspan="4" title="${escapeHtml(row.tabulation_blocked_title)}">${escapeHtml(row.tabulation_blocked_message)}</td>
+              ` : `
+                <td class="numeric">${row.tabulated ? escapeHtml(formatTabulationInteger(row.table_count)) : "--"}</td>
+                <td class="numeric">${escapeHtml(formatModelMetric(row.mean_error))}</td>
+                <td class="numeric">${escapeHtml(formatModelMetric(row.linear_sd_error))}</td>
+                <td class="numeric">${escapeHtml(formatTabulationInteger(row.missing))}</td>
+              `}
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+    bindTabulationFallbackSelectors();
+  }
+
+  function renderTabulationTableSelectorFallbacks(groups = tabulationTableGroups()) {
+    if (tabulationSelectedModelIds().length > 1) {
+      renderTabulationTableSelectorFallback("glmTabulationCommonTableGrid", "glmTabulationCommonTableFallback", tabulationDisplayTableRows(groups.common), true, "No common tables");
+      renderTabulationTableSelectorFallback("glmTabulationOtherTableGrid", "glmTabulationOtherTableFallback", tabulationDisplayTableRows(groups.other), true, "No other tables");
+      return;
+    }
+    renderTabulationTableSelectorFallback("glmTabulationTableGrid", "glmTabulationTableFallback", tabulationDisplayTableRows(groups.single), false, "No tabulations built");
+  }
+
+  function renderTabulationTableSelectorFallback(gridId, fallbackId, rows = [], multiModel = false, emptyText = "No tables") {
+    const grid = el(gridId);
+    const target = el(fallbackId);
+    if (grid) grid.classList.add("hidden");
+    if (!target) return;
+    if (!rows.length) {
+      target.innerHTML = `<div class="glm-empty-state">${escapeHtml(emptyText)}</div>`;
+      return;
+    }
+    const headers = multiModel
+      ? "<th>Table name</th><th class=\"numeric\">Dim</th>"
+      : "<th>Table name</th><th class=\"numeric\">Dim</th><th class=\"numeric\">Cells</th><th class=\"numeric\">Min</th><th class=\"numeric\">Max</th><th class=\"numeric\">Span</th>";
+    target.innerHTML = `
+      <table class="glm-table glm-tabulation-selector-table">
+        <thead><tr>${headers}</tr></thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr data-glm-tabulation-table-id="${escapeHtml(row.table_id)}" class="${row.table_id === selectedTabulationTableId ? "selected" : ""}" tabindex="0" aria-selected="${row.table_id === selectedTabulationTableId ? "true" : "false"}">
+              <td>${escapeHtml(row.table_name)}</td>
+              <td class="numeric">${escapeHtml(formatTabulationDim(row.dim))}</td>
+              ${multiModel ? "" : `
+                <td class="numeric">${escapeHtml(formatTabulationInteger(row.cells))}</td>
+                <td class="numeric">${escapeHtml(formatModelMetric(row.display_min))}</td>
+                <td class="numeric">${escapeHtml(formatModelMetric(row.display_max))}</td>
+                <td class="numeric">${escapeHtml(formatModelMetric(row.display_span))}</td>
+              `}
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+    bindTabulationFallbackSelectors();
+  }
+
+  function tabulationTextFormatter(cell) {
+    return escapeHtml(cell.getValue() ?? "");
+  }
+
+  function tabulationTableCountFormatter(cell) {
+    const row = cell.getRow().getData() || {};
+    const element = cell.getElement();
+    if (row.tabulation_blocked_message) {
+      element.classList.add("glm-tabulation-blocked-cell");
+      element.title = row.tabulation_blocked_title || row.tabulation_blocked_message;
+      return `<span class="glm-tabulation-blocked-message">${escapeHtml(row.tabulation_blocked_message)}</span>`;
+    }
+    element.classList.remove("glm-tabulation-blocked-cell");
+    element.removeAttribute("title");
+    if (!row.tabulated) return "--";
+    return escapeHtml(formatTabulationInteger(cell.getValue()));
+  }
+
+  function tabulationModelMetricFormatter(cell) {
+    if (cell.getRow().getData()?.tabulation_blocked_message) return "";
+    return tabulationMetricFormatter(cell);
+  }
+
+  function tabulationModelIntegerFormatter(cell) {
+    if (cell.getRow().getData()?.tabulation_blocked_message) return "";
+    return tabulationIntegerFormatter(cell);
+  }
+
+  function tabulationMetricFormatter(cell) {
+    return escapeHtml(formatModelMetric(cell.getValue()));
+  }
+
+  function tabulationIntegerFormatter(cell) {
+    return escapeHtml(formatTabulationInteger(cell.getValue()));
+  }
+
+  function tabulationDimFormatter(cell) {
+    return escapeHtml(formatTabulationDim(cell.getValue()));
+  }
+
+  function formatTabulationInteger(value) {
+    const number = modelNumberOrNull(value);
+    return number === null ? "--" : Math.round(number).toLocaleString();
+  }
+
+  function formatTabulationDim(value) {
+    const number = modelNumberOrNull(value);
+    return number === null ? "--" : Math.round(number).toLocaleString();
   }
 
   async function refreshTabulationConfig() {
@@ -823,6 +1245,7 @@ export function createGlmTool({
     const plot = el("glmTabulationPlot");
     tabulationPayload = null;
     refreshTabulationDiagnostics();
+    disposeTabulationTable();
     if (grid) grid.innerHTML = "";
     if (fallback) fallback.innerHTML = `<div class="glm-empty-state">${escapeHtml(message)}</div>`;
     if (plot) plot.innerHTML = `<div class="glm-empty-state">${escapeHtml(message)}</div>`;
@@ -832,6 +1255,7 @@ export function createGlmTool({
     const grid = el("glmTabulationTable");
     const fallback = el("glmTabulationFallback");
     if (!grid || !fallback) return;
+    disposeTabulationTable();
     grid.innerHTML = "";
     fallback.innerHTML = "";
     setInlineTabulationNotice(data.notices || []);
@@ -1048,6 +1472,61 @@ export function createGlmTool({
     tabulationChart = null;
   }
 
+  function scheduleTabulationResize() {
+    if (tabulationResizeFrame) return;
+    tabulationResizeFrame = window.requestAnimationFrame(() => {
+      tabulationResizeFrame = null;
+      tabulationChart?.resize?.();
+      tabulationModelTable?.redraw?.(true);
+      tabulationCommonTable?.redraw?.(true);
+      tabulationOtherTable?.redraw?.(true);
+      tabulationTable?.redraw?.(true);
+    });
+  }
+
+  function observeTabulationLayoutResize() {
+    disconnectTabulationResizeObserver();
+    if (!window.ResizeObserver) return;
+    const main = document.querySelector(".glm-tabulation-main");
+    if (!main) return;
+    tabulationResizeObserver = new ResizeObserver(scheduleTabulationResize);
+    tabulationResizeObserver.observe(main);
+  }
+
+  function disconnectTabulationResizeObserver() {
+    tabulationResizeObserver?.disconnect?.();
+    tabulationResizeObserver = null;
+    if (tabulationResizeFrame) {
+      window.cancelAnimationFrame(tabulationResizeFrame);
+      tabulationResizeFrame = null;
+    }
+  }
+
+  function disposeTabulationTable() {
+    if (!tabulationTable) return;
+    try {
+      tabulationTable.destroy();
+    } catch (_) {
+    }
+    tabulationTable = null;
+  }
+
+  function disposeTabulationSelectorTables() {
+    tabulationSelectorRenderSeq += 1;
+    window.clearTimeout(tabulationBlockedPopoverTimer);
+    tabulationBlockedPopoverTimer = null;
+    [tabulationModelTable, tabulationCommonTable, tabulationOtherTable].forEach((table) => {
+      if (!table) return;
+      try {
+        table.destroy();
+      } catch (_) {
+      }
+    });
+    tabulationModelTable = null;
+    tabulationCommonTable = null;
+    tabulationOtherTable = null;
+  }
+
   function setInlineTabulationNotice(notices = []) {
     const notice = el("glmTabulationNotice");
     if (!notice) return;
@@ -1249,14 +1728,13 @@ export function createGlmTool({
     const resizeTo = (width, persist = true) => {
       const layoutRect = layout.getBoundingClientRect();
       const resizerWidth = resizer.getBoundingClientRect().width || 0;
-      const minLeft = 240;
+      const minLeft = 420;
       const minRight = 420;
       const maxLeft = Math.max(minLeft, layoutRect.width - resizerWidth - minRight);
       const clamped = Math.max(minLeft, Math.min(maxLeft, width));
       layout.style.setProperty("--glm-tabulation-sidebar-width", `${Math.round(clamped)}px`);
       if (persist) localStorage.setItem(GLM_TABULATION_SPLIT_STORAGE_KEY, String(Math.round(clamped)));
-      tabulationChart?.resize?.();
-      tabulationTable?.redraw?.(true);
+      scheduleTabulationResize();
     };
 
     const resizeFromClientX = (clientX) => {
@@ -2315,12 +2793,18 @@ export function createGlmTool({
     }
   }
 
+  function resize() {
+    scheduleTabulationResize();
+    if (aceEditor) aceEditor.resize();
+  }
+
   return {
     buildRequest,
     fetchData,
     openModelNavigator,
     render,
     refreshTheme,
+    resize,
     syncSidebarFromSchema,
     useCached,
   };

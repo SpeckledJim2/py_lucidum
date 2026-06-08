@@ -985,6 +985,18 @@
         if (refresh && state.schema) refreshActiveTool();
       }
 
+      function resizeActiveTool() {
+        if (state.tool === "uk_map") {
+          ukMapTool.syncViewport({ mode: "preserve" });
+        } else if (state.tool === "glm") {
+          glmTool.resize();
+        } else if (state.tool === "gbm") {
+          gbmTool.resize?.();
+        } else {
+          lineBarTool.resize();
+        }
+      }
+
       function handleToolClick(tool) {
         if (state.tool === tool) {
           setSidebarVisible(!state.sidebarVisible);
@@ -998,13 +1010,7 @@
         document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible);
         el("appSidebar").removeAttribute("aria-hidden");
         syncSidebarToggleButton();
-        requestAnimationFrame(() => {
-          if (state.tool === "line_bar") {
-            lineBarTool.resize();
-          } else if (state.tool === "uk_map") {
-            ukMapTool.syncViewport({ mode: "preserve" });
-          }
-        });
+        requestAnimationFrame(resizeActiveTool);
       }
 
       function syncSidebarToggleButton() {
@@ -1020,13 +1026,7 @@
         document.body.classList.toggle("filter-footer-collapsed", state.filterFooterCollapsed);
         el("filterFooter").setAttribute("aria-hidden", String(state.filterFooterCollapsed));
         syncFilterFooterToggleButton();
-        requestAnimationFrame(() => {
-          if (state.tool === "line_bar") {
-            lineBarTool.resize();
-          } else if (state.tool === "uk_map") {
-            ukMapTool.syncViewport({ mode: "preserve" });
-          }
-        });
+        requestAnimationFrame(resizeActiveTool);
       }
 
       function syncFilterFooterToggleButton() {
@@ -1926,11 +1926,7 @@
             } catch (_) {
             }
           }
-          if (state.tool === "uk_map") {
-            ukMapTool.syncViewport({ mode: "preserve" });
-          } else {
-            lineBarTool.resize();
-          }
+          resizeActiveTool();
         }
         resizer.addEventListener("pointerup", finishDrag);
         resizer.addEventListener("pointercancel", finishDrag);
@@ -1940,13 +1936,7 @@
         const viewportLimit = Math.max(260, window.innerWidth - 520);
         const width = Math.min(Math.max(rawWidth, 220), Math.min(560, viewportLimit));
         document.documentElement.style.setProperty("--sidebar-width", `${Math.round(width)}px`);
-        requestAnimationFrame(() => {
-          if (state.tool === "uk_map") {
-            ukMapTool.syncViewport({ mode: "preserve" });
-          } else {
-            lineBarTool.resize();
-          }
-        });
+        requestAnimationFrame(resizeActiveTool);
       }
 
       function setupChartControlsResize() {
@@ -2179,8 +2169,8 @@
             const firstPanel = controls?.querySelector(".chart-side-section");
             if (firstPanel) setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height);
             lineBarTool.resize();
-          } else if (state.tool === "uk_map") {
-            ukMapTool.syncViewport({ mode: "preserve" });
+          } else {
+            resizeActiveTool();
           }
         });
       }

@@ -489,7 +489,7 @@
         display: grid;
         flex: 1 1 auto;
         gap: 0;
-        grid-template-columns: minmax(240px, var(--glm-tabulation-sidebar-width, 320px)) 12px minmax(0, 1fr);
+        grid-template-columns: minmax(420px, var(--glm-tabulation-sidebar-width, 1fr)) 12px minmax(420px, 1fr);
         height: auto;
         min-height: 0;
         min-width: 0;
@@ -508,6 +508,10 @@
         min-height: 0;
       }
 
+      .glm-tabulation-sidebar {
+        position: relative;
+      }
+
       .glm-tabulation-label {
         color: var(--muted);
         flex: 0 0 auto;
@@ -517,74 +521,162 @@
         padding: 8px 12px 4px;
       }
 
-      .glm-tabulation-list {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        color: var(--text);
-        margin: 0 12px;
+      .glm-grid.glm-tabulation-selector-grid {
         min-height: 0;
-        overflow: auto;
       }
 
       .glm-tabulation-model-list {
-        flex: 0 0 132px;
-      }
-
-      .glm-tabulation-model-group {
-        cursor: default;
-        padding-left: 8px;
+        flex: 0 0 158px;
+        margin: 0 12px;
       }
 
       .glm-tabulation-table-list {
         flex: 1 1 auto;
-        min-height: 132px;
+        min-height: 0;
       }
 
-      .glm-tabulation-list-row {
-        align-items: center;
-        appearance: none;
-        background: transparent;
-        border: 0;
-        border-bottom: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
-        color: var(--text);
-        cursor: pointer;
+      .glm-tabulation-table-sections {
         display: flex;
-        font: inherit;
-        font-size: 11px;
-        font-weight: 400;
-        gap: 10px;
-        justify-content: space-between;
+        flex: 1 1 auto;
+        flex-direction: column;
+        gap: 8px;
+        margin: 0 12px;
+        min-height: 0;
+      }
+
+      .glm-tabulation-table-sections.single {
+        gap: 0;
+      }
+
+      .glm-tabulation-table-section {
+        display: flex;
+        flex: 1 1 0;
+        flex-direction: column;
+        min-height: 104px;
+        min-width: 0;
+      }
+
+      .glm-tabulation-section-title {
+        color: var(--muted);
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 800;
         line-height: 1.15;
-        min-height: 20px;
-        padding: 1px 6px;
-        text-align: left;
-        width: 100%;
+        padding: 0 0 3px;
+        text-transform: uppercase;
       }
 
-      .glm-tabulation-list-row:hover,
-      .glm-tabulation-list-row:focus-visible {
-        background: color-mix(in srgb, var(--line) 34%, var(--panel));
-        outline: none;
+      .glm-tabulation-selector-fallback {
+        max-height: 100%;
+        min-height: 0;
+        overflow: auto;
       }
 
-      .glm-tabulation-list-row.selected {
-        background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+      .glm-tabulation-selector-fallback:empty {
+        display: none;
+      }
+
+      .glm-tabulation-selector-table {
+        min-width: 620px;
+      }
+
+      .glm-tabulation-selector-table tr[data-glm-tabulation-model-id],
+      .glm-tabulation-selector-table tr[data-glm-tabulation-table-id],
+      .glm-tabulation-model-list .tabulator-row,
+      .glm-tabulation-table-list .tabulator-row {
+        cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .glm-tabulation-model-list .tabulator-row {
+        overflow: visible;
+      }
+
+      .glm-tabulation-model-list .tabulator-row.glm-tabulation-model-blocked,
+      .glm-tabulation-selector-table tr.blocked {
+        cursor: not-allowed;
+      }
+
+      .glm-tabulation-blocked-popover {
+        background: color-mix(in srgb, var(--panel) 96%, var(--accent));
+        border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line));
+        border-radius: 5px;
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.18);
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 600;
+        left: 12px;
+        line-height: 1.25;
+        max-width: calc(100% - 24px);
+        padding: 7px 9px;
+        position: absolute;
+        right: 12px;
+        z-index: 20;
+      }
+
+      .glm-tabulation-blocked-popover.hidden {
+        display: none;
+      }
+
+      .glm-tabulation-blocked-cell {
+        overflow: visible !important;
+        position: relative;
+        text-align: left !important;
+        z-index: 2;
+      }
+
+      .glm-tabulation-blocked-message {
+        background: inherit;
+        color: var(--muted);
+        display: inline-block;
+        font-weight: 400;
+        line-height: 1.15;
+        max-width: 360px;
+        overflow: hidden;
+        padding-right: 8px;
+        text-overflow: ellipsis;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+
+      .glm-tabulation-blocked-fallback-cell {
+        color: var(--muted);
+        font-weight: 400;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.tabulator-selected,
+      .glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.tabulator-selected .tabulator-cell,
+      .glm-grid.glm-tabulation-selector-grid.glm-tabulation-table-list .tabulator-row.tabulator-selected,
+      .glm-grid.glm-tabulation-selector-grid.glm-tabulation-table-list .tabulator-row.tabulator-selected .tabulator-cell,
+      .glm-tabulation-selector-table tr.selected,
+      .glm-tabulation-selector-table tr.selected td {
+        background: color-mix(in srgb, var(--accent) 24%, var(--panel)) !important;
+        color: var(--text) !important;
+      }
+
+      body.dark .glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.tabulator-selected,
+      body.dark .glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.tabulator-selected .tabulator-cell,
+      body.dark .glm-grid.glm-tabulation-selector-grid.glm-tabulation-table-list .tabulator-row.tabulator-selected,
+      body.dark .glm-grid.glm-tabulation-selector-grid.glm-tabulation-table-list .tabulator-row.tabulator-selected .tabulator-cell,
+      body.dark .glm-tabulation-selector-table tr.selected,
+      body.dark .glm-tabulation-selector-table tr.selected td {
+        background: color-mix(in srgb, var(--accent) 32%, var(--panel)) !important;
+        color: var(--text) !important;
+      }
+
+      .glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.glm-tabulation-model-untabulated .tabulator-cell,
+      .glm-tabulation-selector-table tr.untabulated td {
+        color: var(--muted) !important;
       }
 
       .glm-tabulation-row-main {
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .glm-tabulation-row-meta {
-        color: var(--muted);
-        flex: 0 0 auto;
-        font-size: 9px;
-        line-height: 1.1;
-        text-align: right;
         white-space: nowrap;
       }
 
@@ -599,6 +691,10 @@
         min-height: 0;
         overflow: auto;
         padding: 8px 12px;
+      }
+
+      .glm-tabulation-diagnostics.hidden {
+        display: none;
       }
 
       .glm-tabulation-model-diagnostic {
@@ -626,10 +722,11 @@
       .glm-tabulation-controls {
         align-items: center;
         border-bottom: 1px solid var(--line);
-        display: grid;
+        display: flex;
         flex: 0 0 auto;
-        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        flex-wrap: wrap;
         gap: 8px;
+        justify-content: space-between;
         min-width: 0;
         padding: 8px 12px;
       }
@@ -642,15 +739,16 @@
       }
 
       .glm-tabulation-control-left {
-        justify-self: start;
+        flex: 0 0 auto;
       }
 
       .glm-tabulation-control-middle {
-        justify-self: center;
+        flex: 0 0 auto;
       }
 
       .glm-tabulation-control-right {
-        justify-self: end;
+        flex: 1 1 180px;
+        justify-content: flex-end;
       }
 
       .glm-tabulation-controls .segmented button {

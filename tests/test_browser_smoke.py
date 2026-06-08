@@ -250,6 +250,7 @@ COPY (
                 "2026-05-25T00:00:00Z",
                 [0.11, 0.21, 0.31],
             )
+            self.write_gbm_tabulation_artifacts(store, "browser-smoke-model", offset=0.2, tabulated=False)
             self.write_gbm_prediction_model(
                 store,
                 "browser-smoke-model-2",
@@ -257,6 +258,7 @@ COPY (
                 "2026-05-25T00:00:01Z",
                 [0.41, 0.51, 0.61],
             )
+            self.write_gbm_tabulation_artifacts(store, "browser-smoke-model-2", offset=0.4, blocked=True)
             store.activate_model("browser-smoke-model")
             glm_store = GlmModelStore(data_path)
             self.write_glm_prediction_model(
@@ -271,6 +273,7 @@ COPY (
                 training_scope="all",
                 regularization={"mode": "none"},
             )
+            self.write_glm_tabulation_artifacts(glm_store, "browser-smoke-glm", include_segment=True, offset=0.0)
             self.write_glm_prediction_model(
                 glm_store,
                 "browser-smoke-glm-2",
@@ -283,6 +286,7 @@ COPY (
                 training_scope="training",
                 regularization={"mode": "manual", "l1_ratio": 1, "alpha": "0.07"},
             )
+            self.write_glm_tabulation_artifacts(glm_store, "browser-smoke-glm-2", offset=0.2)
             self.write_glm_prediction_model(
                 glm_store,
                 "browser-smoke-glm-delete-a",
@@ -599,6 +603,162 @@ COPY (
 COPY (
   {prediction_rows}
 ) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+
+    @staticmethod
+    def write_glm_tabulation_artifacts(store: GlmModelStore, model_id: str, *, include_segment: bool = False, offset: float = 0.0) -> None:
+        model_dir = store.model_dir(model_id)
+        (model_dir / "estimator.pkl").write_bytes(b"browser smoke estimator placeholder")
+        tables = [
+            {"table_id": "base", "label": "base", "index": 0, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": offset, "max": offset},
+            {"table_id": "Age", "label": "Age", "index": 1, "features": ["Age"], "cell_count": 3, "skipped": False, "path": "tabulations/Age.parquet", "min": offset, "max": offset + 1.0},
+        ]
+        if include_segment:
+            tables.append(
+                {"table_id": "Segment", "label": "Segment", "index": 2, "features": ["Segment"], "cell_count": 3, "skipped": False, "path": "tabulations/Segment.parquet", "min": offset - 0.2, "max": offset + 0.3}
+            )
+        store.write_json(
+            store.artifact_path(model_id, "tabulation_manifest"),
+            {
+                "model_id": model_id,
+                "status": "tabulated",
+                "tables": tables,
+                "warnings": [],
+                "diagnostics": {
+                    "mean_linear_error": round(offset / 10, 4),
+                    "linear_sd_error": round(0.01 + offset / 20, 4),
+                    "tabulated_row_count": 3,
+                    "missing_tabulated_prediction_rows": int(offset * 10),
+                },
+            },
+        )
+        store.tabulations_dir(model_id).mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 'base' AS table_id, 'ok' AS status, {offset} AS tabulated_linear
+) TO {sql_literal(str(store.tabulations_dir(model_id) / "base.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 30 AS Age, 'ok' AS status, {offset} AS tabulated_linear
+  UNION ALL SELECT 40, 'ok', {offset + 0.5}
+  UNION ALL SELECT 50, 'ok', {offset + 1.0}
+) TO {sql_literal(str(store.tabulations_dir(model_id) / "Age.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            if include_segment:
+                con.execute(
+                    f"""
+COPY (
+  SELECT 'A' AS Segment, 'ok' AS status, {offset - 0.2} AS tabulated_linear
+  UNION ALL SELECT 'B', 'ok', {offset + 0.1}
+  UNION ALL SELECT 'C', 'ok', {offset + 0.3}
+) TO {sql_literal(str(store.tabulations_dir(model_id) / "Segment.parquet"))} (FORMAT PARQUET)
+"""
+                )
+        finally:
+            con.close()
+
+    @staticmethod
+    def write_gbm_tabulation_artifacts(store: GbmModelStore, model_id: str, *, offset: float = 0.0, tabulated: bool = True, blocked: bool = False) -> None:
+        model_dir = store.model_dir(model_id)
+        if blocked:
+            warnings = [
+                "Tree 0 has 4 leaves; GBM tabulation supports only 2 or 3 leaf trees.",
+                "Tree 0 uses 3 features; GBM tabulation supports only 1D and 2D trees.",
+            ]
+            store.write_json(
+                store.artifact_path(model_id, "tabulation_manifest"),
+                {
+                    "model_id": model_id,
+                    "model_kind": "gbm",
+                    "model_ref": f"gbm:{model_id}",
+                    "status": "not_tabulatable",
+                    "tables": [],
+                    "warnings": warnings,
+                    "diagnostics": {"blocking_warnings": warnings},
+                },
+            )
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-S1' AS left_child, '0-S2' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 1.0 AS split_gain, '35' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-S1', '0-L0', '0-L1', '0-S0', 'Segment', 1.0, '0', 'A', '==', 'right', 'None', 0.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-S2', '0-L2', '0-L3', '0-S0', 'denominator', 1.0, '1', NULL, '<=', 'right', 'None', 0.0, 2.0, 2
+  UNION ALL SELECT 0, 3, '0-L0', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L2', NULL, NULL, '0-S2', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 3.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L3', NULL, NULL, '0-S2', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 4.0, 1.0, 1
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            return
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 1.0 AS split_gain, '35' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 2.0, 2
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            if not tabulated:
+                return
+            store.write_json(
+                store.artifact_path(model_id, "tabulation_manifest"),
+                {
+                    "model_id": model_id,
+                    "model_kind": "gbm",
+                    "model_ref": f"gbm:{model_id}",
+                    "status": "tabulated",
+                    "tables": [
+                        {"table_id": "base", "label": "base", "index": 0, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": offset, "max": offset},
+                        {"table_id": "Age", "label": "Age", "index": 1, "features": ["Age"], "cell_count": 3, "skipped": False, "path": "tabulations/Age.parquet", "min": offset, "max": offset + 0.8},
+                    ],
+                    "warnings": [],
+                    "diagnostics": {
+                        "mean_linear_error": round(offset / 10, 4),
+                        "linear_sd_error": round(0.02 + offset / 20, 4),
+                        "tabulated_row_count": 3,
+                        "missing_tabulated_prediction_rows": int(offset * 10),
+                    },
+                },
+            )
+            store.tabulations_dir(model_id).mkdir(parents=True, exist_ok=True)
+            con.execute(
+                f"""
+COPY (
+  SELECT 'base' AS table_id, 'ok' AS status, {offset} AS tabulated_linear
+) TO {sql_literal(str(store.tabulations_dir(model_id) / "base.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 30 AS Age, 'ok' AS status, {offset} AS tabulated_linear
+  UNION ALL SELECT 40, 'ok', {offset + 0.4}
+  UNION ALL SELECT 50, 'ok', {offset + 0.8}
+) TO {sql_literal(str(store.tabulations_dir(model_id) / "Age.parquet"))} (FORMAT PARQUET)
 """
             )
         finally:
@@ -1512,6 +1672,201 @@ COPY (
                 self.assertFalse(selected_glm_navigator_state["renameDisabled"])
                 self.assertFalse(selected_glm_navigator_state["activateDisabled"])
                 self.assertFalse(selected_glm_navigator_state["deleteDisabled"])
+
+                page.get_by_role("button", name="Tabulations").click()
+                page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").click()
+                page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator('[data-glm-tabulation-scale="exp"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const ageRow = [...document.querySelectorAll("#glmTabulationTableGrid .tabulator-row")]
+                        .find((row) => row.textContent.includes("Age"));
+                      return ageRow?.querySelector('.tabulator-cell[tabulator-field="display_span"]')?.textContent.trim() === "2.7183";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                tabulation_single_state = page.evaluate(
+                    """
+                    () => {
+                      const ageRow = [...document.querySelectorAll("#glmTabulationTableGrid .tabulator-row")]
+                        .find((row) => row.textContent.includes("Age"));
+                      const modelRows = [...document.querySelectorAll("#glmTabulationModelGrid .tabulator-row")];
+                      const tabulatedGlmRow = modelRows.find((row) => row.textContent.includes("Browser smoke GLM"));
+                      const blockedGbmRow = modelRows.find((row) => row.textContent.includes("Second smoke model"));
+                      const untabulatedGbmRow = modelRows.find((row) => row.textContent.includes("Browser smoke model"));
+                      const blockedGbmMessage = blockedGbmRow?.querySelector(".glm-tabulation-blocked-message") || null;
+                      const selectedModelCell = document.querySelector("#glmTabulationModelGrid .tabulator-row.tabulator-selected .tabulator-cell");
+                      const unselectedModelCell = modelRows
+                        .find((row) => !row.classList.contains("tabulator-selected"))
+                        ?.querySelector(".tabulator-cell");
+                      const selectedTableCell = document.querySelector("#glmTabulationTableGrid .tabulator-row.tabulator-selected .tabulator-cell");
+                      const unselectedTableCell = [...document.querySelectorAll("#glmTabulationTableGrid .tabulator-row")]
+                        .find((row) => !row.classList.contains("tabulator-selected"))
+                        ?.querySelector(".tabulator-cell");
+                      return {
+                        modelHeaders: [...document.querySelectorAll("#glmTabulationModelGrid .tabulator-col-title")]
+                          .map((node) => node.textContent.trim()).filter(Boolean),
+                        modelTypes: modelRows.map((row) => row.querySelector('.tabulator-cell[tabulator-field="model_type"]')?.textContent.trim()).filter(Boolean),
+                        selectedModels: document.querySelectorAll("#glmTabulationModelGrid .tabulator-row.tabulator-selected").length,
+                        selectedModelBackground: selectedModelCell ? getComputedStyle(selectedModelCell).backgroundColor : "",
+                        unselectedModelBackground: unselectedModelCell ? getComputedStyle(unselectedModelCell).backgroundColor : "",
+                        blockedGbmCountText: blockedGbmRow?.querySelector('.tabulator-cell[tabulator-field="table_count"]')?.textContent.trim() || "",
+                        blockedGbmCountTitle: blockedGbmRow?.querySelector('.tabulator-cell[tabulator-field="table_count"]')?.getAttribute("title") || "",
+                        blockedGbmMessageWeight: blockedGbmMessage ? getComputedStyle(blockedGbmMessage).fontWeight : "",
+                        blockedGbmMeanText: blockedGbmRow?.querySelector('.tabulator-cell[tabulator-field="mean_error"]')?.textContent.trim() || "",
+                        untabulatedGbmCountText: untabulatedGbmRow?.querySelector('.tabulator-cell[tabulator-field="table_count"]')?.textContent.trim() || "",
+                        untabulatedGbmNameColor: untabulatedGbmRow?.querySelector('.tabulator-cell[tabulator-field="model_name"]')
+                          ? getComputedStyle(untabulatedGbmRow.querySelector('.tabulator-cell[tabulator-field="model_name"]')).color
+                          : "",
+                        tabulatedGlmNameColor: tabulatedGlmRow?.querySelector('.tabulator-cell[tabulator-field="model_name"]')
+                          ? getComputedStyle(tabulatedGlmRow.querySelector('.tabulator-cell[tabulator-field="model_name"]')).color
+                          : "",
+                        blockedGbmCursor: blockedGbmRow ? getComputedStyle(blockedGbmRow).cursor : "",
+                        modelNameColumnWidth: document.querySelector("#glmTabulationModelGrid .tabulator-col[tabulator-field='model_name']")?.getBoundingClientRect().width || 0,
+                        missingColumnWidth: document.querySelector("#glmTabulationModelGrid .tabulator-col[tabulator-field='missing']")?.getBoundingClientRect().width || 0,
+                        tableHeaders: [...document.querySelectorAll("#glmTabulationTableGrid .tabulator-col-title")]
+                          .map((node) => node.textContent.trim()).filter(Boolean),
+                        selectedTableBackground: selectedTableCell ? getComputedStyle(selectedTableCell).backgroundColor : "",
+                        unselectedTableBackground: unselectedTableCell ? getComputedStyle(unselectedTableCell).backgroundColor : "",
+                        tableNameColumnWidth: document.querySelector("#glmTabulationTableGrid .tabulator-col[tabulator-field='table_name']")?.getBoundingClientRect().width || 0,
+                        spanColumnWidth: document.querySelector("#glmTabulationTableGrid .tabulator-col[tabulator-field='display_span']")?.getBoundingClientRect().width || 0,
+                        ageMin: ageRow?.querySelector('.tabulator-cell[tabulator-field="display_min"]')?.textContent.trim() || "",
+                        ageMax: ageRow?.querySelector('.tabulator-cell[tabulator-field="display_max"]')?.textContent.trim() || "",
+                        ageSpan: ageRow?.querySelector('.tabulator-cell[tabulator-field="display_span"]')?.textContent.trim() || "",
+                        diagnosticsHidden: document.querySelector("#glmTabulationDiagnostics")?.classList.contains("hidden"),
+                        splitDelta: Math.abs(
+                          (document.querySelector(".glm-tabulation-sidebar")?.getBoundingClientRect().width || 0)
+                          - (document.querySelector(".glm-tabulation-main")?.getBoundingClientRect().width || 0)
+                        ),
+                        resultHeaders: [...document.querySelectorAll("#glmTabulationTable .tabulator-col-title")]
+                          .map((node) => node.textContent.trim()).filter(Boolean),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    tabulation_single_state["modelHeaders"],
+                    ["Model name", "Model type", "Number of tables", "Mean error", "linear SD error", "missing"],
+                )
+                self.assertIn("GLM", tabulation_single_state["modelTypes"])
+                self.assertIn("GBM", tabulation_single_state["modelTypes"])
+                self.assertEqual(tabulation_single_state["selectedModels"], 1)
+                self.assertNotEqual(tabulation_single_state["selectedModelBackground"], tabulation_single_state["unselectedModelBackground"])
+                self.assertEqual(tabulation_single_state["blockedGbmCountText"], "n/a: >3 leaves")
+                self.assertIn("4 leaves", tabulation_single_state["blockedGbmCountTitle"])
+                self.assertIn("3 features", tabulation_single_state["blockedGbmCountTitle"])
+                self.assertEqual(tabulation_single_state["blockedGbmMessageWeight"], "400")
+                self.assertEqual(tabulation_single_state["blockedGbmMeanText"], "")
+                self.assertEqual(tabulation_single_state["untabulatedGbmCountText"], "--")
+                self.assertNotEqual(tabulation_single_state["untabulatedGbmNameColor"], tabulation_single_state["tabulatedGlmNameColor"])
+                self.assertEqual(tabulation_single_state["blockedGbmCursor"], "not-allowed")
+                self.assertGreater(tabulation_single_state["modelNameColumnWidth"], tabulation_single_state["missingColumnWidth"])
+                self.assertEqual(tabulation_single_state["tableHeaders"], ["Table name", "Dim", "Cells", "Min", "Max", "Span"])
+                self.assertNotEqual(tabulation_single_state["selectedTableBackground"], tabulation_single_state["unselectedTableBackground"])
+                self.assertGreater(tabulation_single_state["tableNameColumnWidth"], tabulation_single_state["spanColumnWidth"])
+                self.assertEqual(tabulation_single_state["ageMin"], "1")
+                self.assertEqual(tabulation_single_state["ageMax"], "2.7183")
+                self.assertEqual(tabulation_single_state["ageSpan"], "2.7183")
+                self.assertTrue(tabulation_single_state["diagnosticsHidden"])
+                self.assertLess(tabulation_single_state["splitDelta"], 36)
+                self.assertIn("Age", tabulation_single_state["resultHeaders"])
+
+                page.locator('[data-glm-tabulation-view="plot"]').click()
+                page.locator("#glmTabulationPlot canvas").first.wait_for(timeout=10_000)
+                initial_plot_width = page.evaluate(
+                    """
+                    () => window.echarts.getInstanceByDom(document.querySelector("#glmTabulationPlot"))?.getWidth() || 0
+                    """
+                )
+                self.assertGreater(initial_plot_width, 0)
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function(
+                    """
+                    (initialWidth) => {
+                      if (document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") !== "false") return false;
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#glmTabulationPlot"));
+                      return chart && chart.getWidth() > initialWidth + 20;
+                    }
+                    """,
+                    arg=initial_plot_width,
+                    timeout=10_000,
+                )
+                collapsed_plot_width = page.evaluate(
+                    """
+                    () => window.echarts.getInstanceByDom(document.querySelector("#glmTabulationPlot"))?.getWidth() || 0
+                    """
+                )
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function(
+                    """
+                    (collapsedWidth) => {
+                      if (document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") !== "true") return false;
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#glmTabulationPlot"));
+                      return chart && chart.getWidth() < collapsedWidth - 20;
+                    }
+                    """,
+                    arg=collapsed_plot_width,
+                    timeout=10_000,
+                )
+                page.locator('[data-glm-tabulation-view="table"]').click()
+                page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
+
+                page.locator("#glmTabulationModelGrid .tabulator-row", has_text="Second smoke model").click(force=True)
+                page.locator("#glmTabulationBlockedPopover", has_text="Tabulations are limited to GBMs with <=3 leaves.").wait_for(timeout=10_000)
+                blocked_model_click_state = page.evaluate(
+                    """
+                    () => ({
+                      selectedModels: [...document.querySelectorAll("#glmTabulationModelGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                      popoverText: document.querySelector("#glmTabulationBlockedPopover")?.textContent.trim() || "",
+                      popoverHidden: document.querySelector("#glmTabulationBlockedPopover")?.classList.contains("hidden"),
+                    })
+                    """
+                )
+                self.assertEqual(blocked_model_click_state["popoverText"], "Tabulations are limited to GBMs with <=3 leaves.")
+                self.assertFalse(blocked_model_click_state["popoverHidden"])
+                self.assertEqual(len(blocked_model_click_state["selectedModels"]), 1)
+                self.assertFalse(any("Second smoke model" in text for text in blocked_model_click_state["selectedModels"]))
+                page.evaluate('() => document.querySelector("#glmTabulationBlockedPopover")?.classList.add("hidden")')
+
+                page.locator("#glmTabulationModelGrid .tabulator-row", has_text="Second smoke GLM").click(modifiers=[row_selection_modifier])
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll("#glmTabulationModelGrid .tabulator-row.tabulator-selected").length === 2
+                      && document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-row").length > 0
+                      && document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row").length > 0
+                    """,
+                    timeout=10_000,
+                )
+                tabulation_multi_state = page.evaluate(
+                    """
+                    () => ({
+                      selectedModels: [...document.querySelectorAll("#glmTabulationModelGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                      commonHeaders: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-col-title")]
+                        .map((node) => node.textContent.trim()).filter(Boolean),
+                      otherHeaders: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-col-title")]
+                        .map((node) => node.textContent.trim()).filter(Boolean),
+                      commonRows: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-row")]
+                        .map((row) => row.textContent),
+                      otherRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row")]
+                        .map((row) => row.textContent),
+                    })
+                    """
+                )
+                self.assertTrue(any("Browser smoke GLM" in text for text in tabulation_multi_state["selectedModels"]))
+                self.assertTrue(any("Second smoke GLM" in text for text in tabulation_multi_state["selectedModels"]))
+                self.assertEqual(tabulation_multi_state["commonHeaders"], ["Table name", "Dim"])
+                self.assertEqual(tabulation_multi_state["otherHeaders"], ["Table name", "Dim"])
+                self.assertTrue(any("Age" in text for text in tabulation_multi_state["commonRows"]))
+                self.assertTrue(any("Segment" in text for text in tabulation_multi_state["otherRows"]))
+
+                page.locator("#glmTabulationOtherTableGrid .tabulator-row", has_text="Segment").click()
+                page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator("#glmTabulationNotice", has_text="has no Segment tabulation").wait_for(timeout=10_000)
 
                 glm_job_succeed = {"value": False}
                 glm_build_payload = {"value": None}

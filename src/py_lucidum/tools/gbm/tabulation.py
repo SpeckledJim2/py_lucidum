@@ -631,8 +631,18 @@ def tabulation_model_status(store: GbmModelStore, model: dict[str, Any]) -> dict
     model_warnings = list(manifest.get("warnings", [])) if manifest else []
     if not tabulatable:
         model_warnings.append("Rebuild this GBM before tabulating; tree_table.parquet is missing.")
+    blocking_warnings: list[str] = []
+    if tabulatable and not tables:
+        _, blocking_warnings = _tree_groups(_read_tree_table(store, model_id, model.get("best_iteration")))
+        if blocking_warnings:
+            tabulatable = False
+            model_warnings.extend(blocking_warnings)
     if manifest and manifest.get("status") == "not_tabulatable":
         tabulatable = False
+        blocking_warnings = list(manifest.get("diagnostics", {}).get("blocking_warnings", [])) or blocking_warnings
+    diagnostics = dict(manifest.get("diagnostics", {}) if manifest else {})
+    if blocking_warnings:
+        diagnostics["blocking_warnings"] = blocking_warnings
     return {
         "model_id": model_id,
         "model_ref": f"gbm:{model_id}",
@@ -643,7 +653,7 @@ def tabulation_model_status(store: GbmModelStore, model: dict[str, Any]) -> dict
         "tabulated": bool(tables),
         "tables": tables,
         "warnings": model_warnings,
-        "diagnostics": manifest.get("diagnostics", {}) if manifest else {},
+        "diagnostics": diagnostics,
     }
 
 
