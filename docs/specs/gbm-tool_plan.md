@@ -63,6 +63,7 @@ Chosen defaults:
 - **Features and parameters** tab:
   - Left feature grid columns: feature name, include checkbox, monotonicity, and one importance metric column: `Gain`, or `SHAP` when the active model has saved mean absolute SHAP values.
   - If a Feature Specification is loaded, show its `Grouping` column between feature name and include checkbox, then show an interaction-constraint multi-select followed by a scenario dropdown immediately before `Clear all`. `Base` is rescaling metadata and is not displayed as a scenario.
+  - Show a separate interaction-pair allowlist dropdown for trainable feature pairs; adding a pair selects both features. Pair mode may combine with Feature Specification grouping constraints only when selected groups are disjoint from every paired feature, may keep singleton locks only outside the pair list, persists as `feature_interaction_constraints.mode = "pairs"`, and can be seeded from 2D rows in the active EBM Gain summary.
   - Selecting a feature scenario selects only usable, non-reserved features whose scenario cell contains `feature`, case-insensitive; manual checkbox edits, `Clear all`, and `Select all` clear the scenario dropdown.
   - Feature type is displayed as muted right-aligned text inside the Feature cell, with categorical counts shown as `categorical (n)`.
   - Feature Specification groupings drive the interaction-constraint multi-select; constrained selected features show a lock marker in the Grouping column.

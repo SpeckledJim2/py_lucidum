@@ -30,6 +30,7 @@ from .validation import (
     normalise_feature_grouping_map,
     normalise_feature_interaction_features,
     normalise_feature_interaction_groupings,
+    normalise_feature_interaction_pairs,
     normalise_training_mode,
     objective,
     init_score_requested,
@@ -436,6 +437,7 @@ def train_model(
         feature_grouping_map = normalise_feature_grouping_map(payload.get("feature_groupings"))
         selected_interaction_groupings = normalise_feature_interaction_groupings(payload.get("feature_interaction_groupings"))
         selected_interaction_features = normalise_feature_interaction_features(payload.get("feature_interaction_features"))
+        selected_interaction_pairs = normalise_feature_interaction_pairs(payload.get("feature_interaction_pairs"))
         dataset_sample = dataset_sample_column(dataset)
         if not dataset_sample and payload.get("create_sample"):
             create_generated_sample(dataset, store.generated_sample_path)
@@ -474,32 +476,68 @@ def train_model(
     monotone_constraints = [int(feature["monotonicity"]) for feature in features]
     if any(monotone_constraints):
         params["monotone_constraints"] = monotone_constraints
-    interaction_groups = feature_interaction_constraint_groups(
-        features,
-        selected_interaction_groupings,
-        feature_grouping_map,
-        selected_interaction_features,
-    )
-    interaction_constraints = lightgbm_interaction_constraints(feature_names, interaction_groups)
-    interaction_group_constraints = [
-        {"grouping": str(group["grouping"]), "features": group["features"]}
-        for group in interaction_groups
-        if group.get("kind") != "feature"
-    ]
-    interaction_feature_constraints = [
-        str(group["features"][0])
-        for group in interaction_groups
-        if group.get("kind") == "feature" and group.get("features")
-    ]
-    feature_interaction_constraints = (
-        {
-            "groupings": [str(group["grouping"]) for group in interaction_group_constraints],
-            "features": interaction_feature_constraints,
-            "groups": interaction_group_constraints,
+    interaction_group_constraints: list[dict[str, Any]] = []
+    if selected_interaction_pairs:
+        pair_feature_names = {
+            feature_name
+            for pair in selected_interaction_pairs
+            for feature_name in (pair["left"], pair["right"])
         }
-        if interaction_constraints
-        else None
-    )
+        interaction_feature_constraints = [
+            feature_name
+            for feature_name in selected_interaction_features
+            if feature_name not in pair_feature_names
+        ]
+        interaction_groups = feature_interaction_constraint_groups(
+            features,
+            selected_interaction_groupings,
+            feature_grouping_map,
+            interaction_feature_constraints,
+        )
+        interaction_constraints = lightgbm_pair_interaction_constraints(feature_names, selected_interaction_pairs, interaction_groups)
+        interaction_group_constraints = [
+            {"grouping": str(group["grouping"]), "features": group["features"]}
+            for group in interaction_groups
+            if group.get("kind") != "feature"
+        ]
+        feature_interaction_constraints = (
+            {
+                "mode": "pairs",
+                "pairs": selected_interaction_pairs,
+                **({"groupings": [str(group["grouping"]) for group in interaction_group_constraints]} if interaction_group_constraints else {}),
+                **({"groups": interaction_group_constraints} if interaction_group_constraints else {}),
+                **({"features": interaction_feature_constraints} if interaction_feature_constraints else {}),
+            }
+            if interaction_constraints
+            else None
+        )
+    else:
+        interaction_groups = feature_interaction_constraint_groups(
+            features,
+            selected_interaction_groupings,
+            feature_grouping_map,
+            selected_interaction_features,
+        )
+        interaction_constraints = lightgbm_interaction_constraints(feature_names, interaction_groups)
+        interaction_group_constraints = [
+            {"grouping": str(group["grouping"]), "features": group["features"]}
+            for group in interaction_groups
+            if group.get("kind") != "feature"
+        ]
+        interaction_feature_constraints = [
+            str(group["features"][0])
+            for group in interaction_groups
+            if group.get("kind") == "feature" and group.get("features")
+        ]
+        feature_interaction_constraints = (
+            {
+                "groupings": [str(group["grouping"]) for group in interaction_group_constraints],
+                "features": interaction_feature_constraints,
+                "groups": interaction_group_constraints,
+            }
+            if interaction_constraints
+            else None
+        )
     if interaction_constraints:
         params["interaction_constraints"] = interaction_constraints
 
@@ -832,6 +870,53 @@ def lightgbm_interaction_constraints(feature_names: list[str], groups: list[dict
     remainder = [index for index in range(len(feature_names)) if index not in constrained_indexes]
     if remainder:
         constraints.append(remainder)
+    return constraints
+
+
+def lightgbm_pair_interaction_constraints(
+    feature_names: list[str],
+    pairs: list[dict[str, str]],
+    groups: list[dict[str, Any]] | None = None,
+) -> list[list[int]]:
+    if not feature_names or not pairs:
+        return []
+    feature_indexes = {name: index for index, name in enumerate(feature_names)}
+    constraints: list[list[int]] = []
+    constrained_indexes: set[int] = set()
+    seen_pairs: set[tuple[int, int]] = set()
+    for pair in pairs:
+        left_index = feature_indexes.get(str(pair.get("left") or ""))
+        right_index = feature_indexes.get(str(pair.get("right") or ""))
+        if left_index is None or right_index is None or left_index == right_index:
+            continue
+        key = tuple(sorted((left_index, right_index)))
+        if key in seen_pairs:
+            continue
+        constraints.append([left_index, right_index])
+        constrained_indexes.update(key)
+        seen_pairs.add(key)
+    seen_groups: set[tuple[int, ...]] = set()
+    for group in groups or []:
+        indexes: list[int] = []
+        seen_indexes: set[int] = set()
+        for feature in group.get("features", []):
+            index = feature_indexes.get(str(feature))
+            if index is not None and index not in seen_indexes:
+                indexes.append(index)
+                seen_indexes.add(index)
+        if not indexes:
+            continue
+        key = tuple(indexes)
+        if key in seen_groups:
+            continue
+        constraints.append(indexes)
+        constrained_indexes.update(indexes)
+        seen_groups.add(key)
+    if not constraints:
+        return []
+    for index in range(len(feature_names)):
+        if index not in constrained_indexes:
+            constraints.append([index])
     return constraints
 
 
@@ -1286,6 +1371,7 @@ __all__ = [
     "gbm_dependencies",
     "lightgbm_progress_payload",
     "lightgbm_interaction_constraints",
+    "lightgbm_pair_interaction_constraints",
     "feature_config_with_mean_abs_shap",
     "normalise_feature_scenario",
     "should_use_offset_init_score",

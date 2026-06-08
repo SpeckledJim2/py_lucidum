@@ -958,7 +958,7 @@ export function createGlmTool({
   }
 
   function syncTabulationModelSelectorSelection() {
-    if (!tabulationModelTable) return;
+    if (!tabulatorReady(tabulationModelTable)) return;
     const selected = new Set(tabulationSelectedModelIds());
     try {
       tabulationModelTable.deselectRow();
@@ -969,7 +969,7 @@ export function createGlmTool({
 
   function syncTabulationTableSelectorSelection() {
     [tabulationCommonTable, tabulationOtherTable].forEach((table) => {
-      if (!table) return;
+      if (!tabulatorReady(table)) return;
       try {
         table.deselectRow();
         table.selectRow(selectedTabulationTableId);
@@ -1477,11 +1477,24 @@ export function createGlmTool({
     tabulationResizeFrame = window.requestAnimationFrame(() => {
       tabulationResizeFrame = null;
       tabulationChart?.resize?.();
-      tabulationModelTable?.redraw?.(true);
-      tabulationCommonTable?.redraw?.(true);
-      tabulationOtherTable?.redraw?.(true);
-      tabulationTable?.redraw?.(true);
+      safeTabulatorRedraw(tabulationModelTable);
+      safeTabulatorRedraw(tabulationCommonTable);
+      safeTabulatorRedraw(tabulationOtherTable);
+      safeTabulatorRedraw(tabulationTable);
     });
+  }
+
+  function tabulatorReady(table) {
+    const element = table?.element || table?.rowManager?.element?.closest?.(".tabulator") || null;
+    return Boolean(table?.initialized && element?.isConnected);
+  }
+
+  function safeTabulatorRedraw(table) {
+    if (!tabulatorReady(table) || typeof table.redraw !== "function") return;
+    try {
+      table.redraw(true);
+    } catch (_) {
+    }
   }
 
   function observeTabulationLayoutResize() {

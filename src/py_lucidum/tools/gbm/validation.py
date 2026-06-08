@@ -658,8 +658,77 @@ def normalise_feature_interaction_features(raw: Any) -> list[str]:
     return features
 
 
+def feature_interaction_pair_key(left: str, right: str) -> tuple[str, str]:
+    return tuple(sorted((left, right), key=lambda value: (value.lower(), value)))
+
+
+def normalise_feature_interaction_pairs(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    pairs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        left = str(item.get("left") or "").strip()
+        right = str(item.get("right") or "").strip()
+        if not left or not right or left == right:
+            continue
+        key = feature_interaction_pair_key(left, right)
+        if key in seen:
+            continue
+        pairs.append({"left": left, "right": right})
+        seen.add(key)
+    return pairs
+
+
 def available_feature_interaction_groupings(feature_groupings: dict[str, str]) -> list[str]:
     return sorted({grouping for grouping in feature_groupings.values() if grouping}, key=str.lower)
+
+
+def feature_interaction_pair_errors(
+    raw: Any,
+    *,
+    columns: dict[str, ColumnInfo],
+    selected_feature_names: set[str],
+    response_col: str,
+    offset_col: str | None,
+    reserved_sample_names: set[str],
+) -> list[str]:
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list):
+        return ["Choose valid GBM feature interaction pairs"]
+    errors: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            errors.append("Choose two valid GBM features for each interaction pair")
+            continue
+        left = str(item.get("left") or "").strip()
+        right = str(item.get("right") or "").strip()
+        if not left or not right:
+            errors.append("Choose two valid GBM features for each interaction pair")
+            continue
+        if left == right:
+            errors.append(f"Choose two different GBM features for interaction pair: {left}")
+            continue
+        key = feature_interaction_pair_key(left, right)
+        if key in seen:
+            errors.append(f"Duplicate GBM feature interaction pair: {key[0]} x {key[1]}")
+            continue
+        seen.add(key)
+        for feature_name in (left, right):
+            column = columns.get(feature_name)
+            if column is None:
+                errors.append(f"Choose a valid GBM feature interaction pair feature: {feature_name}")
+            elif feature_name not in selected_feature_names:
+                errors.append(f"{feature_name} must be selected to use a GBM feature interaction pair")
+            elif not feature_usable(column):
+                errors.append(f"{feature_name} cannot be used in a GBM feature interaction pair")
+            elif column.name == response_col or (offset_col and column.name == offset_col) or column.name in reserved_sample_names:
+                errors.append(f"{feature_name} is reserved and cannot use a GBM feature interaction pair")
+    return errors
 
 
 def feature_interaction_constraint_groups(
@@ -822,10 +891,13 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
 
         feature_grouping_map = normalise_feature_grouping_map(payload.get("feature_groupings"))
         valid_interaction_groupings = set(available_feature_interaction_groupings(feature_grouping_map))
-        for grouping in normalise_feature_interaction_groupings(payload.get("feature_interaction_groupings")):
+        selected_interaction_groupings = normalise_feature_interaction_groupings(payload.get("feature_interaction_groupings"))
+        selected_interaction_features = normalise_feature_interaction_features(payload.get("feature_interaction_features"))
+        selected_interaction_pairs = normalise_feature_interaction_pairs(payload.get("feature_interaction_pairs"))
+        for grouping in selected_interaction_groupings:
             if grouping not in valid_interaction_groupings:
                 errors.append(f"Choose a valid GBM feature interaction grouping: {grouping}")
-        for feature_name in normalise_feature_interaction_features(payload.get("feature_interaction_features")):
+        for feature_name in selected_interaction_features:
             column = columns.get(feature_name)
             if column is None:
                 errors.append(f"Choose a valid GBM feature interaction feature: {feature_name}")
@@ -833,6 +905,41 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
                 errors.append(f"{feature_name} cannot be used as a LightGBM feature interaction constraint")
             elif column.name == response_col or (offset_col and column.name == offset_col) or column.name in reserved_sample_names:
                 errors.append(f"{feature_name} is reserved and cannot use a feature interaction constraint")
+        pair_feature_names = {
+            feature_name
+            for pair in selected_interaction_pairs
+            for feature_name in (pair["left"], pair["right"])
+        }
+        selected_interaction_feature_set = set(selected_interaction_features)
+        if selected_interaction_pairs and selected_interaction_groupings:
+            for grouping in selected_interaction_groupings:
+                overlapping: list[str] = []
+                for feature in selected_features:
+                    feature_name = str(feature.get("name") or "").strip()
+                    if not feature_name or feature_name in selected_interaction_feature_set:
+                        continue
+                    if feature_grouping_map.get(feature_name, "") == grouping and feature_name in pair_feature_names:
+                        overlapping.append(feature_name)
+                overlapping = sorted(set(overlapping), key=str.lower)
+                if overlapping:
+                    noun = "feature" if len(overlapping) == 1 else "features"
+                    errors.append(f"GBM feature interaction grouping {grouping} cannot include paired {noun}: {', '.join(overlapping)}")
+        for feature_name in selected_interaction_features:
+            if selected_interaction_pairs and feature_name in pair_feature_names:
+                errors.append(f"{feature_name} cannot be both isolated and used in a GBM feature interaction pair")
+        selected_feature_names = {feature["name"] for feature in selected_features}
+        errors.extend(
+            feature_interaction_pair_errors(
+                payload.get("feature_interaction_pairs"),
+                columns=columns,
+                selected_feature_names=selected_feature_names,
+                response_col=response_col,
+                offset_col=offset_col,
+                reserved_sample_names=reserved_sample_names,
+            )
+        )
+        if selected_interaction_pairs and integer_parameter(params, "num_leaves", 0) > 3:
+            warnings.append("Feature interaction pairs constrain branch co-occurrence, but num_leaves above 3 can still create higher-order branches through overlapping pairs")
 
         if selected_training_mode == "ebm":
             early_stopping_rounds = integer_parameter(params, "early_stopping_rounds", 0)
@@ -979,6 +1086,8 @@ __all__ = [
     "ebm_available",
     "display_monotonicity",
     "feature_interaction_constraint_groups",
+    "feature_interaction_pair_errors",
+    "feature_interaction_pair_key",
     "feature_rows",
     "init_score_current_options",
     "init_score_options",
@@ -989,6 +1098,7 @@ __all__ = [
     "normalise_feature_grouping_map",
     "normalise_feature_interaction_features",
     "normalise_feature_interaction_groupings",
+    "normalise_feature_interaction_pairs",
     "normalise_features",
     "normalise_parameters",
     "normalise_training_mode",

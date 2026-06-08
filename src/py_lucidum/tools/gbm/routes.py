@@ -28,6 +28,7 @@ from .validation import (
     ebm_available,
     feature_rows,
     init_score_current_options,
+    normalise_feature_interaction_pairs,
     normalise_training_mode,
 )
 
@@ -257,10 +258,9 @@ WHERE feature IS NOT NULL
         stored = manifest.get("feature_interaction_constraints")
         if not isinstance(stored, dict):
             return None
+        pairs = normalise_feature_interaction_pairs(stored.get("pairs"))
         groups = normalise_interaction_constraint_groups(stored.get("groups"))
         features = scenario_feature_list(stored.get("features"))
-        if not groups and not features:
-            return None
         current_grouping_set = set(valid_groupings)
         payload_groups: list[dict[str, Any]] = []
         for group in groups:
@@ -274,7 +274,18 @@ WHERE feature IS NOT NULL
             else:
                 payload["status"] = "current"
             payload_groups.append(payload)
+        if str(stored.get("mode") or "").strip().lower() == "pairs" or pairs:
+            return {
+                "mode": "pairs",
+                "pairs": pairs,
+                "groupings": [group["grouping"] for group in payload_groups],
+                "features": features,
+                "groups": payload_groups,
+            } if pairs else None
+        if not groups and not features:
+            return None
         return {
+            "mode": "groups",
             "groupings": [group["grouping"] for group in payload_groups],
             "features": features,
             "groups": payload_groups,

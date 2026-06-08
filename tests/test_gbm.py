@@ -24,8 +24,8 @@ from py_lucidum.tools.gbm import tabulation as gbm_tabulation
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
-from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_parameters, validate_request
+from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import tabulation_config, tabulation_table
 from py_lucidum.tools.line_bar.query import chart
@@ -785,6 +785,7 @@ COPY (
         self.assertEqual(
             payload["active_feature_interaction_constraints"],
             {
+                "mode": "groups",
                 "groupings": ["DRIVER", "POSTCODE", "OLD"],
                 "features": ["Age"],
                 "groups": [
@@ -827,9 +828,79 @@ COPY (
         self.assertEqual(
             payload["active_feature_interaction_constraints"],
             {
+                "mode": "groups",
                 "groupings": ["POSTCODE"],
                 "features": [],
                 "groups": [{"grouping": "POSTCODE", "features": ["Segment"], "status": "stale"}],
+            },
+        )
+
+    def test_active_feature_interaction_constraints_report_pairs(self) -> None:
+        store = self.write_model_artifacts()
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = {
+            "mode": "pairs",
+            "pairs": [{"left": "Age", "right": "Segment"}, {"left": "Segment", "right": "Age"}],
+            "features": ["PostcodeArea"],
+        }
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            payload["active_feature_interaction_constraints"],
+            {
+                "mode": "pairs",
+                "pairs": [{"left": "Age", "right": "Segment"}],
+                "groupings": [],
+                "features": ["PostcodeArea"],
+                "groups": [],
+            },
+        )
+
+    def test_active_feature_interaction_constraints_report_pairs_with_groups(self) -> None:
+        store = self.write_model_artifacts()
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = {
+            "mode": "pairs",
+            "pairs": [{"left": "Age", "right": "Segment"}],
+            "features": ["PostcodeSector"],
+            "groupings": ["POSTCODE"],
+            "groups": [{"grouping": "POSTCODE", "features": ["PostcodeArea"]}],
+        }
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+        features_path = self.root / "pair_group_feature_spec.csv"
+        features_path.write_text(
+            "Feature,Grouping,scenario1\n"
+            "Age,DRIVER,feature\n"
+            "Segment,VEHICLE,feature\n"
+            "PostcodeArea,POSTCODE,feature\n",
+            encoding="utf-8",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm"],
+            use_saved_filters=False,
+            use_kpis=False,
+            features_path=features_path,
+        )
+
+        status, body = asgi_get(app, "/api/gbm/config")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            payload["active_feature_interaction_constraints"],
+            {
+                "mode": "pairs",
+                "pairs": [{"left": "Age", "right": "Segment"}],
+                "groupings": ["POSTCODE"],
+                "features": ["PostcodeSector"],
+                "groups": [{"grouping": "POSTCODE", "features": ["PostcodeArea"], "status": "current"}],
             },
         )
 
@@ -849,6 +920,17 @@ COPY (
         self.assertEqual(available_feature_interaction_groupings(grouping_map), ["DRIVER", "POSTCODE", "VEHICLE"])
         self.assertEqual(normalise_feature_interaction_groupings(["POSTCODE", "POSTCODE", "", "VEHICLE"]), ["POSTCODE", "VEHICLE"])
         self.assertEqual(normalise_feature_interaction_features(["Age", "Age", "", "Segment"]), ["Age", "Segment"])
+        self.assertEqual(
+            normalise_feature_interaction_pairs(
+                [
+                    {"left": "Age", "right": "Segment"},
+                    {"left": "Segment", "right": "Age"},
+                    {"left": "Age", "right": "Age"},
+                    {"left": "", "right": "Segment"},
+                ]
+            ),
+            [{"left": "Age", "right": "Segment"}],
+        )
 
     def test_feature_interaction_constraint_groups_use_selected_features_only(self) -> None:
         features = [{"name": "Age"}, {"name": "Segment"}, {"name": "VehicleAge"}]
@@ -887,6 +969,22 @@ COPY (
         self.assertEqual(constraints, [[1], [0], [2, 3]])
         self.assertEqual(lightgbm_interaction_constraints(["Age"], [{"grouping": "DRIVER", "features": []}]), [])
 
+    def test_lightgbm_pair_interaction_constraints_add_singleton_main_effects(self) -> None:
+        pairs = [{"left": "Age", "right": "Segment"}, {"left": "Age", "right": "VehicleAge"}]
+
+        constraints = lightgbm_pair_interaction_constraints(["Age", "Segment", "VehicleAge", "Ncd"], pairs)
+
+        self.assertEqual(constraints, [[0, 1], [0, 2], [3]])
+        self.assertEqual(lightgbm_pair_interaction_constraints(["Age"], [{"left": "Age", "right": "Missing"}]), [])
+
+    def test_lightgbm_pair_interaction_constraints_keep_disjoint_groups(self) -> None:
+        pairs = [{"left": "Age", "right": "Segment"}]
+        groups = [{"grouping": "POSTCODE", "features": ["PostcodeArea", "Region"], "kind": "group"}]
+
+        constraints = lightgbm_pair_interaction_constraints(["Age", "Segment", "PostcodeArea", "Region", "VehicleAge"], pairs, groups)
+
+        self.assertEqual(constraints, [[0, 1], [2, 3], [4]])
+
     def test_validate_rejects_unknown_feature_interaction_grouping(self) -> None:
         dataset = Dataset(self.data_path)
         payload = {
@@ -919,6 +1017,103 @@ COPY (
 
         self.assertFalse(result.ok)
         self.assertIn("Choose a valid GBM feature interaction feature: Missing", result.errors)
+
+    def test_validate_rejects_invalid_feature_interaction_pairs(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": self.request_features(),
+            "parameters": default_parameters(),
+            "sample_column": "SAMPLE",
+            "feature_interaction_pairs": [
+                {"left": "Age", "right": "Segment"},
+                {"left": "Segment", "right": "Age"},
+                {"left": "Age", "right": "Age"},
+                {"left": "Age", "right": "Missing"},
+                {"left": "Age", "right": "PostcodeArea"},
+            ],
+        }
+
+        result = validate_request(dataset, payload)
+
+        self.assertFalse(result.ok)
+        self.assertIn("Duplicate GBM feature interaction pair: Age x Segment", result.errors)
+        self.assertIn("Choose two different GBM features for interaction pair: Age", result.errors)
+        self.assertIn("Choose a valid GBM feature interaction pair feature: Missing", result.errors)
+        self.assertIn("PostcodeArea must be selected to use a GBM feature interaction pair", result.errors)
+
+    def test_validate_allows_feature_interaction_pairs_with_disjoint_groups(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": self.request_features() + [{"name": "PostcodeArea", "include": True, "monotonicity": ""}],
+            "parameters": default_parameters(),
+            "sample_column": "SAMPLE",
+            "feature_groupings": {"Age": "DRIVER", "Segment": "VEHICLE", "PostcodeArea": "POSTCODE"},
+            "feature_interaction_groupings": ["POSTCODE"],
+            "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+        }
+
+        result = validate_request(dataset, payload)
+
+        self.assertTrue(result.ok, result.errors)
+
+    def test_validate_rejects_feature_interaction_pairs_with_overlapping_groups(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": self.request_features() + [{"name": "PostcodeArea", "include": True, "monotonicity": ""}],
+            "parameters": default_parameters(),
+            "sample_column": "SAMPLE",
+            "feature_groupings": {"Age": "DRIVER", "Segment": "VEHICLE", "PostcodeArea": "POSTCODE"},
+            "feature_interaction_groupings": ["DRIVER"],
+            "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+        }
+
+        result = validate_request(dataset, payload)
+
+        self.assertFalse(result.ok)
+        self.assertIn("GBM feature interaction grouping DRIVER cannot include paired feature: Age", result.errors)
+
+    def test_validate_allows_disjoint_singleton_with_feature_interaction_pairs(self) -> None:
+        dataset = Dataset(self.data_path)
+        features = [
+            {"name": "Age", "include": True, "monotonicity": ""},
+            {"name": "Segment", "include": True, "monotonicity": ""},
+            {"name": "PostcodeArea", "include": True, "monotonicity": ""},
+        ]
+
+        valid = validate_request(
+            dataset,
+            {
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": features,
+                "parameters": default_parameters(),
+                "sample_column": "SAMPLE",
+                "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+                "feature_interaction_features": ["PostcodeArea"],
+            },
+        )
+        invalid = validate_request(
+            dataset,
+            {
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": features,
+                "parameters": default_parameters(),
+                "sample_column": "SAMPLE",
+                "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+                "feature_interaction_features": ["Age"],
+            },
+        )
+
+        self.assertTrue(valid.ok, valid.errors)
+        self.assertFalse(invalid.ok)
+        self.assertIn("Age cannot be both isolated and used in a GBM feature interaction pair", invalid.errors)
 
     def test_generated_sample_sidecar_is_reused_for_missing_sample_column(self) -> None:
         data_path = self.root / "no_sample.csv"
@@ -1991,6 +2186,67 @@ COPY (
 
         self.assertFalse(result["ok"])
         self.assertIn("init_score cannot use grid-search braces", "; ".join(result["errors"]))
+
+    def test_training_persists_feature_interaction_pairs(self) -> None:
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            self.skipTest("LightGBM is not installed")
+
+        data_path = self.root / "pair_train.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age,VehicleAge,Segment,PostcodeArea\n"
+            "10,100,30,4,A,AB\n"
+            "20,200,40,5,B,AB\n"
+            "30,300,50,6,A,CD\n"
+            "40,400,60,7,B,CD\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        store = GbmModelStore(data_path)
+        parameters = default_parameters() + [
+            {"name": "num_iterations", "value": 2},
+            {"name": "early_stopping_rounds", "value": 0},
+            {"name": "num_leaves", "value": 3},
+            {"name": "min_data_in_leaf", "value": 1},
+            {"name": "metric", "value": "poisson"},
+            {"name": "objective", "value": "poisson"},
+        ]
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "Pair interactions",
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [
+                    {"name": "Age", "include": True, "monotonicity": ""},
+                    {"name": "VehicleAge", "include": True, "monotonicity": ""},
+                    {"name": "Segment", "include": True, "monotonicity": ""},
+                    {"name": "PostcodeArea", "include": True, "monotonicity": ""},
+                ],
+                "parameters": parameters,
+                "sample_column": "",
+                "shap_rows": "0",
+                "feature_groupings": {"PostcodeArea": "POSTCODE"},
+                "feature_interaction_groupings": ["POSTCODE"],
+                "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+                "feature_interaction_features": ["VehicleAge"],
+            },
+        )
+
+        manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
+        self.assertEqual(
+            manifest["feature_interaction_constraints"],
+            {
+                "mode": "pairs",
+                "pairs": [{"left": "Age", "right": "Segment"}],
+                "groupings": ["POSTCODE"],
+                "groups": [{"grouping": "POSTCODE", "features": ["PostcodeArea"]}],
+                "features": ["VehicleAge"],
+            },
+        )
 
     def test_training_persists_init_score_and_uses_it_for_predictions(self) -> None:
         try:

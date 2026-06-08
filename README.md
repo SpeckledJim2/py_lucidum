@@ -231,6 +231,8 @@ If a Feature Specification is loaded, the Feature table shows its `Grouping` val
 
 Choosing one or more interaction groups constrains the currently selected trainable features in each group so they can only interact with features in the same group, with all other selected features left together in a remainder constraint.
 
+The `Interaction pairs` dropdown lets you add a short allowlist of feature pairs, such as `DRIVER_AGE x VEHICLE_AGE`; adding a pair also selects those two features for training. Pair constraints can be combined with Feature Specification grouping constraints only when the selected groups are disjoint from every paired feature; overlapping groups are rejected because they would reopen interactions beyond the pair allowlist. Singleton feature locks are allowed only for features outside the pair list. Main effects remain available for all selected features, and unlisted pairs cannot appear together on the same LightGBM branch. Pair allowlists are intended for 3-leaf GBM/EBM workflows, though they can be used with normal GBMs too.
+
 When a saved model has both Gain and saved SHAP rows, the Feature table shows a Gain/SHAP toggle and displays one importance metric at a time; SHAP means mean absolute SHAP value over the saved SHAP rows. For saved EBM models, the same toggle also offers `EBM Gain`, replacing the Feature table with a tree-feature-combination gain summary built from the saved tree table.
 
 When an active GBM has both saved predictions and saved SHAP rows, Line and Bar can show `Partial dependancies > SHAP` ribbons for the selected x-axis feature. These ribbons use the same grouping, banding, filter, denominator, low-weight grouping, and response transform as the chart. The ribbon median is scaled to the active GBM fitted prediction mean for the current chart slice, using the selected Weight when present; when `Both` is selected, the GLM line is aligned to the same fitted-mean baseline for direct comparison. Categorical x-axes also offer a SHAP sort ordered by median SHAP.
@@ -256,6 +258,8 @@ During training, the app shows live iteration and train/test metric progress and
 When a GBM is trained directly from a feature scenario, the model records that scenario name and the training-time feature list. Selecting a saved GBM shows the recorded scenario in the dropdown. If `feature_spec.csv` has changed since training, the dropdown marks the recorded scenario as changed or missing while the Feature table still reflects the model's saved feature configuration.
 
 When a GBM is trained with feature interaction constraints, the model records the constrained group names and training-time feature lists. Selecting a saved GBM shows those constraints in the interaction dropdown, shows a lock beside constrained Feature table groupings, and marks stale or missing groupings if `feature_spec.csv` has changed. The Model navigator includes a `Constraints` column, and the saved `tree_table.parquet` can be used to inspect which split features appear along each tree path.
+
+When a GBM is trained with interaction pairs, the model records the allowed pairs and the Model navigator shows `Pairs (n)`. In an active EBM model's `EBM Gain` view, right-click a two-feature row and choose `Allow interaction pair` to seed the pair allowlist before retraining.
 
 ### EBM mode
 

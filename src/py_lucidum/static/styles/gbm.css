@@ -600,6 +600,7 @@
       }
 
       .gbm-interaction-constraint-select,
+      .gbm-interaction-pair-select,
       .gbm-feature-scenario-select {
         flex: 0 0 auto;
         position: relative;
@@ -732,6 +733,96 @@
 
       .gbm-feature-scenario-row-trained {
         cursor: default;
+      }
+
+      .gbm-interaction-pair-menu {
+        gap: 5px;
+        max-width: calc(100vw - 32px);
+        min-width: 440px;
+        width: min(620px, calc(100vw - 32px));
+      }
+
+      .gbm-interaction-pair-builder {
+        align-items: center;
+        display: grid;
+        gap: 5px;
+        grid-template-columns: minmax(180px, 1fr) auto minmax(180px, 1fr) auto;
+      }
+
+      .gbm-interaction-pair-feature {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 650;
+        min-height: 22px;
+        min-width: 0;
+        padding: 2px 4px;
+        width: 100%;
+      }
+
+      .gbm-interaction-pair-times {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .gbm-interaction-pair-add {
+        min-height: 22px;
+      }
+
+      .gbm-interaction-pair-rows {
+        border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        max-height: 150px;
+        overflow: auto;
+        padding-top: 4px;
+      }
+
+      .gbm-interaction-pair-row,
+      .gbm-interaction-pair-empty {
+        align-items: center;
+        color: var(--text);
+        display: flex;
+        font-size: 11px;
+        font-weight: 700;
+        gap: 6px;
+        justify-content: space-between;
+        line-height: 1.2;
+        min-height: 22px;
+      }
+
+      .gbm-interaction-pair-empty {
+        color: var(--muted);
+        justify-content: flex-start;
+      }
+
+      .gbm-interaction-pair-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .gbm-interaction-pair-remove {
+        background: transparent;
+        border: 0;
+        color: var(--muted);
+        cursor: pointer;
+        flex: 0 0 auto;
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 18px;
+        padding: 0 4px;
+      }
+
+      .gbm-interaction-pair-remove:hover,
+      .gbm-interaction-pair-remove:focus-visible {
+        color: var(--danger);
+        outline: none;
       }
 
       .gbm-grouping-value {
@@ -990,6 +1081,19 @@
 
       .gbm-feature-interaction-lock {
         margin-left: 2px;
+      }
+
+      .gbm-pair-interaction-lock {
+        align-items: flex-end;
+        display: inline-flex;
+        gap: 1px;
+        margin-left: 2px;
+      }
+
+      .gbm-interaction-lock-subscript {
+        font-size: 8px;
+        line-height: 1;
+        transform: translateY(1px);
       }
 
       .gbm-feature-kind {

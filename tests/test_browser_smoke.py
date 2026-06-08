@@ -2518,7 +2518,7 @@ COPY (
                     }
                     """
                 )
-                self.assertEqual(initial_constraints["button"], "Trained constraints (1)")
+                self.assertEqual(initial_constraints["button"], "Trained constraint groups (1)")
                 self.assertIn("interact within selected groups", initial_constraints["title"])
                 self.assertIn("OLD (trained; missing from spec)", initial_constraints["rows"])
                 self.assertIn("\U0001f512", initial_constraints["ageGrouping"])
@@ -2549,7 +2549,7 @@ COPY (
                 page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle group interaction constraint").click()
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() === "Constraints (1)"
+                    () => document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() === "Constraint groups (1)"
                       && [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
                         .find((row) => row.textContent.includes("Age"))
                         ?.querySelector(".tabulator-cell[tabulator-field='grouping']")
@@ -2562,7 +2562,7 @@ COPY (
                 page.get_by_role("button", name="Features and parameters").click()
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() === "Constraints (1)"
+                    () => document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() === "Constraint groups (1)"
                       && [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
                         .find((row) => row.textContent.includes("Age"))
                         ?.querySelector(".tabulator-cell[tabulator-field='grouping']")
@@ -3308,7 +3308,7 @@ COPY (
                     "0.22",
                 )
                 self.assertEqual(feature_scenario_state()["value"], "scenario1")
-                self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraints (1)")
+                self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraint groups (1)")
                 assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
                 ebm_metric_state = page.evaluate(
@@ -3357,7 +3357,11 @@ COPY (
                 ebm_dim2_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
                     "(items) => items.map((item) => item.textContent.trim())"
                 )
-                self.assertEqual(ebm_dim2_context_labels, ["Go to SHAP"])
+                self.assertEqual(ebm_dim2_context_labels, ["Allow interaction pair", "Go to SHAP"])
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Allow interaction pair").click()
+                self.assertEqual(page.locator("#gbmFeatureInteractionPairButton").text_content(), "Interaction pairs (1)")
+                page.locator("#gbmEbmGainSummaryGrid .tabulator-row", has_text="Age x Segment").click(button="right")
+                page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST", timeout=10_000):
                     page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to SHAP").click()
                 page.wait_for_function(
@@ -3606,19 +3610,72 @@ COPY (
 
                 page.route("**/api/gbm/train", train_route)
                 page.route("**/api/gbm/jobs/live-job", job_route)
-                choose_feature_scenario("scenario1")
+                self.assertEqual(page.locator("#gbmFeatureInteractionPairButton").text_content(), "Interaction pairs")
+                self.assertFalse(page.locator("#gbmFeatureInteractionPairButton").is_disabled())
+                page.locator("#gbmFeatureInteractionPairButton").click()
+                page.locator("#gbmInteractionPairLeft").select_option("Age")
+                page.locator("#gbmInteractionPairRight").select_option("Segment")
+                page.locator("#gbmInteractionPairAdd").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#gbmFeatureInteractionPairButton')?.textContent.trim() === 'Interaction pairs (1)'",
+                    timeout=10_000,
+                )
+                page.keyboard.press("Escape")
+                page.wait_for_function(
+                    "() => document.querySelector('#gbmFeatureInteractionPairMenu')?.classList.contains('hidden')",
+                    timeout=10_000,
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const lockState = (name) => {
+                        const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                          .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes(name));
+                        const cell = row?.querySelector(".tabulator-cell[tabulator-field='name']");
+                        return {
+                          pair: Boolean(cell?.querySelector(".gbm-pair-interaction-lock")),
+                          singleton: Boolean(cell?.querySelector(".gbm-feature-interaction-lock")),
+                          subscript: cell?.querySelector(".gbm-pair-interaction-lock .gbm-interaction-lock-subscript")?.textContent.trim() || "",
+                        };
+                      };
+                      const age = lockState("Age");
+                      const segment = lockState("Segment");
+                      return age.pair && !age.singleton && age.subscript === "2"
+                        && segment.pair && !segment.singleton && segment.subscript === "2";
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#gbmFeatureGrid .tabulator-row", has_text="Segment").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle interaction constraint").click()
-                page.locator("#gbmFeatureInteractionConstraintButton").click()
-                page.locator('[data-gbm-interaction-grouping="VEHICLE"]').check()
-                self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraints (1)")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
+                      const featureCell = (name) => rows
+                        .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes(name))
+                        ?.querySelector(".tabulator-cell[tabulator-field='name']");
+                      const ageCell = featureCell("Age");
+                      const segmentCell = featureCell("Segment");
+                      return Boolean(ageCell?.querySelector(".gbm-pair-interaction-lock"))
+                        && !ageCell?.querySelector(".gbm-feature-interaction-lock")
+                        && Boolean(segmentCell?.querySelector(".gbm-feature-interaction-lock"))
+                        && !segmentCell?.querySelector(".gbm-pair-interaction-lock");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Segment").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle interaction constraint").click()
                 page.wait_for_function(
                     """
                     () => {
                       const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
-                        .find((item) => item.textContent.includes("Segment"));
-                      return (row?.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent || "").includes("\\uD83D\\uDD12")
-                        && (row?.querySelector(".tabulator-cell[tabulator-field='grouping']")?.textContent || "").includes("\\uD83D\\uDD12");
+                        .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes("Segment"));
+                      const cell = row?.querySelector(".tabulator-cell[tabulator-field='name']");
+                      return Boolean(cell?.querySelector(".gbm-pair-interaction-lock"))
+                        && !cell?.querySelector(".gbm-feature-interaction-lock")
+                        && cell?.querySelector(".gbm-interaction-lock-subscript")?.textContent.trim() === "2";
                     }
                     """,
                     timeout=10_000,
@@ -3626,12 +3683,13 @@ COPY (
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmTrainingStatus").get_by_text("training, tree 2/10, test gamma 7.2").wait_for(timeout=10_000)
                 page.locator("#startupProgress.ready", has_text="Training GBM (1/25)...").wait_for(timeout=10_000)
-                self.assertEqual(
-                    train_payload["value"]["feature_scenario"],
-                    {"name": "scenario1", "features": ["Age", "Segment"]},
-                )
-                self.assertEqual(train_payload["value"]["feature_interaction_groupings"], ["VEHICLE"])
-                self.assertEqual(train_payload["value"]["feature_interaction_features"], ["Segment"])
+                self.assertNotIn("feature_scenario", train_payload["value"])
+                self.assertEqual(train_payload["value"]["feature_interaction_pairs"], [{"left": "Age", "right": "Segment"}])
+                self.assertNotIn("feature_interaction_groupings", train_payload["value"])
+                self.assertNotIn("feature_interaction_features", train_payload["value"])
+                trained_features = {feature["name"]: feature for feature in train_payload["value"]["features"]}
+                self.assertTrue(trained_features["Age"]["include"])
+                self.assertTrue(trained_features["Segment"]["include"])
                 page.wait_for_function(
                     """
                     () => {
