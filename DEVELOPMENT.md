@@ -32,7 +32,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `src/py_lucidum/static/app.css` is the stable linked CSS entrypoint and import manifest. Split styles live under `src/py_lucidum/static/styles/`; `foundations.css` and `controls.css` own shared primitives, while shell/tool files own boundary-specific selectors.
 - Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/`. Core ECharts and Leaflet are loaded locally from `index.html` because the default app tools need them at startup. GLM lazy-loads Ace for formula editing. GBM lazy-loads Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
 
-Tool code should depend on `core` and the app registration context, but tools should not depend on each other. Shared behavior should move into `core` or another shared module only when there is real reuse.
+Tool packages own their training, validation, persistence, routes, and artifacts. GLM and GBM intentionally publish model outputs through the shared `data_sources` contract, and Line/Bar intentionally consumes those outputs for prediction plotting, GBM SHAP ribbons, and GLM overlays. Optional modelling dependencies must still be imported lazily and must not become base app imports. Shared reusable logic should move into `core`, `static/app/shared/`, or a modelling/shared backend helper when there is real reuse.
 
 Frontend tools should prefer a `createXTool({ deps })` factory. Data-driven tools should expose `buildRequest`, `fetchData`, `useCached`, and render/lifecycle methods where applicable, with shared shell behavior kept in `main.js` or `static/app/shared/`. GLM/GBM model UI helpers that are genuinely common, such as polling cadence, model-list grouping, fallback selection, action button state, resize observation, and empty/status HTML, live in `src/py_lucidum/static/app/shared/model-ui.js`.
 New frontend tool styles should live in a tool-owned file under `static/styles/`; move reusable tokens, layout primitives, and shared controls into `foundations.css` or `controls.css` instead of duplicating them.
@@ -307,6 +307,7 @@ node --check src/py_lucidum/static/app/shared/api.js
 node --check src/py_lucidum/static/app/shared/format.js
 node --check src/py_lucidum/static/app/shared/model-ui.js
 node --check src/py_lucidum/static/app/shared/schema.js
+node --check src/py_lucidum/static/app/shared/tabulator.js
 node --check src/py_lucidum/static/app/shared/timing.js
 node --check src/py_lucidum/static/app/glm-tool.js
 node --check src/py_lucidum/static/app/glm-formula-builder.js
@@ -356,7 +357,7 @@ The current test suite should cover:
 
 ## Future Work
 
-- GLM should become an independently registered modelling tool without coupling directly to Line/Bar internals.
+- Reduce private-helper imports between modelling and chart code by formalizing shared modelling/chart contracts where reuse is stable, while preserving intentional Line/Bar consumption of GLM/GBM model outputs.
 - Future modelling routes, query code, and frontend assets should live inside their tool packages unless shared behavior emerges.
 - Model outputs that need plotting should publish tabular artifacts through the shared data-source contract so Line/Bar can plot them without knowing model-specific concepts such as SHAP, residuals, or lift tables.
 - Performance tests should be opt-in and target generated large datasets where practical, measuring schema load, aggregation time, repeat-query time, memory use, returned row count, and payload size.
