@@ -50,6 +50,8 @@ This file records the refactor order for `py_lucidum`. Each phase should be done
 
 ### 5. Backend Route Thinning
 
+**Status:** Completed on 2026-06-08.
+
 - Split GBM route helper/config logic out of `src/py_lucidum/tools/gbm/routes.py`.
 - Keep routes focused on auth, request parsing, error mapping, and dispatch.
 - Preserve all existing HTTP API shapes.
