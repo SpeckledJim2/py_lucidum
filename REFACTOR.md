@@ -72,6 +72,10 @@ This file records the refactor order for `py_lucidum`. Each phase should be done
 
 ### 7. GBM Frontend Split
 
+**Status:** Completed on 2026-06-08.
+
+**Decision:** GBM frontend behavior is split into focused ES modules for feature/parameter controls, the training evaluation chart, the model navigator, and tab orchestration. `gbm-tool.js` now keeps high-level render flow, API mutation, and cross-tool invalidation responsibilities.
+
 - Split `gbm-tool.js` into focused modules:
   - Feature and parameter controls.
   - Training/evaluation chart.

@@ -1,20 +1,20 @@
 import { createGbmTreeViewer } from "./gbm-tree-viewer.js";
+import { createGbmEvaluationChart } from "./gbm-evaluation-chart.js";
+import { createGbmParameterControls } from "./gbm-feature-parameter-controls.js";
+import { createGbmModelNavigator } from "./gbm-model-navigator.js";
 import { createGbmShapTool } from "./gbm-shap-tool.js";
 import { createGbmStackedShapTool } from "./gbm-stacked-shap-tool.js";
+import { bindGbmTabs, gbmPanelClass, gbmTabsHtml, syncGbmRenderedTab } from "./gbm-tab-orchestration.js";
 import { loadTabulator } from "./shared/tabulator.js";
 import {
-  bindFallbackModelSelection,
   createSidebarModelHeading,
   createSidebarModelOption,
   emptyStateHtml,
-  formatModelCreated as sharedFormatModelCreated,
   formatModelMetric as sharedFormatModelMetric,
   isModelJobPending,
-  modelCreatedSort as sharedModelCreatedSort,
   modelGroups,
   modelJobPollDelay,
   modelNumberOrNull as sharedModelNumberOrNull,
-  observeResize,
   restoreModelSelection as restoreSharedModelSelection,
   selectedModelIdsFromTableOrFallback,
   setInlinePhaseStatus,
@@ -23,53 +23,9 @@ import {
   toggleSidebarModelGroup,
 } from "./shared/model-ui.js";
 
-const GBM_PARAMETER_OPTIONS = {
-  objective: [
-    "regression",
-    "regression_l1",
-    "huber",
-    "fair",
-    "poisson",
-    "quantile",
-    "mape",
-    "gamma",
-    "tweedie",
-    "binary",
-    "cross_entropy",
-    "cross_entropy_lambda",
-  ],
-  metric: [
-    "l1",
-    "l2",
-    "rmse",
-    "quantile",
-    "mape",
-    "huber",
-    "fair",
-    "poisson",
-    "gamma",
-    "gamma_deviance",
-    "tweedie",
-    "auc",
-    "average_precision",
-    "binary_logloss",
-    "binary_error",
-    "cross_entropy",
-    "cross_entropy_lambda",
-    "kullback_leibler",
-    "r2",
-  ],
-  data_sample_strategy: [
-    "bagging",
-    "goss",
-  ],
-};
-
 const GBM_RUNNING_POLL_MS = 500;
 const GBM_QUEUED_POLL_MS = 1000;
 const GBM_MODEL_LIST_POLL_MS = 2000;
-const GBM_EVALUATION_DOWNSAMPLE_THRESHOLD = 2000;
-const GBM_EVALUATION_MAX_PLOT_POINTS = 1500;
 const GBM_GRID_SAMPLE_DEFAULT = 25;
 
 function gbmAutoModelTimeLabel(date = new Date()) {
@@ -183,9 +139,20 @@ export function createGbmTool({
   let liveEvaluationParameters = null;
   let gridSampleValue = GBM_GRID_SAMPLE_DEFAULT;
   let gridTrainingNotice = "";
-  let evaluationChart = null;
-  let evaluationResizeObserver = null;
-  let evaluationViewMode = "all";
+  const evaluationChart = createGbmEvaluationChart({ escapeHtml, formatEvaluationValue });
+  const parameterControls = createGbmParameterControls({
+    escapeHtml,
+    parameterOptions: () => config?.parameter_options || {},
+  });
+  const modelNavigator = createGbmModelNavigator({
+    escapeHtml,
+    formatModelMetric,
+    modelInteractionConstraintLabel,
+    modelLabel,
+    normaliseModel,
+    uniqueModels,
+    onFallbackSelectionChange: () => syncModelActionButtons(),
+  });
   let featureMetricMode = "gain";
   let featureMetricModelId = "";
   let featureToolbarOutsideClickBound = false;
@@ -293,7 +260,7 @@ export function createGbmTool({
     const mount = el("modelToolWrap");
     if (!mount) return;
     closeGbmFeatureContextMenu();
-    disposeEvaluationChart();
+    evaluationChart.dispose();
     treeViewer.dispose();
     shapTool.dispose();
     stackedShapTool.dispose();
@@ -302,15 +269,11 @@ export function createGbmTool({
         <div id="gbmNotice" class="gbm-notice hidden" role="alert" aria-live="polite"></div>
         <div class="gbm-toolbar">
           <div class="gbm-tabs tabs workspace-tabs">
-            <button class="tab ${activeTab === "features" ? "active" : ""}" type="button" data-gbm-tab="features">Features and parameters</button>
-            <button class="tab ${activeTab === "models" ? "active" : ""}" type="button" data-gbm-tab="models">Model navigator</button>
-            <button class="tab ${activeTab === "shap" ? "active" : ""}" type="button" data-gbm-tab="shap">SHAP</button>
-            <button class="tab ${activeTab === "stacked-shap" ? "active" : ""}" type="button" data-gbm-tab="stacked-shap">Stacked SHAP</button>
-            <button class="tab ${activeTab === "trees" ? "active" : ""}" type="button" data-gbm-tab="trees">Tree viewer</button>
+            ${gbmTabsHtml(activeTab)}
           </div>
           <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${trainingStatusHtml(liveProgress)}</div>
         </div>
-        <div class="gbm-tab-panel ${activeTab === "features" ? "" : "hidden"}" data-gbm-panel="features">
+        <div class="${gbmPanelClass(activeTab, "features")}" data-gbm-panel="features">
           <div class="gbm-feature-layout">
             <section class="gbm-panel-section gbm-grid-panel">
               <div class="gbm-section-header gbm-feature-section-header">
@@ -365,7 +328,7 @@ export function createGbmTool({
             </section>
           </div>
         </div>
-        <div class="gbm-tab-panel ${activeTab === "models" ? "" : "hidden"}" data-gbm-panel="models">
+        <div class="${gbmPanelClass(activeTab, "models")}" data-gbm-panel="models">
           <div class="gbm-model-navigator">
             <div class="gbm-model-actions" role="group" aria-label="GBM model actions">
               <button id="gbmRenameModelBtn" class="tab gbm-inline-action-button" type="button">Rename</button>
@@ -376,7 +339,7 @@ export function createGbmTool({
             <div id="gbmModelFallback" class="gbm-fallback-table"></div>
           </div>
         </div>
-        <div class="gbm-tab-panel ${activeTab === "trees" ? "" : "hidden"}" data-gbm-panel="trees">
+        <div class="${gbmPanelClass(activeTab, "trees")}" data-gbm-panel="trees">
           <div id="gbmTreeViewer" class="gbm-tree-viewer">
             <section class="gbm-panel-section gbm-tree-summary-panel">
               <div class="gbm-tree-section-header">
@@ -413,10 +376,10 @@ export function createGbmTool({
             </section>
           </div>
         </div>
-        <div class="gbm-tab-panel ${activeTab === "shap" ? "" : "hidden"}" data-gbm-panel="shap">
+        <div class="${gbmPanelClass(activeTab, "shap")}" data-gbm-panel="shap">
           ${shapTool.shellHtml()}
         </div>
-        <div class="gbm-tab-panel ${activeTab === "stacked-shap" ? "" : "hidden"}" data-gbm-panel="stacked-shap">
+        <div class="${gbmPanelClass(activeTab, "stacked-shap")}" data-gbm-panel="stacked-shap">
           ${stackedShapTool.shellHtml()}
         </div>
       </div>
@@ -505,7 +468,7 @@ export function createGbmTool({
   }
 
   function evaluationViewModeHtml() {
-    const selected = normaliseEvaluationViewMode(evaluationViewMode);
+    const selected = normaliseEvaluationViewMode(evaluationChart.getViewMode());
     return `
       <div id="gbmEvaluationViewMode" class="gbm-evaluation-view-mode" role="radiogroup" aria-label="Evaluation Log view">
         <label class="gbm-evaluation-view-option">
@@ -584,24 +547,18 @@ export function createGbmTool({
   }
 
   function bindTabs(mount) {
-    for (const button of mount.querySelectorAll("[data-gbm-tab]")) {
-      button.addEventListener("click", () => {
-        closeGbmFeatureContextMenu();
-        const nextTab = button.dataset.gbmTab;
-        activeTab = nextTab;
-        render(config || {});
-        if (nextTab === "models") refreshModelList({ force: true });
-      });
-    }
+    bindGbmTabs(mount, selectTab);
+  }
+
+  function selectTab(nextTab) {
+    closeGbmFeatureContextMenu();
+    activeTab = nextTab;
+    render(config || {});
+    if (nextTab === "models") refreshModelList({ force: true });
   }
 
   function syncRenderedTab(mount, nextTab) {
-    for (const button of mount.querySelectorAll("[data-gbm-tab]")) {
-      button.classList.toggle("active", button.dataset.gbmTab === nextTab);
-    }
-    for (const panel of mount.querySelectorAll("[data-gbm-panel]")) {
-      panel.classList.toggle("hidden", panel.dataset.gbmPanel !== nextTab);
-    }
+    syncGbmRenderedTab(mount, nextTab);
   }
 
   function openModelNavigator() {
@@ -1677,7 +1634,7 @@ export function createGbmTool({
     for (const input of document.querySelectorAll("input[name='gbmEvaluationViewMode']")) {
       input.addEventListener("change", () => {
         if (!input.checked) return;
-        evaluationViewMode = normaliseEvaluationViewMode(input.value);
+        evaluationChart.setViewMode(normaliseEvaluationViewMode(input.value));
         rerenderEvaluationChart();
       });
     }
@@ -2656,158 +2613,51 @@ export function createGbmTool({
   }
 
   function parameterOptionsForName(name) {
-    const parameterName = String(name || "");
-    const configured = config?.parameter_options?.[parameterName];
-    const options = Array.isArray(configured) && configured.length
-      ? configured
-      : GBM_PARAMETER_OPTIONS[parameterName] || [];
-    const normalised = options.map(normaliseParameterOption);
-    return parameterName === "init_score"
-      ? initScoreParameterOptions(normalised)
-      : normalised.sort(compareParameterOption);
-  }
-
-  function normaliseParameterOption(option) {
-    if (option && typeof option === "object") {
-      const value = String(option.value ?? "");
-      return {
-        value,
-        label: String(option.label ?? value),
-        kind: String(option.kind ?? ""),
-        disabled: Boolean(option.disabled),
-      };
-    }
-    const value = String(option);
-    return { value, label: value, kind: "", disabled: false };
-  }
-
-  function compareParameterOption(left, right) {
-    if (left.value === "none") return -1;
-    if (right.value === "none") return 1;
-    return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
-  }
-
-  function initScoreParameterOptions(options) {
-    const none = options.filter((option) => option.value === "none").sort(compareParameterOption);
-    const glms = options.filter((option) => option.value !== "none" && option.kind === "glm_prediction").sort(compareParameterOption);
-    const columns = options.filter((option) => option.kind === "dataset_column").sort(compareParameterOption);
-    const other = options
-      .filter((option) => option.value !== "none" && option.kind !== "glm_prediction" && option.kind !== "dataset_column")
-      .sort(compareParameterOption);
-    return [...none, ...glms, ...columns, ...other];
-  }
-
-  function groupedInitScoreOptions(options) {
-    const enabled = options.filter((option) => !option.disabled);
-    const none = enabled.filter((option) => option.value === "none");
-    const glms = enabled.filter((option) => option.value !== "none" && option.kind === "glm_prediction").sort(compareParameterOption);
-    const columns = enabled.filter((option) => option.kind === "dataset_column").sort(compareParameterOption);
-    const groups = [...none];
-    if (glms.length) groups.push({ label: "GLM PREDICTIONS", options: glms });
-    if (columns.length) groups.push({ label: "DATASET COLUMNS", options: columns });
-    return groups;
+    return parameterControls.optionsForName(name);
   }
 
   function parameterEditorValues(name) {
-    const parameterName = String(name || "");
-    const options = parameterOptionsForName(parameterName).filter((option) => !option.disabled);
-    if (parameterName === "init_score") return groupedInitScoreOptions(options);
-    const values = {};
-    for (const option of options) values[option.value] = option.label;
-    return values;
+    return parameterControls.editorValues(name);
   }
 
   function parameterOptionByValue(name, value) {
-    const text = String(value ?? "");
-    return parameterOptionsForName(name).find((option) => option.value === text) || null;
+    return parameterControls.optionByValue(name, value);
   }
 
   function parameterValueDisplay(name, value) {
-    return parameterOptionByValue(name, value)?.label || String(value ?? "");
+    return parameterControls.valueDisplay(name, value);
   }
 
   function parameterValueFormatter(cell) {
-    const rowData = cell.getRow().getData();
-    return escapeHtml(parameterValueDisplay(rowData.name, cell.getValue()));
+    return parameterControls.valueFormatter(cell);
   }
 
   function parameterValueEditorParams() {
-    return {
-      editorLookup: parameterValueEditorLookup,
-      paramsLookup: parameterValueEditorParamsLookup,
-    };
+    return parameterControls.valueEditorParams();
   }
 
   function parameterValueEditorLookup(cell) {
-    const rowData = cell.getRow().getData();
-    return parameterOptionsForName(rowData.name).filter((option) => !option.disabled).length ? "list" : "input";
+    return parameterControls.valueEditorLookup(cell);
   }
 
   function parameterValueEditorParamsLookup(editor, cell) {
-    const rowData = cell.getRow().getData();
-    const label = String(rowData.name || "Parameter value");
-    const elementAttributes = {
-      "aria-label": label,
-      class: `gbm-parameter-editor gbm-parameter-${editor}-editor`,
-    };
-    if (editor === "list") {
-      return {
-        values: parameterEditorValues(rowData.name),
-        autocomplete: true,
-        freetext: true,
-        listOnEmpty: true,
-        elementAttributes,
-      };
-    }
-    return {
-      selectContents: true,
-      elementAttributes,
-    };
+    return parameterControls.valueEditorParamsLookup(editor, cell);
   }
 
   function parameterControlHtml(parameter) {
-    const name = String(parameter.name || "");
-    const value = String(parameter.value ?? "");
-    const options = parameterOptionsForName(name);
-    if (!options.length) {
-      return `<input data-gbm-parameter="${escapeHtml(name)}" value="${escapeHtml(value)}" />`;
-    }
-    const hasCurrentValue = options.some((option) => option.value === value);
-    const renderedOptions = hasCurrentValue
-      ? options
-      : [{ value, label: `${value} (missing)`, disabled: true }, ...options];
-    return `
-      <select data-gbm-parameter="${escapeHtml(name)}" aria-label="${escapeHtml(name)}">
-        ${parameterSelectOptionsHtml(name, renderedOptions, value)}
-      </select>
-    `;
+    return parameterControls.controlHtml(parameter);
   }
 
   function parameterSelectOptionsHtml(name, options, value) {
-    if (String(name || "") !== "init_score") {
-      return options.map((option) => parameterOptionHtml(option, value)).join("");
-    }
-    const none = options.filter((option) => option.value === "none");
-    const glms = options.filter((option) => option.value !== "none" && option.kind === "glm_prediction").sort(compareParameterOption);
-    const columns = options.filter((option) => option.kind === "dataset_column").sort(compareParameterOption);
-    const other = options
-      .filter((option) => option.value !== "none" && option.kind !== "glm_prediction" && option.kind !== "dataset_column")
-      .sort(compareParameterOption);
-    return [
-      ...none.map((option) => parameterOptionHtml(option, value)),
-      parameterOptgroupHtml("GLM PREDICTIONS", glms, value),
-      parameterOptgroupHtml("DATASET COLUMNS", columns, value),
-      ...other.map((option) => parameterOptionHtml(option, value)),
-    ].filter(Boolean).join("");
+    return parameterControls.selectOptionsHtml(name, options, value);
   }
 
   function parameterOptgroupHtml(label, options, value) {
-    if (!options.length) return "";
-    return `<optgroup label="${escapeHtml(label)}">${options.map((option) => parameterOptionHtml(option, value)).join("")}</optgroup>`;
+    return parameterControls.optgroupHtml(label, options, value);
   }
 
   function parameterOptionHtml(option, value) {
-    return `<option value="${escapeHtml(option.value)}" ${option.value === value ? "selected" : ""} ${option.disabled ? "disabled" : ""}>${escapeHtml(option.label)}</option>`;
+    return parameterControls.optionHtml(option, value);
   }
 
   function bindGridSampleInput() {
@@ -2853,26 +2703,7 @@ export function createGbmTool({
   }
 
   function modelRows(models) {
-    return uniqueModels(models.map(normaliseModel).filter((model) => model.model_id)).map((model) => ({
-      ...model,
-      model_label: modelLabel(model),
-      created_sort: modelCreatedSort(model.created_at),
-      created_display: formatModelCreated(model.created_at),
-      weight_display: modelWeightLabel(model.offset_column),
-      training_mode_display: model.training_mode === "ebm" ? "EBM" : "Normal",
-      constraint_display: modelInteractionConstraintLabel(model.feature_interaction_constraints),
-      best_training_metric: modelBestMetric(model, "training"),
-      best_test_metric: modelBestMetric(model, "test"),
-      param_num_iterations: modelParameterNumber(model, "num_iterations"),
-      param_learning_rate: modelParameterNumber(model, "learning_rate"),
-      param_num_leaves: modelParameterNumber(model, "num_leaves"),
-      param_max_depth: modelParameterNumber(model, "max_depth"),
-      param_min_data_in_leaf: modelParameterNumber(model, "min_data_in_leaf"),
-      param_early_stopping_rounds: modelParameterNumber(model, "early_stopping_rounds"),
-      runtime_seconds: modelRuntimeSeconds(model),
-      runtime_display: formatModelRuntime(model),
-      sample_display: formatSampleMode(model.sample_column, model.sample_source),
-    }));
+    return modelNavigator.rows(models);
   }
 
   function modelInteractionConstraintLabel(rawConstraints) {
@@ -2883,130 +2714,47 @@ export function createGbmTool({
   }
 
   function renderModelFallback(models) {
-    const target = el("gbmModelFallback");
-    if (!target) return;
-    if (!models.length) {
-      target.innerHTML = emptyStateHtml("No GBMs trained yet", "gbm-empty-state", escapeHtml);
-      return;
-    }
-    target.innerHTML = `
-      <table class="gbm-model-table">
-        <thead>
-          <tr>
-            <th class="gbm-model-active-heading" aria-label="Active model"></th>
-            <th>Model</th>
-            <th>Created</th>
-            <th>Response</th>
-            <th>Weight</th>
-            <th>Objective</th>
-            <th>Metric</th>
-            <th>Mode</th>
-            <th>Constraints</th>
-            <th class="numeric">Train</th>
-            <th class="numeric">Best iter.</th>
-            <th class="numeric compact" title="Training metric at best iteration">tr@best</th>
-            <th class="numeric compact" title="Test metric at best iteration">te@best</th>
-            <th class="numeric compact" title="num_iterations">n_iter</th>
-            <th class="numeric compact" title="learning_rate">lr</th>
-            <th class="numeric compact" title="num_leaves">leaves</th>
-            <th class="numeric compact" title="max_depth">depth</th>
-            <th class="numeric compact" title="min_data_in_leaf">min_leaf</th>
-            <th class="numeric compact" title="early_stopping_rounds">ES</th>
-            <th class="numeric">Run time</th>
-            <th>Sample</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${models.map((model) => `
-            <tr data-gbm-model-row="${escapeHtml(model.model_id)}" aria-selected="false">
-              <td class="gbm-model-active-cell">
-                ${model.active ? '<span class="gbm-model-active-dot" title="Active model" aria-label="Active model"></span>' : ""}
-              </td>
-              <td class="gbm-model-name-cell">
-                <span class="gbm-model-name-main">${escapeHtml(model.model_label)}</span>
-              </td>
-              <td>${escapeHtml(model.created_display)}</td>
-              <td>${escapeHtml(model.response_column)}</td>
-              <td>${escapeHtml(model.weight_display)}</td>
-              <td>${escapeHtml(model.objective || "")}</td>
-              <td>${escapeHtml(model.metric || "")}</td>
-              <td>${escapeHtml(model.training_mode_display)}</td>
-              <td>${escapeHtml(model.constraint_display)}</td>
-              <td class="numeric">${formatModelCount(model.training_rows)}</td>
-              <td class="numeric">${formatModelCount(model.best_iteration)}</td>
-              <td class="numeric">${escapeHtml(formatModelMetric(model.best_training_metric))}</td>
-              <td class="numeric">${escapeHtml(formatModelMetric(model.best_test_metric))}</td>
-              <td class="numeric">${escapeHtml(formatModelInteger(model.param_num_iterations))}</td>
-              <td class="numeric">${escapeHtml(formatModelDecimal(model.param_learning_rate))}</td>
-              <td class="numeric">${escapeHtml(formatModelInteger(model.param_num_leaves))}</td>
-              <td class="numeric">${escapeHtml(formatModelInteger(model.param_max_depth))}</td>
-              <td class="numeric">${escapeHtml(formatModelInteger(model.param_min_data_in_leaf))}</td>
-              <td class="numeric">${escapeHtml(formatModelInteger(model.param_early_stopping_rounds))}</td>
-              <td class="numeric">${escapeHtml(model.runtime_display)}</td>
-              <td>${escapeHtml(model.sample_display)}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    `;
-    const rows = Array.from(target.querySelectorAll("[data-gbm-model-row]"));
-    bindFallbackModelSelection(rows, syncModelActionButtons);
+    modelNavigator.renderFallback(el("gbmModelFallback"), models);
   }
 
   function formatModelCount(value) {
-    const number = Number(value);
-    return Number.isFinite(number) && number > 0 ? Math.round(number).toLocaleString() : "0";
+    return modelNavigator.count(value);
   }
 
   function modelParameterNumber(model, name) {
-    const parameters = model?.parameters && typeof model.parameters === "object" ? model.parameters : {};
-    return modelNumberOrNull(parameters[name]);
+    return modelNavigator.parameterNumber(model, name);
   }
 
   function formatModelInteger(value) {
-    const number = Number(value);
-    return Number.isFinite(number) ? Math.round(number).toLocaleString() : "--";
+    return modelNavigator.integer(value);
   }
 
   function formatModelDecimal(value) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return "--";
-    return number.toLocaleString(undefined, { maximumSignificantDigits: 4 });
+    return modelNavigator.decimal(value);
   }
 
   function modelRuntimeSeconds(model) {
-    const seconds = Number(model?.timings?.training_seconds ?? model?.training_seconds);
-    return Number.isFinite(seconds) && seconds >= 0 ? seconds : -1;
+    return modelNavigator.runtimeSeconds(model);
   }
 
   function formatModelRuntime(model) {
-    const seconds = modelRuntimeSeconds(model);
-    if (seconds < 0) return "--";
-    if (seconds < 1) return `${Math.round(seconds * 1000).toLocaleString()}ms`;
-    if (seconds < 60) return `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })}s`;
-    const minutes = Math.floor(seconds / 60);
-    const remainder = Math.round(seconds % 60);
-    return `${minutes}m ${remainder.toString().padStart(2, "0")}s`;
+    return modelNavigator.runtime(model);
   }
 
   function formatModelCreated(value) {
-    return sharedFormatModelCreated(value);
+    return modelNavigator.created(value);
   }
 
   function modelCreatedSort(value) {
-    return sharedModelCreatedSort(value);
+    return modelNavigator.createdSort(value);
   }
 
   function formatSampleMode(value, source = "") {
-    const text = String(value || "").trim();
-    if (!text) return "All rows";
-    if (String(source || "").trim() === "generated") return "Generated 60/20/20";
-    return text;
+    return modelNavigator.sampleMode(value, source);
   }
 
   function modelWeightLabel(value) {
-    const text = String(value || "").trim();
-    return !text || text === "__none__" || text === "Average row value" ? "N" : text;
+    return modelNavigator.weightLabel(value);
   }
 
   function bindModelActions() {
@@ -3406,457 +3154,7 @@ export function createGbmTool({
   }
 
   function renderEvaluationChart(source = null) {
-    const target = el("gbmEvaluationChart");
-    const detail = source || activeDetail;
-    const evaluation = detail?.training_log?.evaluation || detail?.evaluation;
-    if (!target || !window.echarts || !evaluation) return;
-    const rows = [];
-    for (const [datasetName, metrics] of Object.entries(evaluation)) {
-      for (const [metricName, values] of Object.entries(metrics)) {
-        rows.push({ datasetName, metricName, values });
-      }
-    }
-    if (!rows.length) return;
-    rows.sort(compareEvaluationRows);
-    const metricNames = new Set(rows.map((row) => row.metricName));
-    const primaryMetric = String(detail?.manifest?.metric || detail?.metric || rows[0]?.metricName || "metric");
-    const maxIteration = Math.max(1, ...rows.map((row) => row.values.length));
-    const xMax = evaluationXAxisMax(maxIteration, detail?.progress || null);
-    const xDomain = evaluationXDomain(maxIteration, detail, xMax);
-    const xInterval = niceIterationInterval(evaluationXDomainSpan(xDomain));
-    const xLabelInterval = niceIterationLabelInterval(evaluationXDomainSpan(xDomain));
-    const yAxisBounds = evaluationYAxisBounds(rows, maxIteration, primaryMetric, detail, xDomain);
-    const sampledEvaluationIndexes = evaluationSampledIndexes(rows, maxIteration, detail?.manifest || {}, detail?.progress || null, xDomain);
-    const title = evaluationTitle(rows, primaryMetric, detail?.manifest || {}, detail?.progress || null);
-    const textColor = cssVar("--text", "#3f3f46");
-    const mutedColor = cssVar("--muted", "#4b5563");
-    const lineColor = cssVar("--line", "#e5e7eb");
-    const panelColor = cssVar("--panel", "#ffffff");
-    if (!evaluationChart) {
-      evaluationChart = window.echarts.init(target);
-      bindEvaluationResize(target);
-    }
-    evaluationChart.setOption({
-      animation: false,
-      color: ["#ff140f", cssVar("--actual-line", "#050505"), "#2563eb", "#7c3aed"],
-      title: {
-        text: title,
-        left: "center",
-        top: 8,
-        textStyle: { color: textColor, fontSize: 12, fontWeight: 800, lineHeight: 15 },
-      },
-      legend: {
-        orient: "vertical",
-        right: 8,
-        top: "middle",
-        itemWidth: 10,
-        itemHeight: 10,
-        textStyle: { color: textColor, fontSize: 12 },
-      },
-      tooltip: {
-        trigger: "axis",
-        backgroundColor: panelColor,
-        borderColor: lineColor,
-        textStyle: { color: textColor },
-        formatter: (params) => evaluationTooltipFormatter(params),
-      },
-      grid: { left: 12, right: 82, top: 42, bottom: 20, containLabel: true },
-      xAxis: {
-        type: "value",
-        min: xDomain.min,
-        max: xDomain.max,
-        interval: xInterval,
-        axisLabel: { color: mutedColor, hideOverlap: false, margin: 4, formatter: (value) => evaluationIterationAxisLabel(value, xLabelInterval) },
-        axisLine: { lineStyle: { color: mutedColor } },
-        splitLine: { lineStyle: { color: lineColor } },
-      },
-      yAxis: {
-        type: "value",
-        scale: true,
-        ...yAxisBounds,
-        splitNumber: 4,
-        axisLabel: { color: mutedColor, formatter: (value) => formatEvaluationAxisValue(value) },
-        axisLine: { show: true, lineStyle: { color: mutedColor } },
-        splitLine: { lineStyle: { color: lineColor } },
-      },
-      series: rows.map((row) => ({
-        name: evaluationSeriesName(row, metricNames.size > 1),
-        type: "line",
-        showSymbol: true,
-        symbol: "circle",
-        symbolSize: 4,
-        lineStyle: { width: 2 },
-        data: evaluationSeriesData(row.values, sampledEvaluationIndexes),
-      })),
-    }, true);
-    requestAnimationFrame(() => evaluationChart?.resize());
-  }
-
-  function evaluationSeriesName(row, includeMetric) {
-    const dataset = String(row.datasetName || "").toLowerCase() === "training" ? "train" : String(row.datasetName || "series");
-    return includeMetric ? `${dataset} ${row.metricName}` : dataset;
-  }
-
-  function compareEvaluationRows(left, right) {
-    const leftOrder = evaluationDatasetOrder(left.datasetName);
-    const rightOrder = evaluationDatasetOrder(right.datasetName);
-    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
-    return String(left.metricName).localeCompare(String(right.metricName));
-  }
-
-  function evaluationDatasetOrder(datasetName) {
-    const name = String(datasetName || "").toLowerCase();
-    if (name === "training" || name === "train") return 0;
-    if (name === "test" || name === "validation" || name === "valid") return 1;
-    return 2;
-  }
-
-  function evaluationTitle(rows, primaryMetric, manifest = {}, progress = null) {
-    const bestIteration = Math.max(0, Number(manifest.best_iteration || 0));
-    const metric = primaryMetric || rows[0]?.metricName || "metric";
-    const testRow = rows.find((row) => row.datasetName === "test" && row.metricName === metric)
-      || rows.find((row) => row.datasetName === "test")
-      || rows.find((row) => row.metricName === metric)
-      || rows[0];
-    const livePoint = progress ? preferredLiveMetric(progress.latest || [], metric) : null;
-    const liveValue = Number(livePoint?.value);
-    const bestValue = Number.isFinite(liveValue) ? liveValue : valueAtIteration(testRow?.values || [], bestIteration) ?? lastFiniteValue(testRow?.values || []);
-    const parts = [];
-    parts.push(`evaluation metric: ${metric}`);
-    if (bestValue !== null) parts.push(`test metric: ${formatEvaluationValue(bestValue)}`);
-    if (progress?.iteration) {
-      parts.push(`iteration: ${Number(progress.iteration).toLocaleString()}`);
-    } else if (bestIteration) {
-      parts.push(`best iteration: ${bestIteration.toLocaleString()}`);
-    }
-    return parts.join(", ");
-  }
-
-  function preferredLiveMetric(latest, metric) {
-    if (!Array.isArray(latest) || !latest.length) return null;
-    return [...latest].sort((left, right) => liveMetricSortKey(left, metric).localeCompare(liveMetricSortKey(right, metric)))[0];
-  }
-
-  function liveMetricSortKey(item, metric) {
-    const dataset = String(item?.dataset || "").toLowerCase();
-    const datasetRank = dataset === "test" ? "0" : ["validation", "valid"].includes(dataset) ? "1" : ["training", "train"].includes(dataset) ? "2" : "3";
-    const metricRank = String(item?.metric || "") === String(metric || "") ? "0" : "1";
-    return `${datasetRank}:${metricRank}:${item?.metric || ""}`;
-  }
-
-  function valueAtIteration(values, iteration) {
-    if (!iteration || iteration < 1) return null;
-    const value = values[iteration - 1];
-    return Number.isFinite(Number(value)) ? Number(value) : null;
-  }
-
-  function lastFiniteValue(values) {
-    for (let index = values.length - 1; index >= 0; index -= 1) {
-      const value = Number(values[index]);
-      if (Number.isFinite(value)) return value;
-    }
-    return null;
-  }
-
-  function evaluationXAxisMax(maxIteration, progress = null) {
-    const liveTotal = progress?.phase === "training" ? Number(progress.total_iterations) : NaN;
-    if (Number.isFinite(liveTotal) && liveTotal > 0) return Math.max(1, Math.round(liveTotal));
-    return Math.max(1, Math.round(Number(maxIteration || 1)));
-  }
-
-  function evaluationXDomain(maxIteration, detail, xMax) {
-    if (evaluationViewMode !== "tail") return { min: 0, max: xMax };
-    const tailMax = Math.max(1, Math.round(Number(maxIteration || 1)));
-    const width = evaluationTailWindowSize(tailMax, detail);
-    return { min: Math.max(1, tailMax - width + 1), max: tailMax };
-  }
-
-  function evaluationXDomainSpan(domain) {
-    return Math.max(1, Number(domain?.max || 1) - Number(domain?.min || 0));
-  }
-
-  function evaluationTailWindowSize(maxIteration, detail) {
-    const count = Math.max(1, Math.round(Number(maxIteration || 1)));
-    const bestIteration = Math.round(Number(detail?.manifest?.best_iteration || 0));
-    const earlyStoppingRounds = evaluationEarlyStoppingRounds(detail);
-    if (bestIteration >= 1 && earlyStoppingRounds > 0 && count - bestIteration >= earlyStoppingRounds) {
-      return Math.min(count, Math.max(50, earlyStoppingRounds * 5));
-    }
-    return Math.min(count, Math.max(50, Math.ceil(count * 0.2)));
-  }
-
-  function evaluationEarlyStoppingRounds(detail) {
-    const value = evaluationParameterValue(detail?.parameters, "early_stopping_rounds");
-    const rounds = Math.round(Number(value));
-    return Number.isFinite(rounds) && rounds > 0 ? rounds : 0;
-  }
-
-  function evaluationParameterValue(parameters, name) {
-    if (Array.isArray(parameters)) {
-      return parameters.find((parameter) => String(parameter?.name || "") === name)?.value;
-    }
-    if (parameters && typeof parameters === "object") return parameters[name];
-    return null;
-  }
-
-  function evaluationYAxisBounds(rows, maxIteration, primaryMetric, detail, xDomain) {
-    if (evaluationViewMode === "tail") return evaluationTailYAxisBounds(rows, primaryMetric, xDomain);
-    const yMax = evaluationYAxisMax(rows, maxIteration);
-    return yMax !== null ? { max: yMax } : {};
-  }
-
-  function evaluationTailYAxisBounds(rows, primaryMetric, xDomain) {
-    const row = evaluationTailFocusRow(rows, primaryMetric);
-    const values = Array.isArray(row?.values) ? row.values : [];
-    const startIndex = Math.max(0, Math.ceil(Number(xDomain?.min || 1)) - 1);
-    const endIndex = Math.min(values.length - 1, Math.floor(Number(xDomain?.max || values.length)) - 1);
-    const extent = evaluationEmptyExtent();
-    for (let index = startIndex; index <= endIndex; index += 1) {
-      const value = Number(values[index]);
-      if (Number.isFinite(value)) updateEvaluationExtent(extent, value);
-    }
-    if (!extent.count) return {};
-    const padding = evaluationTailYAxisPadding(extent);
-    return { min: extent.min - padding, max: extent.max + padding };
-  }
-
-  function evaluationTailYAxisPadding(extent) {
-    const range = Math.max(0, extent.max - extent.min);
-    if (range > 0) return Math.max(range * 0.2, 1e-9);
-    return Math.max(Math.abs(extent.max), 1) * 0.0001;
-  }
-
-  function evaluationTailFocusRow(rows, primaryMetric) {
-    const metric = String(primaryMetric || "");
-    return rows.find((row) => String(row.datasetName || "").toLowerCase() === "test" && String(row.metricName || "") === metric)
-      || rows.find((row) => String(row.datasetName || "").toLowerCase() === "test")
-      || rows.find((row) => ["training", "train"].includes(String(row.datasetName || "").toLowerCase()) && String(row.metricName || "") === metric)
-      || rows.find((row) => ["training", "train"].includes(String(row.datasetName || "").toLowerCase()))
-      || rows.find((row) => String(row.metricName || "") === metric)
-      || rows[0];
-  }
-
-  function evaluationYAxisMax(rows, maxIteration) {
-    if (maxIteration < 50) return null;
-    const tailStart = evaluationTailStart(maxIteration);
-    const initialExtent = evaluationEmptyExtent();
-    const tailExtent = evaluationEmptyExtent();
-    for (const row of rows) {
-      const values = Array.isArray(row.values) ? row.values : [];
-      values.forEach((value, index) => {
-        const number = Number(value);
-        if (!Number.isFinite(number)) return;
-        if (index < tailStart) {
-          updateEvaluationExtent(initialExtent, number);
-        } else {
-          updateEvaluationExtent(tailExtent, number);
-        }
-      });
-    }
-    if (!initialExtent.count || !tailExtent.count) return null;
-    const initialMax = initialExtent.max;
-    const tailMin = tailExtent.min;
-    const tailMax = tailExtent.max;
-    const tailRange = Math.max(0, tailMax - tailMin);
-    const materialGap = Math.max(tailRange * 2, Math.abs(tailMax) * 0.03, 1e-9);
-    if (initialMax <= tailMax + materialGap) return null;
-    const padding = Math.max(tailRange * 0.12, Math.abs(tailMax) * 0.01, 1e-9);
-    return tailMax + padding;
-  }
-
-  function evaluationTailStart(maxIteration) {
-    return Math.max(10, Math.min(300, Math.floor(Number(maxIteration || 0) * 0.08)));
-  }
-
-  function evaluationTooltipFormatter(params) {
-    const items = Array.isArray(params) ? params : [params].filter(Boolean);
-    const first = items[0] || {};
-    const rawIteration = Number(first.axisValue ?? (Array.isArray(first.value) ? first.value[0] : null));
-    const iteration = Number.isFinite(rawIteration) ? Math.round(rawIteration).toLocaleString() : "";
-    const lines = [`<strong>Iteration:</strong> ${escapeHtml(iteration)}`];
-    for (const item of items) {
-      const value = Array.isArray(item?.value) ? item.value[1] : item?.value;
-      lines.push(`${item?.marker || ""}${escapeHtml(item?.seriesName || "series")}: ${escapeHtml(formatEvaluationValue(value))}`);
-    }
-    return lines.join("<br/>");
-  }
-
-  function evaluationSampledIndexes(rows, maxIteration, manifest = {}, progress = null, xDomain = null) {
-    const count = Math.max(1, Math.round(Number(maxIteration || 1)));
-    const range = evaluationIndexRange(count, xDomain);
-    const visibleCount = range.end - range.start + 1;
-    if (visibleCount <= GBM_EVALUATION_DOWNSAMPLE_THRESHOLD) return sequentialIndexes(range.start, range.end);
-    const requiredIndexes = requiredEvaluationIndexes(count, manifest, progress, range);
-    const compositePoints = evaluationCompositePoints(rows, range.start, range.end);
-    if (compositePoints.length <= GBM_EVALUATION_MAX_PLOT_POINTS) {
-      return mergeEvaluationIndexes(compositePoints.map((point) => point.index), requiredIndexes);
-    }
-    const samplingLimit = Math.max(2, GBM_EVALUATION_MAX_PLOT_POINTS - requiredIndexes.size);
-    const sampled = largestTriangleThreeBuckets(compositePoints, samplingLimit).map((point) => point.index);
-    return mergeEvaluationIndexes(sampled, requiredIndexes);
-  }
-
-  function evaluationIndexRange(maxIteration, xDomain = null) {
-    const end = Math.max(0, Math.min(maxIteration - 1, Math.floor(Number(xDomain?.max || maxIteration)) - 1));
-    const start = Math.max(0, Math.min(end, Math.ceil(Number(xDomain?.min || 1)) - 1));
-    return { start, end };
-  }
-
-  function sequentialIndexes(start, end) {
-    const count = Math.max(0, end - start + 1);
-    return Array.from({ length: count }, (_value, offset) => start + offset);
-  }
-
-  function requiredEvaluationIndexes(maxIteration, manifest = {}, progress = null, range = null) {
-    const required = new Set([0, Math.max(0, maxIteration - 1)]);
-    const bestIteration = Math.round(Number(manifest?.best_iteration || 0));
-    const liveIteration = Math.round(Number(progress?.iteration || 0));
-    for (const iteration of [bestIteration, liveIteration]) {
-      if (iteration >= 1 && iteration <= maxIteration) required.add(iteration - 1);
-    }
-    if (!range) return required;
-    return new Set([...required].filter((index) => index >= range.start && index <= range.end));
-  }
-
-  function evaluationCompositePoints(rows, startIndex, endIndex) {
-    const stats = rows.map((row) => evaluationRowStats(row.values));
-    const points = [];
-    for (let index = startIndex; index <= endIndex; index += 1) {
-      let total = 0;
-      let count = 0;
-      rows.forEach((row, rowIndex) => {
-        const value = Number(row.values?.[index]);
-        const stat = stats[rowIndex];
-        if (!Number.isFinite(value) || !stat) return;
-        total += stat.range > 0 ? (value - stat.min) / stat.range : 0.5;
-        count += 1;
-      });
-      if (count) points.push({ index, x: index, y: total / count });
-    }
-    return points;
-  }
-
-  function evaluationRowStats(values) {
-    const extent = evaluationEmptyExtent();
-    for (const value of Array.isArray(values) ? values : []) {
-      const number = Number(value);
-      if (Number.isFinite(number)) updateEvaluationExtent(extent, number);
-    }
-    if (!extent.count) return null;
-    return { min: extent.min, max: extent.max, range: extent.max - extent.min };
-  }
-
-  function evaluationEmptyExtent() {
-    return { count: 0, min: Infinity, max: -Infinity };
-  }
-
-  function updateEvaluationExtent(extent, value) {
-    extent.count += 1;
-    if (value < extent.min) extent.min = value;
-    if (value > extent.max) extent.max = value;
-  }
-
-  function largestTriangleThreeBuckets(points, threshold) {
-    if (threshold >= points.length || threshold <= 2) return points.slice();
-    const sampled = [points[0]];
-    let anchorIndex = 0;
-    const bucketSize = (points.length - 2) / (threshold - 2);
-    for (let bucket = 0; bucket < threshold - 2; bucket += 1) {
-      const bucketStart = Math.floor((bucket + 0) * bucketSize) + 1;
-      const bucketEnd = Math.floor((bucket + 1) * bucketSize) + 1;
-      const nextBucketStart = Math.floor((bucket + 1) * bucketSize) + 1;
-      const nextBucketEnd = Math.floor((bucket + 2) * bucketSize) + 1;
-      const average = averageEvaluationPoint(points.slice(nextBucketStart, Math.min(nextBucketEnd, points.length)));
-      const anchor = points[anchorIndex];
-      let maxArea = -1;
-      let nextAnchorIndex = bucketStart;
-      for (let index = bucketStart; index < Math.min(bucketEnd, points.length - 1); index += 1) {
-        const point = points[index];
-        const area = Math.abs((anchor.x - average.x) * (point.y - anchor.y) - (anchor.x - point.x) * (average.y - anchor.y)) * 0.5;
-        if (area > maxArea) {
-          maxArea = area;
-          nextAnchorIndex = index;
-        }
-      }
-      sampled.push(points[nextAnchorIndex]);
-      anchorIndex = nextAnchorIndex;
-    }
-    sampled.push(points[points.length - 1]);
-    return sampled;
-  }
-
-  function averageEvaluationPoint(points) {
-    if (!points.length) return { x: 0, y: 0 };
-    const totals = points.reduce((accumulator, point) => ({
-      x: accumulator.x + point.x,
-      y: accumulator.y + point.y,
-    }), { x: 0, y: 0 });
-    return { x: totals.x / points.length, y: totals.y / points.length };
-  }
-
-  function mergeEvaluationIndexes(sampledIndexes, requiredIndexes) {
-    return [...new Set([...sampledIndexes, ...requiredIndexes])]
-      .filter((index) => Number.isInteger(index) && index >= 0)
-      .sort((left, right) => left - right);
-  }
-
-  function evaluationSeriesData(values, sampledIndexes) {
-    const seriesValues = Array.isArray(values) ? values : [];
-    return sampledIndexes
-      .filter((index) => index < seriesValues.length)
-      .map((index) => [index + 1, seriesValues[index]]);
-  }
-
-  function niceIterationInterval(maxIteration) {
-    return niceIterationStep(Math.max(1, Number(maxIteration || 1) / 30));
-  }
-
-  function niceIterationLabelInterval(maxIteration) {
-    return niceIterationStep(Math.max(1, Number(maxIteration || 1) / 10));
-  }
-
-  function niceIterationStep(rawStep) {
-    const raw = Math.max(1, Number(rawStep || 1));
-    const magnitude = 10 ** Math.floor(Math.log10(raw));
-    for (const step of [1, 2, 5, 10]) {
-      const interval = step * magnitude;
-      if (interval >= raw) return interval;
-    }
-    return 10 * magnitude;
-  }
-
-  function evaluationIterationAxisLabel(value, labelInterval) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return "";
-    const iteration = Math.round(number);
-    if (Math.abs(number - iteration) > 1e-6) return "";
-    const interval = Math.max(1, Math.round(Number(labelInterval || 1)));
-    return iteration % interval === 0 ? iteration.toLocaleString() : "";
-  }
-
-  function formatEvaluationAxisValue(value) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return "";
-    const abs = Math.abs(number);
-    if (abs >= 1000) return Math.round(number).toLocaleString();
-    if (abs >= 10) return number.toLocaleString(undefined, { maximumFractionDigits: 1 });
-    if (abs >= 1) return number.toLocaleString(undefined, { maximumFractionDigits: 3 });
-    return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
-  }
-
-  function bindEvaluationResize(target) {
-    evaluationResizeObserver = observeResize([target, target.parentElement], () => {
-      evaluationChart?.resize();
-    });
-  }
-
-  function disposeEvaluationChart() {
-    evaluationResizeObserver?.disconnect();
-    evaluationResizeObserver = null;
-    if (evaluationChart) {
-      evaluationChart.dispose();
-      evaluationChart = null;
-    }
+    evaluationChart.render(source || activeDetail);
   }
 
   function formatGain(value) {
@@ -3892,10 +3190,6 @@ export function createGbmTool({
 
   function cssEscape(value) {
     return window.CSS?.escape ? window.CSS.escape(value) : String(value).replace(/"/g, '\\"');
-  }
-
-  function cssVar(name, fallback) {
-    return getComputedStyle(document.body).getPropertyValue(name).trim() || fallback;
   }
 
   return {

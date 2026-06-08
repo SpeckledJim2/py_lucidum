@@ -94,6 +94,10 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/shared/tabulator.js",
             "/static/app/shared/timing.js",
             "/static/app/gbm-tool.js",
+            "/static/app/gbm-evaluation-chart.js",
+            "/static/app/gbm-feature-parameter-controls.js",
+            "/static/app/gbm-model-navigator.js",
+            "/static/app/gbm-tab-orchestration.js",
             "/static/app/gbm-shap-tool.js",
             "/static/app/gbm-shap-chart.js",
             "/static/app/gbm-stacked-shap-tool.js",
@@ -956,6 +960,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/shared/tabulator.js")
         self.assert_no_store("/static/app/shared/timing.js")
         self.assert_no_store("/static/app/gbm-tool.js")
+        self.assert_no_store("/static/app/gbm-evaluation-chart.js")
+        self.assert_no_store("/static/app/gbm-feature-parameter-controls.js")
+        self.assert_no_store("/static/app/gbm-model-navigator.js")
+        self.assert_no_store("/static/app/gbm-tab-orchestration.js")
         self.assert_no_store("/static/app/gbm-shap-tool.js")
         self.assert_no_store("/static/app/gbm-shap-chart.js")
         self.assert_no_store("/static/app/gbm-stacked-shap-tool.js")
@@ -1526,11 +1534,11 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         shap_control_positions = [js.index(item) for item in shap_control_order]
         self.assertEqual(shap_control_positions, sorted(shap_control_positions))
         tab_order = [
-            'data-gbm-tab="features">Features and parameters',
-            'data-gbm-tab="models">Model navigator',
-            'data-gbm-tab="shap">SHAP',
-            'data-gbm-tab="stacked-shap">Stacked SHAP',
-            'data-gbm-tab="trees">Tree viewer',
+            '{ id: "features", label: "Features and parameters" }',
+            '{ id: "models", label: "Model navigator" }',
+            '{ id: "shap", label: "SHAP" }',
+            '{ id: "stacked-shap", label: "Stacked SHAP" }',
+            '{ id: "trees", label: "Tree viewer" }',
         ]
         tab_positions = [js.index(item) for item in tab_order]
         self.assertEqual(tab_positions, sorted(tab_positions))
@@ -1760,7 +1768,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn('Features and parameters', js)
         self.assertIn('Model navigator', js)
         self.assertIn('Tree viewer', js)
-        self.assertIn('SHAP</button>', js)
+        self.assertIn('{ id: "shap", label: "SHAP" }', js)
         self.assertIn('class="gbm-toolbar"', js)
         self.assertIn('id="gbmTrainingStatus" class="gbm-training-status', js)
         self.assertIn("setTrainingStatus(progress.message || \"\", progress.phase || \"\", trainingStatusDetail(progress));", js)
@@ -1817,14 +1825,16 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("setTrainingState(false)", js)
         self.assertIn('isTraining ? "Training..." : "Train GBM"', js)
         self.assertIn("if (magnitude >= 1000) return Math.round(number).toLocaleString();", js)
-        self.assertIn("let evaluationChart = null;", js)
-        self.assertIn("function bindEvaluationResize(target)", js)
-        self.assertIn("evaluationResizeObserver = observeResize([target, target.parentElement]", js)
-        self.assertIn("evaluationChart?.resize()", js)
+        self.assertIn('import { createGbmEvaluationChart } from "./gbm-evaluation-chart.js";', js)
+        self.assertIn("const evaluationChart = createGbmEvaluationChart({ escapeHtml, formatEvaluationValue });", js)
+        self.assertIn("let chart = null;", js)
+        self.assertIn("function bindResize(target)", js)
+        self.assertIn("resizeObserver = observeResize([target, target.parentElement]", js)
+        self.assertIn("chart?.resize()", js)
         self.assertIn("function evaluationTitle(rows, primaryMetric, manifest = {}, progress = null)", js)
         self.assertIn("rows.sort(compareEvaluationRows);", js)
         self.assertIn("function compareEvaluationRows(left, right)", js)
-        self.assertIn('let evaluationViewMode = "all";', js)
+        self.assertIn('let viewMode = "all";', js)
         self.assertIn('id="gbmEvaluationViewMode"', js)
         self.assertIn('name="gbmEvaluationViewMode"', js)
         self.assertIn("function bindEvaluationViewModeActions()", js)
@@ -1884,17 +1894,17 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn('"average_precision"', js)
         self.assertIn('{ title: "Parameter", field: "name", widthGrow: 1 }', js)
         self.assertIn('{ title: "Value", field: "value", formatter: parameterValueFormatter, editor: "adaptable", editorParams: parameterValueEditorParams(), widthGrow: 2 }', js)
-        self.assertIn("function initScoreParameterOptions(options)", js)
+        self.assertIn("function initScoreOptions(options)", js)
         self.assertIn("function groupedInitScoreOptions(options)", js)
         self.assertIn('"GLM PREDICTIONS"', js)
         self.assertIn('"DATASET COLUMNS"', js)
-        self.assertIn("values: parameterEditorValues(rowData.name)", js)
+        self.assertIn("values: editorValues(rowData.name)", js)
         self.assertIn("function parameterValueEditorParams()", js)
         self.assertIn("function parameterValueFormatter(cell)", js)
         self.assertIn("function parameterValueEditorLookup(cell)", js)
         self.assertIn("function parameterValueEditorParamsLookup(editor, cell)", js)
-        self.assertIn("editorLookup: parameterValueEditorLookup", js)
-        self.assertIn("paramsLookup: parameterValueEditorParamsLookup", js)
+        self.assertIn("editorLookup: valueEditorLookup", js)
+        self.assertIn("paramsLookup: valueEditorParamsLookup", js)
         self.assertIn("class: `gbm-parameter-editor gbm-parameter-${editor}-editor`,", js)
         self.assertIn("function parameterControlHtml(parameter)", js)
         self.assertIn("function parameterSelectOptionsHtml(name, options, value)", js)
@@ -2083,7 +2093,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertNotIn("<th>Scored</th>", js)
         self.assertNotIn("data-gbm-activate", js)
         self.assertNotIn('modelTable.on("rowClick"', js)
-        self.assertIn("bindFallbackModelSelection(rows, syncModelActionButtons);", js)
+        self.assertIn("bindFallbackModelSelection(fallbackRows, onFallbackSelectionChange);", js)
         self.assertIn("function formatModelRuntime(model)", js)
         self.assertIn("function formatModelMetric(value)", js)
         self.assertIn("function modelParameterNumber(model, name)", js)
