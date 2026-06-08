@@ -719,16 +719,30 @@
         overflow-wrap: anywhere;
       }
 
+      .glm-tabulation-rebase-rule {
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+
       .glm-tabulation-controls {
-        align-items: center;
+        align-items: stretch;
         border-bottom: 1px solid var(--line);
         display: flex;
         flex: 0 0 auto;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+        padding: 8px 12px;
+      }
+
+      .glm-tabulation-controls-row {
+        align-items: center;
+        display: flex;
         flex-wrap: wrap;
         gap: 8px;
         justify-content: space-between;
         min-width: 0;
-        padding: 8px 12px;
+        width: 100%;
       }
 
       .glm-tabulation-control-group {
@@ -915,6 +929,20 @@
 
       .glm-grid .tabulator-row .tabulator-cell.glm-tabulation-colour-cell {
         background: var(--glm-tabulation-cell-bg, inherit) !important;
+      }
+
+      .glm-grid .tabulator-row .tabulator-cell.glm-tabulation-rebase-cell,
+      .glm-tabulation-fallback-table .glm-tabulation-rebase-cell {
+        cursor: context-menu;
+      }
+
+      .glm-tabulation-context-menu {
+        max-width: min(440px, calc(100vw - 16px));
+        min-width: 260px;
+      }
+
+      .glm-tabulation-context-menu-item {
+        white-space: normal;
       }
 
       .glm-model-grid .tabulator-row,

@@ -8,6 +8,7 @@ GLM tabulations convert a fitted `glum` model into insurance-style rating tables
 - Tabulations are built on demand for selected model IDs by `POST /api/glm/tabulations/build`; they are not created during GLM training.
 - The tab shows a multi-model selector, table selector, table diagnostics, table/plot views, linear/`exp` display scale, colour toggle, and a 2D crosstab selector.
 - `glm_tabulated_prediction` appears in `glm:<model_id>:predictions` only after tabulation artifacts exist. It is grouped under `Model predictions` in Line/Bar like `glm_prediction`.
+- For a single GLM non-base table, users can rebase a selected table cell to zero. Interaction crosstab rebases can transfer the offset into a compatible one-way table; one-way or no-crosstab rebases transfer the offset into the `base` table. The app recalculates `tabulated_predictions.parquet` so row-level `glm_tabulated_prediction` reflects the adjusted table decomposition.
 
 ## Required Training State
 
@@ -50,6 +51,19 @@ For each selected model:
 
 The SD error is expected to be nonzero for numeric tables because row scoring uses table banding.
 
+## Rebasing
+
+Tabulation tables can have a free additive allocation between visible components. Rebasing is an app-level gauge transform on the linear-predictor scale:
+
+1. Preserve the first generated tables and manifest under `tabulations_raw/` and `tabulation_manifest_raw.json`.
+2. Read the selected cell's current `tabulated_linear` value.
+3. For an interaction table with a valid feature crosstab, subtract that value from every OK cell in the source table slice matching the transfer feature value, then add the same value to the matching row of the transfer feature's one-way table. If that one-way table does not exist, create a one-way adjustment table.
+4. For a one-way table, or a higher-dimensional table without a feature-transfer crosstab, subtract that value from every numeric source table cell and add it to the `base` table.
+5. Rebuild `tabulated_predictions.parquet` from the adjusted tables and assert the row-level linear predictions are unchanged within numerical tolerance.
+6. Store the applied rule under `tabulation_manifest.json` `rebasing.rules`.
+
+Reset restores `tabulations_raw/`, clears `rebasing`, and rebuilds `tabulated_predictions.parquet` from the restored raw tables.
+
 ## Artifacts
 
 Each model directory under `.lucidum/models/glm/<model_id>/` may contain:
@@ -57,6 +71,7 @@ Each model directory under `.lucidum/models/glm/<model_id>/` may contain:
 - `estimator.pkl`: fitted `glum` estimator.
 - `tabulation_manifest.json`: tables, warnings, diagnostics, feature metadata, and build time.
 - `tabulations/*.parquet`: one Parquet table per tabulation, including `base.parquet`.
+- `tabulations_raw/*.parquet` and `tabulation_manifest_raw.json`: first generated raw tables and metadata, present only while rebase rules are active.
 - `tabulated_predictions.parquet`: row-level tabulated predictions.
 
 `tabulated_predictions.parquet` contains:
@@ -74,6 +89,8 @@ Each model directory under `.lucidum/models/glm/<model_id>/` may contain:
 - `POST /api/glm/tabulations/config`: returns tabulatable status, union table list, warnings, and diagnostics for selected models.
 - `POST /api/glm/tabulations/table`: returns a multi-model wide table payload for the selected table and display scale.
 - `POST /api/glm/tabulations/plot`: returns ECharts-ready series for 1D tables and 2D crosstab tables.
+- `POST /api/glm/tabulations/rebase`: rebases one selected GLM table cell and recalculates tabulated predictions.
+- `POST /api/glm/tabulations/rebase/reset`: restores the raw tabulations for one GLM and recalculates tabulated predictions.
 
 ## Source Exposure
 

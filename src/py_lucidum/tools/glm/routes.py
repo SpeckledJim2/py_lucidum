@@ -8,7 +8,7 @@ from py_lucidum.app.context import AppContext
 
 from .jobs import GlmJobManager
 from .store import GlmModelNameError, GlmModelStore, GlmSourceProvider
-from .tabulation import tabulation_config, tabulation_plot, tabulation_table
+from .tabulation import rebase_tabulation, reset_tabulation_rebase, tabulation_config, tabulation_plot, tabulation_table
 from .training import MissingGlmDependency, glm_dependencies
 from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payload, regularization_options_payload, sample_metadata, validate_request
 
@@ -117,6 +117,24 @@ def register(app: FastAPI, context: AppContext) -> None:
         context.check_token(request)
         payload = dict(await request.json())
         return tabulation_plot(store, payload, gbm_store=getattr(app.state, "gbm_store", None))
+
+    @app.post("/api/glm/tabulations/rebase")
+    async def tabulation_rebase_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        try:
+            return rebase_tabulation(context.dataset, store, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/glm/tabulations/rebase/reset")
+    async def tabulation_rebase_reset_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        try:
+            return reset_tabulation_rebase(context.dataset, store, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/glm/models/{model_id}")
     async def model_endpoint(request: Request, model_id: str) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import re
 import socket
@@ -21,6 +22,8 @@ from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore
+from py_lucidum.tools.glm.tabulation import build_tabulations
+from py_lucidum.tools.glm.training import stop_persistent_glm_fit_worker, train_model
 
 
 try:
@@ -435,6 +438,67 @@ COPY (
                 server.should_exit = True
                 thread.join(timeout=5)
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    @unittest.skipUnless(importlib.util.find_spec("glum") is not None, "glum is not installed")
+    def test_glm_tabulation_rebase_smoke(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,Age,Segment,SAMPLE\n"
+                "10,30,A,training\n"
+                "20,40,B,test\n"
+                "30,50,A,training\n"
+                "45,55,B,training\n"
+                "60,60,A,test\n"
+                "75,65,B,training\n",
+                encoding="utf-8",
+            )
+            features_path = Path(tmp_dir) / "feature_spec.csv"
+            features_path.write_text(
+                "Feature,Grouping,Base,min,max,banding,scenario1\n"
+                "Age,DRIVER,40,30,70,5,feature\n"
+                "Segment,DRIVER,A,,,,feature\n",
+                encoding="utf-8",
+            )
+            dataset = Dataset(data_path)
+            store = GlmModelStore(data_path)
+            result = train_model(
+                dataset,
+                store,
+                {
+                    "label": "Browser rebase GLM",
+                    "formula": "Age * C(Segment)",
+                    "response_column": "actualNumerator",
+                    "family": "normal",
+                    "training_scope": "all",
+                    "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
+                },
+            )
+            build_tabulations(
+                dataset,
+                store,
+                {"model_ids": [result["model_id"]]},
+                {
+                    "rows": [
+                        {"feature": "Age", "grouping": "DRIVER", "base": "40", "min": "30", "max": "70", "banding": "5"},
+                        {"feature": "Segment", "grouping": "DRIVER", "base": "A"},
+                    ]
+                },
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["glm"],
+                features_path=features_path,
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "__none__"},
+            )
+            try:
+                self.exercise_glm_tabulation_rebase(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
     @staticmethod
     def start_app(
         data_path: Path,
@@ -769,6 +833,222 @@ COPY (
         with urlopen(f"{base_url}{path}", timeout=5) as response:
             assert response.status == 200
             assert expected_content_type in response.headers.get("content-type", "")
+
+    def exercise_glm_tabulation_rebase(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                def right_click_tabulation_cell(script: str, arg: dict[str, object] | None = None) -> None:
+                    point = page.evaluate(
+                        """
+                        ({ script, arg }) => {
+                          const resolve = new Function(`return (${script});`)();
+                          const element = resolve(arg || {});
+                          if (!element) return null;
+                          element.scrollIntoView({ block: "center", inline: "center" });
+                          const rect = element.getBoundingClientRect();
+                          return {
+                            x: rect.left + Math.min(18, Math.max(4, rect.width / 2)),
+                            y: rect.top + Math.min(12, Math.max(4, rect.height / 2)),
+                          };
+                        }
+                        """,
+                        {"script": script, "arg": arg or {}},
+                    )
+                    self.assertIsNotNone(point)
+                    page.mouse.click(point["x"], point["y"], button="right")
+
+                def click_tabulation_menu_item(name: str) -> None:
+                    page.locator("#glmTabulationContextMenu:not([hidden])").wait_for(timeout=5_000)
+                    page.get_by_role("menuitem", name=name).click()
+
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#glmTool").click()
+                page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
+                page.get_by_role("button", name="Tabulations").click()
+                page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age × Segment").click()
+                page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator("#glmTabulationCrosstab").select_option("Segment")
+                page.locator('[data-glm-tabulation-scale="exp"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
+                      return headers.some((header) => header.textContent.trim() === "B")
+                        && document.querySelectorAll("#glmTabulationTable .tabulator-row").length > 0;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                right_click_tabulation_cell(
+                    """
+                    () => document.querySelector('#glmTabulationTable .tabulator-row .tabulator-cell[tabulator-field="Age"]')
+                    """
+                )
+                page.wait_for_timeout(150)
+                self.assertEqual(page.locator("#glmTabulationContextMenu:not([hidden])").count(), 0)
+                before = page.evaluate(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
+                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
+                      if (!bField) return null;
+                      for (const row of document.querySelectorAll("#glmTabulationTable .tabulator-row")) {
+                        const age = row.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() || "";
+                        const cell = row.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`);
+                        const text = cell?.textContent.trim() || "";
+                        if (cell && text && text !== "NA" && text !== "1.0000") {
+                          return { age, text, bField };
+                        }
+                      }
+                      return null;
+                    }
+                    """
+                )
+                self.assertIsNotNone(before)
+                right_click_tabulation_cell(
+                    """
+                    ({ age, bField }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      return [...(row?.querySelectorAll(".tabulator-cell") || [])]
+                        .find((cell) => cell.getAttribute("tabulator-field") === bField) || null;
+                    }
+                    """,
+                    before,
+                )
+                click_tabulation_menu_item("Rebase Segment=B slice to this cell; offset Segment table")
+                page.wait_for_function(
+                    """
+                    ({ age }) => {
+                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
+                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      const text = row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() || "";
+                      return text === "1.0000"
+                        && document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
+                    }
+                    """,
+                    arg={"age": before["age"]},
+                    timeout=15_000,
+                )
+                right_click_tabulation_cell(
+                    """
+                    ({ age, bField }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      return [...(row?.querySelectorAll(".tabulator-cell") || [])]
+                        .find((cell) => cell.getAttribute("tabulator-field") === bField) || null;
+                    }
+                    """,
+                    before,
+                )
+                click_tabulation_menu_item("Reset rebase")
+                page.wait_for_function(
+                    """
+                    ({ age, text }) => {
+                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
+                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      const current = row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() || "";
+                      return current === text
+                        && !document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
+                    }
+                    """,
+                    arg=before,
+                    timeout=15_000,
+                )
+                selected_segment = page.evaluate(
+                    """
+                    () => {
+                      for (const row of document.querySelectorAll("#glmTabulationTableGrid .tabulator-row")) {
+                        const name = row.querySelector('.tabulator-cell[tabulator-field="table_name"]')?.textContent.trim() || "";
+                        if (name === "Segment") {
+                          row.click();
+                          return true;
+                        }
+                      }
+                      return false;
+                    }
+                    """
+                )
+                self.assertTrue(selected_segment)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
+                      return headers.some((header) => header.textContent.trim() === "B")
+                        && document.querySelectorAll("#glmTabulationTable .tabulator-row").length > 0;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                one_way_before = page.evaluate(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
+                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
+                      const row = document.querySelector("#glmTabulationTable .tabulator-row");
+                      const cell = bField ? row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`) : null;
+                      const text = cell?.textContent.trim() || "";
+                      if (cell && text && text !== "NA" && text !== "1.0000") {
+                        return { text, bField };
+                      }
+                      return null;
+                    }
+                    """
+                )
+                self.assertIsNotNone(one_way_before)
+                right_click_tabulation_cell(
+                    """
+                    ({ bField }) => {
+                      const row = document.querySelector("#glmTabulationTable .tabulator-row");
+                      return [...(row?.querySelectorAll(".tabulator-cell") || [])]
+                        .find((cell) => cell.getAttribute("tabulator-field") === bField) || null;
+                    }
+                    """,
+                    one_way_before,
+                )
+                click_tabulation_menu_item("Rebase whole table to this cell; offset base")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
+                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
+                      const row = document.querySelector("#glmTabulationTable .tabulator-row");
+                      const text = row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() || "";
+                      return text === "1.0000"
+                        && document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
+                    }
+                    """,
+                    timeout=15_000,
+                )
+                page.locator("#glmTabulationTable .tabulator-cell.glm-tabulation-rebase-cell").first.click(button="right", force=True)
+                click_tabulation_menu_item("Reset rebase")
+                page.wait_for_function(
+                    """
+                    ({ text }) => {
+                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
+                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
+                      const row = document.querySelector("#glmTabulationTable .tabulator-row");
+                      const current = row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() || "";
+                      return current === text
+                        && !document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
+                    }
+                    """,
+                    arg=one_way_before,
+                    timeout=15_000,
+                )
+                self.assertFalse(page_errors)
+            finally:
+                browser.close()
 
     def exercise_sidebar_accordion(self, base_url: str) -> None:
         assert sync_playwright is not None
