@@ -18,6 +18,8 @@ This file records the refactor order for `py_lucidum`. Each phase should be done
 
 ### 2. Test Tiering
 
+**Status:** Completed on 2026-06-08.
+
 - Add documented test tiers for future agents:
   - Syntax checks.
   - Fast non-model backend tests.

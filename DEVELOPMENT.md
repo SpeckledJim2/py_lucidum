@@ -243,6 +243,55 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 ## Testing
 
+Use these tiers to keep iteration focused while preserving the full suite.
+Narrow tiers are for local speed only; do not delete, skip, or weaken tests just
+to reduce count.
+
+- Syntax checks:
+
+```bash
+.venv/bin/python -m compileall src tests
+find src/py_lucidum/static -path '*/vendor/*' -prune -o -name '*.js' -print0 | xargs -0 -n1 node --check
+```
+
+- Fast non-model backend tests:
+
+```bash
+.venv/bin/python -m unittest \
+  tests/test_cli.py \
+  tests/test_column_profile.py \
+  tests/test_demo_dataset.py \
+  tests/test_features.py \
+  tests/test_line_bar.py \
+  tests/test_telemetry.py \
+  tests/test_uk_map.py
+```
+
+- Model tests:
+
+```bash
+.venv/bin/python -m unittest tests/test_glm.py tests/test_gbm.py
+```
+
+- Static frontend contract tests:
+
+```bash
+.venv/bin/python -m unittest tests/test_static_assets.py
+```
+
+Prefer future behavior tests over exact JS/CSS string-contract tests where
+practical. Exact asset-string checks are still acceptable for stable contracts
+such as asset registration, cache-control behavior, and intentionally documented
+UI text or selectors.
+
+- Browser smoke tests:
+
+```bash
+.venv/bin/python scripts/run_browser_smoke.py
+```
+
+- Full pre-commit checks: run the complete command block below.
+
 Standard checks before committing:
 
 ```bash
