@@ -317,10 +317,11 @@ def write_preview(output_paths: list[Path], output_dir: Path) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
+    local_map_root = repo_root / "local" / "uk_map"
     parser = argparse.ArgumentParser(description="Convert local UK map GeoPackages to compact GeoJSON.")
-    parser.add_argument("--source-dir", type=Path, default=root / "source")
-    parser.add_argument("--output-dir", type=Path, default=root / "output")
+    parser.add_argument("--source-dir", type=Path, default=local_map_root / "source")
+    parser.add_argument("--output-dir", type=Path, default=local_map_root / "output")
     parser.add_argument("--precision", type=int, default=6, help="Coordinate decimal places to keep.")
     parser.add_argument("--no-preview", action="store_true", help="Skip writing output/preview.html.")
     return parser.parse_args()

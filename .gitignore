@@ -1,8 +1,9 @@
-# Local development datasets
+# Local development datasets and artifacts
 datasets/*.csv
 datasets/*.parquet
 !datasets/motor_premiums.parquet
 .lucidum/
+local/
 
 # Python/cache/build artifacts
 __pycache__/

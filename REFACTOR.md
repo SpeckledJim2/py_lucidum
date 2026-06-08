@@ -32,6 +32,8 @@ This file records the refactor order for `py_lucidum`. Each phase should be done
 
 ### 3. Repo Hygiene
 
+**Status:** Completed on 2026-06-08.
+
 - Move `local/uk_map/scripts/convert_gpkg_to_geojson.py` into `scripts/` or `scripts/uk_map/`.
 - Add `local/` to `.gitignore` after moving the tracked helper.
 - Confirm no local datasets, generated previews, `.lucidum/`, caches, or virtualenv artifacts are tracked.
