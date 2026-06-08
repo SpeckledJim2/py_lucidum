@@ -1,6 +1,6 @@
 Feature,Grouping,Base,min,max,banding,scenario1,scenario2,scenario3
 ANNUAL_MILEAGE,VEHICLE,5000,1000,30000,1000,feature,feature,feature
-CAR_VALUE,VEHICLE,1000,1000,85000,5000,feature,feature,
+CAR_VALUE,VEHICLE,1000,1000,85000,1000,feature,feature,
 DRIVER_AGE,DRIVER,40,17,96,1,feature,feature,feature
 FUEL_TYPE,VEHICLE,Petrol,,,,,feature,feature
 LATITUDE,POSTCODE,52.5,50,60.5,0.5,,feature,feature
