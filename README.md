@@ -110,6 +110,11 @@ UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat
   --longitude longitude
 ```
 
+Core browser libraries are bundled and served by the local app. UK map geometry
+is also bundled. The `Blank` map background makes no external tile requests;
+other map backgrounds, such as OSM, Esri, Aerial, Light, and Dark, fetch map
+tiles from their listed third-party providers and need network access.
+
 ## Python Usage
 
 ```python

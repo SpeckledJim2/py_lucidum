@@ -40,6 +40,10 @@ This file records the refactor order for `py_lucidum`. Each phase should be done
 
 ### 4. Browser Dependency Policy
 
+**Status:** Completed on 2026-06-08.
+
+**Decision:** Core ECharts 5.5.1 and Leaflet 1.9.4 are vendored and loaded locally; optional map tile layers remain documented external provider dependencies.
+
 - Decide whether core ECharts and Leaflet should be vendored or documented as CDN dependencies.
 - If vendored, lazy-load or locally load them consistently with Tabulator, D3, Ace, and ECharts GL.
 - Document external map tile dependency separately from app asset loading.
