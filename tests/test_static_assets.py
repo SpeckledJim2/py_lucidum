@@ -184,6 +184,61 @@ if (preferredStartupSource(schema.data_sources, "missing") !== "glm:one:predicti
 """
         self.run_node_script(script)
 
+    def test_uk_map_postcode_availability_helper(self) -> None:
+        module = Path("src/py_lucidum/static/app/uk-map-tool.js").resolve().as_uri()
+        script = f"""
+import {{ ukMapPostcodeAvailability }} from "{module}";
+const labels = (schema, query = "") => ukMapPostcodeAvailability({{
+  schema,
+  locationParams: new URLSearchParams(query),
+}}).levels.map((level) => level.label).join("/");
+const noPostcodes = {{ columns: [{{ name: "Actual", kind: "numeric" }}], defaults: {{}} }};
+if (labels(noPostcodes) !== "") throw new Error("expected no postcode levels");
+const areaOnly = {{ columns: [{{ name: "PostcodeArea", kind: "string" }}], defaults: {{}} }};
+if (labels(areaOnly) !== "Area") throw new Error("expected area only");
+const areaSector = {{ columns: [{{ name: "PostcodeArea", kind: "string" }}, {{ name: "PostcodeSector", kind: "string" }}], defaults: {{}} }};
+if (labels(areaSector) !== "Area/Sector") throw new Error("expected area and sector");
+const unitWithoutCoordinates = {{
+  columns: [
+    {{ name: "PostcodeArea", kind: "string" }},
+    {{ name: "PostcodeSector", kind: "string" }},
+    {{ name: "PostcodeUnit", kind: "string" }},
+  ],
+  defaults: {{}},
+}};
+if (labels(unitWithoutCoordinates) !== "Area/Sector") throw new Error("unit should require coordinates");
+const unitWithCoordinates = {{
+  columns: [
+    {{ name: "PostcodeArea", kind: "string" }},
+    {{ name: "PostcodeSector", kind: "string" }},
+    {{ name: "PostcodeUnit", kind: "string" }},
+    {{ name: "lat", kind: "numeric" }},
+    {{ name: "long", kind: "numeric" }},
+  ],
+  defaults: {{}},
+}};
+if (labels(unitWithCoordinates) !== "Area/Sector/Unit") throw new Error("expected all postcode levels");
+const customDefaults = {{
+  columns: [
+    {{ name: "Area", kind: "string" }},
+    {{ name: "Sector", kind: "string" }},
+    {{ name: "Unit", kind: "string" }},
+    {{ name: "LatCol", kind: "numeric" }},
+    {{ name: "LongCol", kind: "numeric" }},
+  ],
+  defaults: {{
+    postcode_area: "Area",
+    postcode_sector: "Sector",
+    postcode_unit: "Unit",
+    latitude: "LatCol",
+    longitude: "LongCol",
+  }},
+}};
+if (labels(customDefaults) !== "Area/Sector/Unit") throw new Error("custom defaults should resolve");
+if (labels(customDefaults, "postcode_unit=Missing") !== "Area/Sector") throw new Error("invalid explicit unit should hide unit");
+"""
+        self.run_node_script(script)
+
     def test_shared_timing_controller_is_importable(self) -> None:
         module = Path("src/py_lucidum/static/app/shared/timing.js").resolve().as_uri()
         script = f"""
@@ -584,9 +639,16 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertNotIn("<span>lucidum</span>", html)
         self.assertIn(".mark {\n        width: 48px;\n        height: 48px;", css)
         self.assertIn(".meta {\n        color: var(--muted);\n        font-size: 16px;", css)
-        self.assertIn(".dataset-meta-gbm-link,\n      .dataset-meta-glm-link {", css)
+        self.assertIn(".dataset-meta-gbm-link,\n      .dataset-meta-glm-link,\n      .dataset-meta-uk-map-link {", css)
+        self.assertIn(".dataset-meta-uk-map-icon {\n        width: 28px;\n        height: 28px;", css)
+        self.assertIn("body.dark .dataset-meta-uk-map-icon", css)
         self.assertIn("text-decoration-skip-ink: none;", css)
+        self.assertIn("text-decoration-thickness: 1px;", css)
         self.assertIn("function renderDatasetMeta(", js)
+        self.assertIn("function renderDatasetPostcodeMeta(target)", js)
+        self.assertIn('icon.src = "/tools/uk-map/static/icons/UK.png";', js)
+        self.assertIn('button.className = "dataset-meta-uk-map-link";', js)
+        self.assertIn("ukMapTool.setMapLevel(level", js)
         self.assertIn('const payload = await api("/api/glm/models", { method: "GET" });', js)
         self.assertIn('const payload = await api("/api/gbm/models", { method: "GET" });', js)
         self.assertIn("button.textContent = `GLMs (${datasetGlmCount.toLocaleString()})`;", js)
@@ -2642,7 +2704,7 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         html = html_body.decode("utf-8")
         js = self.app_js_contract()
 
-        self.assertIn('import { createUkMapTool } from "./uk-map-tool.js";', js)
+        self.assertIn('import { createUkMapTool, ukMapPostcodeAvailability } from "./uk-map-tool.js";', js)
         self.assertIn("export function createUkMapTool", js)
         self.assertIn("ukMapTool.bindControls();", js)
         self.assertIn("ukMapTool.activate();", js)

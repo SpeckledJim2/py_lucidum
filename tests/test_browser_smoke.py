@@ -1704,6 +1704,17 @@ COPY (
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetMeta")?.textContent.includes("Area/Sector/Unit")
+                    """
+                )
+                self.assertEqual(page.locator("header").evaluate("node => getComputedStyle(node).height"), "52px")
+                self.assertEqual(
+                    page.locator(".dataset-meta-uk-map-link").evaluate_all("nodes => nodes.map((node) => node.textContent.trim()).join('/')"),
+                    "Area/Sector/Unit",
+                )
+                self.assertTrue(page.locator(".dataset-meta-uk-map-icon").is_visible())
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
@@ -1777,12 +1788,13 @@ COPY (
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
 
-                page.locator("#ukMapTool").click()
+                page.locator('.dataset-meta-uk-map-link[data-map-level="area"]').click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                 page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-pane')")
                 page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')")
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
+                self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="area"]').is_checked())
                 self.assertFalse(page.locator("#mapLabelControl").is_hidden())
                 self.assertFalse(page.locator("#mapLabelSize").is_disabled())
                 page.evaluate(
@@ -1868,8 +1880,9 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                    page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').check()
+                    page.locator('.dataset-meta-uk-map-link[data-map-level="sector"]').click()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
+                self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').is_checked())
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
@@ -1890,8 +1903,9 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                    page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').check()
+                    page.locator('.dataset-meta-uk-map-link[data-map-level="unit"]').click()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")')
+                self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').is_checked())
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())

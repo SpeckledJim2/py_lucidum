@@ -1,6 +1,6 @@
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import { createLineBarTool } from "./line-bar-tool.js";
-      import { createUkMapTool } from "./uk-map-tool.js";
+      import { createUkMapTool, ukMapPostcodeAvailability } from "./uk-map-tool.js";
       import { createGlmTool } from "./glm-tool.js";
       import { createGbmTool } from "./gbm-tool.js";
       import { createApiClient, monitorPath } from "./shared/api.js";
@@ -792,6 +792,40 @@
         return fileSize ? `${path} · ${fileSize}` : path;
       }
 
+      function renderDatasetPostcodeMeta(target) {
+        if (!toolEnabled("uk_map")) return;
+        const availability = ukMapPostcodeAvailability({ schema: state.schema, locationParams });
+        if (!availability.levels.length) return;
+        target.append(document.createTextNode(" · "));
+        const group = document.createElement("span");
+        group.className = "dataset-meta-uk-map";
+        group.title = "Open UK Mapping by postcode resolution";
+        const icon = document.createElement("img");
+        icon.className = "dataset-meta-uk-map-icon";
+        icon.src = "/tools/uk-map/static/icons/UK.png";
+        icon.alt = "";
+        icon.setAttribute("aria-hidden", "true");
+        group.append(icon);
+        availability.levels.forEach((entry, index) => {
+          if (index > 0) {
+            const separator = document.createElement("span");
+            separator.className = "dataset-meta-uk-map-separator";
+            separator.textContent = "/";
+            group.append(separator);
+          }
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "dataset-meta-uk-map-link";
+          button.dataset.mapLevel = entry.level;
+          button.textContent = entry.label;
+          button.title = `Open UK Mapping at postcode ${entry.label.toLowerCase()} resolution`;
+          button.setAttribute("aria-label", button.title);
+          button.addEventListener("click", () => openUkMapLevel(entry.level));
+          group.append(button);
+        });
+        target.append(group);
+      }
+
       function renderDatasetMeta(fileMeta = datasetMetaBase, gbmCount = datasetGbmCount, glmCount = datasetGlmCount) {
         datasetMetaBase = String(fileMeta || "");
         const numericCount = Number(gbmCount);
@@ -803,6 +837,7 @@
         const columns = Number(state.schema?.columns?.length || 0).toLocaleString();
         target.textContent = "";
         target.append(document.createTextNode(`${datasetMetaBase} · ${rows} rows · ${columns} columns`));
+        renderDatasetPostcodeMeta(target);
         if (datasetGlmCount !== null && toolEnabled("glm")) {
           target.append(document.createTextNode(" · "));
           const button = document.createElement("button");
@@ -862,6 +897,13 @@
       function setDatasetGlmCount(count) {
         if (!toolEnabled("glm")) return;
         renderDatasetMeta(datasetMetaBase, datasetGbmCount, count);
+      }
+
+      function openUkMapLevel(level) {
+        if (!toolEnabled("uk_map")) return;
+        const refreshOnLevelChange = state.tool === "uk_map";
+        if (!ukMapTool.setMapLevel(level, { refresh: refreshOnLevelChange })) return;
+        setTool("uk_map", state.tool !== "uk_map");
       }
 
       function openGlmModelNavigator() {

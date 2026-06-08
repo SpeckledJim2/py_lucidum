@@ -1,3 +1,116 @@
+const MAP_LEVELS = {
+  area: {
+    label: "areas",
+    singular: "area",
+    property: "PostcodeArea",
+    url: "/tools/uk-map/static/geodata/areas_MappaR.geojson",
+    defaultColumn: "PostcodeArea",
+    aliases: ["PostcodeArea", "POSTCODE_AREA"],
+    smoothFactor: 1,
+  },
+  sector: {
+    label: "sectors",
+    singular: "sector",
+    property: "PostcodeSector",
+    url: "/tools/uk-map/static/geodata/sectors_MappaR.geojson",
+    defaultColumn: "PostcodeSector",
+    aliases: ["PostcodeSector", "POSTCODE_SECTOR"],
+    smoothFactor: 0,
+  },
+  unit: {
+    label: "units",
+    singular: "unit",
+    property: "PostcodeUnit",
+    defaultColumn: "PostcodeUnit",
+    aliases: ["PostcodeUnit", "POSTCODE_UNIT"],
+  },
+};
+
+const COORDINATE_COLUMN_ALIASES = {
+  latitude: ["lat", "latitude", "LATITUDE"],
+  longitude: ["long", "longitude", "LONGITUDE", "LONGiTUDE"],
+};
+
+const POSTCODE_LEVELS = [
+  { level: "area", label: "Area" },
+  { level: "sector", label: "Sector" },
+  { level: "unit", label: "Unit" },
+];
+
+function locationParamValue(locationParams, key) {
+  if (!locationParams) return "";
+  if (typeof locationParams.get === "function") return locationParams.get(key) || "";
+  return String(locationParams[key] || "");
+}
+
+function schemaDefaultValue(schema, key) {
+  return String(schema?.defaults?.[key] || "");
+}
+
+function schemaColumnMap(schema) {
+  return new Map((schema?.columns || []).map((column) => [column.name, column]));
+}
+
+function schemaColumnExists(columnsByName, name) {
+  return Boolean(name && columnsByName.has(name));
+}
+
+function schemaNumericColumnExists(columnsByName, name) {
+  const kind = columnsByName.get(name)?.kind;
+  return kind === "numeric" || kind === "integer";
+}
+
+function configuredSchemaColumn(schema, locationParams, key) {
+  return locationParamValue(locationParams, key) || schemaDefaultValue(schema, key);
+}
+
+function firstExistingColumn(columnsByName, names) {
+  const seen = new Set();
+  for (const name of names) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    if (schemaColumnExists(columnsByName, name)) return name;
+  }
+  return "";
+}
+
+function resolvedSchemaColumn(columnsByName, schema, locationParams, key, fallback, aliases) {
+  const configured = configuredSchemaColumn(schema, locationParams, key);
+  if (configured) return schemaColumnExists(columnsByName, configured) ? configured : "";
+  return firstExistingColumn(columnsByName, [fallback, ...aliases]);
+}
+
+export function ukMapPostcodeAvailability({ schema, locationParams } = {}) {
+  const columnsByName = schemaColumnMap(schema);
+  const areaColumn = resolvedSchemaColumn(columnsByName, schema, locationParams, "postcode_area", MAP_LEVELS.area.defaultColumn, MAP_LEVELS.area.aliases);
+  const sectorColumn = resolvedSchemaColumn(columnsByName, schema, locationParams, "postcode_sector", MAP_LEVELS.sector.defaultColumn, MAP_LEVELS.sector.aliases);
+  const unitColumn = resolvedSchemaColumn(columnsByName, schema, locationParams, "postcode_unit", MAP_LEVELS.unit.defaultColumn, MAP_LEVELS.unit.aliases);
+  const latitudeColumn = resolvedSchemaColumn(columnsByName, schema, locationParams, "latitude", "lat", COORDINATE_COLUMN_ALIASES.latitude);
+  const longitudeColumn = resolvedSchemaColumn(columnsByName, schema, locationParams, "longitude", "long", COORDINATE_COLUMN_ALIASES.longitude);
+  const unitAvailable = Boolean(
+    unitColumn
+      && schemaNumericColumnExists(columnsByName, latitudeColumn)
+      && schemaNumericColumnExists(columnsByName, longitudeColumn)
+  );
+  const columnsByLevel = {
+    area: areaColumn,
+    sector: sectorColumn,
+    unit: unitAvailable ? unitColumn : "",
+  };
+  const levels = POSTCODE_LEVELS
+    .filter((item) => columnsByLevel[item.level])
+    .map((item) => ({ ...item, column: columnsByLevel[item.level] }));
+  return {
+    levels,
+    areaColumn,
+    sectorColumn,
+    unitColumn: unitAvailable ? unitColumn : "",
+    latitudeColumn: unitAvailable ? latitudeColumn : "",
+    longitudeColumn: unitAvailable ? longitudeColumn : "",
+    hasAny: levels.length > 0,
+  };
+}
+
 export function createUkMapTool({
   api,
   el,
@@ -28,38 +141,6 @@ export function createUkMapTool({
   refreshUkMap,
 }) {
   const L = leafletImpl;
-
-  const MAP_LEVELS = {
-    area: {
-      label: "areas",
-      singular: "area",
-      property: "PostcodeArea",
-      url: "/tools/uk-map/static/geodata/areas_MappaR.geojson",
-      defaultColumn: "PostcodeArea",
-      aliases: ["PostcodeArea", "POSTCODE_AREA"],
-      smoothFactor: 1,
-    },
-    sector: {
-      label: "sectors",
-      singular: "sector",
-      property: "PostcodeSector",
-      url: "/tools/uk-map/static/geodata/sectors_MappaR.geojson",
-      defaultColumn: "PostcodeSector",
-      aliases: ["PostcodeSector", "POSTCODE_SECTOR"],
-      smoothFactor: 0,
-    },
-    unit: {
-      label: "units",
-      singular: "unit",
-      property: "PostcodeUnit",
-      defaultColumn: "PostcodeUnit",
-      aliases: ["PostcodeUnit", "POSTCODE_UNIT"],
-    },
-  };
-  const COORDINATE_COLUMN_ALIASES = {
-    latitude: ["lat", "latitude", "LATITUDE"],
-    longitude: ["long", "longitude", "LONGITUDE", "LONGiTUDE"],
-  };
   const MAP_PALETTES = {
     divergent: ["#00441b", "#1b7837", "#5aae61", "#a6dba0", "#d9f0d3", "#fddbc7", "#f4a582", "#d6604d", "#b2182b", "#67001f"],
     spectral: ["#2c7bb6", "#00a6ca", "#00ccbc", "#90eb9d", "#ffff8c", "#f9d057", "#f29e2e", "#e76818", "#d7191c", "#a50026"],
@@ -449,6 +530,22 @@ export function createUkMapTool({
       syncFloatingMapControl();
       refreshMap();
     }
+  }
+
+  function setMapLevel(level, options = {}) {
+    const nextLevel = String(level || "");
+    if (!Object.prototype.hasOwnProperty.call(MAP_LEVELS, nextLevel) || !mapLevelSelectable(nextLevel)) return false;
+    const changed = state.mapLevel !== nextLevel;
+    if (changed) {
+      if (state.tool === "uk_map") captureMapView("map-level-change");
+      state.mapLevel = nextLevel;
+    }
+    syncMapControls();
+    syncFloatingMapControl();
+    if (changed && options.refresh !== false && state.tool === "uk_map") {
+      refreshMap(options.refreshOptions || {});
+    }
+    return true;
   }
 
   function syncMapControls() {
@@ -1615,6 +1712,7 @@ export function createUkMapTool({
     activate,
     bindControls,
     captureView: captureMapView,
+    setMapLevel,
     syncViewport,
     resize,
     refreshTheme,
