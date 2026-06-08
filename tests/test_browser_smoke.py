@@ -873,7 +873,25 @@ COPY (
                 page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age × Segment").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
-                page.locator("#glmTabulationCrosstab").select_option("Segment")
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmTabulationCrosstab")?.value === "Segment"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('[data-glm-tabulation-view="plot"]').click()
+                page.locator("#glmTabulationPlot canvas").first.wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const notice = document.querySelector("#glmTabulationNotice")?.textContent || "";
+                      return !notice.includes("Choose a feature crosstab");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('[data-glm-tabulation-view="table"]').click()
+                page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator('[data-glm-tabulation-scale="exp"]').click()
                 page.wait_for_function(
                     """
@@ -984,7 +1002,8 @@ COPY (
                     """
                     () => {
                       const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
-                      return headers.some((header) => header.textContent.trim() === "B")
+                      return document.querySelector("#glmTabulationCrosstab")?.value === ""
+                        && headers.some((header) => header.textContent.trim() === "Segment")
                         && document.querySelectorAll("#glmTabulationTable .tabulator-row").length > 0;
                     }
                     """,
@@ -993,13 +1012,12 @@ COPY (
                 one_way_before = page.evaluate(
                     """
                     () => {
-                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
-                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
-                      const row = document.querySelector("#glmTabulationTable .tabulator-row");
-                      const cell = bField ? row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`) : null;
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Segment"]')?.textContent.trim() === "B");
+                      const cell = row?.querySelector(".tabulator-cell.glm-tabulation-rebase-cell") || null;
                       const text = cell?.textContent.trim() || "";
                       if (cell && text && text !== "NA" && text !== "1.0000") {
-                        return { text, bField };
+                        return { text, segment: "B" };
                       }
                       return null;
                     }
@@ -1008,10 +1026,10 @@ COPY (
                 self.assertIsNotNone(one_way_before)
                 right_click_tabulation_cell(
                     """
-                    ({ bField }) => {
-                      const row = document.querySelector("#glmTabulationTable .tabulator-row");
-                      return [...(row?.querySelectorAll(".tabulator-cell") || [])]
-                        .find((cell) => cell.getAttribute("tabulator-field") === bField) || null;
+                    ({ segment }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Segment"]')?.textContent.trim() === segment);
+                      return row?.querySelector(".tabulator-cell.glm-tabulation-rebase-cell") || null;
                     }
                     """,
                     one_way_before,
@@ -1020,10 +1038,9 @@ COPY (
                 page.wait_for_function(
                     """
                     () => {
-                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
-                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
-                      const row = document.querySelector("#glmTabulationTable .tabulator-row");
-                      const text = row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() || "";
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Segment"]')?.textContent.trim() === "B");
+                      const text = row?.querySelector(".tabulator-cell.glm-tabulation-rebase-cell")?.textContent.trim() || "";
                       return text === "1.0000"
                         && document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
                     }
@@ -1034,11 +1051,10 @@ COPY (
                 click_tabulation_menu_item("Reset rebase")
                 page.wait_for_function(
                     """
-                    ({ text }) => {
-                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
-                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
-                      const row = document.querySelector("#glmTabulationTable .tabulator-row");
-                      const current = row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() || "";
+                    ({ text, segment }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Segment"]')?.textContent.trim() === segment);
+                      const current = row?.querySelector(".tabulator-cell.glm-tabulation-rebase-cell")?.textContent.trim() || "";
                       return current === text
                         && !document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
                     }

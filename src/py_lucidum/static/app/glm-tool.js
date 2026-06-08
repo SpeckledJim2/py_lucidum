@@ -165,6 +165,9 @@ export function createGlmTool({
   let tabulationScale = localStorage.getItem("py_lucidum_glm_tabulation_scale") || "linear";
   let tabulationColor = localStorage.getItem("py_lucidum_glm_tabulation_color") === "true";
   let tabulationCrosstab = "";
+  let tabulationCrosstabManualKey = "";
+  let tabulationCrosstabDefaultKey = "";
+  const tabulationCrosstabDefaultCache = new Map();
   let isRebasing = false;
   let aceEditor = null;
   let editorInitialisedFor = null;
@@ -850,6 +853,78 @@ export function createGlmTool({
     return options;
   }
 
+  function tabulationSelectionKey(modelIds = tabulationSelectedModelIds(), tableId = selectedTabulationTableId) {
+    return `${modelIds.map(normaliseTabulationRef).join("\u001f")}\u001e${String(tableId || "base")}`;
+  }
+
+  function resetTabulationCrosstabDefault() {
+    tabulationCrosstab = "";
+    tabulationCrosstabManualKey = "";
+    tabulationCrosstabDefaultKey = "";
+  }
+
+  function syncTabulationCrosstabSelect() {
+    const select = el("glmTabulationCrosstab");
+    if (select) select.value = tabulationCrosstab;
+  }
+
+  function tabulationDistinctValueKey(value) {
+    if (value === null || value === undefined) return "__lucidum_missing__";
+    try {
+      return JSON.stringify(value);
+    } catch (_) {
+      return String(value);
+    }
+  }
+
+  function tabulationDefaultCrosstabFromPayload(data = {}, features = []) {
+    if (features.length !== 2) return "";
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    if (!rows.length) return features[1] || "";
+    const counts = features.map((feature) => {
+      const values = new Set();
+      rows.forEach((row) => values.add(tabulationDistinctValueKey(row?.[feature])));
+      return values.size;
+    });
+    return counts[0] < counts[1] ? features[0] : features[1];
+  }
+
+  async function defaultTabulationCrosstabForTable(modelIds = tabulationSelectedModelIds(), tableId = selectedTabulationTableId, features = []) {
+    if (features.length !== 2) return "";
+    const key = tabulationSelectionKey(modelIds, tableId);
+    if (tabulationCrosstabDefaultCache.has(key)) return await tabulationCrosstabDefaultCache.get(key);
+    const promise = api("/api/glm/tabulations/table", {
+      method: "POST",
+      body: JSON.stringify({ model_refs: modelIds, table_id: tableId, scale: tabulationScale, crosstab: "" }),
+    })
+      .then((data) => tabulationDefaultCrosstabFromPayload(data, features))
+      .catch(() => "");
+    tabulationCrosstabDefaultCache.set(key, promise);
+    const result = await promise;
+    tabulationCrosstabDefaultCache.set(key, result);
+    return result;
+  }
+
+  async function ensureDefaultTabulationCrosstab(modelIds = tabulationSelectedModelIds(), tableId = selectedTabulationTableId) {
+    const table = activeTabulationTable();
+    const features = Array.isArray(table?.features) ? table.features.map((feature) => String(feature || "")).filter(Boolean) : [];
+    const key = tabulationSelectionKey(modelIds, tableId);
+    if (tabulationCrosstabManualKey === key) return;
+    if (features.length !== 2) {
+      tabulationCrosstab = "";
+      tabulationCrosstabDefaultKey = "";
+      syncTabulationCrosstabSelect();
+      return;
+    }
+    if (tabulationCrosstabDefaultKey === key && features.includes(tabulationCrosstab)) return;
+    const defaultCrosstab = await defaultTabulationCrosstabForTable(modelIds, tableId, features);
+    if (key !== tabulationSelectionKey()) return;
+    if (tabulationCrosstabManualKey === key) return;
+    tabulationCrosstab = features.includes(defaultCrosstab) ? defaultCrosstab : "";
+    tabulationCrosstabDefaultKey = tabulationCrosstab ? key : "";
+    syncTabulationCrosstabSelect();
+  }
+
   function normaliseTabulationCrosstab(options = []) {
     const values = new Set(options.map((option) => option.value));
     if (!values.has(tabulationCrosstab)) tabulationCrosstab = "";
@@ -911,6 +986,7 @@ export function createGlmTool({
   }
 
   function selectTabulationModel(modelId, event = {}) {
+    const previousKey = tabulationSelectionKey();
     const modelRef = normaliseTabulationRef(modelId);
     const orderedIds = tabulationAvailableModels().filter((model) => !tabulationModelIsBlocked(model)).map((model) => tabulationModelRef(model)).filter(Boolean);
     if (!orderedIds.includes(modelRef)) return false;
@@ -938,6 +1014,7 @@ export function createGlmTool({
     if (!next.size) next.add(modelRef);
     selectedTabulationModelIds = next;
     tabulationSelectionAnchorModelId = modelRef;
+    if (previousKey !== tabulationSelectionKey()) resetTabulationCrosstabDefault();
     closeGlmTabulationContextMenu();
     return true;
   }
@@ -968,6 +1045,8 @@ export function createGlmTool({
     });
     el("glmTabulationCrosstab")?.addEventListener("change", (event) => {
       tabulationCrosstab = event.target.value || "";
+      tabulationCrosstabManualKey = tabulationSelectionKey();
+      tabulationCrosstabDefaultKey = "";
       closeGlmTabulationContextMenu();
       loadTabulationView();
     });
@@ -1008,8 +1087,10 @@ export function createGlmTool({
   }
 
   function selectTabulationTable(tableId) {
+    const previousKey = tabulationSelectionKey();
     selectedTabulationTableId = String(tableId || "base") || "base";
     localStorage.setItem("py_lucidum_glm_tabulation_table", selectedTabulationTableId);
+    if (previousKey !== tabulationSelectionKey()) resetTabulationCrosstabDefault();
     closeGlmTabulationContextMenu();
     const table = activeTabulationTable();
     const features = Array.isArray(table?.features) ? table.features : [];
@@ -1330,19 +1411,23 @@ export function createGlmTool({
 
   async function refreshTabulationConfig() {
     const model_ids = tabulationSelectedModelIds();
+    const previousKey = tabulationSelectionKey(model_ids, selectedTabulationTableId);
     selectedTabulationModelIds = new Set(model_ids);
     tabulationPayload = null;
     if (!model_ids.length) {
       tabulationConfig = { models: [], all_models: [], tables: [], warnings: [] };
+      resetTabulationCrosstabDefault();
       renderTabulationsPanel();
       return;
     }
     try {
       tabulationConfig = await api("/api/glm/tabulations/config", { method: "POST", body: JSON.stringify({ model_refs: model_ids }) });
+      tabulationCrosstabDefaultCache.clear();
       const tables = Array.isArray(tabulationConfig?.tables) ? tabulationConfig.tables : [];
       if (tables.length && !tables.some((table) => String(table.table_id || "") === selectedTabulationTableId)) {
         selectedTabulationTableId = String(tables[0]?.table_id || "base");
       }
+      if (previousKey !== tabulationSelectionKey(tabulationSelectedModelIds(), selectedTabulationTableId)) resetTabulationCrosstabDefault();
       setGlmNotice("");
       renderTabulationsPanel();
       await loadTabulationView();
@@ -1488,8 +1573,10 @@ export function createGlmTool({
     refreshTabulationDiagnostics();
     const seq = tabulationRenderSeq + 1;
     tabulationRenderSeq = seq;
-    const payload = { model_refs: model_ids, table_id, scale: tabulationScale, crosstab: tabulationCrosstab };
     try {
+      await ensureDefaultTabulationCrosstab(model_ids, table_id);
+      if (seq !== tabulationRenderSeq) return;
+      const payload = { model_refs: model_ids, table_id, scale: tabulationScale, crosstab: tabulationCrosstab };
       if (tabulationView === "plot") {
         const data = await api("/api/glm/tabulations/plot", { method: "POST", body: JSON.stringify(payload) });
         if (seq !== tabulationRenderSeq) return;

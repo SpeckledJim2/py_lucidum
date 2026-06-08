@@ -739,9 +739,10 @@
         align-items: center;
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
+        column-gap: 20px;
         justify-content: space-between;
         min-width: 0;
+        row-gap: 8px;
         width: 100%;
       }
 
