@@ -1504,7 +1504,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("payload.feature_interaction_groupings = featureInteractionGroupings;", js)
         self.assertIn("payload.feature_interaction_features = featureInteractionFeatures;", js)
         self.assertIn("payload.feature_interaction_pairs = featureInteractionPairs;", js)
-        self.assertIn("if (currentModelId !== nextModelId) featureDraftState = null;", js)
+        self.assertIn("if (currentModelId !== nextModelId) {\n      featureDraftState = null;\n      featureInteractionPairEditModelId = \"\";", js)
         self.assertNotIn("config = nextConfig;\n    activeDetail = null;", js)
         self.assertIn("(trained; spec changed)", js)
         self.assertIn("(trained; missing from spec)", js)

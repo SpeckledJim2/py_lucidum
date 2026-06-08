@@ -173,6 +173,7 @@ export function createGbmTool({
   let featureMetricModelId = "";
   let featureToolbarOutsideClickBound = false;
   let featureDraftState = null;
+  let featureInteractionPairEditModelId = "";
   const treeViewer = createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNotice });
   const shapTool = createGbmShapTool({ api, escapeHtml, setNotice: setGbmNotice });
   const stackedShapTool = createGbmStackedShapTool({ api, escapeHtml, setNotice: setGbmNotice });
@@ -608,13 +609,17 @@ export function createGbmTool({
   function captureFeatureDraftStateForRender(nextData = config) {
     const mount = el("modelToolWrap");
     if (!mount?.querySelector(".gbm-tool") || !config) {
-      if (featureDraftState && featureDraftState.modelId !== featureDraftModelId(nextData)) featureDraftState = null;
+      if (featureDraftState && featureDraftState.modelId !== featureDraftModelId(nextData)) {
+        featureDraftState = null;
+        featureInteractionPairEditModelId = "";
+      }
       return;
     }
     const currentModelId = featureDraftModelId(config);
     const nextModelId = featureDraftModelId(nextData);
     if (currentModelId !== nextModelId) {
       featureDraftState = null;
+      featureInteractionPairEditModelId = "";
       return;
     }
     const rows = currentFeatureRows();
@@ -641,6 +646,29 @@ export function createGbmTool({
 
   function featureDraftForData(data = config) {
     return featureDraftState && featureDraftState.modelId === featureDraftModelId(data) ? featureDraftState : null;
+  }
+
+  function markFeatureInteractionPairsEdited(pairs, features = currentFeatureRows()) {
+    const existing = featureDraftForData(config);
+    const rows = Array.isArray(features) && features.length ? features : currentFeatureRows();
+    const interactionGroupings = existing?.interactionGroupings || currentFeatureInteractionGroupings();
+    const scenarioName = existing?.scenarioName ?? (el("gbmFeatureScenarioDropdown")?.dataset.gbmSelectedFeatureScenario || "");
+    featureDraftState = {
+      modelId: featureDraftModelId(config),
+      features: rows.map((feature) => ({
+        name: feature.name,
+        include: Boolean(feature.include),
+        monotonicity: feature.monotonicity || "",
+        feature_interaction_locked: Boolean(feature.feature_interaction_locked),
+      })),
+      interactionGroupings,
+      interactionGroupingsEdited: existing?.interactionGroupingsEdited ?? featureInteractionGroupingsEdited(interactionGroupings, config),
+      interactionPairs: normaliseFeatureInteractionPairs(pairs),
+      interactionPairsEdited: true,
+      scenarioName,
+      scenarioEdited: existing?.scenarioEdited ?? featureScenarioSelectionEdited(scenarioName, config),
+    };
+    featureInteractionPairEditModelId = featureDraftModelId(config);
   }
 
   function applyFeatureDraftStateToData(data = {}) {
@@ -927,8 +955,8 @@ export function createGbmTool({
     const active = normaliseActiveFeatureInteractionConstraints(activeConstraints);
     const draft = featureDraftForData(config);
     const pairFeatures = pairCandidateFeatureRows(features);
-    const sourcePairs = draft?.interactionPairsEdited ? draft.interactionPairs || [] : active.pairs;
-    const pairs = pruneFeatureInteractionPairs(sourcePairs, features);
+    const sourcePairs = featureInteractionPairsUserEdited(config) ? draft.interactionPairs || [] : active.pairs;
+    const pairs = normaliseFeatureInteractionPairs(sourcePairs);
     const pairClass = pairs.length ? " has-constraints" : "";
     return `
       <div id="gbmFeatureInteractionPairSelect" class="gbm-interaction-pair-select" data-gbm-feature-menu-root>
@@ -1091,8 +1119,9 @@ export function createGbmTool({
     return names;
   }
 
-  function pruneFeatureInteractionPairs(pairs = [], features = currentFeatureRows()) {
-    const allowed = new Set(selectedPairFeatureRows(features).map((feature) => feature.name));
+  function pruneFeatureInteractionPairs(pairs = [], features = currentFeatureRows(), { requireSelected = true } = {}) {
+    const allowedRows = requireSelected ? selectedPairFeatureRows(features) : pairCandidateFeatureRows(features);
+    const allowed = new Set(allowedRows.map((feature) => feature.name));
     return normaliseFeatureInteractionPairs(pairs).filter((pair) => allowed.has(pair.left) && allowed.has(pair.right));
   }
 
@@ -1180,13 +1209,28 @@ export function createGbmTool({
     return features.length ? [...new Set(features)] : null;
   }
 
-  function currentFeatureInteractionPairs() {
+  function renderedFeatureInteractionPairs() {
     return normaliseFeatureInteractionPairs(
       [...document.querySelectorAll("[data-gbm-interaction-pair-row]")]
         .map((row) => ({
           left: row.getAttribute("data-gbm-interaction-pair-left") || "",
           right: row.getAttribute("data-gbm-interaction-pair-right") || "",
         }))
+    );
+  }
+
+  function currentFeatureInteractionPairs(data = config) {
+    const draft = featureDraftForData(data);
+    if (featureInteractionPairsUserEdited(data)) return normaliseFeatureInteractionPairs(draft.interactionPairs || []);
+    const activePairs = activeFeatureInteractionPairs(data);
+    return activePairs.length ? activePairs : renderedFeatureInteractionPairs();
+  }
+
+  function featureInteractionPairsUserEdited(data = config) {
+    return Boolean(
+      featureInteractionPairEditModelId
+      && featureInteractionPairEditModelId === featureDraftModelId(data)
+      && featureDraftForData(data)?.interactionPairsEdited
     );
   }
 
@@ -1200,6 +1244,7 @@ export function createGbmTool({
   }
 
   function setFeatureInteractionPairs(pairs, features = currentFeatureRows()) {
+    markFeatureInteractionPairsEdited(pairs, features);
     syncFeatureInteractionPairControls(features, pairs);
     syncFeatureInteractionLocks(currentFeatureRows());
   }
@@ -1248,7 +1293,7 @@ export function createGbmTool({
     const root = el("gbmFeatureInteractionPairSelect");
     if (!root) return;
     const selectedFeatures = pairCandidateFeatureRows(features);
-    const pairs = pruneFeatureInteractionPairs(nextPairs === null ? currentFeatureInteractionPairs() : nextPairs, features);
+    const pairs = normaliseFeatureInteractionPairs(nextPairs === null ? currentFeatureInteractionPairs() : nextPairs);
     const leftSelect = el("gbmInteractionPairLeft");
     const rightSelect = el("gbmInteractionPairRight");
     const leftValue = selectedFeatures.some((feature) => feature.name === leftSelect?.value) ? leftSelect.value : selectedFeatures[0]?.name || "";
@@ -1340,11 +1385,11 @@ export function createGbmTool({
 
   function renderedPairInteractionFeatureNames(features) {
     const draft = featureDraftForData(config);
-    const sourcePairs = draft?.interactionPairsEdited
+    const sourcePairs = featureInteractionPairsUserEdited(config)
       ? draft.interactionPairs || []
       : activeFeatureInteractionPairs(config);
     const locked = new Set();
-    for (const pair of pruneFeatureInteractionPairs(sourcePairs, features)) {
+    for (const pair of normaliseFeatureInteractionPairs(sourcePairs)) {
       locked.add(pair.left);
       locked.add(pair.right);
     }
@@ -1375,7 +1420,7 @@ export function createGbmTool({
 
   function selectedPairInteractionFeatureNames(features = currentFeatureRows()) {
     const locked = new Set();
-    for (const pair of pruneFeatureInteractionPairs(currentFeatureInteractionPairs(), features)) {
+    for (const pair of normaliseFeatureInteractionPairs(currentFeatureInteractionPairs())) {
       locked.add(pair.left);
       locked.add(pair.right);
     }
@@ -3359,7 +3404,10 @@ export function createGbmTool({
     syncDatasetGbmCountFromConfig(nextConfig);
     const currentModelId = featureDraftModelId(config);
     const nextModelId = featureDraftModelId(nextConfig);
-    if (currentModelId !== nextModelId) featureDraftState = null;
+    if (currentModelId !== nextModelId) {
+      featureDraftState = null;
+      featureInteractionPairEditModelId = "";
+    }
     activeDetail = null;
     setGbmNotice("");
     if (state.tool === tool) {

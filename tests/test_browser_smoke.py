@@ -119,7 +119,11 @@ class BrowserSmokeTests(unittest.TestCase):
                         "feature_interaction_constraints": (
                             {"groupings": ["DRIVER"], "groups": [{"grouping": "DRIVER", "features": ["Age"]}]}
                             if model_id.endswith("-2")
-                            else {"groupings": ["OLD"], "groups": [{"grouping": "OLD", "features": ["Age"]}]}
+                            else (
+                                {"mode": "pairs", "pairs": [{"left": "Age", "right": "Segment"}]}
+                                if model_id == "browser-smoke-delete-a"
+                                else {"groupings": ["OLD"], "groups": [{"grouping": "OLD", "features": ["Age"]}]}
+                            )
                         ),
                         "sources": {},
                     },
@@ -127,7 +131,7 @@ class BrowserSmokeTests(unittest.TestCase):
                 feature_config = [{"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 5.0}]
                 if model_id == "browser-smoke-model":
                     feature_config.append({"name": "lat", "kind": "numeric", "include": True, "monotonicity": "", "gain": 4.0})
-                if model_id.endswith("-2"):
+                if model_id.endswith("-2") or model_id == "browser-smoke-delete-a":
                     feature_config.append({"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 6.0})
                 store.write_json(model_dir / "feature_config.json", feature_config)
                 store.write_json(
@@ -3312,6 +3316,106 @@ COPY (
                 self.assertTrue(navigator_state["activateDisabled"])
                 self.assertTrue(navigator_state["deleteDisabled"])
                 self.assertTrue(navigator_state["hasActivateButton"])
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Disposable smoke model A").click()
+                page.locator("#gbmActivateModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Disposable smoke model A")
+                      && document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Disposable smoke model A")
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("button", name="Features and parameters").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const lockState = (name) => {
+                        const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                          .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes(name));
+                        const cell = row?.querySelector(".tabulator-cell[tabulator-field='name']");
+                        return {
+                          pair: Boolean(cell?.querySelector(".gbm-pair-interaction-lock")),
+                          singleton: Boolean(cell?.querySelector(".gbm-feature-interaction-lock")),
+                          subscript: cell?.querySelector(".gbm-pair-interaction-lock .gbm-interaction-lock-subscript")?.textContent.trim() || "",
+                        };
+                      };
+                      const age = lockState("Age");
+                      const segment = lockState("Segment");
+                      return document.querySelector("#gbmFeatureInteractionPairButton")?.textContent.trim() === "Interaction pairs (1)"
+                        && document.querySelectorAll("[data-gbm-interaction-pair-row]").length === 1
+                        && age.pair && !age.singleton && age.subscript === "2"
+                        && segment.pair && !segment.singleton && segment.subscript === "2";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                pair_validate_payload: dict[str, Any] = {}
+                pair_train_payload: dict[str, Any] = {}
+
+                def pair_validate_route(route: Any) -> None:
+                    pair_validate_payload["value"] = route.request.post_data_json
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps({"ok": True, "errors": [], "warnings": [], "grid": {"messages": []}}),
+                    )
+
+                def pair_train_route(route: Any) -> None:
+                    pair_train_payload["value"] = route.request.post_data_json
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "job_id": "pair-live-job",
+                                "status": "queued",
+                                "created_at": "2026-05-25T00:00:00Z",
+                                "updated_at": "2026-05-25T00:00:00Z",
+                                "result": None,
+                                "error": None,
+                                "progress": None,
+                            }
+                        ),
+                    )
+
+                def pair_job_route(route: Any) -> None:
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "job_id": "pair-live-job",
+                                "status": "succeeded",
+                                "created_at": "2026-05-25T00:00:00Z",
+                                "updated_at": "2026-05-25T00:00:01Z",
+                                "result": {"sources": {}},
+                                "error": None,
+                                "progress": {"phase": "succeeded", "message": "GBM training complete", "percent": 100},
+                            }
+                        ),
+                    )
+
+                page.route("**/api/gbm/validate", pair_validate_route)
+                page.route("**/api/gbm/train", pair_train_route)
+                page.route("**/api/gbm/jobs/pair-live-job", pair_job_route)
+                with page.expect_request("**/api/gbm/train", timeout=10_000):
+                    page.locator("#gbmTrainBtn").click()
+                page.wait_for_function("() => !document.querySelector('#gbmTrainBtn')?.classList.contains('training')", timeout=10_000)
+                self.assertEqual(pair_validate_payload["value"]["feature_interaction_pairs"], [{"left": "Age", "right": "Segment"}])
+                self.assertEqual(pair_train_payload["value"]["feature_interaction_pairs"], [{"left": "Age", "right": "Segment"}])
+                page.unroute("**/api/gbm/validate", pair_validate_route)
+                page.unroute("**/api/gbm/train", pair_train_route)
+                page.unroute("**/api/gbm/jobs/pair-live-job", pair_job_route)
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
+                page.locator("#gbmActivateModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
+                      && document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Browser smoke model")
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Disposable smoke model A").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Disposable smoke model B").click()
                 plain_replace_state = page.evaluate(
