@@ -1,3 +1,6 @@
+import { createGlmFormulaBuilder } from "./glm-formula-builder.js";
+import { createGlmModelNavigator } from "./glm-model-navigator.js";
+import { createGlmTabulations, GLM_TABULATION_MODEL_CROSSTAB } from "./glm-tabulations.js";
 import { loadTabulator } from "./shared/tabulator.js";
 import {
   bindFallbackModelSelection,
@@ -22,11 +25,6 @@ import {
 const GLM_RUNNING_POLL_MS = 500;
 const GLM_QUEUED_POLL_MS = 1000;
 const GLM_MODEL_LIST_POLL_MS = 2000;
-const ACE_BASE_PATH = "/static/vendor/ace";
-const GLM_BUILDER_SPLIT_STORAGE_KEY = "py_lucidum_glm_formula_panel_width";
-const GLM_TABULATION_SPLIT_STORAGE_KEY = "py_lucidum_glm_tabulation_sidebar_width_v2";
-const GLM_TABULATION_MODEL_CROSSTAB = "__model__";
-const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
 
 function glmAutoModelTimeLabel(date = new Date()) {
   const hour = String(date.getHours()).padStart(2, "0");
@@ -62,41 +60,6 @@ function downloadText(filename, text, type = "text/plain") {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-}
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`);
-    if (existing) {
-      existing.addEventListener("load", resolve, { once: true });
-      existing.addEventListener("error", reject, { once: true });
-      if (existing.dataset.loaded === "true") resolve();
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = true;
-    script.dataset.loaded = "false";
-    script.addEventListener("load", () => {
-      script.dataset.loaded = "true";
-      resolve();
-    }, { once: true });
-    script.addEventListener("error", reject, { once: true });
-    document.head.append(script);
-  });
-}
-
-let aceLoaderPromise = null;
-
-async function loadAce() {
-  if (window.ace) return window.ace;
-  if (!aceLoaderPromise) {
-    aceLoaderPromise = loadScript(`${ACE_BASE_PATH}/ace.js`).then(() => window.ace);
-  }
-  const ace = await aceLoaderPromise;
-  if (!ace) throw new Error("Ace editor did not load");
-  ace.config.set("basePath", ACE_BASE_PATH);
-  return ace;
 }
 
 export function glmModelDetailLabel(model = {}) {
@@ -178,17 +141,35 @@ export function createGlmTool({
   let tabulationCrosstabDefaultKey = "";
   const tabulationCrosstabDefaultCache = new Map();
   let isRebasing = false;
-  let aceEditor = null;
-  let editorInitialisedFor = null;
-  let editorFontSize = Number(localStorage.getItem("py_lucidum_glm_font_size")) || 14;
-  let selectedFamily = localStorage.getItem("py_lucidum_glm_family") || "normal";
-  let selectedTrainingScope = localStorage.getItem("py_lucidum_glm_training_scope") || "all";
-  let selectedRegularizationMode = localStorage.getItem("py_lucidum_glm_regularization_mode") || "none";
-  let selectedRegularizationMix = localStorage.getItem("py_lucidum_glm_regularization_mix") || "0.5";
-  let selectedRegularizationAlpha = localStorage.getItem("py_lucidum_glm_regularization_alpha") || "0.01";
-  let formulaDraft = localStorage.getItem("py_lucidum_glm_formula")
-    || "# GLM formula\n# Enter RHS terms, or response ~ terms\n";
   let builderDraftSourceModelId = "";
+  const formulaBuilder = createGlmFormulaBuilder({
+    el,
+    escapeHtml,
+    getFamilies: () => config?.families || [],
+    onBuildModel: buildModel,
+    onCoefficientSearch: () => renderCoefficientTable(coefficientRows),
+    onCopyCoefficients: copyCoefficients,
+    onDownloadCoefficients: downloadCoefficients,
+  });
+  const modelNavigator = createGlmModelNavigator({
+    bindFallbackModelSelection,
+    emptyStateHtml,
+    escapeHtml,
+    formatModelCreated,
+    formatModelMetric,
+    modelCreatedSort: sharedModelCreatedSort,
+    modelLabel,
+    modelNumberOrNull,
+    modelWeightLabel,
+    normaliseModels,
+    selectedModelIds: () => selectedModelIds,
+    onFallbackSelectionChange: syncSelectedModelsFromTable,
+  });
+  const tabulations = createGlmTabulations({
+    el,
+    modelNumberOrNull,
+    scheduleResize: scheduleTabulationResize,
+  });
 
   function buildRequest() {
     if (!state.schema) return null;
@@ -241,7 +222,7 @@ export function createGlmTool({
   }
 
   function render(data = {}) {
-    captureBuilderDraft();
+    formulaBuilder.captureDraft();
     config = data;
     modelRows = normaliseModels(data.models || []);
     const activeModelId = currentActiveModelId(data);
@@ -256,7 +237,7 @@ export function createGlmTool({
     setGroupMeta(tool, groupMeta);
     setStatus("");
     setChartMessage("");
-    disposeEditor();
+    formulaBuilder.disposeEditor();
     disconnectTabulationResizeObserver();
     disposeTabulationChart();
     disposeTabulationTable();
@@ -274,7 +255,7 @@ export function createGlmTool({
     renderModelTable(modelRows, data.active_model_id);
     syncSidebarModelChooser(modelRows, data.active_model_id);
     renderCoefficientTable(coefficientRowsForActiveModel(data.active_model_id));
-    initEditor();
+    formulaBuilder.initEditor();
     if (activeModelId) loadModelDetail(activeModelId);
     if (liveProgress) renderLiveProgress(liveProgress);
     if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
@@ -285,12 +266,10 @@ export function createGlmTool({
   }
 
   function shellHtml(data = {}) {
-    const sample = data.sample || {};
-    const trainingDisabled = !sample.available || !Number(sample.training_rows || 0);
-    if (trainingDisabled && selectedTrainingScope === "training" && !data.active_model_id) selectedTrainingScope = "all";
+    const trainingDisabled = formulaBuilder.ensureTrainingScope(data);
     const activeModel = modelForActiveModel(data.active_model_id);
     const diagnostics = activeModel?.diagnostics || activeModel?.metrics || {};
-    const splitStyle = savedBuilderSplitWidthStyle();
+    const splitStyle = formulaBuilder.savedSplitWidthStyle();
     return `
       <div class="glm-tool">
         <div id="glmNotice" class="glm-notice hidden" role="alert" aria-live="polite"></div>
@@ -312,8 +291,8 @@ export function createGlmTool({
                   <button id="glmFontSmallerBtn" class="tab glm-icon-action-button" type="button" aria-label="Decrease formula font size" title="Decrease font size">A-</button>
                   <button id="glmFontLargerBtn" class="tab glm-icon-action-button" type="button" aria-label="Increase formula font size" title="Increase font size">A+</button>
                   <div class="segmented glm-scope-control glm-header-scope-control" role="group" aria-label="Rows to fit">
-                    <button type="button" data-glm-scope="all" class="${selectedTrainingScope === "all" ? "active" : ""}">All</button>
-                    <button type="button" data-glm-scope="training" class="${selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
+                    <button type="button" data-glm-scope="all" class="${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}">All</button>
+                    <button type="button" data-glm-scope="training" class="${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
                   </div>
                   <button id="glmBuildBtn" class="tab glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
@@ -322,26 +301,26 @@ export function createGlmTool({
                 <div class="glm-control-line">
                   <div class="glm-family-row">
                     <label class="glm-control-label" for="glmFamilySelect">Family</label>
-                    <select id="glmFamilySelect" aria-label="GLM family">${familyOptionsHtml(data.families || [])}</select>
-                    <input id="glmFamilyParameter" class="glm-family-parameter" type="text" inputmode="decimal" placeholder="family.parameter" value="${escapeHtml(String(familyParameterDefault(data.families || [])))}" aria-label="GLM family parameter" />
+                    <select id="glmFamilySelect" aria-label="GLM family">${formulaBuilder.familyOptionsHtml(data.families || [])}</select>
+                    <input id="glmFamilyParameter" class="glm-family-parameter" type="text" inputmode="decimal" placeholder="family.parameter" value="${escapeHtml(String(formulaBuilder.familyParameterDefault(data.families || [])))}" aria-label="GLM family parameter" />
                   </div>
                 </div>
                 <div class="glm-control-line">
                   <div class="glm-penalty-row">
                     <label class="glm-control-label" for="glmRegularizationMode">Penalty</label>
-                    <select id="glmRegularizationMode" class="glm-penalty-mode" aria-label="GLM penalty">${regularizationModeOptionsHtml(data.regularization)}</select>
-                    <div id="glmRegularizationManualControls" class="glm-penalty-manual ${selectedRegularizationMode === "manual" ? "" : "disabled"}">
+                    <select id="glmRegularizationMode" class="glm-penalty-mode" aria-label="GLM penalty">${formulaBuilder.regularizationModeOptionsHtml(data.regularization)}</select>
+                    <div id="glmRegularizationManualControls" class="glm-penalty-manual ${formulaBuilder.selectedRegularizationMode === "manual" ? "" : "disabled"}">
                       <label class="glm-control-label" for="glmRegularizationMix">Mix</label>
-                      <select id="glmRegularizationMix" class="glm-penalty-mix" aria-label="GLM penalty mix">${regularizationMixOptionsHtml(data.regularization)}</select>
+                      <select id="glmRegularizationMix" class="glm-penalty-mix" aria-label="GLM penalty mix">${formulaBuilder.regularizationMixOptionsHtml(data.regularization)}</select>
                       <label class="glm-control-label" for="glmRegularizationAlpha">Alpha</label>
-                      <input id="glmRegularizationAlpha" class="glm-penalty-alpha" type="text" inputmode="decimal" value="${escapeHtml(selectedRegularizationAlpha)}" aria-label="GLM penalty alpha" />
+                      <input id="glmRegularizationAlpha" class="glm-penalty-alpha" type="text" inputmode="decimal" value="${escapeHtml(formulaBuilder.selectedRegularizationAlpha)}" aria-label="GLM penalty alpha" />
                     </div>
                   </div>
                 </div>
               </div>
               <div class="glm-editor-shell">
                 <div id="glmFormulaEditor" class="glm-formula-editor"></div>
-                <textarea id="glmFormulaText" class="glm-formula-text" spellcheck="false">${escapeHtml(formulaDraft)}</textarea>
+                <textarea id="glmFormulaText" class="glm-formula-text" spellcheck="false">${escapeHtml(formulaBuilder.formulaDraft)}</textarea>
               </div>
             </section>
             <div id="glmBuilderResizer" class="glm-builder-resizer" role="separator" aria-orientation="vertical" aria-label="Resize GLM formula and coefficients panels" tabindex="0"></div>
@@ -466,21 +445,11 @@ export function createGlmTool({
   }
 
   function normaliseTabulationRef(value) {
-    const text = String(value || "").trim();
-    if (!text) return "";
-    if (text.startsWith("glm:") || text.startsWith("gbm:")) {
-      const parts = text.split(":");
-      return parts.length >= 2 ? `${parts[0]}:${parts[1]}` : text;
-    }
-    return `glm:${text}`;
+    return tabulations.normaliseRef(value);
   }
 
   function tabulationModelRef(model = {}) {
-    const explicit = String(model.model_ref || "").trim();
-    if (explicit) return normaliseTabulationRef(explicit);
-    const kind = String(model.model_kind || "glm").toLowerCase() === "gbm" ? "gbm" : "glm";
-    const modelId = String(model.model_id || "").trim();
-    return modelId ? `${kind}:${modelId}` : "";
+    return tabulations.modelRef(model);
   }
 
   function tabulationAvailableModels() {
@@ -490,24 +459,7 @@ export function createGlmTool({
   }
 
   function tabulationTableSelectorShellHtml(selectedIds = []) {
-    if (selectedIds.length > 1) {
-      return `
-        <section class="glm-tabulation-table-section">
-          <div class="glm-tabulation-section-title">Common tables</div>
-          <div id="glmTabulationCommonTableGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-table-list"></div>
-          <div id="glmTabulationCommonTableFallback" class="glm-tabulation-selector-fallback"></div>
-        </section>
-        <section class="glm-tabulation-table-section">
-          <div class="glm-tabulation-section-title">Other tables</div>
-          <div id="glmTabulationOtherTableGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-table-list"></div>
-          <div id="glmTabulationOtherTableFallback" class="glm-tabulation-selector-fallback"></div>
-        </section>
-      `;
-    }
-    return `
-      <div id="glmTabulationTableGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-table-list"></div>
-      <div id="glmTabulationTableFallback" class="glm-tabulation-selector-fallback"></div>
-    `;
+    return tabulations.tableSelectorShellHtml(selectedIds);
   }
 
   function activeTabulationTable() {
@@ -856,10 +808,7 @@ export function createGlmTool({
   }
 
   function tabulationCrosstabOptions(features = [], modelIds = tabulationSelectedModelIds()) {
-    const options = [{ value: "", label: "No crosstab" }];
-    if (modelIds.length > 1) options.push({ value: GLM_TABULATION_MODEL_CROSSTAB, label: "Model" });
-    features.forEach((feature) => options.push({ value: feature, label: feature }));
-    return options;
+    return tabulations.crosstabOptions(features, modelIds);
   }
 
   function tabulationSelectionKey(modelIds = tabulationSelectedModelIds(), tableId = selectedTabulationTableId) {
@@ -1247,20 +1196,11 @@ export function createGlmTool({
   }
 
   function tabulationDisplayTableValue(value) {
-    const number = modelNumberOrNull(value);
-    if (number === null) return null;
-    if (tabulationScale !== "exp") return number;
-    const expValue = Math.exp(number);
-    return Number.isFinite(expValue) ? expValue : null;
+    return tabulations.displayTableValue(value, tabulationScale);
   }
 
   function tabulationDisplayTableSpan(min, max) {
-    const lo = modelNumberOrNull(min);
-    const hi = modelNumberOrNull(max);
-    if (lo === null || hi === null) return null;
-    if (tabulationScale !== "exp") return hi - lo;
-    const ratio = Math.exp(hi - lo);
-    return Number.isFinite(ratio) ? ratio : null;
+    return tabulations.displayTableSpan(min, max, tabulationScale);
   }
 
   function syncTabulationModelSelectorSelection() {
@@ -1704,96 +1644,23 @@ export function createGlmTool({
   }
 
   function niceTabulationAxisStep(span) {
-    if (!Number.isFinite(span) || span <= 0) return 1;
-    const roughStep = span / GLM_TABULATION_Y_AXIS_TARGET_INTERVALS;
-    const magnitude = 10 ** Math.floor(Math.log10(roughStep));
-    const normalized = roughStep / magnitude;
-    const multiplier = [1, 2, 5, 10].find((candidate) => normalized <= candidate) || 10;
-    return multiplier * magnitude;
+    return tabulations.niceAxisStep(span);
   }
 
   function roundTabulationAxisValue(value, step) {
-    if (!Number.isFinite(value)) return value;
-    const precision = Math.min(12, Math.max(0, Math.ceil(-Math.log10(Math.abs(step))) + 3));
-    return Number(value.toFixed(precision));
+    return tabulations.roundAxisValue(value, step);
   }
 
   function formatTabulationUpliftPercent(value) {
-    if (value === null || value === undefined || Number.isNaN(value)) return "";
-    const number = Number(value);
-    if (!Number.isFinite(number)) return "";
-    let percent = Number(((number - 1) * 100).toFixed(10));
-    if (Math.abs(percent) < 1e-9) percent = 0;
-    const abs = Math.abs(percent);
-    let fractionDigits = 0;
-    if (abs !== 0 && abs < 0.01) fractionDigits = 4;
-    else if (abs !== 0 && abs < 1) fractionDigits = 2;
-    else if (abs !== 0 && abs < 10) fractionDigits = 1;
-    const formatted = percent.toLocaleString(undefined, {
-      minimumFractionDigits: fractionDigits,
-      maximumFractionDigits: fractionDigits,
-    });
-    const sign = percent > 0 ? "+" : "";
-    return `${sign}${formatted}%`;
+    return tabulations.formatUpliftPercent(value);
   }
 
   function formatTabulationAxisTick(value, scale = "linear") {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return "";
-    if (scale === "exp") return formatTabulationUpliftPercent(number);
-    return number.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    return tabulations.formatAxisTick(value, scale);
   }
 
   function tabulationYAxisOptions(data = {}) {
-    const name = data.scale === "exp" ? "exp(tabulated)" : "tabulated";
-    let min = Number(data.min);
-    let max = Number(data.max);
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-      return {
-        type: "value",
-        name,
-        scale: true,
-        splitNumber: GLM_TABULATION_Y_AXIS_TARGET_INTERVALS,
-        axisLabel: { formatter: (value) => formatTabulationAxisTick(value, data.scale) },
-      };
-    }
-    if (max < min) [min, max] = [max, min];
-    const dataMin = min;
-    const dataMax = max;
-    if (min === max) {
-      const pad = data.scale === "exp"
-        ? Math.max(Math.abs(min) * 0.02, 0.01)
-        : Math.max(Math.abs(min) * 0.02, 0.1);
-      min -= pad;
-      max += pad;
-    }
-    const span = Math.max(max - min, Number.EPSILON);
-    const paddedMin = min - span * 0.06;
-    const paddedMax = max + span * 0.06;
-    const step = niceTabulationAxisStep(paddedMax - paddedMin);
-    let axisMin = Math.floor(paddedMin / step) * step;
-    let axisMax = Math.ceil(paddedMax / step) * step;
-    if (data.scale === "exp") {
-      axisMin = Math.floor(dataMin / step) * step;
-      if (axisMin > min) axisMin = Math.max(step, axisMin - step);
-      if (axisMin <= 0) axisMin = Math.max(step, Math.floor(dataMin / step) * step);
-    } else if (dataMin > 0 && axisMin <= 0) {
-      axisMin = Math.floor(dataMin / step) * step;
-      if (axisMin <= 0) axisMin = step;
-    } else if (dataMax < 0 && axisMax >= 0) {
-      axisMax = Math.ceil(dataMax / step) * step;
-      if (axisMax >= 0) axisMax = dataMax;
-    }
-    return {
-      type: "value",
-      name,
-      scale: true,
-      splitNumber: GLM_TABULATION_Y_AXIS_TARGET_INTERVALS,
-      min: roundTabulationAxisValue(axisMin, step),
-      max: roundTabulationAxisValue(axisMax, step),
-      interval: roundTabulationAxisValue(step, step),
-      axisLabel: { formatter: (value) => formatTabulationAxisTick(value, data.scale) },
-    };
+    return tabulations.yAxisOptions(data);
   }
 
   function renderTabulationFallbackTable(columns, rows, data = {}) {
@@ -1943,81 +1810,6 @@ export function createGlmTool({
     notice.classList.toggle("hidden", !text);
   }
 
-  function familyOptionsHtml(families = []) {
-    const rows = families.length ? families : [
-      { value: "normal", label: "Normal" },
-      { value: "poisson", label: "Poisson" },
-      { value: "gamma", label: "Gamma" },
-      { value: "tweedie", label: "Tweedie" },
-      { value: "binomial", label: "Binomial" },
-      { value: "inverse.gaussian", label: "Inverse Gaussian" },
-      { value: "negative.binomial", label: "Negative Binomial" },
-    ];
-    if (!rows.some((row) => row.value === selectedFamily)) selectedFamily = rows[0]?.value || "normal";
-    return rows.map((row) => `<option value="${escapeHtml(row.value)}" ${row.value === selectedFamily ? "selected" : ""}>${escapeHtml(row.label || row.value)}</option>`).join("");
-  }
-
-  function familyParameterDefault(families = []) {
-    const parameter = familyParameterConfig(selectedFamily, families);
-    if (!parameter) return "";
-    const key = `py_lucidum_glm_family_parameter_${selectedFamily}`;
-    return localStorage.getItem(key) || parameter.default || "";
-  }
-
-  function familyParameterConfig(familyValue, families = config?.families || []) {
-    const value = String(familyValue || "").trim();
-    const family = (families || []).find((row) => row.value === value);
-    if (family?.parameter) return family.parameter;
-    if (value === "tweedie") return { label: "var.power", default: "1.5", min: 1, max: 2 };
-    if (value === "negative.binomial") return { label: "theta", default: "1", min: 0.000001 };
-    return null;
-  }
-
-  function syncFamilyParameterControl() {
-    const select = el("glmFamilySelect");
-    const input = el("glmFamilyParameter");
-    if (!select || !input) return;
-    const parameter = familyParameterConfig(select.value);
-    input.disabled = !parameter;
-    input.placeholder = "family.parameter";
-    input.value = parameter ? (localStorage.getItem(`py_lucidum_glm_family_parameter_${select.value}`) || parameter.default || "") : "";
-  }
-
-  function regularizationModeOptionsHtml(regularization = {}) {
-    const rows = Array.isArray(regularization?.modes) && regularization.modes.length
-      ? regularization.modes
-      : [
-        { value: "none", label: "None" },
-        { value: "auto", label: "Auto" },
-        { value: "manual", label: "Manual" },
-      ];
-    if (!rows.some((row) => row.value === selectedRegularizationMode)) selectedRegularizationMode = "none";
-    return rows.map((row) => `<option value="${escapeHtml(row.value)}" ${row.value === selectedRegularizationMode ? "selected" : ""}>${escapeHtml(row.label || row.value)}</option>`).join("");
-  }
-
-  function regularizationMixOptionsHtml(regularization = {}) {
-    const rows = Array.isArray(regularization?.mixes) && regularization.mixes.length
-      ? regularization.mixes
-      : [
-        { value: "0", label: "Ridge" },
-        { value: "0.5", label: "Elastic net" },
-        { value: "1", label: "Lasso" },
-      ];
-    if (!rows.some((row) => String(row.value) === String(selectedRegularizationMix))) selectedRegularizationMix = "0.5";
-    return rows.map((row) => `<option value="${escapeHtml(row.value)}" ${String(row.value) === String(selectedRegularizationMix) ? "selected" : ""}>${escapeHtml(row.label || row.value)}</option>`).join("");
-  }
-
-  function syncRegularizationControls() {
-    const mode = el("glmRegularizationMode");
-    const manual = el("glmRegularizationManualControls");
-    const mix = el("glmRegularizationMix");
-    const alpha = el("glmRegularizationAlpha");
-    const isManual = (mode?.value || selectedRegularizationMode) === "manual";
-    if (manual) manual.classList.toggle("disabled", !isManual);
-    if (mix) mix.disabled = !isManual;
-    if (alpha) alpha.disabled = !isManual;
-  }
-
   function bindTabs(mount) {
     mount.querySelectorAll("[data-glm-tab]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -2031,148 +1823,19 @@ export function createGlmTool({
   }
 
   function bindBuilderControls() {
-    syncFamilyParameterControl();
-    syncRegularizationControls();
-    el("glmFamilySelect")?.addEventListener("change", (event) => {
-      selectedFamily = event.target.value;
-      localStorage.setItem("py_lucidum_glm_family", selectedFamily);
-      syncFamilyParameterControl();
-    });
-    el("glmFamilyParameter")?.addEventListener("change", (event) => {
-      if (familyParameterConfig(selectedFamily)) localStorage.setItem(`py_lucidum_glm_family_parameter_${selectedFamily}`, event.target.value.trim());
-    });
-    el("glmRegularizationMode")?.addEventListener("change", (event) => {
-      selectedRegularizationMode = event.target.value || "none";
-      localStorage.setItem("py_lucidum_glm_regularization_mode", selectedRegularizationMode);
-      syncRegularizationControls();
-    });
-    el("glmRegularizationMix")?.addEventListener("change", (event) => {
-      selectedRegularizationMix = event.target.value || "0.5";
-      localStorage.setItem("py_lucidum_glm_regularization_mix", selectedRegularizationMix);
-    });
-    el("glmRegularizationAlpha")?.addEventListener("change", (event) => {
-      selectedRegularizationAlpha = event.target.value.trim() || "0.01";
-      localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
-    });
-    document.querySelectorAll("[data-glm-scope]").forEach((button) => {
-      button.addEventListener("click", () => {
-        if (button.disabled) return;
-        selectedTrainingScope = button.dataset.glmScope || "all";
-        localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
-        document.querySelectorAll("[data-glm-scope]").forEach((item) => item.classList.toggle("active", item === button));
-      });
-    });
-    el("glmClearFormulaBtn")?.addEventListener("click", () => setFormulaText(""));
-    el("glmFontSmallerBtn")?.addEventListener("click", () => adjustFontSize(-1));
-    el("glmFontLargerBtn")?.addEventListener("click", () => adjustFontSize(1));
-    el("glmBuildBtn")?.addEventListener("click", buildModel);
-    el("glmCopyCoefficientsBtn")?.addEventListener("click", copyCoefficients);
-    el("glmDownloadCoefficientsBtn")?.addEventListener("click", downloadCoefficients);
-    el("glmCoefficientSearch")?.addEventListener("input", () => renderCoefficientTable(coefficientRows));
-  }
-
-  function savedBuilderSplitWidthStyle() {
-    const width = Number(localStorage.getItem(GLM_BUILDER_SPLIT_STORAGE_KEY));
-    return Number.isFinite(width) && width > 0 ? `--glm-formula-panel-width: ${Math.round(width)}px;` : "";
+    formulaBuilder.bindControls();
   }
 
   function savedTabulationSplitWidthStyle() {
-    const width = Number(localStorage.getItem(GLM_TABULATION_SPLIT_STORAGE_KEY));
-    return Number.isFinite(width) && width > 0 ? `--glm-tabulation-sidebar-width: ${Math.round(width)}px;` : "";
+    return tabulations.savedSplitWidthStyle();
   }
 
   function bindBuilderResizer() {
-    const layout = document.querySelector(".glm-builder-layout");
-    const resizer = el("glmBuilderResizer");
-    if (!layout || !resizer) return;
-
-    const resizeTo = (width, persist = true) => {
-      const layoutRect = layout.getBoundingClientRect();
-      const resizerWidth = resizer.getBoundingClientRect().width || 0;
-      const minLeft = 320;
-      const minRight = 360;
-      const maxLeft = Math.max(minLeft, layoutRect.width - resizerWidth - minRight);
-      const clamped = Math.max(minLeft, Math.min(maxLeft, width));
-      layout.style.setProperty("--glm-formula-panel-width", `${Math.round(clamped)}px`);
-      if (persist) localStorage.setItem(GLM_BUILDER_SPLIT_STORAGE_KEY, String(Math.round(clamped)));
-      if (aceEditor) aceEditor.resize();
-    };
-
-    const resizeFromClientX = (clientX) => {
-      const layoutRect = layout.getBoundingClientRect();
-      resizeTo(clientX - layoutRect.left);
-    };
-
-    resizer.addEventListener("pointerdown", (event) => {
-      event.preventDefault();
-      resizer.classList.add("dragging");
-      document.body.classList.add("glm-builder-resizing");
-      resizer.setPointerCapture?.(event.pointerId);
-      const onMove = (moveEvent) => resizeFromClientX(moveEvent.clientX);
-      const onUp = () => {
-        resizer.classList.remove("dragging");
-        document.body.classList.remove("glm-builder-resizing");
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp, { once: true });
-    });
-
-    resizer.addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
-      event.preventDefault();
-      const formulaPanel = layout.querySelector(".glm-formula-panel");
-      const current = formulaPanel?.getBoundingClientRect().width || 0;
-      resizeTo(current + (event.key === "ArrowRight" ? 24 : -24));
-    });
+    formulaBuilder.bindResizer();
   }
 
   function bindTabulationResizer() {
-    const layout = document.querySelector(".glm-tabulation-layout");
-    const resizer = el("glmTabulationResizer");
-    if (!layout || !resizer) return;
-
-    const resizeTo = (width, persist = true) => {
-      const layoutRect = layout.getBoundingClientRect();
-      const resizerWidth = resizer.getBoundingClientRect().width || 0;
-      const minLeft = 420;
-      const minRight = 420;
-      const maxLeft = Math.max(minLeft, layoutRect.width - resizerWidth - minRight);
-      const clamped = Math.max(minLeft, Math.min(maxLeft, width));
-      layout.style.setProperty("--glm-tabulation-sidebar-width", `${Math.round(clamped)}px`);
-      if (persist) localStorage.setItem(GLM_TABULATION_SPLIT_STORAGE_KEY, String(Math.round(clamped)));
-      scheduleTabulationResize();
-    };
-
-    const resizeFromClientX = (clientX) => {
-      const layoutRect = layout.getBoundingClientRect();
-      resizeTo(clientX - layoutRect.left);
-    };
-
-    resizer.addEventListener("pointerdown", (event) => {
-      event.preventDefault();
-      resizer.classList.add("dragging");
-      document.body.classList.add("glm-builder-resizing");
-      resizer.setPointerCapture?.(event.pointerId);
-      const onMove = (moveEvent) => resizeFromClientX(moveEvent.clientX);
-      const onUp = () => {
-        resizer.classList.remove("dragging");
-        document.body.classList.remove("glm-builder-resizing");
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp, { once: true });
-    });
-
-    resizer.addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
-      event.preventDefault();
-      const sidebar = layout.querySelector(".glm-tabulation-sidebar");
-      const current = sidebar?.getBoundingClientRect().width || 0;
-      resizeTo(current + (event.key === "ArrowRight" ? 24 : -24));
-    });
+    tabulations.bindResizer();
   }
 
   function bindModelActions() {
@@ -2182,162 +1845,18 @@ export function createGlmTool({
     updateModelActionButtons();
   }
 
-  function syncAceGutterWidth() {
-    if (!aceEditor?.session || !aceEditor?.container) return;
-    const lineCount = Math.max(1, aceEditor.session.getLength());
-    const digits = String(lineCount).length;
-    const width = Math.max(24, Math.ceil((digits * editorFontSize * 0.62) + 10));
-    const value = `${width}px`;
-    const container = aceEditor.container;
-    container.style.setProperty("--glm-ace-gutter-width", value);
-    const gutter = container.querySelector(".ace_gutter");
-    const scroller = container.querySelector(".ace_scroller");
-    if (gutter) gutter.style.width = value;
-    if (scroller) scroller.style.left = value;
-    aceEditor.resize();
-  }
-
-  async function initEditor() {
-    const mount = el("glmFormulaEditor");
-    const fallback = el("glmFormulaText");
-    if (!mount || !fallback) return;
-    fallback.value = formulaDraft;
-    fallback.style.fontSize = `${editorFontSize}px`;
-    try {
-      const ace = await loadAce();
-      if (!document.body.contains(mount) || editorInitialisedFor === mount) return;
-      aceEditor = ace.edit(mount);
-      editorInitialisedFor = mount;
-      aceEditor.setTheme("ace/theme/textmate");
-      aceEditor.session.setMode("ace/mode/r");
-      aceEditor.session.setUseWorker(false);
-      aceEditor.setOptions({
-        fontSize: `${editorFontSize}px`,
-        tabSize: 2,
-        useSoftTabs: true,
-        showPrintMargin: false,
-        wrap: true,
-      });
-      aceEditor.setValue(formulaDraft, -1);
-      syncAceGutterWidth();
-      aceEditor.session.on("change", () => {
-        formulaDraft = aceEditor.getValue();
-        localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
-        syncAceGutterWidth();
-      });
-      fallback.classList.add("hidden");
-      mount.classList.remove("fallback");
-    } catch (_) {
-      mount.classList.add("fallback");
-      fallback.classList.remove("hidden");
-      fallback.addEventListener("input", () => {
-        formulaDraft = fallback.value;
-        localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
-      });
-    }
-  }
-
-  function disposeEditor() {
-    if (!aceEditor) return;
-    formulaDraft = aceEditor.getValue();
-    localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
-    try {
-      aceEditor.destroy();
-    } catch (_) {
-    }
-    aceEditor = null;
-    editorInitialisedFor = null;
-  }
-
-  function getFormulaText() {
-    captureBuilderDraft();
-    return formulaDraft;
-  }
-
-  function setFormulaText(value) {
-    formulaDraft = String(value || "");
-    localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
-    if (aceEditor) {
-      aceEditor.setValue(formulaDraft, -1);
-      syncAceGutterWidth();
-    }
-    if (el("glmFormulaText")) el("glmFormulaText").value = formulaDraft;
-  }
-
-  function adjustFontSize(delta) {
-    editorFontSize = Math.max(10, Math.min(24, editorFontSize + delta));
-    localStorage.setItem("py_lucidum_glm_font_size", String(editorFontSize));
-    if (aceEditor) {
-      aceEditor.setFontSize(`${editorFontSize}px`);
-      syncAceGutterWidth();
-    }
-    if (el("glmFormulaText")) el("glmFormulaText").style.fontSize = `${editorFontSize}px`;
-  }
-
-  function captureBuilderDraft() {
-    if (aceEditor) formulaDraft = aceEditor.getValue();
-    else if (el("glmFormulaText")) formulaDraft = el("glmFormulaText").value;
-    localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
-
-    const familySelect = el("glmFamilySelect");
-    if (familySelect?.value) {
-      selectedFamily = familySelect.value;
-      localStorage.setItem("py_lucidum_glm_family", selectedFamily);
-    }
-    const familyParameter = el("glmFamilyParameter");
-    if (familyParameter && familyParameterConfig(selectedFamily)) {
-      localStorage.setItem(`py_lucidum_glm_family_parameter_${selectedFamily}`, familyParameter.value.trim());
-    }
-
-    const activeScope = document.querySelector("[data-glm-scope].active")?.dataset?.glmScope;
-    if (activeScope === "all" || activeScope === "training") {
-      selectedTrainingScope = activeScope;
-      localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
-    }
-
-    const regularizationMode = el("glmRegularizationMode");
-    if (regularizationMode?.value) {
-      selectedRegularizationMode = regularizationMode.value || "none";
-      localStorage.setItem("py_lucidum_glm_regularization_mode", selectedRegularizationMode);
-    }
-    const regularizationMix = el("glmRegularizationMix");
-    if (regularizationMix?.value) {
-      selectedRegularizationMix = regularizationMix.value || "0.5";
-      localStorage.setItem("py_lucidum_glm_regularization_mix", selectedRegularizationMix);
-    }
-    const regularizationAlpha = el("glmRegularizationAlpha");
-    if (regularizationAlpha) {
-      selectedRegularizationAlpha = regularizationAlpha.value.trim();
-      localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
-    }
-  }
-
   function buildPayload() {
-    captureBuilderDraft();
     const actual = el("actualNumerator")?.value || "";
     const denominator = el("denominator")?.value || "__none__";
-    const family = el("glmFamilySelect")?.value || selectedFamily || "normal";
-    const familyParameter = familyParameterConfig(family) ? (el("glmFamilyParameter")?.value.trim() || "") : "";
-    return {
-      formula: getFormulaText(),
-      family,
-      family_parameter: familyParameter,
-      regularization: buildRegularizationPayload(),
-      training_scope: selectedTrainingScope,
-      response_column: actual,
-      denominator_column: denominator === "__none__" ? "" : denominator,
+    return formulaBuilder.buildPayload({
+      actual,
+      denominator,
       label: `GLM ${glmAutoModelTimeLabel()}`,
-    };
+    });
   }
 
   function buildRegularizationPayload() {
-    const mode = el("glmRegularizationMode")?.value || selectedRegularizationMode || "none";
-    const payload = { mode };
-    if (mode === "manual") {
-      payload.l1_ratio = Number(el("glmRegularizationMix")?.value || selectedRegularizationMix || 0.5);
-      payload.alpha = el("glmRegularizationAlpha")?.value.trim() || selectedRegularizationAlpha || "";
-    }
-    return payload;
+    return formulaBuilder.buildRegularizationPayload();
   }
 
   async function buildModel() {
@@ -2381,32 +1900,11 @@ export function createGlmTool({
   }
 
   function validateFamilyParameter(family, rawValue) {
-    const parameter = familyParameterConfig(family);
-    if (!parameter) return "";
-    const text = String(rawValue || "").trim();
-    const value = Number(text);
-    const min = Number(parameter.min);
-    const max = Number(parameter.max);
-    if (!text || !Number.isFinite(value) || (Number.isFinite(min) && value < min) || (Number.isFinite(max) && value > max)) {
-      const label = parameter.label || "family parameter";
-      if (Number.isFinite(min) && Number.isFinite(max)) return `Choose ${label} from ${min} to ${max}`;
-      if (Number.isFinite(min)) return `Choose ${label} of at least ${min}`;
-      return `Choose a numeric ${label}`;
-    }
-    return "";
+    return formulaBuilder.validateFamilyParameter(family, rawValue);
   }
 
   function validateRegularizationParameter(regularization = {}) {
-    if (regularization.mode !== "manual") return "";
-    const alpha = Number(regularization.alpha);
-    const l1Ratio = Number(regularization.l1_ratio);
-    if (!Number.isFinite(alpha) || alpha <= 0) {
-      return "Choose a positive GLM regularization alpha";
-    }
-    if (!Number.isFinite(l1Ratio) || l1Ratio < 0 || l1Ratio > 1) {
-      return "Choose a GLM regularization mix from 0 to 1";
-    }
-    return "";
+    return formulaBuilder.validateRegularizationParameter(regularization);
   }
 
   function pollBuildJob(jobId) {
@@ -2538,59 +2036,7 @@ export function createGlmTool({
   }
 
   function syncBuilderFromModelDetail(detail = {}, options = {}) {
-    if (options.syncBuilderDraft === false) return;
-    const manifest = detail?.manifest || {};
-    const rawFormula = detail?.formula ?? manifest?.formula?.raw;
-    if (rawFormula !== undefined && rawFormula !== null) setFormulaText(String(rawFormula));
-
-    const family = String(manifest.family || "").trim();
-    if (family) {
-      selectedFamily = family;
-      localStorage.setItem("py_lucidum_glm_family", selectedFamily);
-      const select = el("glmFamilySelect");
-      if (select) select.value = selectedFamily;
-    }
-
-    const familyParameter = manifest.family_parameter;
-    if (familyParameterConfig(family) && familyParameter !== undefined && familyParameter !== null && String(familyParameter).trim() !== "") {
-      localStorage.setItem(`py_lucidum_glm_family_parameter_${family}`, String(familyParameter));
-    }
-    syncFamilyParameterControl();
-    const input = el("glmFamilyParameter");
-    if (input && !input.disabled && familyParameter !== undefined && familyParameter !== null) {
-      input.value = String(familyParameter);
-    }
-
-    const trainingScope = String(manifest.training_scope || "").trim().toLowerCase();
-    if (trainingScope === "all" || trainingScope === "training") {
-      selectedTrainingScope = trainingScope;
-      localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
-      document.querySelectorAll("[data-glm-scope]").forEach((button) => {
-        button.classList.toggle("active", button.dataset.glmScope === selectedTrainingScope);
-      });
-    }
-
-    const regularization = manifest.regularization || {};
-    const regularizationMode = String(regularization.mode || "none").trim().toLowerCase();
-    if (["none", "auto", "manual"].includes(regularizationMode)) {
-      selectedRegularizationMode = regularizationMode;
-      localStorage.setItem("py_lucidum_glm_regularization_mode", selectedRegularizationMode);
-      const mode = el("glmRegularizationMode");
-      if (mode) mode.value = selectedRegularizationMode;
-    }
-    if (regularization.l1_ratio !== undefined && regularization.l1_ratio !== null && !Array.isArray(regularization.l1_ratio)) {
-      selectedRegularizationMix = String(regularization.l1_ratio);
-      localStorage.setItem("py_lucidum_glm_regularization_mix", selectedRegularizationMix);
-      const mix = el("glmRegularizationMix");
-      if (mix) mix.value = selectedRegularizationMix;
-    }
-    if (regularization.alpha !== undefined && regularization.alpha !== null && String(regularization.alpha).trim() !== "") {
-      selectedRegularizationAlpha = String(regularization.alpha);
-      localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
-      const alpha = el("glmRegularizationAlpha");
-      if (alpha) alpha.value = selectedRegularizationAlpha;
-    }
-    syncRegularizationControls();
+    formulaBuilder.syncFromModelDetail(detail, options);
   }
 
   function coefficientRowsForActiveModel(activeModelId) {
@@ -2696,7 +2142,7 @@ export function createGlmTool({
     }
     grid.innerHTML = "";
     fallback.innerHTML = "";
-    const rows = modelTableRows(models, activeModelId);
+    const rows = modelNavigator.rows(models, activeModelId);
     try {
       const Tabulator = await loadTabulator();
       if (renderSeq !== modelTableRenderSeq || !grid.isConnected) return;
@@ -2709,8 +2155,8 @@ export function createGlmTool({
         selectableRows: true,
         selectableRowsRangeMode: "click",
         columns: [
-          { title: "", field: "active", formatter: activeModelDotFormatter, hozAlign: "center", headerHozAlign: "center", width: 28, minWidth: 28, headerSort: false, resizable: false },
-          { title: "Model", field: "model_label", sorter: "string", formatter: modelNameFormatter, widthGrow: 3, headerSort: true },
+          { title: "", field: "active", formatter: modelNavigator.activeDotFormatter, hozAlign: "center", headerHozAlign: "center", width: 28, minWidth: 28, headerSort: false, resizable: false },
+          { title: "Model", field: "model_label", sorter: "string", formatter: modelNavigator.nameFormatter, widthGrow: 3, headerSort: true },
           { title: "Created", field: "created_sort", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().created_display), width: 105, headerSort: true },
           { title: "Response", field: "response_column", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.4, headerSort: true },
           { title: "Weight", field: "weight_display", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.1, headerSort: true },
@@ -2734,86 +2180,7 @@ export function createGlmTool({
 
   function renderModelFallback(models = modelRows, activeModelId = config?.active_model_id) {
     const target = el("glmModelFallback");
-    if (!target) return;
-    if (!models.length) {
-      target.innerHTML = emptyStateHtml("No GLMs built yet", "glm-empty-state", escapeHtml);
-      return;
-    }
-    target.innerHTML = `
-      <table class="glm-table glm-model-table">
-        <thead>
-          <tr>
-            <th class="glm-model-active-heading" aria-label="Active model"></th>
-            <th>model</th>
-            <th>created</th>
-            <th>response</th>
-            <th>weight</th>
-            <th>family</th>
-            <th>deviance</th>
-            <th>AIC</th>
-            <th>BIC</th>
-            <th>rows</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${models.map((model) => modelTableRowHtml(model, activeModelId)).join("")}
-        </tbody>
-      </table>
-    `;
-    const rows = Array.from(target.querySelectorAll("[data-glm-model-row]"));
-    bindFallbackModelSelection(rows, syncSelectedModelsFromTable);
-  }
-
-  function modelTableRowHtml(model, activeModelId) {
-    const active = model.model_id === activeModelId;
-    const selected = selectedModelIds.has(model.model_id);
-    const diagnostics = model.diagnostics || model.metrics || {};
-    return `
-      <tr data-glm-model-row="${escapeHtml(model.model_id)}" class="${active ? "active" : ""}${selected ? " selected" : ""}" aria-selected="${selected ? "true" : "false"}">
-        <td class="glm-model-active-cell">
-          ${active ? '<span class="glm-model-active-dot" title="Active model" aria-label="Active model"></span>' : ""}
-        </td>
-        <td class="glm-model-name-cell"><span class="glm-model-name-main">${escapeHtml(model.label || model.model_id)}</span></td>
-        <td>${escapeHtml(formatModelCreated(model.created_at))}</td>
-        <td>${escapeHtml(model.response_column || "")}</td>
-        <td>${escapeHtml(modelWeightLabel(model.denominator_column || model.offset_column))}</td>
-        <td>${escapeHtml(model.family || "")}</td>
-        <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.deviance))}</td>
-        <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.aic))}</td>
-        <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.bic))}</td>
-        <td class="numeric">${Number(model.training_rows || diagnostics.training_rows || 0).toLocaleString()}</td>
-      </tr>
-    `;
-  }
-
-  function modelTableRows(models = modelRows, activeModelId = config?.active_model_id) {
-    return normaliseModels(models).map((model) => {
-      const diagnostics = model.diagnostics || model.metrics || {};
-      return {
-        ...model,
-        active: model.model_id === activeModelId || Boolean(model.active),
-        model_label: modelLabel(model),
-        created_sort: modelCreatedSort(model.created_at),
-        created_display: formatModelCreated(model.created_at),
-        weight_display: modelWeightLabel(model.denominator_column || model.offset_column),
-        deviance: modelNumberOrNull(diagnostics.deviance),
-        aic: modelNumberOrNull(diagnostics.aic),
-        bic: modelNumberOrNull(diagnostics.bic),
-        training_rows: Number(model.training_rows || diagnostics.training_rows || 0),
-      };
-    });
-  }
-
-  function modelCreatedSort(value) {
-    return sharedModelCreatedSort(value);
-  }
-
-  function activeModelDotFormatter(cell) {
-    return cell.getValue() ? '<span class="glm-model-active-dot" title="Active model" aria-label="Active model"></span>' : "";
-  }
-
-  function modelNameFormatter(cell) {
-    return `<span class="glm-model-name-main">${escapeHtml(cell.getValue() || "")}</span>`;
+    modelNavigator.renderFallback(target, models, activeModelId);
   }
 
   function syncSelectedModelsFromTable() {
@@ -2929,7 +2296,7 @@ export function createGlmTool({
   }
 
   async function applyModelMutationResult(result, options = {}) {
-    captureBuilderDraft();
+    formulaBuilder.captureDraft();
     const nextConfig = result.config || config || {};
     const renamedFrom = String(options?.renamedFrom || "");
     const renamedTo = String(result?.model?.model_id || "");
@@ -3136,14 +2503,12 @@ export function createGlmTool({
   }
 
   function refreshTheme() {
-    if (aceEditor) {
-      aceEditor.setTheme(document.body.classList.contains("dark") ? "ace/theme/monokai" : "ace/theme/textmate");
-    }
+    formulaBuilder.refreshTheme();
   }
 
   function resize() {
     scheduleTabulationResize();
-    if (aceEditor) aceEditor.resize();
+    formulaBuilder.resize();
   }
 
   return {

@@ -87,6 +87,9 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/line-bar-tool.js",
             "/static/app/uk-map-tool.js",
             "/static/app/glm-tool.js",
+            "/static/app/glm-formula-builder.js",
+            "/static/app/glm-model-navigator.js",
+            "/static/app/glm-tabulations.js",
             "/static/app/shared/api.js",
             "/static/app/shared/format.js",
             "/static/app/shared/model-ui.js",
@@ -548,8 +551,8 @@ if (actual !== "gamma · AIC 747,117.3116") throw new Error(actual);
         self.run_node_script(script)
 
     def test_glm_family_parameter_guard(self) -> None:
-        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
-        script = "const config = { families: [] };\n" + "\n".join(self.js_function_source(js, name) for name in ["familyParameterConfig", "validateFamilyParameter"]) + """
+        js = self.assert_no_store("/static/app/glm-formula-builder.js")[1].decode("utf-8")
+        script = "const config = { families: [] };\nfunction getFamilies() { return config.families; }\n" + "\n".join(self.js_function_source(js, name) for name in ["familyParameterConfig", "validateFamilyParameter"]) + """
 if (validateFamilyParameter("normal", "") !== "") throw new Error("normal should not validate parameter");
 if (validateFamilyParameter("tweedie", "1") !== "") throw new Error("lower bound failed");
 if (validateFamilyParameter("tweedie", "2") !== "") throw new Error("upper bound failed");
@@ -562,7 +565,7 @@ if (!validateFamilyParameter("negative.binomial", "0")) throw new Error("negativ
         self.run_node_script(script)
 
     def test_glm_regularization_parameter_guard(self) -> None:
-        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        js = self.assert_no_store("/static/app/glm-formula-builder.js")[1].decode("utf-8")
         script = self.js_function_source(js, "validateRegularizationParameter") + """
 if (validateRegularizationParameter({ mode: "none" }) !== "") throw new Error("none should not validate parameter");
 if (validateRegularizationParameter({ mode: "auto" }) !== "") throw new Error("auto should not validate parameter");
@@ -953,6 +956,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/line-bar-tool.js")
         self.assert_no_store("/static/app/uk-map-tool.js")
         self.assert_no_store("/static/app/glm-tool.js")
+        self.assert_no_store("/static/app/glm-formula-builder.js")
+        self.assert_no_store("/static/app/glm-model-navigator.js")
+        self.assert_no_store("/static/app/glm-tabulations.js")
         self.assert_no_store("/static/app/shared/api.js")
         self.assert_no_store("/static/app/shared/format.js")
         self.assert_no_store("/static/app/shared/model-ui.js")
@@ -997,7 +1003,11 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_glm_frontend_contains_real_tool_contract(self) -> None:
         js = self.app_js_contract()
-        glm_js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        glm_tool_js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        glm_formula_js = self.assert_no_store("/static/app/glm-formula-builder.js")[1].decode("utf-8")
+        glm_model_js = self.assert_no_store("/static/app/glm-model-navigator.js")[1].decode("utf-8")
+        glm_tabulation_js = self.assert_no_store("/static/app/glm-tabulations.js")[1].decode("utf-8")
+        glm_js = "\n".join([glm_tool_js, glm_formula_js, glm_model_js, glm_tabulation_js])
         css = self.app_css_contract()
 
         self.assertIn('import { createGlmTool } from "./glm-tool.js";', js)
@@ -1032,7 +1042,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('id="glmRegularizationMode"', js)
         self.assertIn('id="glmRegularizationMix"', js)
         self.assertIn('id="glmRegularizationAlpha"', js)
-        self.assertIn('class="glm-penalty-manual ${selectedRegularizationMode === "manual" ? "" : "disabled"}"', glm_js)
+        self.assertIn('class="glm-penalty-manual ${formulaBuilder.selectedRegularizationMode === "manual" ? "" : "disabled"}"', glm_js)
         self.assertIn('manual.classList.toggle("disabled", !isManual);', glm_js)
         self.assertNotIn('manual.classList.toggle("hidden", !isManual);', glm_js)
         self.assertIn('type="text" inputmode="decimal"', glm_js)
@@ -1080,7 +1090,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('modelTable.on("rowSelectionChanged", syncSelectedModelsFromTable);', glm_js)
         self.assertIn("function renderModelFallback(models = modelRows, activeModelId = config?.active_model_id)", glm_js)
         self.assertIn("function restoreModelSelection(ids)", glm_js)
-        self.assertIn("bindFallbackModelSelection(rows, syncSelectedModelsFromTable);", glm_js)
+        self.assertIn("bindFallbackModelSelection(fallbackRows, onFallbackSelectionChange);", glm_js)
         self.assertIn('id="glmTabulationColor" type="checkbox"', glm_js)
         self.assertIn('id="glmTabulationModelGrid"', glm_js)
         self.assertIn('id="glmTabulationModelFallback"', glm_js)
@@ -1188,10 +1198,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("yAxis: tabulationYAxisOptions(data)", glm_js)
         self.assertIn("scale: true,", glm_js)
         self.assertIn("splitNumber: GLM_TABULATION_Y_AXIS_TARGET_INTERVALS", glm_js)
-        self.assertIn("min: roundTabulationAxisValue(axisMin, step)", glm_js)
-        self.assertIn("max: roundTabulationAxisValue(axisMax, step)", glm_js)
-        self.assertIn("interval: roundTabulationAxisValue(step, step)", glm_js)
-        self.assertIn("axisLabel: { formatter: (value) => formatTabulationAxisTick(value, data.scale) }", glm_js)
+        self.assertIn("min: roundAxisValue(axisMin, step)", glm_js)
+        self.assertIn("max: roundAxisValue(axisMax, step)", glm_js)
+        self.assertIn("interval: roundAxisValue(step, step)", glm_js)
+        self.assertIn("axisLabel: { formatter: (value) => formatAxisTick(value, data.scale) }", glm_js)
         self.assertIn('tooltip: { trigger: "axis", valueFormatter: (value) => formatTabulationAxisTick(value, data.scale) }', glm_js)
         self.assertNotIn('["mean error", diagnostics.mean_linear_error]', glm_js)
         self.assertNotIn('["linear SD error", diagnostics.linear_sd_error]', glm_js)
@@ -1219,14 +1229,18 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
 let tabulationScale = "linear";
 {self.shared_model_ui_source(["modelNumberOrNull"])}
-{self.js_function_source(glm_js, "modelNumberOrNull")}
-{self.js_function_source(glm_js, "tabulationDisplayTableValue")}
-{self.js_function_source(glm_js, "tabulationDisplayTableSpan")}
-{self.js_function_source(glm_js, "niceTabulationAxisStep")}
-{self.js_function_source(glm_js, "roundTabulationAxisValue")}
-{self.js_function_source(glm_js, "formatTabulationUpliftPercent")}
-{self.js_function_source(glm_js, "formatTabulationAxisTick")}
-{self.js_function_source(glm_js, "tabulationYAxisOptions")}
+function modelNumberOrNull(value) {{ return sharedModelNumberOrNull(value); }}
+{self.js_function_source(glm_tabulation_js, "displayTableValue")}
+{self.js_function_source(glm_tabulation_js, "displayTableSpan")}
+{self.js_function_source(glm_tabulation_js, "niceAxisStep")}
+{self.js_function_source(glm_tabulation_js, "roundAxisValue")}
+{self.js_function_source(glm_tabulation_js, "formatUpliftPercent")}
+{self.js_function_source(glm_tabulation_js, "formatAxisTick")}
+{self.js_function_source(glm_tabulation_js, "yAxisOptions")}
+function tabulationDisplayTableValue(value) {{ return displayTableValue(value, tabulationScale); }}
+function tabulationDisplayTableSpan(min, max) {{ return displayTableSpan(min, max, tabulationScale); }}
+function tabulationYAxisOptions(data) {{ return yAxisOptions(data); }}
+function formatTabulationAxisTick(value, scale = "linear") {{ return formatAxisTick(value, scale); }}
 	if (tabulationDisplayTableValue(0.5) !== 0.5) throw new Error("linear table min/max should stay linear");
 	if (tabulationDisplayTableSpan(0.5, 1.25) !== 0.75) throw new Error("linear table span should be a difference");
 	tabulationScale = "exp";
@@ -1307,8 +1321,8 @@ if (formatTabulationAxisTick(1.2, "linear") !== "1.2") throw new Error("linear t
         self.assertIn(".glm-model-list .glm-model-option.active", css)
 
     def test_glm_active_model_detail_syncs_builder_controls(self) -> None:
-        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
-        script = "const config = { families: [] };\n" + "\n".join(self.js_function_source(js, name) for name in ["familyParameterConfig", "syncRegularizationControls", "syncBuilderFromModelDetail"]) + r"""
+        js = self.assert_no_store("/static/app/glm-formula-builder.js")[1].decode("utf-8")
+        script = "const config = { families: [] };\nfunction getFamilies() { return config.families; }\n" + "\n".join(self.js_function_source(js, name) for name in ["familyParameterConfig", "syncRegularizationControls", "syncFromModelDetail"]) + r"""
 let formulaText = "";
 let selectedFamily = "";
 let selectedTrainingScope = "";
@@ -1353,7 +1367,7 @@ const trainingButton = makeScopeButton("training");
 const document = {
   querySelectorAll: (selector) => selector === "[data-glm-scope]" ? [allButton, trainingButton] : [],
 };
-syncBuilderFromModelDetail({
+syncFromModelDetail({
   formula: "Age + C(Segment)",
   manifest: {
     family: "tweedie",
@@ -1406,7 +1420,7 @@ nodes.glmRegularizationAlpha.value = "0.09";
 localStorage.setItem("py_lucidum_glm_regularization_mode", selectedRegularizationMode);
 localStorage.setItem("py_lucidum_glm_regularization_mix", selectedRegularizationMix);
 localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
-syncBuilderFromModelDetail({
+syncFromModelDetail({
   formula: "different model formula",
   manifest: {
     family: "gamma",

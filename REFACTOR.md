@@ -85,6 +85,10 @@ This file records the refactor order for `py_lucidum`. Each phase should be done
 
 ### 8. GLM Frontend Split
 
+**Status:** Completed on 2026-06-08.
+
+**Decision:** GLM frontend behavior is split into focused ES modules for formula-builder state/editor controls, model navigator row/fallback rendering, and tabulation helper behavior. `glm-tool.js` keeps high-level render flow, API mutation, model build/detail orchestration, and tabulation job/rebase workflow coordination.
+
 - Split `glm-tool.js` into focused modules:
   - Formula builder.
   - Model navigator.
