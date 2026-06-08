@@ -1,5 +1,7 @@
 # GBM Tool Implementation Plan
 
+**Status:** Historical implementation plan. It is retained for background context, but future agents should treat `DEVELOPMENT.md` and `docs/specs/gbm-tool.md` as the current GBM behavior and product contracts. Do not treat unchecked bullets in this plan as fresh requirements without confirming them against the current code and durable docs.
+
 ## Summary
 
 Build the GBM tool as an opt-in LightGBM-backed modelling tool with persistent sidecar artifacts, background training, GBM diagnostic tabs including SHAP plotting, and shareable model-output data sources that Line/Bar and UK Map can query like normal dataset columns.

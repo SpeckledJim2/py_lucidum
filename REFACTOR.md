@@ -8,6 +8,8 @@ This file records the refactor order for `py_lucidum`. Each phase should be done
 
 ### 1. Documentation Hygiene
 
+**Status:** Completed on 2026-06-08.
+
 - Fix `AGENTS.md` stale references:
   - Replace `src/py_lucidum/core.py` with `src/py_lucidum/core/`.
   - Add missing JS checks for `glm-tool.js`, `gbm-stacked-shap-tool.js`, and `gbm-stacked-shap-chart.js`.

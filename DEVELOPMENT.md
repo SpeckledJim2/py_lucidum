@@ -1,6 +1,14 @@
 # py_lucidum Development Notes
 
-This document is the durable maintainer context for `py_lucidum`. The public user-facing documentation lives in `README.md`.
+This document is the durable maintainer contract for `py_lucidum`: architecture, behavior contracts, testing policy, packaging notes, data handling, and tool-extension guidance should stay current here. The public user-facing documentation lives in `README.md`.
+
+## Navigation
+
+- Start with `Purpose` and `Current Architecture` to understand ownership boundaries.
+- Use `Public Interfaces` before changing CLI, Python, or HTTP API behavior.
+- Use `Behavior Contracts` for tool behavior, data-source rules, optional dependency policy, and persistence requirements.
+- Use `UI Direction` before frontend layout or interaction changes.
+- Use `Testing` and `Maintenance Rules` before handing off or committing changes.
 
 ## Purpose
 
@@ -20,7 +28,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
 - `py_lucidum.tools.glm` implements the opt-in `glum` GLM tool. GLM validation, training jobs, persistence, coefficient/model-detail routes, and model-output data sources live in separate backend modules.
 - `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM training, validation, persistence, tree summary/detail, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
-- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/glm-tool.js` owns the GLM frontend, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
+- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/glm-tool.js` owns the GLM frontend, `src/py_lucidum/static/app/gbm-tool.js` owns the GBM frontend, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-stacked-shap-tool.js` and `src/py_lucidum/static/app/gbm-stacked-shap-chart.js` own the Stacked SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
 - `src/py_lucidum/static/app.css` is the stable linked CSS entrypoint and import manifest. Split styles live under `src/py_lucidum/static/styles/`; `foundations.css` and `controls.css` own shared primitives, while shell/tool files own boundary-specific selectors.
 - Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/` and lazy-loaded by the tools that need them. GLM uses Ace for formula editing. GBM currently uses Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
 
