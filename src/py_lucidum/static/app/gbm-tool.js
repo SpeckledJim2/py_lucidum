@@ -2,6 +2,26 @@ import { createGbmTreeViewer } from "./gbm-tree-viewer.js";
 import { createGbmShapTool } from "./gbm-shap-tool.js";
 import { createGbmStackedShapTool } from "./gbm-stacked-shap-tool.js";
 import { loadTabulator } from "./shared/tabulator.js";
+import {
+  bindFallbackModelSelection,
+  createSidebarModelHeading,
+  createSidebarModelOption,
+  emptyStateHtml,
+  formatModelCreated as sharedFormatModelCreated,
+  formatModelMetric as sharedFormatModelMetric,
+  isModelJobPending,
+  modelCreatedSort as sharedModelCreatedSort,
+  modelGroups,
+  modelJobPollDelay,
+  modelNumberOrNull as sharedModelNumberOrNull,
+  observeResize,
+  restoreModelSelection as restoreSharedModelSelection,
+  selectedModelIdsFromTableOrFallback,
+  setInlinePhaseStatus,
+  syncCollapsedModelGroups,
+  syncModelActionButtons as syncSharedModelActionButtons,
+  toggleSidebarModelGroup,
+} from "./shared/model-ui.js";
 
 const GBM_PARAMETER_OPTIONS = {
   objective: [
@@ -89,9 +109,7 @@ function modelBestMetric(model, name) {
 }
 
 function modelNumberOrNull(value) {
-  if (value === null || value === undefined || String(value).trim() === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+  return sharedModelNumberOrNull(value);
 }
 
 function formatTrainingBadgeCount(value) {
@@ -108,8 +126,7 @@ export function gbmTrainingReadyBadgeLabel(progress = null) {
 }
 
 function formatModelMetric(value) {
-  const number = modelNumberOrNull(value);
-  return number === null ? "--" : formatEvaluationValue(number) || "--";
+  return sharedFormatModelMetric(value);
 }
 
 function formatEvaluationValue(value) {
@@ -1809,9 +1826,11 @@ export function createGbmTool({
     if (!status) return;
     const text = String(message || "");
     const detailText = String(detail || "");
-    status.innerHTML = trainingStatusContentHtml(text, detailText);
-    status.dataset.phase = String(phase || "");
-    status.classList.toggle("hidden", !text && !detailText);
+    setInlinePhaseStatus(status, {
+      html: trainingStatusContentHtml(text, detailText),
+      phase,
+      hidden: !text && !detailText,
+    });
   }
 
   function syncSidebarModelChooser(models, activeModelId) {
@@ -1821,74 +1840,59 @@ export function createGbmTool({
     const normalisedModels = uniqueModels(models.map(normaliseModel).filter((model) => model.model_id));
     const activeModel = normalisedModels.find((model) => model.model_id === activeModelId) || null;
     if (meta) meta.textContent = activeModel ? modelLabel(activeModel) : "No active model";
-    const modelsByGroup = new Map();
-    for (const model of normalisedModels) {
-      const group = modelGroupLabel(model);
-      if (!modelsByGroup.has(group)) modelsByGroup.set(group, []);
-      modelsByGroup.get(group).push(model);
-    }
+    const modelsByGroup = modelGroups(normalisedModels, modelGroupLabel);
     const groups = [...modelsByGroup.keys()];
-    if (!state.gbmModelGroupsInitialised) {
-      groups.forEach((group) => state.collapsedGbmModelGroups.add(group));
-      const openGroup = activeModel ? modelGroupLabel(activeModel) : groups[0];
-      if (openGroup) state.collapsedGbmModelGroups.delete(openGroup);
-      state.gbmModelGroupsInitialised = true;
-    }
-    for (const group of state.collapsedGbmModelGroups) {
-      if (!groups.includes(group)) state.collapsedGbmModelGroups.delete(group);
-    }
+    state.gbmModelGroupsInitialised = syncCollapsedModelGroups({
+      groups,
+      collapsedGroups: state.collapsedGbmModelGroups,
+      initialised: state.gbmModelGroupsInitialised,
+      activeGroup: activeModel ? modelGroupLabel(activeModel) : "",
+    }).initialised;
     list.innerHTML = "";
     if (!normalisedModels.length) {
-      list.innerHTML = `<div class="gbm-empty-state">No GBMs trained yet</div>`;
+      list.innerHTML = emptyStateHtml("No GBMs trained yet", "gbm-empty-state", escapeHtml);
       return;
     }
     for (const group of groups) {
       const collapsed = state.collapsedGbmModelGroups.has(group);
-      const heading = document.createElement("button");
-      heading.type = "button";
-      heading.className = "saved-filter-theme gbm-model-theme";
-      heading.dataset.gbmModelGroup = group;
-      heading.setAttribute("aria-expanded", String(!collapsed));
-      heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} GBM models`);
-      heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} GBM models`;
-      heading.innerHTML = `<span class="saved-filter-theme-icon" aria-hidden="true"></span><span class="saved-filter-theme-label">${escapeHtml(group)}</span>`;
-      heading.addEventListener("click", () => toggleGbmModelGroup(group));
-      list.append(heading);
+      list.append(createSidebarModelHeading({
+        group,
+        collapsed,
+        toolLabel: "GBM",
+        className: "gbm-model-theme",
+        dataKey: "gbmModelGroup",
+        escapeHtml,
+        onToggle: toggleGbmModelGroup,
+      }));
       for (const model of modelsByGroup.get(group) || []) {
         const active = model.model_id === activeModelId;
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = `feature gbm-model-option${active ? " active" : ""}`;
-        button.dataset.gbmModelId = model.model_id;
-        button.dataset.gbmModelGroup = group;
-        button.hidden = collapsed;
-        button.setAttribute("role", "option");
-        button.setAttribute("aria-selected", String(active));
-        button.innerHTML = `<span class="saved-filter-name">${escapeHtml(modelLabel(model))}</span><span class="gbm-model-detail">${escapeHtml(modelDetailLabel(model))}</span>`;
-        button.addEventListener("click", () => {
-          if (!active) activateModel(model.model_id);
-        });
-        list.append(button);
+        list.append(createSidebarModelOption({
+          model,
+          group,
+          active,
+          collapsed,
+          className: "gbm-model-option",
+          detailClassName: "gbm-model-detail",
+          modelIdDataKey: "gbmModelId",
+          groupDataKey: "gbmModelGroup",
+          escapeHtml,
+          modelLabel,
+          modelDetailLabel,
+          onActivate: activateModel,
+        }));
       }
     }
   }
 
   function toggleGbmModelGroup(group) {
-    const collapsed = !state.collapsedGbmModelGroups.has(group);
-    if (collapsed) {
-      state.collapsedGbmModelGroups.add(group);
-    } else {
-      state.collapsedGbmModelGroups.delete(group);
-    }
-    const list = el("gbmModelSelect");
-    list.querySelectorAll(".gbm-model-theme").forEach((heading) => {
-      if (heading.dataset.gbmModelGroup !== group) return;
-      heading.setAttribute("aria-expanded", String(!collapsed));
-      heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} GBM models`);
-      heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} GBM models`;
-    });
-    list.querySelectorAll(".gbm-model-option").forEach((button) => {
-      if (button.dataset.gbmModelGroup === group) button.hidden = collapsed;
+    toggleSidebarModelGroup({
+      list: el("gbmModelSelect"),
+      group,
+      collapsedGroups: state.collapsedGbmModelGroups,
+      themeClassName: "gbm-model-theme",
+      optionClassName: "gbm-model-option",
+      groupDataKey: "gbmModelGroup",
+      toolLabel: "GBM",
     });
   }
 
@@ -2882,7 +2886,7 @@ export function createGbmTool({
     const target = el("gbmModelFallback");
     if (!target) return;
     if (!models.length) {
-      target.innerHTML = `<div class="gbm-empty-state">No GBMs trained yet</div>`;
+      target.innerHTML = emptyStateHtml("No GBMs trained yet", "gbm-empty-state", escapeHtml);
       return;
     }
     target.innerHTML = `
@@ -2946,40 +2950,7 @@ export function createGbmTool({
       </table>
     `;
     const rows = Array.from(target.querySelectorAll("[data-gbm-model-row]"));
-    let anchorRow = null;
-    const setSelected = (row, selected) => {
-      row.classList.toggle("selected", selected);
-      row.setAttribute("aria-selected", String(selected));
-    };
-    for (const row of rows) {
-      row.addEventListener("click", (event) => {
-        const commandSelection = event.metaKey || event.ctrlKey;
-        if (event.shiftKey) {
-          event.preventDefault();
-          const anchor = anchorRow && rows.includes(anchorRow) ? anchorRow : row;
-          const start = rows.indexOf(anchor);
-          const end = rows.indexOf(row);
-          const min = Math.min(start, end);
-          const max = Math.max(start, end);
-          if (!commandSelection) rows.forEach((candidate) => setSelected(candidate, false));
-          for (let index = min; index <= max; index += 1) {
-            const candidate = rows[index];
-            if (commandSelection && candidate !== anchor) {
-              setSelected(candidate, candidate.getAttribute("aria-selected") !== "true");
-            } else {
-              setSelected(candidate, true);
-            }
-          }
-        } else if (commandSelection) {
-          setSelected(row, row.getAttribute("aria-selected") !== "true");
-        } else {
-          rows.forEach((candidate) => setSelected(candidate, candidate === row));
-        }
-        anchorRow = row;
-        syncModelActionButtons();
-      });
-    }
-    syncModelActionButtons();
+    bindFallbackModelSelection(rows, syncModelActionButtons);
   }
 
   function formatModelCount(value) {
@@ -3019,18 +2990,11 @@ export function createGbmTool({
   }
 
   function formatModelCreated(value) {
-    if (!value) return "";
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime())) return String(value);
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const hour = String(date.getHours()).padStart(2, "0");
-    const minute = String(date.getMinutes()).padStart(2, "0");
-    return `${date.getDate()} ${months[date.getMonth()]} ${hour}:${minute}`;
+    return sharedFormatModelCreated(value);
   }
 
   function modelCreatedSort(value) {
-    const time = new Date(value || "").getTime();
-    return Number.isFinite(time) ? time : 0;
+    return sharedModelCreatedSort(value);
   }
 
   function formatSampleMode(value, source = "") {
@@ -3053,14 +3017,13 @@ export function createGbmTool({
   }
 
   function syncModelActionButtons() {
-    const selectedCount = selectedModelIds().length;
-    const disableActions = isTraining;
-    const rename = el("gbmRenameModelBtn");
-    const activate = el("gbmActivateModelBtn");
-    const del = el("gbmDeleteModelBtn");
-    if (rename) rename.disabled = disableActions || selectedCount !== 1;
-    if (activate) activate.disabled = disableActions || selectedCount !== 1;
-    if (del) del.disabled = disableActions || selectedCount < 1;
+    syncSharedModelActionButtons({
+      selectedCount: selectedModelIds().length,
+      disabled: isTraining,
+      rename: el("gbmRenameModelBtn"),
+      activate: el("gbmActivateModelBtn"),
+      deleteButton: el("gbmDeleteModelBtn"),
+    });
   }
 
   async function refreshModelList({ force = false } = {}) {
@@ -3116,32 +3079,20 @@ export function createGbmTool({
   }
 
   function restoreModelSelection(ids) {
-    const selected = new Set((ids || []).map((id) => String(id || "")).filter(Boolean));
-    if (modelTable && typeof modelTable.getRows === "function") {
-      for (const row of modelTable.getRows()) {
-        const rowId = String(row.getData()?.model_id || "");
-        if (selected.has(rowId)) {
-          row.select();
-        } else {
-          row.deselect();
-        }
-      }
-      return;
-    }
-    for (const row of document.querySelectorAll("#gbmModelFallback [data-gbm-model-row]")) {
-      const rowId = String(row.dataset.gbmModelRow || "");
-      const active = selected.has(rowId);
-      row.classList.toggle("selected", active);
-      row.setAttribute("aria-selected", String(active));
-    }
+    restoreSharedModelSelection({
+      table: modelTable,
+      fallbackSelector: "#gbmModelFallback [data-gbm-model-row]",
+      rowDataKey: "gbmModelRow",
+      ids,
+    });
   }
 
   function selectedModelIds() {
-    const ids = modelTable && typeof modelTable.getSelectedData === "function"
-      ? modelTable.getSelectedData().map((row) => row?.model_id)
-      : Array.from(document.querySelectorAll('#gbmModelFallback [data-gbm-model-row][aria-selected="true"]'))
-        .map((row) => row.dataset.gbmModelRow);
-    return [...new Set(ids.map((id) => String(id || "")).filter(Boolean))];
+    return selectedModelIdsFromTableOrFallback({
+      table: modelTable,
+      fallbackSelector: "#gbmModelFallback [data-gbm-model-row]",
+      rowDataKey: "gbmModelRow",
+    });
   }
 
   function currentActiveModelId() {
@@ -3248,14 +3199,14 @@ export function createGbmTool({
       try {
         const job = await api(`/api/gbm/jobs/${encodeURIComponent(jobId)}`, { method: "GET", clientTiming: true });
         applyJobProgress(job);
-        if (job.status === "queued" || job.status === "running") {
+        if (isModelJobPending(job.status)) {
           if (!job.progress) {
             const fallback = job.status === "queued" ? "GBM queued..." : "Training GBM...";
             setTrainingStatus(fallback, job.status, gridTrainingNotice);
             setGroupMeta(tool, fallback);
           }
           if (activeTab === "models") refreshModelList();
-          pollJob(jobId, job.status === "running" ? GBM_RUNNING_POLL_MS : GBM_QUEUED_POLL_MS);
+          pollJob(jobId, modelJobPollDelay(job.status, GBM_QUEUED_POLL_MS, GBM_RUNNING_POLL_MS));
           return;
         }
         if (job.status === "failed") {
@@ -3894,12 +3845,9 @@ export function createGbmTool({
   }
 
   function bindEvaluationResize(target) {
-    if (!window.ResizeObserver) return;
-    evaluationResizeObserver = new ResizeObserver(() => {
+    evaluationResizeObserver = observeResize([target, target.parentElement], () => {
       evaluationChart?.resize();
     });
-    evaluationResizeObserver.observe(target);
-    if (target.parentElement) evaluationResizeObserver.observe(target.parentElement);
   }
 
   function disposeEvaluationChart() {

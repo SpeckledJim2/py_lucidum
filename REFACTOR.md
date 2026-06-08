@@ -58,6 +58,10 @@ This file records the refactor order for `py_lucidum`. Each phase should be done
 
 ### 6. Frontend Shared Utilities
 
+**Status:** Completed on 2026-06-08.
+
+**Decision:** Shared GLM/GBM model UI behavior now lives in `src/py_lucidum/static/app/shared/model-ui.js`, while tool-specific table columns, model mutation requests, and tab orchestration remain in the owning tool modules for the split steps.
+
 - Extract common GLM/GBM frontend behavior:
   - Polling helpers.
   - Sidebar model chooser rendering.

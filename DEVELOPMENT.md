@@ -34,7 +34,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 
 Tool code should depend on `core` and the app registration context, but tools should not depend on each other. Shared behavior should move into `core` or another shared module only when there is real reuse.
 
-Frontend tools should prefer a `createXTool({ deps })` factory. Data-driven tools should expose `buildRequest`, `fetchData`, `useCached`, and render/lifecycle methods where applicable, with shared shell behavior kept in `main.js` or `static/app/shared/`.
+Frontend tools should prefer a `createXTool({ deps })` factory. Data-driven tools should expose `buildRequest`, `fetchData`, `useCached`, and render/lifecycle methods where applicable, with shared shell behavior kept in `main.js` or `static/app/shared/`. GLM/GBM model UI helpers that are genuinely common, such as polling cadence, model-list grouping, fallback selection, action button state, resize observation, and empty/status HTML, live in `src/py_lucidum/static/app/shared/model-ui.js`.
 New frontend tool styles should live in a tool-owned file under `static/styles/`; move reusable tokens, layout primitives, and shared controls into `foundations.css` or `controls.css` instead of duplicating them.
 
 ## Public Interfaces
@@ -305,6 +305,7 @@ node --check src/py_lucidum/static/app/line-bar-tool.js
 node --check src/py_lucidum/static/app/uk-map-tool.js
 node --check src/py_lucidum/static/app/shared/api.js
 node --check src/py_lucidum/static/app/shared/format.js
+node --check src/py_lucidum/static/app/shared/model-ui.js
 node --check src/py_lucidum/static/app/shared/schema.js
 node --check src/py_lucidum/static/app/shared/timing.js
 node --check src/py_lucidum/static/app/glm-tool.js

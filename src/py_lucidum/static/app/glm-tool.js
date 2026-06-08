@@ -1,4 +1,23 @@
 import { loadTabulator } from "./shared/tabulator.js";
+import {
+  bindFallbackModelSelection,
+  createSidebarModelHeading,
+  createSidebarModelOption,
+  emptyStateHtml,
+  formatModelCreated as sharedFormatModelCreated,
+  formatModelMetric as sharedFormatModelMetric,
+  isModelJobPending,
+  modelCreatedSort as sharedModelCreatedSort,
+  modelGroups,
+  modelJobPollDelay,
+  modelNumberOrNull as sharedModelNumberOrNull,
+  observeResize,
+  restoreModelSelection as restoreSharedModelSelection,
+  selectedModelIdsFromTableOrFallback,
+  syncCollapsedModelGroups,
+  syncModelActionButtons as syncSharedModelActionButtons,
+  toggleSidebarModelGroup,
+} from "./shared/model-ui.js";
 
 const GLM_RUNNING_POLL_MS = 500;
 const GLM_QUEUED_POLL_MS = 1000;
@@ -17,25 +36,15 @@ function glmAutoModelTimeLabel(date = new Date()) {
 }
 
 function modelNumberOrNull(value) {
-  if (value === null || value === undefined || String(value).trim() === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+  return sharedModelNumberOrNull(value);
 }
 
 function formatModelMetric(value) {
-  const number = modelNumberOrNull(value);
-  if (number === null) return "--";
-  return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return sharedFormatModelMetric(value);
 }
 
 function formatModelCreated(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return String(value);
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const hour = String(date.getHours()).padStart(2, "0");
-  const minute = String(date.getMinutes()).padStart(2, "0");
-  return `${date.getDate()} ${months[date.getMonth()]} ${hour}:${minute}`;
+  return sharedFormatModelCreated(value);
 }
 
 function csvEscape(value) {
@@ -1463,8 +1472,8 @@ export function createGlmTool({
         const progress = job.progress || { phase: job.status, message: job.status };
         liveProgress = progress;
         renderLiveProgress(liveProgress);
-        if (job.status === "queued" || job.status === "running") {
-          tabulationPollTimer = window.setTimeout(poll, job.status === "queued" ? GLM_QUEUED_POLL_MS : GLM_RUNNING_POLL_MS);
+        if (isModelJobPending(job.status)) {
+          tabulationPollTimer = window.setTimeout(poll, modelJobPollDelay(job.status, GLM_QUEUED_POLL_MS, GLM_RUNNING_POLL_MS));
           return;
         }
         tabulationPollTimer = null;
@@ -1885,8 +1894,7 @@ export function createGlmTool({
     if (!window.ResizeObserver) return;
     const main = document.querySelector(".glm-tabulation-main");
     if (!main) return;
-    tabulationResizeObserver = new ResizeObserver(scheduleTabulationResize);
-    tabulationResizeObserver.observe(main);
+    tabulationResizeObserver = observeResize([main], scheduleTabulationResize);
   }
 
   function disconnectTabulationResizeObserver() {
@@ -2409,8 +2417,8 @@ export function createGlmTool({
         const progress = job.progress || { phase: job.status, message: job.status };
         liveProgress = progress;
         renderLiveProgress(liveProgress);
-        if (job.status === "queued" || job.status === "running") {
-          pollTimer = window.setTimeout(poll, job.status === "queued" ? GLM_QUEUED_POLL_MS : GLM_RUNNING_POLL_MS);
+        if (isModelJobPending(job.status)) {
+          pollTimer = window.setTimeout(poll, modelJobPollDelay(job.status, GLM_QUEUED_POLL_MS, GLM_RUNNING_POLL_MS));
           return;
         }
         pollTimer = null;
@@ -2728,7 +2736,7 @@ export function createGlmTool({
     const target = el("glmModelFallback");
     if (!target) return;
     if (!models.length) {
-      target.innerHTML = `<div class="glm-empty-state">No GLMs built yet</div>`;
+      target.innerHTML = emptyStateHtml("No GLMs built yet", "glm-empty-state", escapeHtml);
       return;
     }
     target.innerHTML = `
@@ -2753,40 +2761,7 @@ export function createGlmTool({
       </table>
     `;
     const rows = Array.from(target.querySelectorAll("[data-glm-model-row]"));
-    let anchorRow = null;
-    const setSelected = (row, selected) => {
-      row.classList.toggle("selected", selected);
-      row.setAttribute("aria-selected", String(selected));
-    };
-    rows.forEach((row) => {
-      row.addEventListener("click", (event) => {
-        const commandSelection = event.metaKey || event.ctrlKey;
-        if (event.shiftKey) {
-          event.preventDefault();
-          const anchor = anchorRow && rows.includes(anchorRow) ? anchorRow : row;
-          const start = rows.indexOf(anchor);
-          const end = rows.indexOf(row);
-          const min = Math.min(start, end);
-          const max = Math.max(start, end);
-          if (!commandSelection) rows.forEach((candidate) => setSelected(candidate, false));
-          for (let index = min; index <= max; index += 1) {
-            const candidate = rows[index];
-            if (commandSelection && candidate !== anchor) {
-              setSelected(candidate, candidate.getAttribute("aria-selected") !== "true");
-            } else {
-              setSelected(candidate, true);
-            }
-          }
-        } else if (commandSelection) {
-          setSelected(row, row.getAttribute("aria-selected") !== "true");
-        } else {
-          rows.forEach((candidate) => setSelected(candidate, candidate === row));
-        }
-        anchorRow = row;
-        syncSelectedModelsFromTable();
-      });
-    });
-    syncSelectedModelsFromTable();
+    bindFallbackModelSelection(rows, syncSelectedModelsFromTable);
   }
 
   function modelTableRowHtml(model, activeModelId) {
@@ -2830,8 +2805,7 @@ export function createGlmTool({
   }
 
   function modelCreatedSort(value) {
-    const time = new Date(value || "").getTime();
-    return Number.isFinite(time) ? time : 0;
+    return sharedModelCreatedSort(value);
   }
 
   function activeModelDotFormatter(cell) {
@@ -2848,44 +2822,30 @@ export function createGlmTool({
   }
 
   function selectedModelIdList() {
-    const ids = modelTable && typeof modelTable.getSelectedData === "function"
-      ? modelTable.getSelectedData().map((row) => row?.model_id)
-      : Array.from(document.querySelectorAll('#glmModelFallback [data-glm-model-row][aria-selected="true"]'))
-        .map((row) => row.dataset.glmModelRow);
-    return [...new Set(ids.map((id) => String(id || "")).filter(Boolean))];
+    return selectedModelIdsFromTableOrFallback({
+      table: modelTable,
+      fallbackSelector: "#glmModelFallback [data-glm-model-row]",
+      rowDataKey: "glmModelRow",
+    });
   }
 
   function restoreModelSelection(ids) {
-    const selected = new Set((ids || []).map((id) => String(id || "")).filter(Boolean));
-    selectedModelIds = selected;
-    if (modelTable && typeof modelTable.getRows === "function") {
-      for (const row of modelTable.getRows()) {
-        const rowId = String(row.getData()?.model_id || "");
-        if (selected.has(rowId)) {
-          row.select();
-        } else {
-          row.deselect();
-        }
-      }
-      return;
-    }
-    for (const row of document.querySelectorAll("#glmModelFallback [data-glm-model-row]")) {
-      const rowId = String(row.dataset.glmModelRow || "");
-      const active = selected.has(rowId);
-      row.classList.toggle("selected", active);
-      row.setAttribute("aria-selected", String(active));
-    }
+    selectedModelIds = restoreSharedModelSelection({
+      table: modelTable,
+      fallbackSelector: "#glmModelFallback [data-glm-model-row]",
+      rowDataKey: "glmModelRow",
+      ids,
+    });
   }
 
   function updateModelActionButtons() {
-    const selectedCount = selectedModelIdList().length;
-    const disableActions = isBuilding;
-    const activate = el("glmActivateModelBtn");
-    const rename = el("glmRenameModelBtn");
-    const deleteButton = el("glmDeleteModelBtn");
-    if (activate) activate.disabled = disableActions || selectedCount !== 1;
-    if (rename) rename.disabled = disableActions || selectedCount !== 1;
-    if (deleteButton) deleteButton.disabled = disableActions || selectedCount < 1;
+    syncSharedModelActionButtons({
+      selectedCount: selectedModelIdList().length,
+      disabled: isBuilding,
+      activate: el("glmActivateModelBtn"),
+      rename: el("glmRenameModelBtn"),
+      deleteButton: el("glmDeleteModelBtn"),
+    });
   }
 
   async function refreshModelListIfNeeded(options = {}) {
@@ -3069,71 +3029,59 @@ export function createGlmTool({
     const normalisedModels = normaliseModels(models);
     const activeModel = normalisedModels.find((model) => model.model_id === activeModelId) || null;
     if (meta) meta.textContent = activeModel ? modelLabel(activeModel) : "No active model";
-    const modelsByGroup = new Map();
-    for (const model of normalisedModels) {
-      const group = modelGroupLabel(model);
-      if (!modelsByGroup.has(group)) modelsByGroup.set(group, []);
-      modelsByGroup.get(group).push(model);
-    }
+    const modelsByGroup = modelGroups(normalisedModels, modelGroupLabel);
     const groups = [...modelsByGroup.keys()];
-    if (!state.glmModelGroupsInitialised) {
-      groups.forEach((group) => state.collapsedGlmModelGroups.add(group));
-      const openGroup = activeModel ? modelGroupLabel(activeModel) : groups[0];
-      if (openGroup) state.collapsedGlmModelGroups.delete(openGroup);
-      state.glmModelGroupsInitialised = true;
-    }
-    for (const group of state.collapsedGlmModelGroups) {
-      if (!groups.includes(group)) state.collapsedGlmModelGroups.delete(group);
-    }
+    state.glmModelGroupsInitialised = syncCollapsedModelGroups({
+      groups,
+      collapsedGroups: state.collapsedGlmModelGroups,
+      initialised: state.glmModelGroupsInitialised,
+      activeGroup: activeModel ? modelGroupLabel(activeModel) : "",
+    }).initialised;
     list.innerHTML = "";
     if (!normalisedModels.length) {
-      list.innerHTML = `<div class="glm-empty-state">No GLMs built yet</div>`;
+      list.innerHTML = emptyStateHtml("No GLMs built yet", "glm-empty-state", escapeHtml);
       return;
     }
     for (const group of groups) {
       const collapsed = state.collapsedGlmModelGroups.has(group);
-      const heading = document.createElement("button");
-      heading.type = "button";
-      heading.className = "saved-filter-theme glm-model-theme";
-      heading.dataset.glmModelGroup = group;
-      heading.setAttribute("aria-expanded", String(!collapsed));
-      heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} GLM models`);
-      heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} GLM models`;
-      heading.innerHTML = `<span class="saved-filter-theme-icon" aria-hidden="true"></span><span class="saved-filter-theme-label">${escapeHtml(group)}</span>`;
-      heading.addEventListener("click", () => toggleGlmModelGroup(group));
-      list.append(heading);
+      list.append(createSidebarModelHeading({
+        group,
+        collapsed,
+        toolLabel: "GLM",
+        className: "glm-model-theme",
+        dataKey: "glmModelGroup",
+        escapeHtml,
+        onToggle: toggleGlmModelGroup,
+      }));
       for (const model of modelsByGroup.get(group) || []) {
         const active = model.model_id === activeModelId;
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = `feature glm-model-option${active ? " active" : ""}`;
-        button.dataset.glmModelId = model.model_id;
-        button.dataset.glmModelGroup = group;
-        button.hidden = collapsed;
-        button.setAttribute("role", "option");
-        button.setAttribute("aria-selected", String(active));
-        button.innerHTML = `<span class="saved-filter-name">${escapeHtml(modelLabel(model))}</span><span class="glm-model-detail">${escapeHtml(glmModelDetailLabel(model))}</span>`;
-        button.addEventListener("click", () => {
-          if (!active) activateModel(model.model_id);
-        });
-        list.append(button);
+        list.append(createSidebarModelOption({
+          model,
+          group,
+          active,
+          collapsed,
+          className: "glm-model-option",
+          detailClassName: "glm-model-detail",
+          modelIdDataKey: "glmModelId",
+          groupDataKey: "glmModelGroup",
+          escapeHtml,
+          modelLabel,
+          modelDetailLabel: glmModelDetailLabel,
+          onActivate: activateModel,
+        }));
       }
     }
   }
 
   function toggleGlmModelGroup(group) {
-    const collapsed = !state.collapsedGlmModelGroups.has(group);
-    if (collapsed) state.collapsedGlmModelGroups.add(group);
-    else state.collapsedGlmModelGroups.delete(group);
-    const list = el("glmModelSelect");
-    list.querySelectorAll(".glm-model-theme").forEach((heading) => {
-      if (heading.dataset.glmModelGroup !== group) return;
-      heading.setAttribute("aria-expanded", String(!collapsed));
-      heading.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group} GLM models`);
-      heading.title = `${collapsed ? "Expand" : "Collapse"} ${group} GLM models`;
-    });
-    list.querySelectorAll(".glm-model-option").forEach((button) => {
-      if (button.dataset.glmModelGroup === group) button.hidden = collapsed;
+    toggleSidebarModelGroup({
+      list: el("glmModelSelect"),
+      group,
+      collapsedGroups: state.collapsedGlmModelGroups,
+      themeClassName: "glm-model-theme",
+      optionClassName: "glm-model-option",
+      groupDataKey: "glmModelGroup",
+      toolLabel: "GLM",
     });
   }
 

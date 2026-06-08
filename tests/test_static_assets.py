@@ -89,6 +89,7 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/glm-tool.js",
             "/static/app/shared/api.js",
             "/static/app/shared/format.js",
+            "/static/app/shared/model-ui.js",
             "/static/app/shared/schema.js",
             "/static/app/shared/tabulator.js",
             "/static/app/shared/timing.js",
@@ -122,6 +123,28 @@ class StaticAssetTests(unittest.TestCase):
                     break
         self.assertIsNotNone(end)
         return js[start:end].replace("export function", "function", 1)
+
+    def shared_model_ui_source(self, names: list[str] | tuple[str, ...]) -> str:
+        js = self.assert_no_store("/static/app/shared/model-ui.js")[1].decode("utf-8")
+        aliases = {
+            "formatModelCreated": "sharedFormatModelCreated",
+            "formatModelMetric": "sharedFormatModelMetric",
+            "modelCreatedSort": "sharedModelCreatedSort",
+            "modelNumberOrNull": "sharedModelNumberOrNull",
+        }
+        parts = []
+        if "formatModelCreated" in names:
+            parts.append('const MODEL_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];')
+        for name in names:
+            source = self.js_function_source(js, name)
+            alias = aliases.get(name)
+            if alias:
+                source = source.replace(f"function {name}", f"function {alias}", 1)
+                for dependency, dependency_alias in aliases.items():
+                    if dependency != name:
+                        source = source.replace(f"{dependency}(", f"{dependency_alias}(")
+            parts.append(source)
+        return "\n".join(parts)
 
     def run_node_script(self, script: str) -> None:
         node = shutil.which("node")
@@ -264,6 +287,201 @@ if (monitor.textContent !== "DuckDB: 2ms, JSON: 3ms, Chart render: 12ms, Total: 
 """
         self.run_node_script(script)
 
+    def test_shared_model_ui_helpers_are_importable(self) -> None:
+        module = Path("src/py_lucidum/static/app/shared/model-ui.js").resolve().as_uri()
+        script = f"""
+import {{
+  bindFallbackModelSelection,
+  createSidebarModelHeading,
+  createSidebarModelOption,
+  emptyStateHtml,
+  formatModelCreated,
+  formatModelMetric,
+  isModelJobPending,
+  modelCreatedSort,
+  modelGroups,
+  modelJobPollDelay,
+  modelNumberOrNull,
+  observeResize,
+  restoreModelSelection,
+  selectedModelIdsFromTableOrFallback,
+  setInlinePhaseStatus,
+  syncCollapsedModelGroups,
+  syncModelActionButtons,
+  toggleSidebarModelGroup,
+}} from "{module}";
+
+if (modelNumberOrNull("") !== null) throw new Error("empty number should be null");
+if (modelNumberOrNull("12.5") !== 12.5) throw new Error("numeric string failed");
+if (formatModelMetric(null) !== "--") throw new Error("missing metric failed");
+if (formatModelMetric(1234.56789) !== "1,234.5679") throw new Error("metric formatting failed");
+if (formatModelCreated("2026-01-02T03:04:00") !== "2 Jan 03:04") throw new Error("created formatting failed");
+if (formatModelCreated("not-a-date") !== "not-a-date") throw new Error("invalid date failed");
+if (modelCreatedSort("not-a-date") !== 0) throw new Error("invalid sort failed");
+if (!isModelJobPending("queued") || !isModelJobPending("running") || isModelJobPending("failed")) throw new Error("pending status failed");
+if (modelJobPollDelay("queued", 1000, 500) !== 1000) throw new Error("queued delay failed");
+if (modelJobPollDelay("running", 1000, 500) !== 500) throw new Error("running delay failed");
+if (modelJobPollDelay("succeeded", 1000, 500) !== 0) throw new Error("terminal delay failed");
+
+class FakeElement {{
+  constructor(tag) {{
+    this.tag = tag;
+    this.children = [];
+    this.dataset = {{}};
+    this.attributes = {{}};
+    this.listeners = {{}};
+    this.className = "";
+    this.hidden = false;
+    this.title = "";
+    this.innerHTML = "";
+    this.type = "";
+    this.classList = {{
+      add: (className) => this.setClass(className, true),
+      remove: (className) => this.setClass(className, false),
+      toggle: (className, active) => this.setClass(className, active),
+      contains: (className) => String(this.className || "").split(/\\s+/).includes(className),
+    }};
+  }}
+  setClass(className, active) {{
+    const classes = new Set(String(this.className || "").split(/\\s+/).filter(Boolean));
+    if (active) classes.add(className);
+    else classes.delete(className);
+    this.className = [...classes].join(" ");
+  }}
+  append(child) {{
+    this.children.push(child);
+  }}
+  setAttribute(name, value) {{
+    this.attributes[name] = String(value);
+  }}
+  getAttribute(name) {{
+    return this.attributes[name];
+  }}
+  addEventListener(name, callback) {{
+    this.listeners[name] = this.listeners[name] || [];
+    this.listeners[name].push(callback);
+  }}
+  querySelectorAll(selector) {{
+    const className = selector.startsWith(".") ? selector.slice(1) : selector;
+    return this.children.filter((child) => String(child.className || "").split(/\\s+/).includes(className));
+  }}
+}}
+const fallbackRows = [];
+globalThis.document = {{
+  createElement: (tag) => new FakeElement(tag),
+  querySelectorAll: (selector) => selector.includes("data-gbm-model-row") ? fallbackRows : [],
+}};
+
+const models = [
+  {{ model_id: "m1", label: "One", group: "A" }},
+  {{ model_id: "m2", label: "Two", group: "B" }},
+];
+const grouped = modelGroups(models, (model) => model.group);
+if (grouped.get("A")[0].model_id !== "m1" || grouped.get("B")[0].model_id !== "m2") throw new Error("model grouping failed");
+const collapsedGroups = new Set();
+const sync = syncCollapsedModelGroups({{ groups: [...grouped.keys()], collapsedGroups, initialised: false, activeGroup: "B" }});
+if (!sync.initialised || !collapsedGroups.has("A") || collapsedGroups.has("B")) throw new Error("collapsed group init failed");
+
+const list = new FakeElement("div");
+let toggled = "";
+const heading = createSidebarModelHeading({{
+  group: "A",
+  collapsed: true,
+  toolLabel: "GBM",
+  className: "gbm-model-theme",
+  dataKey: "gbmModelGroup",
+  escapeHtml: (value) => String(value),
+  onToggle: (group) => {{ toggled = group; }},
+}});
+list.append(heading);
+let activated = "";
+const option = createSidebarModelOption({{
+  model: models[0],
+  group: "A",
+  active: false,
+  collapsed: true,
+  className: "gbm-model-option",
+  detailClassName: "gbm-model-detail",
+  modelIdDataKey: "gbmModelId",
+  groupDataKey: "gbmModelGroup",
+  escapeHtml: (value) => String(value),
+  modelLabel: (model) => model.label,
+  modelDetailLabel: (model) => model.model_id,
+  onActivate: (modelId) => {{ activated = modelId; }},
+}});
+list.append(option);
+heading.listeners.click[0]();
+if (toggled !== "A") throw new Error("heading click failed");
+option.listeners.click[0]();
+if (activated !== "m1") throw new Error("option click failed");
+toggleSidebarModelGroup({{
+  list,
+  group: "A",
+  collapsedGroups,
+  themeClassName: "gbm-model-theme",
+  optionClassName: "gbm-model-option",
+  groupDataKey: "gbmModelGroup",
+  toolLabel: "GBM",
+}});
+if (collapsedGroups.has("A") || option.hidden) throw new Error("toggle open failed");
+if (heading.attributes["aria-expanded"] !== "true") throw new Error("heading expanded failed");
+if (emptyStateHtml("Empty", "gbm-empty-state", (value) => String(value)) !== '<div class="gbm-empty-state">Empty</div>') throw new Error("empty state failed");
+
+const status = new FakeElement("div");
+setInlinePhaseStatus(status, {{ html: "Working", phase: "running", hidden: false }});
+if (status.innerHTML !== "Working" || status.dataset.phase !== "running" || status.classList.contains("hidden")) throw new Error("status set failed");
+setInlinePhaseStatus(status, {{ hidden: true }});
+if (!status.classList.contains("hidden")) throw new Error("status hide failed");
+
+const rowA = new FakeElement("tr");
+rowA.dataset.gbmModelRow = "m1";
+const rowB = new FakeElement("tr");
+rowB.dataset.gbmModelRow = "m2";
+fallbackRows.push(rowA, rowB);
+let selectionChanges = 0;
+bindFallbackModelSelection(fallbackRows, () => {{ selectionChanges += 1; }});
+rowA.listeners.click[0]({{ metaKey: false, ctrlKey: false, shiftKey: false }});
+if (rowA.attributes["aria-selected"] !== "true" || rowB.attributes["aria-selected"] !== "false") throw new Error("single row select failed");
+rowB.listeners.click[0]({{ metaKey: true, ctrlKey: false, shiftKey: false }});
+if (rowA.attributes["aria-selected"] !== "true" || rowB.attributes["aria-selected"] !== "true") throw new Error("command row select failed");
+if (selectionChanges < 3) throw new Error("selection change callback failed");
+
+const fallbackIds = selectedModelIdsFromTableOrFallback({{
+  table: null,
+  fallbackSelector: "#gbmModelFallback [data-gbm-model-row]",
+  rowDataKey: "gbmModelRow",
+}});
+if (fallbackIds.join(",") !== "m1,m2") throw new Error(`fallback ids failed: ${{fallbackIds.join(",")}}`);
+const tableIds = selectedModelIdsFromTableOrFallback({{
+  table: {{ getSelectedData: () => [{{ model_id: "m3" }}, {{ model_id: "m3" }}, {{ model_id: "" }}] }},
+  fallbackSelector: "#gbmModelFallback [data-gbm-model-row]",
+  rowDataKey: "gbmModelRow",
+}});
+if (tableIds.join(",") !== "m3") throw new Error(`table ids failed: ${{tableIds.join(",")}}`);
+restoreModelSelection({{ table: null, fallbackSelector: "#gbmModelFallback [data-gbm-model-row]", rowDataKey: "gbmModelRow", ids: ["m2"] }});
+if (rowA.attributes["aria-selected"] !== "false" || rowB.attributes["aria-selected"] !== "true") throw new Error("restore fallback failed");
+
+const activate = {{}};
+const rename = {{}};
+const deleteButton = {{}};
+syncModelActionButtons({{ selectedCount: 1, disabled: false, activate, rename, deleteButton }});
+if (activate.disabled || rename.disabled || deleteButton.disabled) throw new Error("enabled action state failed");
+syncModelActionButtons({{ selectedCount: 2, disabled: true, activate, rename, deleteButton }});
+if (!activate.disabled || !rename.disabled || !deleteButton.disabled) throw new Error("disabled action state failed");
+
+let observedCount = 0;
+class FakeResizeObserver {{
+  constructor(callback) {{ this.callback = callback; }}
+  observe(target) {{ if (target) observedCount += 1; }}
+  disconnect() {{}}
+}}
+globalThis.window = {{ ResizeObserver: FakeResizeObserver }};
+globalThis.ResizeObserver = FakeResizeObserver;
+const resizeObserver = observeResize([rowA, null, rowB], () => {{}});
+if (!resizeObserver || observedCount !== 2) throw new Error("resize observer failed");
+"""
+        self.run_node_script(script)
+
     def test_gbm_shap_selection_helper_maps_active_model_metadata(self) -> None:
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
         script = self.js_function_source(js, "gbmShapSelectionValue") + """
@@ -293,7 +511,8 @@ for (const [name, data, expected] of cases) {
             "formatModelMetric",
             "formatEvaluationValue",
         ]
-        script = "\n".join(self.js_function_source(js, name) for name in helpers) + """
+        script = self.shared_model_ui_source(["modelNumberOrNull", "formatModelMetric"]) + "\n"
+        script += "\n".join(self.js_function_source(js, name) for name in helpers) + """
 const cases = [
   ["full", { metric: "mape", best_iteration: 5189, best_metrics: { training: 0.325612, test: 0.336543 } }, "mape · iter 5,189 · train 0.3256 · test 0.3365"],
   ["missing-test", { metric: "mape", best_iteration: 10, best_metrics: { training: 0.123456, test: null } }, "mape · iter 10 · train 0.1235 · test --"],
@@ -312,7 +531,8 @@ for (const [name, model, expected] of cases) {
     def test_glm_model_detail_label_only_includes_family_and_aic(self) -> None:
         js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
         helpers = ["glmModelDetailLabel", "modelNumberOrNull", "formatModelMetric"]
-        script = "\n".join(self.js_function_source(js, name) for name in helpers) + """
+        script = self.shared_model_ui_source(["modelNumberOrNull", "formatModelMetric"]) + "\n"
+        script += "\n".join(self.js_function_source(js, name) for name in helpers) + """
 const model = {
   family: "gamma",
   diagnostics: { aic: 747117.3116, deviance: 20984.7818 },
@@ -359,7 +579,8 @@ if (!validateRegularizationParameter({ mode: "manual", alpha: "0.1", l1_ratio: 1
         self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-low", css)
         self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-medium", css)
         self.assertIn("#glmCoefficientTable tbody tr.glm-coefficient-pvalue-high", css)
-        script = "\n".join(self.js_function_source(js, name) for name in ["modelNumberOrNull", "glmCoefficientPValueClass"]) + """
+        script = self.shared_model_ui_source(["modelNumberOrNull"]) + "\n"
+        script += "\n".join(self.js_function_source(js, name) for name in ["modelNumberOrNull", "glmCoefficientPValueClass"]) + """
 const cases = [
   [0.0099, "glm-coefficient-pvalue-low"],
   [0.01, "glm-coefficient-pvalue-medium"],
@@ -380,7 +601,8 @@ for (const [value, expected] of cases) {
     def test_gbm_training_ready_badge_label_reports_grid_progress(self) -> None:
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
         helpers = ["modelNumberOrNull", "formatTrainingBadgeCount", "gbmTrainingReadyBadgeLabel"]
-        script = "\n".join(self.js_function_source(js, name) for name in helpers) + """
+        script = self.shared_model_ui_source(["modelNumberOrNull"]) + "\n"
+        script += "\n".join(self.js_function_source(js, name) for name in helpers) + """
 if (gbmTrainingReadyBadgeLabel() !== "Training GBM...") throw new Error("default label failed");
 const gridLabel = gbmTrainingReadyBadgeLabel({ grid_model_number: 2, grid_model_count: 25 });
 if (gridLabel !== "Training GBM (2/25)...") throw new Error(`grid label failed: ${gridLabel}`);
@@ -729,6 +951,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/glm-tool.js")
         self.assert_no_store("/static/app/shared/api.js")
         self.assert_no_store("/static/app/shared/format.js")
+        self.assert_no_store("/static/app/shared/model-ui.js")
         self.assert_no_store("/static/app/shared/schema.js")
         self.assert_no_store("/static/app/shared/tabulator.js")
         self.assert_no_store("/static/app/shared/timing.js")
@@ -820,7 +1043,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("let tabulationResizeObserver = null;", glm_js)
         self.assertIn("function scheduleTabulationResize()", glm_js)
         self.assertIn("function observeTabulationLayoutResize()", glm_js)
-        self.assertIn("tabulationResizeObserver = new ResizeObserver(scheduleTabulationResize);", glm_js)
+        self.assertIn("tabulationResizeObserver = observeResize([main], scheduleTabulationResize);", glm_js)
         self.assertIn("function resize()", glm_js)
         self.assertIn('data-glm-scope="training"', js)
         self.assertIn('id="glmBuildBtn"', js)
@@ -849,8 +1072,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('modelTable.on("rowSelectionChanged", syncSelectedModelsFromTable);', glm_js)
         self.assertIn("function renderModelFallback(models = modelRows, activeModelId = config?.active_model_id)", glm_js)
         self.assertIn("function restoreModelSelection(ids)", glm_js)
-        self.assertIn("const commandSelection = event.metaKey || event.ctrlKey;", glm_js)
-        self.assertIn("if (event.shiftKey) {", glm_js)
+        self.assertIn("bindFallbackModelSelection(rows, syncSelectedModelsFromTable);", glm_js)
         self.assertIn('id="glmTabulationColor" type="checkbox"', glm_js)
         self.assertIn('id="glmTabulationModelGrid"', glm_js)
         self.assertIn('id="glmTabulationModelFallback"', glm_js)
@@ -988,6 +1210,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.run_node_script(f"""
 const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
 let tabulationScale = "linear";
+{self.shared_model_ui_source(["modelNumberOrNull"])}
 {self.js_function_source(glm_js, "modelNumberOrNull")}
 {self.js_function_source(glm_js, "tabulationDisplayTableValue")}
 {self.js_function_source(glm_js, "tabulationDisplayTableSpan")}
@@ -1546,7 +1769,8 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("renderEvaluationChart({", js)
         self.assertIn("progress.evaluation", js)
         self.assertIn('pollJob(job.job_id, 0);', js)
-        self.assertIn('job.status === "running" ? GBM_RUNNING_POLL_MS : GBM_QUEUED_POLL_MS', js)
+        self.assertIn("isModelJobPending(job.status)", js)
+        self.assertIn("modelJobPollDelay(job.status, GBM_QUEUED_POLL_MS, GBM_RUNNING_POLL_MS)", js)
         self.assertIn('if (!job.progress) setTrainingStatus("GBM failed", "failed");', js)
         self.assertLess(js.index('id="gbmTrainBtn"'), js.index("sampleStatusHtml(data.sample)"))
         self.assertLess(js.index("sampleStatusHtml(data.sample)"), js.index('id="gbmShapRows"'))
@@ -1595,7 +1819,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("if (magnitude >= 1000) return Math.round(number).toLocaleString();", js)
         self.assertIn("let evaluationChart = null;", js)
         self.assertIn("function bindEvaluationResize(target)", js)
-        self.assertIn("new ResizeObserver", js)
+        self.assertIn("evaluationResizeObserver = observeResize([target, target.parentElement]", js)
         self.assertIn("evaluationChart?.resize()", js)
         self.assertIn("function evaluationTitle(rows, primaryMetric, manifest = {}, progress = null)", js)
         self.assertIn("rows.sort(compareEvaluationRows);", js)
@@ -1810,16 +2034,18 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("function syncSidebarFromSchema()", js)
         self.assertIn("function syncSidebarModelChooser(models, activeModelId)", js)
         self.assertIn("function modelGroupLabel(model)", js)
-        self.assertIn("const modelsByGroup = new Map();", js)
-        self.assertIn("if (!modelsByGroup.has(group)) modelsByGroup.set(group, []);", js)
-        self.assertIn("modelsByGroup.get(group).push(model);", js)
+        self.assertIn("const modelsByGroup = modelGroups(normalisedModels, modelGroupLabel);", js)
+        self.assertIn("state.gbmModelGroupsInitialised = syncCollapsedModelGroups({", js)
         self.assertIn('return `${model.response_column || "actualNumerator"} / ${modelWeightLabel(model.offset_column)}`;', js)
         self.assertIn("function modelDetailLabel(model)", js)
         self.assertIn("return gbmModelDetailLabel(model);", js)
         self.assertIn('parts.push(`train ${formatModelMetric(modelBestMetric(model, "training"))}`);', js)
         self.assertIn('parts.push(`test ${formatModelMetric(modelBestMetric(model, "test"))}`);', js)
-        self.assertIn('heading.className = "saved-filter-theme gbm-model-theme";', js)
-        self.assertIn('button.className = `feature gbm-model-option${active ? " active" : ""}`;', js)
+        self.assertIn("createSidebarModelHeading({", js)
+        self.assertIn('className: "gbm-model-theme"', js)
+        self.assertIn("createSidebarModelOption({", js)
+        self.assertIn('className: "gbm-model-option"', js)
+        self.assertIn("toggleSidebarModelGroup({", js)
         self.assertIn('id="gbmRenameModelBtn"', js)
         self.assertIn('id="gbmActivateModelBtn" class="tab gbm-inline-action-button" type="button">Activate</button>', js)
         self.assertIn('id="gbmDeleteModelBtn" class="danger-action gbm-model-delete-button"', js)
@@ -1857,37 +2083,36 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertNotIn("<th>Scored</th>", js)
         self.assertNotIn("data-gbm-activate", js)
         self.assertNotIn('modelTable.on("rowClick"', js)
-        self.assertIn("const commandSelection = event.metaKey || event.ctrlKey;", js)
-        self.assertIn("if (event.shiftKey) {", js)
-        self.assertIn("rows.forEach((candidate) => setSelected(candidate, candidate === row));", js)
+        self.assertIn("bindFallbackModelSelection(rows, syncModelActionButtons);", js)
         self.assertIn("function formatModelRuntime(model)", js)
         self.assertIn("function formatModelMetric(value)", js)
         self.assertIn("function modelParameterNumber(model, name)", js)
         self.assertIn('model?.timings?.training_seconds', js)
         self.assertIn("function formatModelCreated(value)", js)
-        self.assertIn('return `${date.getDate()} ${months[date.getMonth()]} ${hour}:${minute}`;', js)
+        self.assertIn('formatModelCreated as sharedFormatModelCreated', js)
+        self.assertIn('return `${date.getDate()} ${MODEL_MONTHS[date.getMonth()]} ${hour}:${minute}`;', js)
         self.assertIn("function modelWeightLabel(value)", js)
         self.assertIn('return !text || text === "__none__" || text === "Average row value" ? "N" : text;', js)
         self.assertIn("function formatSampleMode(value, source = \"\")", js)
         self.assertIn('el("gbmActivateModelBtn")?.addEventListener("click", activateSelectedModel);', js)
-        self.assertIn('const activate = el("gbmActivateModelBtn");', js)
-        self.assertIn("if (activate) activate.disabled = disableActions || selectedCount !== 1;", js)
+        self.assertIn("syncSharedModelActionButtons({", js)
+        self.assertIn('activate: el("gbmActivateModelBtn")', js)
         self.assertIn("async function activateSelectedModel()", js)
         self.assertIn("if (modelIds.length !== 1) return;", js)
         self.assertIn("await activateModel(modelIds[0]);", js)
         self.assertIn("function renameActiveModel()", js)
         self.assertIn("function deleteActiveModel()", js)
         self.assertIn("function selectedModelIds()", js)
-        self.assertIn("const selectedCount = selectedModelIds().length;", js)
+        self.assertIn("selectedCount: selectedModelIds().length,", js)
         self.assertIn("const [modelId] = selectedModelIds();", js)
         self.assertIn("const modelIds = selectedModelIds();", js)
         self.assertIn("for (const modelId of modelIds)", js)
-        self.assertIn('row.classList.toggle("selected", selected);', js)
-        self.assertIn('row.setAttribute("aria-selected", String(selected));', js)
-        self.assertIn("anchorRow = row;", js)
+        self.assertIn("selectedModelIdsFromTableOrFallback({", js)
+        self.assertIn("restoreSharedModelSelection({", js)
         self.assertIn('method: "DELETE"', js)
         self.assertIn("button.setAttribute(\"aria-selected\", String(active));", js)
-        self.assertIn("if (!active) activateModel(model.model_id);", js)
+        self.assertIn("onActivate: activateModel", js)
+        self.assertIn("if (!active) onActivate(model.model_id, model);", js)
         self.assertIn("response_column: source.response_column", js)
         self.assertIn("offset_column: source.offset_column", js)
         self.assertIn("training_mode: source.training_mode", js)
@@ -1936,10 +2161,9 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("restoreModelSelection(preservedIds);", js)
         self.assertIn("function restoreModelSelection(ids)", js)
         self.assertIn('if (activeTab === "models") refreshModelList();', js)
-        self.assertIn("const disableActions = isTraining;", js)
-        self.assertIn("if (rename) rename.disabled = disableActions || selectedCount !== 1;", js)
-        self.assertIn("if (activate) activate.disabled = disableActions || selectedCount !== 1;", js)
-        self.assertIn("if (del) del.disabled = disableActions || selectedCount < 1;", js)
+        self.assertIn("disabled: isTraining,", js)
+        self.assertIn('rename: el("gbmRenameModelBtn")', js)
+        self.assertIn('deleteButton: el("gbmDeleteModelBtn")', js)
         self.assertIn("syncModelActionButtons();\n  }\n\n  function syncTrainingButton()", js)
         self.assertIn("async function activateModel(modelId) {\n    if (isTraining) return;", js)
         self.assertIn("async function activateSelectedModel() {\n    if (isTraining) return;", js)
