@@ -182,21 +182,6 @@
         vertical-align: baseline;
       }
 
-      .dataset-meta-uk-map-icon {
-        width: 28px;
-        height: 28px;
-        object-fit: contain;
-        display: inline-block;
-        margin-right: 4px;
-        vertical-align: -7px;
-      }
-
-      body.dark .dataset-meta-uk-map-icon {
-        filter: invert(1) grayscale(1) brightness(1.7) contrast(1.08);
-        mix-blend-mode: screen;
-        opacity: 0.92;
-      }
-
       .dataset-meta-uk-map-separator {
         color: var(--muted);
         margin: 0 3px;

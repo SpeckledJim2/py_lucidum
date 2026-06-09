@@ -2369,7 +2369,9 @@ COPY (
                     page.locator(".dataset-meta-uk-map-link").evaluate_all("nodes => nodes.map((node) => node.textContent.trim()).join('/')"),
                     "Area/Sector/Unit",
                 )
-                self.assertTrue(page.locator(".dataset-meta-uk-map-icon").is_visible())
+                self.assertEqual(page.locator(".dataset-meta-uk-map-icon").count(), 0)
+                self.assertTrue(page.locator("#ukMapTool img").is_visible())
+                self.assertTrue(page.locator("#ukMapTool img").evaluate("node => node.complete && node.naturalWidth > 0"))
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)

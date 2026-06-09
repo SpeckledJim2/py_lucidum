@@ -800,12 +800,6 @@
         const group = document.createElement("span");
         group.className = "dataset-meta-uk-map";
         group.title = "Open UK Mapping by postcode resolution";
-        const icon = document.createElement("img");
-        icon.className = "dataset-meta-uk-map-icon";
-        icon.src = "/tools/uk-map/static/icons/UK.png";
-        icon.alt = "";
-        icon.setAttribute("aria-hidden", "true");
-        group.append(icon);
         availability.levels.forEach((entry, index) => {
           if (index > 0) {
             const separator = document.createElement("span");
