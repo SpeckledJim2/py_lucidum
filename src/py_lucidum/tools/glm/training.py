@@ -23,7 +23,7 @@ import duckdb
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 
 from .store import GlmModelStore, json_safe_number
-from .terms import model_matrix, term_groups
+from .terms import column_tokens, model_matrix, term_groups
 from .validation import TARGET_COLUMN, physical_sample_column, validate_request
 
 
@@ -569,9 +569,26 @@ def coefficient_rows(
     context: dict[str, Any],
     np: Any,
     pd: Any,
+    source_columns: list[str] | None = None,
     *,
     include_inference: bool = True,
 ) -> list[dict[str, Any]]:
+    coefficient_features = coefficient_feature_rows(model, source_columns or [])
+    coefficient_feature_by_name = {
+        str(name): list(features)
+        for name, features in zip([str(name) for name in getattr(model, "feature_names_", [])], coefficient_features)
+    }
+
+    def features_for_coefficient(term: str, coefficient_index: int) -> list[str]:
+        if term.lower() == "intercept" or term == "(Intercept)":
+            return []
+        features = coefficient_feature_by_name.get(term)
+        if features is None and 0 <= coefficient_index < len(coefficient_features):
+            features = coefficient_features[coefficient_index]
+        if not features and source_columns:
+            features = column_tokens(term, source_columns)
+        return list(features or [])
+
     table = None
     if include_inference:
         try:
@@ -580,11 +597,17 @@ def coefficient_rows(
             table = None
     if table is not None:
         rows: list[dict[str, Any]] = []
+        coefficient_index = 0
         for term, row in table.iterrows():
-            name = "(Intercept)" if str(term).lower() == "intercept" else str(term)
+            raw_name = str(term)
+            name = "(Intercept)" if raw_name.lower() == "intercept" else raw_name
+            features = features_for_coefficient(raw_name, coefficient_index)
+            if raw_name.lower() != "intercept" and raw_name != "(Intercept)":
+                coefficient_index += 1
             rows.append(
                 {
                     "term": name,
+                    "features": features,
                     "estimate": jsonable(row.get("coef"), np, pd),
                     "std_error": jsonable(row.get("se"), np, pd),
                     "statistic": jsonable(row.get("z_value", row.get("t_value")), np, pd),
@@ -600,6 +623,7 @@ def coefficient_rows(
     return [
         {
             "term": term,
+            "features": [] if index == 0 else features_for_coefficient(term, index - 1),
             "estimate": jsonable(estimate, np, pd),
             "std_error": None,
             "statistic": None,
@@ -607,8 +631,34 @@ def coefficient_rows(
             "ci_lower": None,
             "ci_upper": None,
         }
-        for term, estimate in zip(terms, estimates)
+        for index, (term, estimate) in enumerate(zip(terms, estimates))
     ]
+
+
+def coefficient_feature_rows(model: Any, source_columns: list[str]) -> list[list[str]]:
+    feature_names = [str(name) for name in getattr(model, "feature_names_", [])]
+    features_by_index: list[list[str]] = [[] for _ in feature_names]
+    source_set = set(source_columns)
+    spec = getattr(model, "X_model_spec_", None)
+    if spec is not None:
+        term_variables = getattr(spec, "term_variables", {}) or {}
+        term_indices = getattr(spec, "term_indices", {}) or {}
+        for term in getattr(spec, "terms", []) or []:
+            variables = sorted(str(name) for name in (term_variables.get(term, set()) or set()) if str(name) in source_set)
+            if not variables:
+                continue
+            for raw_index in term_indices.get(term, []) or []:
+                try:
+                    index = int(raw_index)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= index < len(features_by_index):
+                    features_by_index[index] = list(variables)
+    if source_columns:
+        for index, features in enumerate(features_by_index):
+            if not features:
+                features_by_index[index] = column_tokens(feature_names[index], source_columns)
+    return features_by_index
 
 
 def glm_feature_importance_rows(
@@ -945,6 +995,7 @@ def _train_model_impl(
             context,
             np,
             pd,
+            source_columns,
             include_inference=not is_penalized,
         )
         feature_importance = glm_feature_importance_rows(

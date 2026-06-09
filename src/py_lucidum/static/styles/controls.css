@@ -830,6 +830,7 @@
 
       .profile-context-menu,
       .gbm-feature-context-menu,
+      .glm-coefficient-context-menu,
       .glm-tabulation-context-menu {
         position: fixed;
         z-index: 1100;
@@ -843,12 +844,14 @@
 
       .profile-context-menu[hidden],
       .gbm-feature-context-menu[hidden],
+      .glm-coefficient-context-menu[hidden],
       .glm-tabulation-context-menu[hidden] {
         display: none;
       }
 
       .profile-context-menu-item,
       .gbm-feature-context-menu-item,
+      .glm-coefficient-context-menu-item,
       .glm-tabulation-context-menu-item {
         display: block;
         width: 100%;
@@ -874,6 +877,8 @@
       .profile-context-menu-item:focus-visible,
       .gbm-feature-context-menu-item:hover,
       .gbm-feature-context-menu-item:focus-visible,
+      .glm-coefficient-context-menu-item:hover,
+      .glm-coefficient-context-menu-item:focus-visible,
       .glm-tabulation-context-menu-item:hover,
       .glm-tabulation-context-menu-item:focus-visible {
         background: color-mix(in srgb, var(--accent) 12%, var(--panel));

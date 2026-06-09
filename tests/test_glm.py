@@ -24,6 +24,7 @@ from py_lucidum.tools.glm.tabulation import build_tabulations, tabulation_config
 from py_lucidum.tools.glm.training import (
     MissingGlmDependency,
     _suppress_tabmat_mixed_dtype_warning,
+    coefficient_rows,
     formula_context,
     glm_dependencies,
     glm_feature_importance_rows,
@@ -561,6 +562,8 @@ if result.get("iteration") != 10:
         self.assertTrue(detail["coefficients"])
         self.assertTrue(detail["feature_importance"])
         self.assertEqual(detail["coefficients"][0]["term"], "(Intercept)")
+        self.assertEqual(detail["coefficients"][0]["features"], [])
+        self.assertTrue(any(row["features"] for row in detail["coefficients"] if row["term"] != "(Intercept)"))
 
         dataset.register_data_source_provider(GlmSourceProvider(store))
         source_id = store.source_id(model_id)
@@ -626,6 +629,71 @@ if result.get("iteration") != 10:
         self.assertAlmostEqual(by_feature["Segment"]["importance"], 44 / 9)
         self.assertGreater(by_feature["Age"]["importance"], by_feature["Segment"]["importance"])
         self.assertTrue(all(":" not in row["feature"] for row in rows))
+
+    def test_glm_coefficient_rows_include_source_features(self) -> None:
+        try:
+            import numpy as np
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class FakeSpec:
+            terms = ["Age", "C(Segment)", "Age:Segment", "pmin(Age, 60)"]
+            term_variables = {
+                "Age": {"Age"},
+                "C(Segment)": {"Segment", "C"},
+                "Age:Segment": {"Age", "Segment"},
+                "pmin(Age, 60)": {"Age", "pmin"},
+            }
+            term_indices = {
+                "Age": [0],
+                "C(Segment)": [1, 2],
+                "Age:Segment": [3, 4],
+                "pmin(Age, 60)": [5],
+            }
+
+        class FakeModel:
+            X_model_spec_ = FakeSpec()
+            feature_names_ = [
+                "Age",
+                "C(Segment)[A]",
+                "C(Segment)[B]",
+                "Age:Segment[A]",
+                "Age:Segment[B]",
+                "pmin(Age, 60)",
+            ]
+
+            def coef_table(self, *_args: Any, **_kwargs: Any) -> Any:
+                index = ["Intercept", *self.feature_names_]
+                return pd.DataFrame(
+                    {
+                        "coef": np.arange(len(index), dtype=float),
+                        "se": np.ones(len(index)),
+                        "z_value": np.ones(len(index)),
+                        "p_value": np.full(len(index), 0.5),
+                        "ci_lower": np.zeros(len(index)),
+                        "ci_upper": np.ones(len(index)),
+                    },
+                    index=index,
+                )
+
+        rows = coefficient_rows(
+            FakeModel(),
+            pd.DataFrame({"Age": [1], "Segment": ["A"]}),
+            np.asarray([1.0]),
+            None,
+            {},
+            np,
+            pd,
+            ["Age", "Segment"],
+        )
+        by_term = {row["term"]: row["features"] for row in rows}
+
+        self.assertEqual(by_term["(Intercept)"], [])
+        self.assertEqual(by_term["Age"], ["Age"])
+        self.assertEqual(by_term["C(Segment)[A]"], ["Segment"])
+        self.assertEqual(by_term["Age:Segment[A]"], ["Age", "Segment"])
+        self.assertEqual(by_term["pmin(Age, 60)"], ["Age"])
 
     def test_glm_training_with_offset_stores_terms_and_predicts(self) -> None:
         self.require_glm_dependencies()

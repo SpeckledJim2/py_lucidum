@@ -50,6 +50,10 @@ function csvEscape(value) {
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function downloadText(filename, text, type = "text/plain") {
   const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
@@ -95,6 +99,9 @@ export function createGlmTool({
   syncClientTimingFromData,
   syncDuckDbTimingFromData,
   toolCache,
+  canNavigateToLineBarFeature = () => false,
+  navigateToLineBarFeature = () => false,
+  selectExpectedPredictionForModelKind = () => false,
   updateAxisControls,
   refreshActiveTool,
   reloadSchema,
@@ -131,6 +138,7 @@ export function createGlmTool({
   let tabulationResizeFrame = null;
   let tabulationFallbackRows = [];
   let tabulationFallbackColumns = [];
+  let glmCoefficientContextMenuListeners = null;
   let glmTabulationContextMenuListeners = null;
   let selectedTabulationTableId = localStorage.getItem("py_lucidum_glm_tabulation_table") || "base";
   let tabulationView = localStorage.getItem("py_lucidum_glm_tabulation_view") || "table";
@@ -2052,6 +2060,7 @@ export function createGlmTool({
     coefficientRows = rows;
     const table = el("glmCoefficientTable");
     if (!table) return;
+    closeGlmCoefficientContextMenu();
     const penalized = activeModelIsPenalized();
     const query = String(el("glmCoefficientSearch")?.value || "").trim().toLowerCase();
     const filtered = query
@@ -2061,6 +2070,7 @@ export function createGlmTool({
       table.innerHTML = `<tbody><tr><td class="glm-empty-cell">No coefficients to show</td></tr></tbody>`;
       return;
     }
+    const visibleRows = filtered.map((row) => ({ row, index: rows.indexOf(row) }));
     table.innerHTML = `
       <thead>
         <tr>
@@ -2071,8 +2081,8 @@ export function createGlmTool({
         </tr>
       </thead>
       <tbody>
-        ${filtered.map((row) => `
-          <tr class="${penalized ? "" : glmCoefficientPValueClass(row.p_value)}">
+        ${visibleRows.map(({ row, index }) => `
+          <tr class="${penalized ? "" : glmCoefficientPValueClass(row.p_value)}" data-glm-coefficient-index="${index}">
             <td>${escapeHtml(row.term)}</td>
             <td class="numeric">${escapeHtml(formatModelMetric(row.estimate))}</td>
             <td class="numeric">${penalized ? "" : escapeHtml(formatModelMetric(row.std_error))}</td>
@@ -2081,6 +2091,160 @@ export function createGlmTool({
         `).join("")}
       </tbody>
     `;
+    table.querySelectorAll("[data-glm-coefficient-index]").forEach((row) => {
+      row.addEventListener("contextmenu", openGlmCoefficientContextMenuForRow);
+    });
+  }
+
+  function isGlmInterceptTerm(term) {
+    const text = String(term || "").trim().toLowerCase();
+    return text === "intercept" || text === "(intercept)";
+  }
+
+  function schemaDatasetFeatureNames() {
+    const datasetSource = (state.schema?.data_sources || []).find((source) => source?.id === "dataset");
+    const columns = datasetSource?.columns || state.schema?.columns || [];
+    return columns.map((column) => String(column?.name || "")).filter(Boolean);
+  }
+
+  function coefficientStoredFeatureNames(row = {}) {
+    if (Array.isArray(row.features)) return row.features;
+    if (typeof row.features !== "string") return [];
+    const text = row.features.trim();
+    if (!text) return [];
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function coefficientFallbackFeatureNames(row = {}) {
+    const term = String(row.term || "");
+    if (!term || isGlmInterceptTerm(term)) return [];
+    return schemaDatasetFeatureNames().filter((feature) => {
+      const pattern = new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(feature)}($|[^A-Za-z0-9_])`);
+      return pattern.test(term);
+    });
+  }
+
+  function normaliseCoefficientFeatureNames(names = []) {
+    const seen = new Set();
+    const features = [];
+    for (const value of names) {
+      const name = String(value || "").trim();
+      if (!name || seen.has(name) || !canNavigateToLineBarFeature(name)) continue;
+      seen.add(name);
+      features.push(name);
+    }
+    return features;
+  }
+
+  function coefficientContextFeatureNames(row = {}) {
+    if (isGlmInterceptTerm(row?.term)) return [];
+    const storedFeatures = normaliseCoefficientFeatureNames(coefficientStoredFeatureNames(row));
+    if (storedFeatures.length) return storedFeatures;
+    return normaliseCoefficientFeatureNames(coefficientFallbackFeatureNames(row));
+  }
+
+  function openGlmCoefficientContextMenuForRow(event) {
+    closeGlmCoefficientContextMenu();
+    const index = Number(event.currentTarget?.dataset?.glmCoefficientIndex);
+    const row = Number.isInteger(index) && index >= 0 ? coefficientRows[index] : null;
+    const features = coefficientContextFeatureNames(row || {});
+    if (!features.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = glmCoefficientContextMenu();
+    menu.innerHTML = "";
+    features.forEach((feature) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "glm-coefficient-context-menu-item";
+      button.setAttribute("role", "menuitem");
+      button.textContent = `Go to Line and Bar (${feature})`;
+      button.addEventListener("click", () => {
+        closeGlmCoefficientContextMenu();
+        goToLineBarCoefficientFeature(feature);
+      });
+      menu.append(button);
+    });
+    menu.hidden = false;
+    const rowRect = event.currentTarget?.getBoundingClientRect?.() || { left: event.clientX, top: event.clientY, height: 18 };
+    const clientX = event.clientX || rowRect.left + 12;
+    const clientY = event.clientY || rowRect.top + Math.min(18, Math.max(8, rowRect.height / 2));
+    positionGlmCoefficientContextMenu(menu, clientX, clientY);
+    menu.querySelector("button")?.focus({ preventScroll: true });
+    bindGlmCoefficientContextMenuDismissal();
+  }
+
+  function glmCoefficientContextMenu() {
+    let menu = document.getElementById("glmCoefficientContextMenu");
+    if (menu) return menu;
+    menu = document.createElement("div");
+    menu.id = "glmCoefficientContextMenu";
+    menu.className = "glm-coefficient-context-menu";
+    menu.hidden = true;
+    menu.setAttribute("role", "menu");
+    document.body.append(menu);
+    return menu;
+  }
+
+  function positionGlmCoefficientContextMenu(menu, clientX, clientY) {
+    const margin = 8;
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const rect = menu.getBoundingClientRect();
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    menu.style.left = `${Math.max(margin, Math.min(clientX, maxLeft))}px`;
+    menu.style.top = `${Math.max(margin, Math.min(clientY, maxTop))}px`;
+  }
+
+  function bindGlmCoefficientContextMenuDismissal() {
+    const pointerdown = (event) => {
+      const menu = document.getElementById("glmCoefficientContextMenu");
+      if (!menu || menu.hidden || menu.contains(event.target)) return;
+      closeGlmCoefficientContextMenu();
+    };
+    const keydown = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeGlmCoefficientContextMenu();
+    };
+    const viewport = () => closeGlmCoefficientContextMenu();
+    glmCoefficientContextMenuListeners = { pointerdown, keydown, viewport };
+    document.addEventListener("pointerdown", pointerdown, true);
+    document.addEventListener("keydown", keydown, true);
+    window.addEventListener("resize", viewport, true);
+    window.addEventListener("scroll", viewport, true);
+  }
+
+  function closeGlmCoefficientContextMenu() {
+    if (glmCoefficientContextMenuListeners) {
+      document.removeEventListener("pointerdown", glmCoefficientContextMenuListeners.pointerdown, true);
+      document.removeEventListener("keydown", glmCoefficientContextMenuListeners.keydown, true);
+      window.removeEventListener("resize", glmCoefficientContextMenuListeners.viewport, true);
+      window.removeEventListener("scroll", glmCoefficientContextMenuListeners.viewport, true);
+      glmCoefficientContextMenuListeners = null;
+    }
+    const menu = document.getElementById("glmCoefficientContextMenu");
+    if (!menu) return;
+    menu.hidden = true;
+    menu.innerHTML = "";
+  }
+
+  function goToLineBarCoefficientFeature(featureName) {
+    const name = String(featureName || "").trim();
+    if (!name) return;
+    selectExpectedPredictionForModelKind("glm");
+    if (typeof navigateToLineBarFeature === "function" && navigateToLineBarFeature(name)) {
+      renderExpectedNumerators();
+      updateAxisControls();
+      return;
+    }
+    setGlmNotice(`Feature ${name} is not available in Line and Bar`);
   }
 
   function glmCoefficientPValueClass(value) {

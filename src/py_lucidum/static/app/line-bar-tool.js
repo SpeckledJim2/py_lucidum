@@ -99,6 +99,7 @@ export function createLineBarTool({
     state.xSource = targetSource;
     state.bandFeature = null;
     renderFeatures();
+    renderExpectedNumerators();
     updateAxisControls();
     setTool("line_bar");
     return state.tool === "line_bar";

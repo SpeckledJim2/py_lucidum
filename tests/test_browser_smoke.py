@@ -673,6 +673,17 @@ COPY (
 ) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
 """
             )
+            con.execute(
+                f"""
+COPY (
+  SELECT '(Intercept)' AS term, []::VARCHAR[] AS features, 0.1::DOUBLE AS estimate, 0.01::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.08::DOUBLE AS ci_lower, 0.12::DOUBLE AS ci_upper
+  UNION ALL
+  SELECT 'Age' AS term, ['Age']::VARCHAR[] AS features, 0.2::DOUBLE AS estimate, 0.02::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.16::DOUBLE AS ci_lower, 0.24::DOUBLE AS ci_upper
+  UNION ALL
+  SELECT 'Age:Segment[A]' AS term, ['Age', 'Segment']::VARCHAR[] AS features, 0.3::DOUBLE AS estimate, 0.03::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.24::DOUBLE AS ci_lower, 0.36::DOUBLE AS ci_upper
+) TO {sql_literal(str(model_dir / "coefficients.parquet"))} (FORMAT PARQUET)
+"""
+            )
         finally:
             con.close()
 
@@ -1411,6 +1422,46 @@ COPY (
                         "regularizationMixDisabled": True,
                         "regularizationAlphaDisabled": True,
                     },
+                )
+                page.locator("#glmCoefficientTable tbody tr", has_text="(Intercept)").click(button="right")
+                page.wait_for_timeout(150)
+                self.assertEqual(page.locator("#glmCoefficientContextMenu:not([hidden])").count(), 0)
+                page.locator("#glmCoefficientTable tbody tr", has_text="Age").first.click(button="right")
+                page.locator("#glmCoefficientContextMenu:not([hidden])").wait_for(timeout=10_000)
+                glm_single_coefficient_context_labels = page.locator("#glmCoefficientContextMenu [role='menuitem']").evaluate_all(
+                    "(items) => items.map((item) => item.textContent.trim())"
+                )
+                self.assertEqual(glm_single_coefficient_context_labels, ["Go to Line and Bar (Age)"])
+                page.keyboard.press("Escape")
+                page.wait_for_function('() => document.querySelector("#glmCoefficientContextMenu")?.hidden === true')
+                page.locator("#glmCoefficientTable tbody tr", has_text="Age:Segment[A]").click(button="right")
+                page.locator("#glmCoefficientContextMenu:not([hidden])").wait_for(timeout=10_000)
+                glm_interaction_coefficient_context_labels = page.locator("#glmCoefficientContextMenu [role='menuitem']").evaluate_all(
+                    "(items) => items.map((item) => item.textContent.trim())"
+                )
+                self.assertEqual(
+                    glm_interaction_coefficient_context_labels,
+                    ["Go to Line and Bar (Age)", "Go to Line and Bar (Segment)"],
+                )
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_coefficient_chart_info:
+                    page.locator("#glmCoefficientContextMenu [role='menuitem']", has_text="Go to Line and Bar (Segment)").click()
+                glm_coefficient_chart_body = json.loads(glm_coefficient_chart_info.value.post_data or "{}")
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
+                self.assertEqual(glm_coefficient_chart_body["x"], "Segment")
+                self.assertEqual(glm_coefficient_chart_body["responses"][1]["numerator"], "glm_prediction")
+                self.assertEqual(glm_coefficient_chart_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
+                page.locator("#glmTool").click()
+                page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
+                page.get_by_role("button", name="Formula builder").click()
+                wait_for_glm_builder_state(
+                    {
+                        "formula": "actualNumerator ~ 1 + Age + Segment",
+                        "family": "tweedie",
+                        "familyParameter": "1.5",
+                        "scope": "all",
+                        "regularizationMode": "none",
+                    }
                 )
                 edited_glm_draft = {
                     "formula": "actualNumerator ~ 1 + Age + C(Segment)",
