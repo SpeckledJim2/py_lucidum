@@ -59,6 +59,7 @@ class FormulaParts:
     rhs_formula: str
     fitted_formula: str
     offset_terms: list[str]
+    fit_intercept: bool
 
 
 def family_options_payload() -> list[dict[str, Any]]:
@@ -401,6 +402,60 @@ def normalise_rhs_formula(rhs: str) -> str:
     return text or "1"
 
 
+def top_level_formula_terms(rhs: str) -> list[tuple[str, str]]:
+    terms: list[tuple[str, str]] = []
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    sign = "+"
+    start = 0
+    text = str(rhs or "")
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote in {"'", '"'}:
+            escaped = True
+            continue
+        if char in {"'", '"', "`"}:
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            continue
+        if quote is not None:
+            continue
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            continue
+        if depth == 0 and char in {"+", "-"}:
+            term = text[start:index].strip()
+            if term:
+                terms.append((sign, term))
+            sign = char
+            start = index + 1
+    term = text[start:].strip()
+    if term:
+        terms.append((sign, term))
+    return terms
+
+
+def formula_fit_intercept(rhs: str) -> bool:
+    fit_intercept = True
+    for sign, term in top_level_formula_terms(rhs):
+        normalized = re.sub(r"\s+", "", term)
+        if sign == "+" and normalized == "1":
+            fit_intercept = True
+        elif sign == "+" and normalized == "0":
+            fit_intercept = False
+        elif sign == "-" and normalized == "1":
+            fit_intercept = False
+    return fit_intercept
+
+
 def strip_offset_terms(rhs: str) -> tuple[str, list[str]]:
     remaining = str(rhs or "")
     offset_terms: list[str] = []
@@ -445,6 +500,7 @@ def parse_formula(raw_formula: Any, response_column: Any) -> FormulaParts:
     if not rhs:
         raise ValueError("Enter the right-hand side of the GLM formula")
     fitted_rhs, offset_terms = strip_offset_terms(rhs)
+    fit_intercept = formula_fit_intercept(fitted_rhs)
     return FormulaParts(
         raw_formula=raw,
         stripped_formula=stripped,
@@ -452,6 +508,7 @@ def parse_formula(raw_formula: Any, response_column: Any) -> FormulaParts:
         rhs_formula=rhs,
         fitted_formula=f"{TARGET_COLUMN} ~ {fitted_rhs}",
         offset_terms=offset_terms,
+        fit_intercept=fit_intercept,
     )
 
 
@@ -576,6 +633,7 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
             "rhs": formula.rhs_formula,
             "fitted": formula.fitted_formula,
             "offset_terms": formula.offset_terms,
+            "fit_intercept": formula.fit_intercept,
         }
     return result
 

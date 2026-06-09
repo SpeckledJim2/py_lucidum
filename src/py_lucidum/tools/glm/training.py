@@ -497,6 +497,26 @@ def glum_family(glum: Any, family: str, family_parameter: float | None) -> Any:
     return family
 
 
+def glm_formula_drop_first(regularization_mode: str) -> bool:
+    return str(regularization_mode or "none") == "none"
+
+
+def _is_singular_matrix_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return ("singular" in message and "matrix" in message) or "rank deficient" in message or "rank-deficient" in message
+
+
+def _raise_actionable_singular_matrix_error(exc: Exception) -> None:
+    if not _is_singular_matrix_error(exc):
+        raise exc
+    raise ValueError(
+        "GLM formula produced a rank-deficient design matrix. For unpenalized fits, simplify redundant spline, transform, "
+        "or interaction terms, try centered spline constraints or explicit no-intercept syntax such as `0 +` when appropriate, "
+        "or use ridge/auto regularization. Original glum error: "
+        f"{exc}"
+    ) from exc
+
+
 def data_frame_from_dataset(dataset: Dataset) -> tuple[Any, list[str]]:
     with dataset.lock:
         columns = [column.name for column in dataset.valid_schema_columns()]
@@ -618,12 +638,22 @@ def coefficient_rows(
             )
         return rows
 
-    terms = ["(Intercept)", *[str(name) for name in getattr(model, "feature_names_", [])]]
-    estimates = [getattr(model, "intercept_", None), *list(getattr(model, "coef_", []))]
+    has_intercept = bool(getattr(model, "fit_intercept", True))
+    feature_names = [str(name) for name in getattr(model, "feature_names_", [])]
+    if has_intercept:
+        terms = ["(Intercept)", *feature_names]
+        estimates = [getattr(model, "intercept_", None), *list(getattr(model, "coef_", []))]
+    else:
+        terms = feature_names
+        estimates = list(getattr(model, "coef_", []))
     return [
         {
             "term": term,
-            "features": [] if index == 0 else features_for_coefficient(term, index - 1),
+            "features": (
+                []
+                if has_intercept and index == 0
+                else features_for_coefficient(term, index - 1 if has_intercept else index)
+            ),
             "estimate": jsonable(estimate, np, pd),
             "std_error": None,
             "statistic": None,
@@ -909,7 +939,9 @@ def _train_model_impl(
     regularization = dict(validation.get("regularization") or {"mode": "none", "alpha": 0.0, "l1_ratio": 0.0, "scale_predictors": False})
     regularization_mode = str(regularization.get("mode") or "none")
     is_penalized = regularization_mode != "none"
+    drop_first = glm_formula_drop_first(regularization_mode)
     formula = validation["formula"]
+    fit_intercept = bool(formula.get("fit_intercept", True))
     context = formula_context(np)
     offset_terms = [str(term) for term in formula.get("offset_terms", [])]
     offset_values = offset_values_for_frame(frame, offset_terms, context, np, pd)
@@ -951,9 +983,9 @@ def _train_model_impl(
     estimator_kwargs = {
         "family": glum_family(glum, family, float(family_param) if family_param is not None else None),
         "link": "auto",
-        "fit_intercept": True,
+        "fit_intercept": fit_intercept,
         "formula": str(formula["fitted"]),
-        "drop_first": False,
+        "drop_first": drop_first,
         "robust": True,
         "scale_predictors": bool(regularization.get("scale_predictors")),
     }
@@ -977,14 +1009,17 @@ def _train_model_impl(
         )
     timings["prep_ms"] = _elapsed_ms(prep_started)
     fit_started = time.perf_counter()
-    with _suppress_tabmat_mixed_dtype_warning():
-        estimator.fit(
-            fit_frame,
-            sample_weight=fit_weight_values,
-            store_covariance_matrix=not is_penalized,
-            context=context,
-            offset=fit_offset_values,
-        )
+    try:
+        with _suppress_tabmat_mixed_dtype_warning():
+            estimator.fit(
+                fit_frame,
+                sample_weight=fit_weight_values,
+                store_covariance_matrix=not is_penalized,
+                context=context,
+                offset=fit_offset_values,
+            )
+    except Exception as exc:
+        _raise_actionable_singular_matrix_error(exc)
     timings["fit_ms"] = _elapsed_ms(fit_started)
     regularization = regularization_summary(estimator, regularization, np)
 
@@ -1058,6 +1093,8 @@ def _train_model_impl(
             "rhs": formula["rhs"],
             "fitted": formula["fitted"],
             "offset_terms": offset_terms,
+            "drop_first": drop_first,
+            "fit_intercept": fit_intercept,
         },
         "diagnostics": jsonable(diagnostics, np, pd),
         "feature_importance": jsonable(feature_importance, np, pd),

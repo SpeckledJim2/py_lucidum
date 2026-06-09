@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
 
+from py_lucidum import demo_dataset_path
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.tools.glm import tabulation as glm_tabulation
@@ -23,9 +25,11 @@ from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.tabulation import build_tabulations, tabulation_config, tabulation_plot, tabulation_table
 from py_lucidum.tools.glm.training import (
     MissingGlmDependency,
+    _raise_actionable_singular_matrix_error,
     _suppress_tabmat_mixed_dtype_warning,
     coefficient_rows,
     formula_context,
+    glm_formula_drop_first,
     glm_dependencies,
     glm_feature_importance_rows,
     stop_persistent_glm_fit_worker,
@@ -206,6 +210,78 @@ class GlmToolTests(unittest.TestCase):
         )
         return path
 
+    def demo_style_glm_data_path(self) -> Path:
+        path = self.root / "demo_style_glm.csv"
+        fuels = ["Petrol", "Diesel"]
+        usages = ["Social", "Commute", "Business"]
+        locations = ["Driveway", "Garage", "Street"]
+        rows = [
+            "PREMIUM,FUEL_TYPE,VEHICLE_USAGE,OVERNIGHT_LOCATION,ANNUAL_MILEAGE,POSTCODE_CATEGORY,"
+            "DRIVER_AGE,CAR_VALUE,VEHICLE_AGE,PRIOR_CLAIMS,NCD_YEARS,YEARS_OWNED_VEHICLE,"
+            "YEARS_LICENCE_HELD,SAMPLE\n"
+        ]
+        row_index = 0
+        for repeat in range(8):
+            for fuel_index, fuel in enumerate(fuels):
+                for usage_index, usage in enumerate(usages):
+                    for location_index, location in enumerate(locations):
+                        annual_mileage = 4000 + repeat * 550 + usage_index * 800 + location_index * 175
+                        postcode_category = 1 + ((repeat + fuel_index + location_index) % 5)
+                        driver_age = 21 + ((repeat * 11 + usage_index * 7 + fuel_index * 5 + location_index * 3) % 56)
+                        car_value = 8000 + repeat * 1700 + fuel_index * 2500 + usage_index * 800 + location_index * 1200
+                        vehicle_age = (repeat * 2 + usage_index + location_index) % 16
+                        prior_claims = (repeat + usage_index + fuel_index) % 4
+                        ncd_years = (repeat * 2 + location_index + fuel_index) % 12
+                        years_owned = (repeat + usage_index * 2 + location_index) % 12
+                        years_licence = max(0, driver_age - 17 - ((repeat + location_index) % 8))
+                        premium = (
+                            220
+                            + fuel_index * 35
+                            + usage_index * 22
+                            + location_index * 15
+                            + annual_mileage * 0.006
+                            + car_value * 0.0015
+                            + driver_age * 1.8
+                            + vehicle_age * 4
+                            + prior_claims * 28
+                            - ncd_years * 5
+                            + years_owned * 2
+                            + (usage_index + 1) * (location_index + 1) * 4
+                            + (row_index % 7) * 3
+                        )
+                        rows.append(
+                            f"{premium:.2f},{fuel},{usage},{location},{annual_mileage},{postcode_category},"
+                            f"{driver_age},{car_value},{vehicle_age},{prior_claims},{ncd_years},{years_owned},"
+                            f"{years_licence},training\n"
+                        )
+                        row_index += 1
+        path.write_text("".join(rows), encoding="utf-8")
+        return path
+
+    def demo_dataset_copy_path(self) -> Path:
+        path = self.root / "motor_premiums.parquet"
+        shutil.copy2(demo_dataset_path(), path)
+        return path
+
+    def rich_categorical_glm_formula(self) -> str:
+        return (
+            "PREMIUM ~ 1"
+            " + C(FUEL_TYPE)"
+            " + C(VEHICLE_USAGE)"
+            " + C(OVERNIGHT_LOCATION)"
+            " + log1p(ANNUAL_MILEAGE)"
+            " + sqrt(POSTCODE_CATEGORY)"
+            " + pmin(DRIVER_AGE, 70)"
+            " + pmax(0, DRIVER_AGE - 70)"
+            " + poly(VEHICLE_AGE, degree=2)"
+            " + ifelse(PRIOR_CLAIMS > 0, 1, 0)"
+            " + C(OVERNIGHT_LOCATION):C(VEHICLE_USAGE)"
+            " + C(VEHICLE_USAGE):pmin(DRIVER_AGE, 70)"
+            " + pmax(0, VEHICLE_AGE - 10):pmax(0, YEARS_OWNED_VEHICLE)"
+            " + PRIOR_CLAIMS:ifelse(NCD_YEARS == 0, 1, 0)"
+            " + offset(log(pmax(ANNUAL_MILEAGE, 1) / 5000))"
+        )
+
     def test_glm_dependency_load_order_keeps_threaded_lightgbm_stable(self) -> None:
         self.require_glm_and_gbm_dependencies()
         script = r"""
@@ -374,6 +450,17 @@ if result.get("iteration") != 10:
             any(message.startswith("Matrices do not all have the same dtype.") for message in messages)
         )
 
+    def test_glm_formula_drop_first_policy_tracks_regularization(self) -> None:
+        self.assertTrue(glm_formula_drop_first("none"))
+        self.assertFalse(glm_formula_drop_first("manual"))
+        self.assertFalse(glm_formula_drop_first("auto"))
+
+    def test_singular_matrix_errors_are_reported_as_rank_deficient_formula(self) -> None:
+        with self.assertRaisesRegex(ValueError, "rank-deficient design matrix.*ridge/auto regularization"):
+            _raise_actionable_singular_matrix_error(
+                RuntimeError("A singular matrix detected: slice(s) [0] are singular.")
+            )
+
     def test_glm_config_routes_work_without_optional_dependency_imports(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
@@ -477,6 +564,38 @@ if result.get("iteration") != 10:
         self.assertEqual(offset["formula"]["rhs"], "Age + offset(log(denominator))")
         self.assertEqual(offset["formula"]["fitted"], "__lucidum_glm_target ~ Age")
         self.assertEqual(offset["formula"]["offset_terms"], ["log(denominator)"])
+        self.assertTrue(rhs["formula"]["fit_intercept"])
+        self.assertTrue(full["formula"]["fit_intercept"])
+        self.assertTrue(offset["formula"]["fit_intercept"])
+
+    def test_formula_validation_tracks_explicit_intercept_syntax(self) -> None:
+        dataset = Dataset(self.data_path)
+        cases = [
+            ("Age", True),
+            ("1 + Age", True),
+            ("offset(log(denominator))", True),
+            ("0 + Age", False),
+            ("-1 + Age", False),
+            ("Age - 1", False),
+            ("actualNumerator ~ 0 + Age", False),
+            ("actualNumerator ~ -1 + Age", False),
+            ("Age - 1 + 1", True),
+            ("1 + Age + 0", False),
+            ("pmax(Age - 1, 0)", True),
+            ("Age + offset(log(pmax(denominator - 1, 1)))", True),
+        ]
+        for formula, fit_intercept in cases:
+            result = validate_request(
+                dataset,
+                {
+                    "formula": formula,
+                    "response_column": "actualNumerator",
+                    "family": "normal",
+                    "training_scope": "all",
+                },
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["formula"]["fit_intercept"], fit_intercept, formula)
 
     def test_regularization_validation_defaults_and_rejects_invalid_manual_values(self) -> None:
         dataset = Dataset(self.data_path)
@@ -544,6 +663,8 @@ if result.get("iteration") != 10:
         self.assertEqual(manifest["denominator_column"], "denominator")
         self.assertEqual(manifest["training_scope"], "training")
         self.assertEqual(manifest["regularization"]["mode"], "none")
+        self.assertTrue(manifest["formula"]["drop_first"])
+        self.assertTrue(manifest["formula"]["fit_intercept"])
         self.assertEqual(manifest["diagnostics"]["training_rows"], 4)
         self.assertIn("deviance", manifest["diagnostics"])
         self.assertTrue(store.artifact_path(model_id, "formula").exists())
@@ -600,6 +721,135 @@ FROM {dataset.relation_sql_for_source(source_id)}
             ).fetchone()
         self.assertEqual(row[:3], (6, 6, 6))
         self.assertAlmostEqual(float(row[3] or 0.0), 0.0, places=10)
+
+    def test_unpenalized_glm_drops_first_categorical_level_for_c_terms(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.demo_style_glm_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "PREMIUM ~ 1 + C(FUEL_TYPE)",
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        manifest = store.manifest(result["model_id"])
+        fuel_coefficients = [row for row in result["coefficients"] if row["features"] == ["FUEL_TYPE"]]
+
+        self.assertTrue(manifest["formula"]["drop_first"])
+        self.assertTrue(manifest["formula"]["fit_intercept"])
+        self.assertEqual(len(fuel_coefficients), 1)
+        self.assertEqual(len(result["coefficients"]), 2)
+        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["fitted_na_rows"], 0)
+
+    def test_unpenalized_glm_handles_categorical_main_effects_and_interactions(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.demo_style_glm_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": (
+                    "PREMIUM ~ 1"
+                    " + C(FUEL_TYPE)"
+                    " + C(VEHICLE_USAGE)"
+                    " + C(OVERNIGHT_LOCATION)"
+                    " + C(OVERNIGHT_LOCATION):C(VEHICLE_USAGE)"
+                ),
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        manifest = store.manifest(result["model_id"])
+
+        self.assertTrue(manifest["formula"]["drop_first"])
+        self.assertTrue(manifest["formula"]["fit_intercept"])
+        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["fitted_na_rows"], 0)
+        self.assertTrue(
+            any(set(row["features"]) == {"OVERNIGHT_LOCATION", "VEHICLE_USAGE"} for row in result["coefficients"])
+        )
+
+    def test_unpenalized_rich_categorical_formula_writes_all_glm_artifacts(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.demo_style_glm_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": self.rich_categorical_glm_formula(),
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        model_id = result["model_id"]
+        manifest = store.manifest(model_id)
+        prediction_rows = store.read_parquet_records(store.artifact_path(model_id, "predictions"))
+
+        self.assertTrue(manifest["formula"]["drop_first"])
+        self.assertTrue(manifest["formula"]["fit_intercept"])
+        self.assertEqual(manifest["offset_terms"], ["log(pmax(ANNUAL_MILEAGE, 1) / 5000)"])
+        self.assertTrue(result["coefficients"])
+        self.assertTrue(result["feature_importance"])
+        self.assertIn("deviance", result["diagnostics"])
+        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["fitted_na_rows"], 0)
+        self.assertEqual(len(prediction_rows), manifest["row_count"])
+        self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
+        self.assertTrue(store.artifact_path(model_id, "feature_importance").exists())
+        self.assertTrue(store.artifact_path(model_id, "predictions").exists())
+        self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
+        self.assertTrue(store.artifact_path(model_id, "manifest").exists())
+
+    def test_no_intercept_demo_spline_formula_fits_and_omits_intercept_coefficient(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.demo_dataset_copy_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": (
+                    "PREMIUM ~ 0 + ns(DRIVER_AGE, df=4)"
+                    " + offset(log(pmax(ANNUAL_MILEAGE, 1) / 5000))"
+                ),
+                "family": "poisson",
+                "training_scope": "all",
+            },
+        )
+        model_id = result["model_id"]
+        manifest = store.manifest(model_id)
+        coefficient_terms = [row["term"] for row in result["coefficients"]]
+        prediction_rows = store.read_parquet_records(store.artifact_path(model_id, "predictions"))
+
+        self.assertFalse(manifest["formula"]["fit_intercept"])
+        self.assertTrue(manifest["formula"]["drop_first"])
+        self.assertNotIn("(Intercept)", coefficient_terms)
+        self.assertEqual(manifest["offset_terms"], ["log(pmax(ANNUAL_MILEAGE, 1) / 5000)"])
+        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["fitted_na_rows"], 0)
+        self.assertEqual(len(prediction_rows), manifest["row_count"])
+        self.assertTrue(result["coefficients"])
+        self.assertTrue(result["feature_importance"])
+        self.assertIn("deviance", result["diagnostics"])
+        self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
+        self.assertTrue(store.artifact_path(model_id, "feature_importance").exists())
+        self.assertTrue(store.artifact_path(model_id, "predictions").exists())
+        self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
+        self.assertTrue(store.artifact_path(model_id, "manifest").exists())
 
     def test_glm_prediction_source_computes_rate_for_legacy_artifacts(self) -> None:
         store = GlmModelStore(self.data_path)
@@ -1622,10 +1872,13 @@ ORDER BY __lucidum_row_id
         regularization = manifest["regularization"]
 
         self.assertEqual(regularization["mode"], "auto")
+        self.assertFalse(manifest["formula"]["drop_first"])
+        self.assertTrue(manifest["formula"]["fit_intercept"])
         self.assertIsNotNone(regularization["selected_alpha"])
         self.assertIn(regularization["selected_l1_ratio"], [0.0, 0.5, 1.0])
         self.assertTrue(regularization["scale_predictors"])
         self.assertGreaterEqual(regularization["nonzero_coefficients"], 0)
+        self.assertEqual(len([row for row in result["coefficients"] if row["features"] == ["Segment"]]), 2)
 
     def test_glm_manual_lasso_omits_penalized_inference_columns(self) -> None:
         self.require_glm_dependencies()
@@ -1647,6 +1900,8 @@ ORDER BY __lucidum_row_id
         coefficients = result["coefficients"]
 
         self.assertEqual(manifest["regularization"]["mode"], "manual")
+        self.assertFalse(manifest["formula"]["drop_first"])
+        self.assertTrue(manifest["formula"]["fit_intercept"])
         self.assertEqual(manifest["regularization"]["selected_l1_ratio"], 1.0)
         self.assertTrue(manifest["regularization"]["scale_predictors"])
         self.assertTrue(any(row["estimate"] == 0 for row in coefficients if row["term"] != "(Intercept)"))
