@@ -491,12 +491,20 @@
       }
 
       .glm-tabulation-label {
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
         color: var(--muted);
         flex: 0 0 auto;
         font-size: 11px;
         font-weight: 700;
+        height: 1px;
         line-height: 1.2;
-        padding: 8px 12px 4px;
+        margin: -1px;
+        overflow: hidden;
+        padding: 0;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px;
       }
 
       .glm-grid.glm-tabulation-selector-grid {
@@ -507,7 +515,7 @@
         display: flex;
         flex: 0 0 var(--glm-tabulation-model-list-height, 158px);
         flex-direction: column;
-        margin: 0 12px;
+        margin: 0;
         min-height: 0;
         min-width: 0;
       }
@@ -523,8 +531,15 @@
       .glm-tabulation-selector-resizer {
         cursor: row-resize;
         flex: 0 0 6px;
-        margin: 4px 12px 0;
+        margin: 0;
         min-height: 6px;
+      }
+
+      .glm-tabulation-selector-resizer::before {
+        background: color-mix(in srgb, var(--line) 42%, transparent);
+        height: 1px;
+        left: 0;
+        right: 0;
       }
 
       .glm-tabulation-table-list {
@@ -537,7 +552,7 @@
         flex: 1 1 auto;
         flex-direction: column;
         gap: 8px;
-        margin: 0 12px;
+        margin: 0;
         min-height: 0;
       }
 
@@ -559,7 +574,7 @@
         font-size: 10px;
         font-weight: 800;
         line-height: 1.15;
-        padding: 0 0 3px;
+        padding: 0 12px 3px;
         text-transform: uppercase;
       }
 
@@ -575,6 +590,24 @@
 
       .glm-tabulation-selector-table {
         min-width: 620px;
+      }
+
+      .glm-tabulation-selector-table th,
+      .glm-tabulation-selector-table td,
+      .glm-tabulation-fallback-table th,
+      .glm-tabulation-fallback-table td {
+        border-right: 0;
+      }
+
+      .glm-tabulation-selector-table th,
+      .glm-tabulation-fallback-table th {
+        background: var(--panel-2);
+        border-bottom-color: var(--line);
+      }
+
+      .glm-tabulation-selector-table td,
+      .glm-tabulation-fallback-table td {
+        border-bottom-color: color-mix(in srgb, var(--line) 56%, transparent);
       }
 
       .glm-tabulation-selector-table tr[data-glm-tabulation-model-id],
@@ -817,7 +850,7 @@
         flex: 1 1 auto;
         min-height: 0;
         overflow: hidden;
-        padding: 0 12px 12px;
+        padding: 0;
       }
 
       .glm-tabulation-grid,
@@ -830,8 +863,6 @@
 
       .glm-tabulation-plot {
         background: var(--panel);
-        border: 1px solid var(--glm-table-border);
-        border-radius: 6px;
       }
 
       .glm-tabulation-fallback {
@@ -865,6 +896,26 @@
         border-color: var(--glm-table-border);
       }
 
+      .glm-tabulation-layout .glm-grid {
+        border-color: color-mix(in srgb, var(--line) 80%, transparent);
+        border-left: 0;
+        border-radius: 0;
+        border-right: 0;
+      }
+
+      .glm-tabulation-layout .glm-tabulation-selector-grid {
+        border-bottom: 0;
+        border-top: 0;
+      }
+
+      .glm-tabulation-layout .glm-tabulation-main .glm-grid {
+        border: 0;
+      }
+
+      .glm-tabulation-layout .glm-grid.tabulator {
+        border-color: color-mix(in srgb, var(--line) 80%, transparent);
+      }
+
       .glm-model-grid {
         flex: 1 1 auto;
         min-height: 0;
@@ -882,6 +933,14 @@
         background: var(--panel-2) !important;
         border-color: var(--line) !important;
         color: var(--text) !important;
+      }
+
+      .glm-tabulation-layout .glm-grid .tabulator-header {
+        border-bottom-color: var(--line) !important;
+      }
+
+      .glm-tabulation-layout .glm-grid .tabulator-header .tabulator-col {
+        border-right: 0 !important;
       }
 
       .glm-grid.tabulator .tabulator-header .tabulator-col {
@@ -916,6 +975,16 @@
         line-height: 1.15;
         min-height: 20px;
         padding: 1px 6px;
+      }
+
+      .glm-tabulation-layout .glm-grid .tabulator-row,
+      .glm-tabulation-layout .glm-grid .tabulator-row.tabulator-row-even,
+      .glm-tabulation-layout .glm-grid .tabulator-row.tabulator-row-odd {
+        border-bottom-color: color-mix(in srgb, var(--line) 56%, transparent);
+      }
+
+      .glm-tabulation-layout .glm-grid .tabulator-row .tabulator-cell {
+        border-right: 0;
       }
 
       .glm-grid .tabulator-row.tabulator-selected,
