@@ -1100,7 +1100,7 @@ SELECT
     MIN(original_order) AS original_order,
     BOOL_OR(is_tail) AS is_tail,
     COALESCE(SUM(__weight_value), 0) AS volume,
-    SUM(__gbm_prediction * __weight_value) AS fitted_num,
+    SUM(__gbm_prediction) AS fitted_num,
     COALESCE(SUM(__weight_value), 0) AS fitted_den,
     {percentile_sql}
 FROM valid

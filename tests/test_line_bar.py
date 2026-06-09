@@ -847,11 +847,54 @@ COPY (
         result = chart(dataset, request)
 
         partial = result["partial_dependence"]
-        target = (300.0 * 30.0 + 400.0 * 40.0) / 70.0
+        target = (300.0 + 400.0) / 70.0
         self.assertEqual([row["x"] for row in partial["rows"]], ["50", "60"])
         self.assertAlmostEqual(partial["scale"]["target"], target)
         weighted_p50 = sum(row["p50"] * row["volume"] for row in partial["rows"]) / sum(row["volume"] for row in partial["rows"])
         self.assertAlmostEqual(weighted_p50, target)
+
+    def test_chart_shap_ribbons_scale_weighted_prediction_numerators_to_response_rate(self) -> None:
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "20,Social,2024-01-01,2000,60,60,0.10\n"
+            "30,Social,2024-01-02,2400,120,120,0.20\n"
+            "40,Business,2024-01-03,2800,180,180,0.30\n"
+            "50,Business,2024-01-04,3200,240,240,0.40\n",
+            encoding="utf-8",
+        )
+        dataset = self.dataset_with_gbm_ribbons(
+            predictions=[(1, 60.0), (2, 120.0), (3, 180.0), (4, 240.0)],
+            shap_values=[(1, 0.0, 0.0), (2, 0.0, 0.0), (3, 0.0, 0.0), (4, 0.0, 0.0)],
+        )
+        prediction_source = "gbm:poisson-ribbons:predictions"
+        request = self.request()
+        request.update(
+            {
+                "x": "YoungestDriverAge",
+                "bandWidth": "10",
+                "denominator": "Weight",
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "gbm_prediction", "numerator": "gbm_prediction", "source": prediction_source},
+                ],
+                "partialDependence": {"mode": "shap"},
+            }
+        )
+
+        result = chart(dataset, request)
+
+        target = (60.0 + 120.0 + 180.0 + 240.0) / (0.10 + 0.20 + 0.30 + 0.40)
+        self.assertAlmostEqual(result["response_summaries"][1]["value"], target)
+        partial = result["partial_dependence"]
+        self.assertAlmostEqual(partial["scale"]["target"], target)
+        weighted_p50 = sum(row["p50"] * row["volume"] for row in partial["rows"]) / sum(row["volume"] for row in partial["rows"])
+        self.assertAlmostEqual(weighted_p50, target)
+
+        average_request = {**request, "denominator": "__none__"}
+        average_result = chart(dataset, average_request)
+        average_target = (60.0 + 120.0 + 180.0 + 240.0) / 4.0
+        self.assertAlmostEqual(average_result["response_summaries"][1]["value"], average_target)
+        self.assertAlmostEqual(average_result["partial_dependence"]["scale"]["target"], average_target)
 
     def test_chart_shap_ribbons_use_quantile_banding(self) -> None:
         dataset = self.dataset_with_gbm_ribbons()
