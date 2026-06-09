@@ -14,6 +14,9 @@
         --base-bar: #4fb6d2;
         --tail: #72c7df;
         --danger: #b42318;
+        --line-bar-pinned-bg: #fff8d6;
+        --line-bar-pinned-hover-bg: #fff1a8;
+        --line-bar-pinned-kind: #7a5b00;
         --saved-filter-theme-bg: #c8daec;
         --saved-filter-theme-hover-bg: #b9d0e7;
         --saved-filter-theme-text: #58677c;
@@ -37,6 +40,9 @@
         --base-bar: #58bfdc;
         --tail: #3b91ad;
         --danger: #fca5a5;
+        --line-bar-pinned-bg: #3a321f;
+        --line-bar-pinned-hover-bg: #4a4124;
+        --line-bar-pinned-kind: #f5d76e;
         --saved-filter-theme-bg: #30415c;
         --saved-filter-theme-hover-bg: #38506f;
         --saved-filter-theme-text: #c1ccdc;

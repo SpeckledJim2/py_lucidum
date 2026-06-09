@@ -1,3 +1,5 @@
+const LINE_BAR_SPECIAL_COLUMN_NAMES = ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"];
+
 export function createLineBarTool({
   api,
   el,
@@ -71,6 +73,24 @@ export function createLineBarTool({
     return kind === "date" || kind === "datetime";
   }
 
+  function isLineBarSpecialColumn(column) {
+    return LINE_BAR_SPECIAL_COLUMN_NAMES.includes(String(column?.name || ""));
+  }
+
+  function lineBarSpecialColumnOrder(column) {
+    const index = LINE_BAR_SPECIAL_COLUMN_NAMES.indexOf(String(column?.name || ""));
+    return index >= 0 ? index : LINE_BAR_SPECIAL_COLUMN_NAMES.length;
+  }
+
+  function orderedLineBarSpecialColumns(columns) {
+    return columns
+      .filter(isLineBarSpecialColumn)
+      .sort((a, b) => (
+        lineBarSpecialColumnOrder(a) - lineBarSpecialColumnOrder(b)
+        || String(a.source_id || "").localeCompare(String(b.source_id || ""), undefined, { sensitivity: "base" })
+      ));
+  }
+
   function lineBarFeatureTargetSource(featureName) {
     if (!lineBarToolAvailable()) return "";
     const name = String(featureName || "");
@@ -107,12 +127,12 @@ export function createLineBarTool({
 
   function expectedDisplayColumns() {
     const columns = expectedColumns().filter((column) => column.source_role !== "gbm_shap_value");
+    const specialColumns = orderedLineBarSpecialColumns(columns);
+    const otherColumns = columns.filter((column) => !isLineBarSpecialColumn(column));
     if (state.expectedSort === "alpha") {
-      columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+      otherColumns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     }
-    const predictionColumns = columns.filter(isModelPredictionColumn);
-    const otherColumns = columns.filter((column) => !isModelPredictionColumn(column));
-    return [...predictionColumns, ...otherColumns];
+    return { specialColumns, otherColumns };
   }
 
   function syncSegmented(control, value) {
@@ -347,9 +367,9 @@ export function createLineBarTool({
     const query = el("expectedSearch").value.trim().toLowerCase();
     const select = el("expectedNumerator");
     const list = el("expectedList");
-    list.innerHTML = "";
+    const { pinned, scroll } = resetLineBarPickerList(list, true);
 
-    function addExpectedButton(label, value, kind, sourceId = "", extraClass = "") {
+    function addExpectedButton(target, label, value, kind, sourceId = "", extraClass = "") {
       const button = document.createElement("button");
       button.type = "button";
       button.className = `feature ${extraClass} ${value === select.value ? "active" : ""}`.trim();
@@ -369,51 +389,71 @@ export function createLineBarTool({
         }
         if (changed || sourceChanged) refreshChart({ force: sourceChanged });
       });
-      list.append(button);
+      target.append(button);
     }
 
     if (!query || "none".includes(query) || "no expected line".includes(query) || "off".includes(query)) {
-      addExpectedButton("No expected line", "", "off", "", "expected-none-option");
+      addExpectedButton(pinned, "No expected line", "", "off", "", "expected-none-option line-bar-special-row");
     }
 
-    for (const col of expectedDisplayColumns()) {
+    const { specialColumns, otherColumns } = expectedDisplayColumns();
+    for (const col of specialColumns) {
       if (query && !col.name.toLowerCase().includes(query)) continue;
-      addExpectedButton(col.name, col.name, col.kind, col.source_id || state.source || "dataset");
+      addExpectedButton(pinned, col.name, col.name, col.kind, col.source_id || state.source || "dataset", "line-bar-special-row");
+    }
+    pinned.hidden = pinned.childElementCount === 0;
+
+    for (const col of otherColumns) {
+      if (query && !col.name.toLowerCase().includes(query)) continue;
+      addExpectedButton(scroll, col.name, col.name, col.kind, col.source_id || state.source || "dataset");
     }
   }
 
   function renderFeatures() {
     const query = el("featureSearch").value.trim().toLowerCase();
     const list = el("featureList");
-    list.innerHTML = "";
     syncFeatureImportanceButton();
     ensureFeatureImportance();
     if (state.featureSort === "importance") {
+      resetLineBarPickerList(list, false);
       renderFeatureImportanceRows(query, list);
       return;
     }
     const columns = [...sourceColumns()];
+    const specialColumns = orderedLineBarSpecialColumns(columns).filter((column) => featureMatchesQuery(column.name, query));
+    const otherColumns = columns.filter((column) => !isLineBarSpecialColumn(column));
     if (state.featureSort === "alpha") {
-      columns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+      otherColumns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     }
-    for (const col of columns) {
-      if (query && !col.name.toLowerCase().includes(query)) continue;
-      const sourceId = col.source_id || state.source || "dataset";
-      const active = col.name === state.x && (!state.xSource || state.xSource === sourceId);
-      const button = document.createElement("button");
-      button.className = `feature ${active ? "active" : ""}`;
-      button.dataset.sourceId = sourceId;
-      button.dataset.value = col.name;
-      button.innerHTML = `<span>${escapeHtml(col.name)}</span><span class="kind">${col.kind}</span>`;
-      button.addEventListener("click", () => {
+    const { pinned, scroll } = resetLineBarPickerList(list, true);
+    for (const col of specialColumns) {
+      addLineBarFeatureButton(pinned, col, "line-bar-special-row");
+    }
+    pinned.hidden = pinned.childElementCount === 0;
+
+    for (const col of otherColumns) {
+      if (!featureMatchesQuery(col.name, query)) continue;
+      addLineBarFeatureButton(scroll, col);
+    }
+  }
+
+  function addLineBarFeatureButton(list, col, extraClass = "") {
+    const sourceId = col.source_id || state.source || "dataset";
+    const active = col.name === state.x && (!state.xSource || state.xSource === sourceId);
+    addFeatureButton(list, {
+      label: col.name,
+      detail: col.kind,
+      sourceId,
+      extraClass,
+      active,
+      onClick: () => {
         state.x = col.name;
         state.xSource = sourceId;
         renderFeatures();
         updateAxisControls();
         refreshChart();
-      });
-      list.append(button);
-    }
+      },
+    });
   }
 
   function renderFeatureImportanceRows(query, list) {
@@ -430,6 +470,7 @@ export function createLineBarTool({
       renderImportanceGroup(list, "GLM", data.models?.glm, query, datasetByName, usedFeatures),
     ].some(Boolean);
     const notUsed = datasetColumns
+      .filter((column) => !isLineBarSpecialColumn(column))
       .filter((column) => !usedFeatures.has(column.name))
       .map((column) => ({ feature: column.name, importance: null, kind: column.kind }));
     renderNotUsedGroup(list, notUsed, query);
@@ -448,9 +489,10 @@ export function createLineBarTool({
   function renderImportanceGroup(list, label, model, query, datasetByName, usedFeatures) {
     const rows = Array.isArray(model?.rows) ? model.rows : [];
     rows.forEach((row) => {
+      if (isLineBarSpecialColumn({ name: row?.feature })) return;
       if (row?.feature) usedFeatures.add(String(row.feature));
     });
-    const filtered = rows.filter((row) => featureMatchesQuery(row.feature, query));
+    const filtered = rows.filter((row) => !isLineBarSpecialColumn({ name: row?.feature }) && featureMatchesQuery(row.feature, query));
     const message = String(model?.message || "");
     if (!filtered.length && (!message || query)) return false;
     addFeatureListHeader(list, importanceGroupLabel(label, model));
@@ -505,11 +547,23 @@ export function createLineBarTool({
     list.append(item);
   }
 
-  function addFeatureButton(list, { label, detail, sourceId, extraClass = "", onClick }) {
+  function resetLineBarPickerList(list, split) {
+    list.innerHTML = "";
+    list.classList.toggle("line-bar-split-list", Boolean(split));
+    if (!split) return { pinned: list, scroll: list };
+    const pinned = document.createElement("div");
+    pinned.className = "line-bar-pinned-region";
+    const scroll = document.createElement("div");
+    scroll.className = "line-bar-scroll-region";
+    list.append(pinned, scroll);
+    return { pinned, scroll };
+  }
+
+  function addFeatureButton(list, { label, detail, sourceId, extraClass = "", active = null, onClick }) {
     const activeSource = state.xSource || state.source || "dataset";
-    const active = label === state.x && activeSource === sourceId;
+    const isActive = active === null ? label === state.x && activeSource === sourceId : Boolean(active);
     const button = document.createElement("button");
-    button.className = `feature ${extraClass} ${active ? "active" : ""}`.trim();
+    button.className = `feature ${extraClass} ${isActive ? "active" : ""}`.trim();
     button.dataset.sourceId = sourceId;
     button.dataset.value = label;
     button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(detail)}</span>`;

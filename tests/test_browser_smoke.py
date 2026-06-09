@@ -1578,6 +1578,59 @@ COPY (
                     {"text": "gbm_predictionnumeric", "source": "gbm:browser-smoke-model-2:predictions", "active": False},
                     expected_state,
                 )
+                expected_pinned_state = page.evaluate(
+                    """
+                    () => {
+                      const pinned = [...document.querySelectorAll("#expectedList > .line-bar-pinned-region > .feature")]
+                        .map((button) => ({
+                          text: button.textContent || "",
+                          value: button.dataset.value || "",
+                          source: button.dataset.sourceId || "",
+                        }));
+                      const scrollValues = [...document.querySelectorAll("#expectedList > .line-bar-scroll-region > .feature")]
+                        .map((button) => button.dataset.value || "");
+                      const none = document.querySelector("#expectedList > .line-bar-pinned-region > .feature.expected-none-option");
+                      const noneKind = none?.querySelector(".kind");
+                      const special = document.querySelector('#expectedList > .line-bar-pinned-region > .feature[data-value="glm_prediction"]');
+                      return {
+                        pinned,
+                        scrollValues,
+                        noneFontWeight: none ? getComputedStyle(none).fontWeight : "",
+                        noneKindFontWeight: noneKind ? getComputedStyle(noneKind).fontWeight : "",
+                        noneTextTransform: noneKind ? getComputedStyle(noneKind).textTransform : "",
+                        specialBackground: special ? getComputedStyle(special).backgroundColor : "",
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    [row["value"] for row in expected_pinned_state["pinned"][:5]],
+                    ["", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"],
+                )
+                self.assertEqual(expected_pinned_state["pinned"][0]["text"], "No expected lineoff")
+                self.assertEqual(expected_pinned_state["noneFontWeight"], "400")
+                self.assertEqual(expected_pinned_state["noneKindFontWeight"], "400")
+                self.assertEqual(expected_pinned_state["noneTextTransform"], "none")
+                self.assertNotIn("glm_tabulated_prediction", [row["value"] for row in expected_pinned_state["pinned"]])
+                self.assertTrue(expected_pinned_state["specialBackground"])
+                page.locator('.segmented[data-control="expectedSort"] button[data-value="alpha"]').click()
+                expected_alpha_state = page.evaluate(
+                    """
+                    () => ({
+                      pinned: [...document.querySelectorAll("#expectedList > .line-bar-pinned-region > .feature")]
+                        .map((button) => button.dataset.value || ""),
+                      scroll: [...document.querySelectorAll("#expectedList > .line-bar-scroll-region > .feature")]
+                        .map((button) => button.dataset.value || ""),
+                    })
+                    """
+                )
+                self.assertEqual(
+                    expected_alpha_state["pinned"][:5],
+                    ["", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"],
+                )
+                self.assertEqual(expected_alpha_state["scroll"], sorted(expected_alpha_state["scroll"], key=str.casefold))
+                page.locator('.segmented[data-control="expectedSort"] button[data-value="original"]').click()
+
                 feature_state = page.evaluate(
                     """
                     () => [...document.querySelectorAll("#featureList .feature")]
@@ -1596,6 +1649,87 @@ COPY (
                     {"text": "gbm_predictionnumeric", "source": "gbm:browser-smoke-model-2:predictions", "active": False},
                     feature_state,
                 )
+                feature_pinned_state = page.evaluate(
+                    """
+                    () => {
+                      const state = () => ({
+                        pinned: [...document.querySelectorAll("#featureList > .line-bar-pinned-region > .feature")]
+                          .map((button) => button.dataset.value || ""),
+                        scroll: [...document.querySelectorAll("#featureList > .line-bar-scroll-region > .feature")]
+                          .map((button) => button.dataset.value || ""),
+                      });
+                      const before = state();
+                      const pinnedRegion = document.querySelector("#featureList > .line-bar-pinned-region");
+                      const scrollRegion = document.querySelector("#featureList > .line-bar-scroll-region");
+                      const previousStyle = scrollRegion?.getAttribute("style");
+                      const pinnedTopBefore = Math.round(pinnedRegion?.getBoundingClientRect().top || 0);
+                      if (scrollRegion) {
+                        scrollRegion.style.flex = "0 0 42px";
+                        scrollRegion.style.height = "42px";
+                        scrollRegion.scrollTop = scrollRegion.scrollHeight;
+                      }
+                      const scrollTop = scrollRegion?.scrollTop || 0;
+                      const pinnedTopAfter = Math.round(pinnedRegion?.getBoundingClientRect().top || 0);
+                      if (scrollRegion) {
+                        if (previousStyle === null) scrollRegion.removeAttribute("style");
+                        else scrollRegion.setAttribute("style", previousStyle);
+                      }
+                      return {
+                        ...before,
+                        scrollTop,
+                        pinnedTopBefore,
+                        pinnedTopAfter,
+                        rootScrollTop: document.querySelector("#featureList")?.scrollTop || 0,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    feature_pinned_state["pinned"],
+                    ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"],
+                )
+                self.assertNotIn("glm_tabulated_prediction", feature_pinned_state["pinned"])
+                self.assertGreater(feature_pinned_state["scrollTop"], 0)
+                self.assertEqual(feature_pinned_state["pinnedTopBefore"], feature_pinned_state["pinnedTopAfter"])
+                self.assertEqual(feature_pinned_state["rootScrollTop"], 0)
+
+                page.locator('.segmented[data-control="featureSort"] button[data-value="alpha"]').click()
+                alpha_feature_state = page.evaluate(
+                    """
+                    () => ({
+                      pinned: [...document.querySelectorAll("#featureList > .line-bar-pinned-region > .feature")]
+                        .map((button) => button.dataset.value || ""),
+                      scroll: [...document.querySelectorAll("#featureList > .line-bar-scroll-region > .feature")]
+                        .map((button) => button.dataset.value || ""),
+                    })
+                    """
+                )
+                self.assertEqual(alpha_feature_state["pinned"], feature_pinned_state["pinned"])
+                self.assertEqual(alpha_feature_state["scroll"], sorted(alpha_feature_state["scroll"], key=str.casefold))
+                self.assertFalse(set(alpha_feature_state["pinned"]) & set(alpha_feature_state["scroll"]))
+
+                page.wait_for_function(
+                    '() => !document.querySelector(\'.segmented[data-control="featureSort"] button[data-value="importance"]\')?.classList.contains("hidden")',
+                    timeout=10_000,
+                )
+                page.locator('.segmented[data-control="featureSort"] button[data-value="importance"]').click()
+                importance_feature_state = page.evaluate(
+                    """
+                    () => ({
+                      split: document.querySelector("#featureList")?.classList.contains("line-bar-split-list"),
+                      specialValues: [...document.querySelectorAll("#featureList .feature")]
+                        .map((button) => button.dataset.value || "")
+                        .filter((value) => ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"].includes(value)),
+                    })
+                    """
+                )
+                self.assertFalse(importance_feature_state["split"])
+                self.assertEqual(importance_feature_state["specialValues"], [])
+                page.locator('.segmented[data-control="featureSort"] button[data-value="original"]').click()
+                page.locator(
+                    '#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"][data-value="glm_prediction"]',
+                ).wait_for(timeout=10_000)
+
                 with page.expect_response(
                     lambda response: response.url.endswith("/api/banding/suggestion") and response.status == 200,
                     timeout=10_000,
