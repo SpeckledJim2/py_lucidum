@@ -192,8 +192,8 @@
 
       .gbm-shap-view {
         display: grid;
-        grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
-        gap: 12px;
+        grid-template-columns: minmax(240px, var(--gbm-shap-side-width, 320px)) 12px minmax(0, 1fr);
+        gap: 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
@@ -208,17 +208,13 @@
       }
 
       .gbm-shap-chooser-divider {
-        background: linear-gradient(to bottom, var(--line), transparent);
         cursor: row-resize;
         min-height: 6px;
-        touch-action: none;
-        user-select: none;
-        -webkit-user-select: none;
       }
 
-      .gbm-shap-chooser-divider:hover,
-      .gbm-shap-chooser-divider.dragging {
-        background: var(--accent);
+      .gbm-shap-main-resizer {
+        cursor: col-resize;
+        min-height: 0;
       }
 
       .gbm-shap-feature-section {
@@ -378,11 +374,16 @@
 
       .gbm-stacked-shap-view {
         display: grid;
-        grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
-        gap: 12px;
+        grid-template-columns: minmax(240px, var(--gbm-stacked-shap-side-width, 320px)) 12px minmax(0, 1fr);
+        gap: 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
+      }
+
+      .gbm-stacked-shap-main-resizer {
+        cursor: col-resize;
+        min-height: 0;
       }
 
       .gbm-stacked-shap-side,
@@ -1301,16 +1302,8 @@
 
       .gbm-tree-resizer {
         align-self: stretch;
-        background: linear-gradient(to right, transparent 0 2px, var(--line) 2px 5px, transparent 5px 7px);
-        border-radius: 6px;
         cursor: col-resize;
         min-height: 0;
-        touch-action: none;
-      }
-
-      .gbm-tree-resizer:hover,
-      .gbm-tree-resizer.dragging {
-        background: color-mix(in srgb, var(--accent) 34%, transparent);
       }
 
       .gbm-tree-summary-grid .tabulator-row.tabulator-selected,

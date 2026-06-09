@@ -2,6 +2,7 @@ import { stackedShapChartOption } from "./gbm-stacked-shap-chart.js";
 
 const BAND_STEPS = makeBandSteps();
 const BAND_BUTTONS = [0.01, 0.1, 1, 5, 10, 100];
+const STACKED_SHAP_SIDE_WIDTH_KEY = "py_lucidum_gbm_stacked_shap_side_width";
 const TAIL_OPTIONS = [
   { value: 0, label: "-" },
   { value: 0.1, label: "0.1%" },
@@ -54,6 +55,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
             <div id="gbmStackedShapFeatureList" class="feature-list gbm-stacked-shap-feature-list" role="listbox" aria-label="Stacked SHAP model feature"></div>
           </section>
         </aside>
+        <div id="gbmStackedShapMainResizer" class="gbm-stacked-shap-main-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize Stacked SHAP controls and chart" tabindex="0"></div>
         <section class="gbm-stacked-shap-main">
           <div id="gbmStackedShapControls" class="gbm-stacked-shap-controls"></div>
           <div class="gbm-stacked-shap-chart-shell">
@@ -100,6 +102,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     if (root.dataset.gbmStackedShapBound === "1") return;
     root.dataset.gbmStackedShapBound = "1";
     root.addEventListener("click", handleClick);
+    setupMainDividerResize(root);
   }
 
   function handleClick(event) {
@@ -513,6 +516,64 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
 
   function rootNode() {
     return document.getElementById("gbmStackedShapRoot");
+  }
+
+  function setupMainDividerResize(root) {
+    const side = root.querySelector(".gbm-stacked-shap-side");
+    const resizer = root.querySelector("#gbmStackedShapMainResizer");
+    if (!side || !resizer) return;
+    const savedWidth = Number(localStorage.getItem(STACKED_SHAP_SIDE_WIDTH_KEY));
+    if (Number.isFinite(savedWidth) && savedWidth > 0) {
+      setMainSideWidth(root, savedWidth);
+    }
+
+    resizer.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = side.getBoundingClientRect().width || 0;
+      resizer.classList.add("dragging");
+      document.body.classList.add("resizing-chart-controls");
+      resizer.setPointerCapture?.(event.pointerId);
+      window.getSelection()?.removeAllRanges();
+      const onMove = (moveEvent) => setMainSideWidth(root, startWidth + moveEvent.clientX - startX);
+      const onUp = () => {
+        resizer.classList.remove("dragging");
+        document.body.classList.remove("resizing-chart-controls");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.getSelection()?.removeAllRanges();
+        const width = parseFloat(root.style.getPropertyValue("--gbm-stacked-shap-side-width"));
+        if (Number.isFinite(width)) {
+          localStorage.setItem(STACKED_SHAP_SIDE_WIDTH_KEY, String(Math.round(width)));
+        }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+    });
+
+    resizer.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const current = side.getBoundingClientRect().width || 0;
+      setMainSideWidth(root, current + (event.key === "ArrowRight" ? 24 : -24));
+      const width = parseFloat(root.style.getPropertyValue("--gbm-stacked-shap-side-width"));
+      if (Number.isFinite(width)) localStorage.setItem(STACKED_SHAP_SIDE_WIDTH_KEY, String(Math.round(width)));
+    });
+  }
+
+  function setMainSideWidth(root, rawWidth) {
+    const resizer = root?.querySelector("#gbmStackedShapMainResizer");
+    const availableWidth = root?.getBoundingClientRect().width || window.innerWidth;
+    const resizerWidth = resizer?.getBoundingClientRect().width || 12;
+    const minSideWidth = 240;
+    const minChartWidth = 360;
+    const maxWidth = Math.max(minSideWidth, availableWidth - resizerWidth - minChartWidth);
+    const width = Math.min(Math.max(rawWidth, minSideWidth), maxWidth);
+    root.style.setProperty("--gbm-stacked-shap-side-width", `${Math.round(width)}px`);
+    resizer?.setAttribute("aria-valuemin", String(minSideWidth));
+    resizer?.setAttribute("aria-valuemax", String(Math.round(maxWidth)));
+    resizer?.setAttribute("aria-valuenow", String(Math.round(width)));
+    requestAnimationFrame(() => chart?.resize());
   }
 
   return {

@@ -349,7 +349,7 @@ export function createGbmTool({
               <div id="gbmTreeSummaryGrid" class="gbm-grid gbm-tree-summary-grid"></div>
               <div id="gbmTreeSummaryFallback" class="gbm-fallback-table"></div>
             </section>
-            <div id="gbmTreeResizer" class="gbm-tree-resizer" role="separator" aria-orientation="vertical" aria-label="Resize tree selector"></div>
+            <div id="gbmTreeResizer" class="gbm-tree-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize tree selector"></div>
             <section class="gbm-panel-section gbm-tree-diagram-panel">
               <div class="gbm-tree-diagram-header">
                 <h3 class="gbm-section-title">Tree viewer</h3>

@@ -331,28 +331,6 @@
       .glm-builder-resizer {
         cursor: col-resize;
         min-height: 0;
-        position: relative;
-        touch-action: none;
-        user-select: none;
-        -webkit-user-select: none;
-      }
-
-      .glm-builder-resizer::before {
-        background: color-mix(in srgb, var(--line) 70%, transparent);
-        border-radius: 999px;
-        bottom: 8px;
-        content: "";
-        left: 50%;
-        position: absolute;
-        top: 8px;
-        transform: translateX(-50%);
-        width: 2px;
-      }
-
-      .glm-builder-resizer:hover::before,
-      .glm-builder-resizer.dragging::before {
-        background: var(--accent);
-        width: 3px;
       }
 
       body.glm-builder-resizing {
@@ -525,9 +503,28 @@
         min-height: 0;
       }
 
-      .glm-tabulation-model-list {
-        flex: 0 0 158px;
+      .glm-tabulation-model-region {
+        display: flex;
+        flex: 0 0 var(--glm-tabulation-model-list-height, 158px);
+        flex-direction: column;
         margin: 0 12px;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .glm-tabulation-model-list {
+        flex: 1 1 auto;
+      }
+
+      .glm-tabulation-model-region .glm-tabulation-selector-fallback {
+        flex: 1 1 auto;
+      }
+
+      .glm-tabulation-selector-resizer {
+        cursor: row-resize;
+        flex: 0 0 6px;
+        margin: 4px 12px 0;
+        min-height: 6px;
       }
 
       .glm-tabulation-table-list {
@@ -1141,6 +1138,7 @@
         }
 
         .glm-builder-resizer,
+        .glm-tabulation-selector-resizer,
         .glm-tabulation-resizer {
           display: none;
         }

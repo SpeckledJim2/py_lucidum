@@ -323,7 +323,7 @@ export function createGlmTool({
                 <textarea id="glmFormulaText" class="glm-formula-text" spellcheck="false">${escapeHtml(formulaBuilder.formulaDraft)}</textarea>
               </div>
             </section>
-            <div id="glmBuilderResizer" class="glm-builder-resizer" role="separator" aria-orientation="vertical" aria-label="Resize GLM formula and coefficients panels" tabindex="0"></div>
+            <div id="glmBuilderResizer" class="glm-builder-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize GLM formula and coefficients panels" tabindex="0"></div>
             <section class="glm-coefficient-panel">
               <div class="glm-panel-header glm-coefficient-header">
                 <div>
@@ -384,16 +384,19 @@ export function createGlmTool({
             <button id="glmBuildTabulationsBtn" class="tab glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !availableModels.length ? "disabled" : ""}>${isTabulating ? "Tabulating..." : "Tabulate"}</button>
           </div>
           <label id="glmTabulationModelLabel" class="glm-tabulation-label">Select models</label>
-          <div id="glmTabulationModelGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-model-list" aria-labelledby="glmTabulationModelLabel"></div>
-          <div id="glmTabulationModelFallback" class="glm-tabulation-selector-fallback"></div>
+          <div class="glm-tabulation-model-region">
+            <div id="glmTabulationModelGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-model-list" aria-labelledby="glmTabulationModelLabel"></div>
+            <div id="glmTabulationModelFallback" class="glm-tabulation-selector-fallback"></div>
+          </div>
           <div id="glmTabulationBlockedPopover" class="glm-tabulation-blocked-popover hidden" role="status" aria-live="polite"></div>
+          <div id="glmTabulationSelectorResizer" class="glm-tabulation-selector-resizer app-resizer app-resizer--horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize GLM model and table selectors" tabindex="0"></div>
           <label id="glmTabulationTableLabel" class="glm-tabulation-label">Select table</label>
           <div id="glmTabulationTableSections" class="glm-tabulation-table-sections ${selectedIds.length > 1 ? "multi" : "single"}" aria-labelledby="glmTabulationTableLabel">
             ${tabulationTableSelectorShellHtml(selectedIds)}
           </div>
           <div id="glmTabulationDiagnostics" class="glm-tabulation-diagnostics ${diagnostics ? "" : "hidden"}">${diagnostics}</div>
         </section>
-        <div id="glmTabulationResizer" class="glm-builder-resizer glm-tabulation-resizer" role="separator" aria-orientation="vertical" aria-label="Resize GLM tabulations and table panels" tabindex="0"></div>
+        <div id="glmTabulationResizer" class="glm-builder-resizer glm-tabulation-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize GLM tabulations and table panels" tabindex="0"></div>
         <section class="glm-tabulation-main">
           <div class="glm-tabulation-controls">
             <div class="glm-tabulation-controls-row glm-tabulation-controls-primary">

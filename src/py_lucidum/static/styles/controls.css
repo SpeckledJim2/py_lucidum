@@ -5,6 +5,52 @@
         margin-bottom: 5px;
       }
 
+      .app-resizer {
+        background: transparent;
+        position: relative;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .app-resizer::before {
+        background: color-mix(in srgb, var(--line) 70%, transparent);
+        border-radius: 999px;
+        content: "";
+        position: absolute;
+      }
+
+      .app-resizer--vertical::before {
+        bottom: 8px;
+        left: 50%;
+        top: 8px;
+        transform: translateX(-50%);
+        width: 2px;
+      }
+
+      .app-resizer--horizontal::before {
+        height: 2px;
+        left: 8px;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+      }
+
+      .app-resizer:hover::before,
+      .app-resizer.dragging::before {
+        background: var(--accent);
+      }
+
+      .app-resizer--vertical:hover::before,
+      .app-resizer--vertical.dragging::before {
+        width: 3px;
+      }
+
+      .app-resizer--horizontal:hover::before,
+      .app-resizer--horizontal.dragging::before {
+        height: 3px;
+      }
+
       .search,
       #filterInput,
       select,

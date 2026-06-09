@@ -3,6 +3,7 @@ import { emptyOption, ensureShapChartLibraries, shapChartOption } from "./gbm-sh
 const BAND_STEPS = makeBandSteps();
 const BAND_BUTTONS = [0.01, 0.1, 1, 5, 10];
 const SHAP_CHOOSER_HEIGHT_KEY = "py_lucidum_gbm_shap_feature1_height";
+const SHAP_SIDE_WIDTH_KEY = "py_lucidum_gbm_shap_side_width";
 const TAIL_OPTIONS = [
   { value: 0, label: "-" },
   { value: 0.1, label: "0.1%" },
@@ -48,9 +49,10 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       <div id="gbmShapRoot" class="gbm-shap-view">
         <aside class="gbm-shap-side">
           ${featureChooserHtml(1, "Feature 1")}
-          <div id="gbmShapChooserDivider" class="gbm-shap-chooser-divider" role="separator" aria-orientation="horizontal" aria-label="Resize SHAP feature choosers" tabindex="0"></div>
+          <div id="gbmShapChooserDivider" class="gbm-shap-chooser-divider app-resizer app-resizer--horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize SHAP feature choosers" tabindex="0"></div>
           ${featureChooserHtml(2, "Feature 2")}
         </aside>
+        <div id="gbmShapMainResizer" class="gbm-shap-main-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize SHAP controls and chart" tabindex="0"></div>
         <section class="gbm-shap-main">
           <div id="gbmShapControls" class="gbm-shap-controls"></div>
           <div class="gbm-shap-chart-shell">
@@ -104,6 +106,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     root.addEventListener("input", handleInput);
     root.addEventListener("change", handleChange);
     setupChooserDividerResize(root);
+    setupMainDividerResize(root);
   }
 
   function handleClick(event) {
@@ -755,6 +758,64 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     resizer?.setAttribute("aria-valuemin", String(minPanelHeight));
     resizer?.setAttribute("aria-valuemax", String(Math.round(maxHeight)));
     resizer?.setAttribute("aria-valuenow", String(Math.round(height)));
+  }
+
+  function setupMainDividerResize(root) {
+    const side = root.querySelector(".gbm-shap-side");
+    const resizer = root.querySelector("#gbmShapMainResizer");
+    if (!side || !resizer) return;
+    const savedWidth = Number(localStorage.getItem(SHAP_SIDE_WIDTH_KEY));
+    if (Number.isFinite(savedWidth) && savedWidth > 0) {
+      setMainSideWidth(root, savedWidth);
+    }
+
+    resizer.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = side.getBoundingClientRect().width || 0;
+      resizer.classList.add("dragging");
+      document.body.classList.add("resizing-chart-controls");
+      resizer.setPointerCapture?.(event.pointerId);
+      window.getSelection()?.removeAllRanges();
+      const onMove = (moveEvent) => setMainSideWidth(root, startWidth + moveEvent.clientX - startX);
+      const onUp = () => {
+        resizer.classList.remove("dragging");
+        document.body.classList.remove("resizing-chart-controls");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.getSelection()?.removeAllRanges();
+        const width = parseFloat(root.style.getPropertyValue("--gbm-shap-side-width"));
+        if (Number.isFinite(width)) {
+          localStorage.setItem(SHAP_SIDE_WIDTH_KEY, String(Math.round(width)));
+        }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+    });
+
+    resizer.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const current = side.getBoundingClientRect().width || 0;
+      setMainSideWidth(root, current + (event.key === "ArrowRight" ? 24 : -24));
+      const width = parseFloat(root.style.getPropertyValue("--gbm-shap-side-width"));
+      if (Number.isFinite(width)) localStorage.setItem(SHAP_SIDE_WIDTH_KEY, String(Math.round(width)));
+    });
+  }
+
+  function setMainSideWidth(root, rawWidth) {
+    const resizer = root?.querySelector("#gbmShapMainResizer");
+    const availableWidth = root?.getBoundingClientRect().width || window.innerWidth;
+    const resizerWidth = resizer?.getBoundingClientRect().width || 12;
+    const minSideWidth = 240;
+    const minChartWidth = 360;
+    const maxWidth = Math.max(minSideWidth, availableWidth - resizerWidth - minChartWidth);
+    const width = Math.min(Math.max(rawWidth, minSideWidth), maxWidth);
+    root.style.setProperty("--gbm-shap-side-width", `${Math.round(width)}px`);
+    resizer?.setAttribute("aria-valuemin", String(minSideWidth));
+    resizer?.setAttribute("aria-valuemax", String(Math.round(maxWidth)));
+    resizer?.setAttribute("aria-valuenow", String(Math.round(width)));
+    requestAnimationFrame(() => chart?.resize());
   }
 
   function legendEntryNames(option) {

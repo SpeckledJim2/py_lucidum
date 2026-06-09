@@ -19,17 +19,8 @@
       }
 
       .chart-controls-resizer {
-        background: linear-gradient(to right, var(--line), transparent);
         cursor: col-resize;
         min-width: 6px;
-        touch-action: none;
-        user-select: none;
-        -webkit-user-select: none;
-      }
-
-      .chart-controls-resizer:hover,
-      .chart-controls-resizer.dragging {
-        background: var(--accent);
       }
 
       .chart-side-controls {
@@ -41,17 +32,8 @@
       }
 
       .chart-control-height-resizer {
-        background: linear-gradient(to bottom, var(--line), transparent);
         cursor: row-resize;
         min-height: 6px;
-        touch-action: none;
-        user-select: none;
-        -webkit-user-select: none;
-      }
-
-      .chart-control-height-resizer:hover,
-      .chart-control-height-resizer.dragging {
-        background: var(--accent);
       }
 
       .chart-side-section {

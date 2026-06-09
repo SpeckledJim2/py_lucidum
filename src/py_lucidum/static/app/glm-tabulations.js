@@ -1,5 +1,6 @@
 export const GLM_TABULATION_MODEL_CROSSTAB = "__model__";
 const GLM_TABULATION_SPLIT_STORAGE_KEY = "py_lucidum_glm_tabulation_sidebar_width_v2";
+const GLM_TABULATION_MODEL_LIST_HEIGHT_KEY = "py_lucidum_glm_tabulation_model_list_height";
 const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
 
 export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) {
@@ -52,6 +53,73 @@ export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) 
       const sidebar = layout.querySelector(".glm-tabulation-sidebar");
       const current = sidebar?.getBoundingClientRect().width || 0;
       resizeTo(current + (event.key === "ArrowRight" ? 24 : -24));
+    });
+
+    bindSelectorResizer(layout);
+  }
+
+  function bindSelectorResizer(layout) {
+    const sidebar = layout.querySelector(".glm-tabulation-sidebar");
+    const modelRegion = layout.querySelector(".glm-tabulation-model-region");
+    const resizer = el("glmTabulationSelectorResizer");
+    if (!sidebar || !modelRegion || !resizer || resizer.dataset.bound === "true") return;
+    resizer.dataset.bound = "true";
+
+    const resizeTo = (height, persist = true) => {
+      const minModelHeight = 96;
+      const minTableHeight = 120;
+      const fixedNodes = [
+        sidebar.querySelector(".glm-panel-header"),
+        el("glmTabulationModelLabel"),
+        el("glmTabulationTableLabel"),
+        resizer,
+        el("glmTabulationDiagnostics"),
+      ];
+      const fixedHeight = fixedNodes.reduce((total, node) => {
+        if (!node || node.classList?.contains("hidden")) return total;
+        return total + (node.getBoundingClientRect().height || 0);
+      }, 48);
+      const availableHeight = sidebar.getBoundingClientRect().height || window.innerHeight;
+      const maxHeight = Math.max(minModelHeight, availableHeight - fixedHeight - minTableHeight);
+      const clamped = Math.max(minModelHeight, Math.min(maxHeight, height));
+      sidebar.style.setProperty("--glm-tabulation-model-list-height", `${Math.round(clamped)}px`);
+      resizer.setAttribute("aria-valuemin", String(minModelHeight));
+      resizer.setAttribute("aria-valuemax", String(Math.round(maxHeight)));
+      resizer.setAttribute("aria-valuenow", String(Math.round(clamped)));
+      if (persist) localStorage.setItem(GLM_TABULATION_MODEL_LIST_HEIGHT_KEY, String(Math.round(clamped)));
+      scheduleResize();
+    };
+
+    const savedHeight = Number(localStorage.getItem(GLM_TABULATION_MODEL_LIST_HEIGHT_KEY));
+    if (Number.isFinite(savedHeight) && savedHeight > 0) {
+      resizeTo(savedHeight, false);
+    }
+
+    resizer.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = modelRegion.getBoundingClientRect().height || 0;
+      resizer.classList.add("dragging");
+      document.body.classList.add("resizing-chart-control-heights");
+      resizer.setPointerCapture?.(event.pointerId);
+      window.getSelection()?.removeAllRanges();
+      const onMove = (moveEvent) => resizeTo(startHeight + moveEvent.clientY - startY);
+      const onUp = () => {
+        resizer.classList.remove("dragging");
+        document.body.classList.remove("resizing-chart-control-heights");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.getSelection()?.removeAllRanges();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+    });
+
+    resizer.addEventListener("keydown", (event) => {
+      if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault();
+      const current = modelRegion.getBoundingClientRect().height || 0;
+      resizeTo(current + (event.key === "ArrowDown" ? 24 : -24));
     });
   }
 
