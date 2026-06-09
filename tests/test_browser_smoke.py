@@ -947,8 +947,9 @@ COPY (
                 right_click_tabulation_cell(
                     """
                     ({ age, bField }) => {
-                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
-                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      const rows = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")];
+                      const row = rows.find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age)
+                        || rows.find((candidate) => candidate.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() === "1.0000");
                       return [...(row?.querySelectorAll(".tabulator-cell") || [])]
                         .find((cell) => cell.getAttribute("tabulator-field") === bField) || null;
                     }
@@ -988,8 +989,9 @@ COPY (
                     ({ age, text }) => {
                       const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
                       const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
-                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
-                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      const rows = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")];
+                      const row = rows.find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age)
+                        || rows.find((candidate) => candidate.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() === text);
                       const current = row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() || "";
                       return current === text
                         && !document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
@@ -1599,8 +1601,7 @@ COPY (
                     timeout=10_000,
                 ) as glm_banding_info:
                     page.locator(
-                        '#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]',
-                        has_text="glm_prediction",
+                        '#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"][data-value="glm_prediction"]',
                     ).click()
                 glm_banding_body = json.loads(glm_banding_info.value.request.post_data or "{}")
                 self.assertEqual(glm_banding_body["source"], "glm:browser-smoke-glm:predictions")
@@ -1614,8 +1615,7 @@ COPY (
 
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_expected_info:
                     page.locator(
-                        '#expectedList .feature[data-source-id="gbm:browser-smoke-model-2:predictions"]',
-                        has_text="gbm_prediction",
+                        '#expectedList .feature[data-source-id="gbm:browser-smoke-model-2:predictions"][data-value="gbm_prediction"]',
                     ).click()
                 gbm_expected_body = json.loads(gbm_expected_info.value.post_data or "{}")
                 self.assertEqual(gbm_expected_body["source"], "glm:browser-smoke-glm:predictions")
@@ -1642,12 +1642,11 @@ COPY (
                 )
 
                 page.locator(
-                    '#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"]',
-                    has_text="glm_prediction",
+                    '#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"][data-value="glm_prediction"]',
                 ).click()
                 page.wait_for_function(
                     """
-                    () => document.querySelector('#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"]')
+                    () => document.querySelector('#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"][data-value="glm_prediction"]')
                       ?.classList.contains("active")
                     """,
                     timeout=10_000,

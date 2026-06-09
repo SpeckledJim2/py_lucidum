@@ -742,18 +742,18 @@ COPY (
             con.execute(
                 f"""
 COPY (
-  SELECT 1 AS __lucidum_row_id, 100.0 AS glm_prediction
+  SELECT 1 AS __lucidum_row_id, 100.0 AS glm_prediction, 1.0 AS glm_prediction_rate
   UNION ALL
-  SELECT 3, 300.0
+  SELECT 3, 300.0, 3.0
 ) TO {sql_literal(str(glm_path))} (FORMAT PARQUET)
 """
             )
             con.execute(
                 f"""
 COPY (
-  SELECT 2 AS __lucidum_row_id, 20.0 AS gbm_prediction
+  SELECT 2 AS __lucidum_row_id, 20.0 AS gbm_prediction, 0.2 AS gbm_prediction_rate
   UNION ALL
-  SELECT 3, 30.0
+  SELECT 3, 30.0, 0.3
 ) TO {sql_literal(str(gbm_path))} (FORMAT PARQUET)
 """
             )
@@ -814,6 +814,40 @@ COPY (
         self.assertIsNone(by_x["100"]["resp1"])
         self.assertAlmostEqual(by_x["300"]["resp0"], 300)
         self.assertAlmostEqual(by_x["300"]["resp1"], 30)
+
+        rate_result = chart(
+            dataset,
+            {
+                "source": "dataset",
+                "x": "glm_prediction_rate",
+                "xSource": "glm:m1:predictions",
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "GBM rate", "numerator": "gbm_prediction_rate", "source": "gbm:m1:predictions"},
+                ],
+                "denominator": "__none__",
+                "filter": "",
+                "bandWidth": 1,
+                "dateBucket": "none",
+                "lowGroup": "0",
+                "sort": "alpha",
+                "sigma": 0,
+                "transform": "none",
+            },
+        )
+
+        rate_by_x = {row["x"]: row for row in rate_result["rows"]}
+        self.assertEqual(rate_result["field_sources"]["x"], "glm:m1:predictions")
+        self.assertEqual(rate_result["field_sources"]["responses"], ["dataset", "gbm:m1:predictions"])
+        self.assertIn("(missing)", rate_by_x)
+        self.assertIn("1", rate_by_x)
+        self.assertIn("3", rate_by_x)
+        self.assertAlmostEqual(rate_by_x["(missing)"]["resp0"], 200)
+        self.assertAlmostEqual(rate_by_x["(missing)"]["resp1"], 0.2)
+        self.assertIsNone(rate_by_x["1"]["resp0"])
+        self.assertIsNone(rate_by_x["1"]["resp1"])
+        self.assertAlmostEqual(rate_by_x["3"]["resp0"], 300)
+        self.assertAlmostEqual(rate_by_x["3"]["resp1"], 0.3)
 
     def test_chart_adds_active_gbm_shap_ribbons_scaled_to_fitted_values(self) -> None:
         dataset = self.dataset_with_gbm_ribbons()

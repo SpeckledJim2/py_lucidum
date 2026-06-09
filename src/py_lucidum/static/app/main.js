@@ -1275,10 +1275,18 @@
         return el("expectedNumerator").selectedOptions[0]?.dataset.sourceId || "";
       }
 
+      function predictionColumnNamesForModelKind(modelKind) {
+        if (modelKind === "glm") return ["glm_prediction", "glm_prediction_rate"];
+        if (modelKind === "gbm") return ["gbm_prediction", "gbm_prediction_rate"];
+        return [];
+      }
+
       function predictionColumnNameForModelKind(modelKind) {
-        if (modelKind === "glm") return "glm_prediction";
-        if (modelKind === "gbm") return "gbm_prediction";
-        return "";
+        return predictionColumnNamesForModelKind(modelKind)[0] || "";
+      }
+
+      function isPredictionColumnForModelKind(columnName, modelKind) {
+        return predictionColumnNamesForModelKind(modelKind).includes(String(columnName || ""));
       }
 
       function activePredictionSourceForModelKind(modelKind) {
@@ -1287,11 +1295,15 @@
         return null;
       }
 
-      function setExpectedPredictionSelectionForModelKind(modelKind) {
-        const predictionColumn = predictionColumnNameForModelKind(modelKind);
+      function setExpectedPredictionSelectionForModelKind(modelKind, preferredColumn = "") {
         const predictionSource = activePredictionSourceForModelKind(modelKind);
-        if (!predictionColumn || !predictionSource?.id) return false;
-        return setExpectedSelection(predictionColumn, predictionSource.id, { allowAnySource: false });
+        if (!predictionSource?.id) return false;
+        const candidates = predictionColumnNamesForModelKind(modelKind);
+        const ordered = [
+          ...(isPredictionColumnForModelKind(preferredColumn, modelKind) ? [String(preferredColumn)] : []),
+          ...candidates,
+        ].filter((name, index, values) => name && values.indexOf(name) === index);
+        return ordered.some((predictionColumn) => setExpectedSelection(predictionColumn, predictionSource.id, { allowAnySource: false }));
       }
 
       function actualSelectionSourceId() {
@@ -1357,9 +1369,15 @@
         if (preferredSource) state.source = preferredSource;
         state.x = previousX;
         state.xSource = previousXSource;
-        if (modelKind && previousX === predictionColumnNameForModelKind(modelKind)) {
+        if (modelKind && isPredictionColumnForModelKind(previousX, modelKind)) {
           const predictionSource = activePredictionSourceForModelKind(modelKind);
-          if (predictionSource?.id) state.xSource = predictionSource.id;
+          if (predictionSource?.id) {
+            state.xSource = predictionSource.id;
+            if (!lineBarColumnExists(state.x, predictionSource.id)) {
+              const fallbackPredictionColumn = predictionColumnNameForModelKind(modelKind);
+              if (lineBarColumnExists(fallbackPredictionColumn, predictionSource.id)) state.x = fallbackPredictionColumn;
+            }
+          }
         }
         syncLineBarXFallback();
         fillMetricSelect(el("actualNumerator"));
@@ -1369,7 +1387,7 @@
           el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
         }
         if (previousExpectedIsPrediction && modelKind) {
-          if (!setExpectedPredictionSelectionForModelKind(modelKind)) el("expectedNumerator").value = "";
+          if (!setExpectedPredictionSelectionForModelKind(modelKind, previousExpected)) el("expectedNumerator").value = "";
         } else if (!setExpectedSelection(previousExpected, previousExpectedSource, { allowAnySource: !previousExpectedIsPrediction })) {
           el("expectedNumerator").value = "";
         }

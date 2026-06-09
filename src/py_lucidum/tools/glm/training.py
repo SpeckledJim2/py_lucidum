@@ -805,11 +805,16 @@ def build_predictions_frame(
         predict_kwargs["offset"] = offset_values.loc[score_mask].astype(float).to_numpy()
     predictions = model.predict(score_frame.loc[score_mask].copy(), **predict_kwargs)
     prediction_values = pd.to_numeric(predictions, errors="coerce")
+    rate_values = prediction_values.copy() if denominator is not None else None
     if denominator is not None:
         prediction_values = prediction_values * denominator.loc[score_mask].to_numpy(dtype=float)
     finite = np.isfinite(np.asarray(prediction_values, dtype=float))
     output["glm_prediction"] = prediction_values
     output.loc[~finite, "glm_prediction"] = np.nan
+    if rate_values is not None:
+        rate_finite = np.isfinite(np.asarray(rate_values, dtype=float))
+        output["glm_prediction_rate"] = rate_values
+        output.loc[~rate_finite, "glm_prediction_rate"] = np.nan
     fitted_na_rows = int((~finite).sum())
     scored_rows = int(finite.sum())
     return output, scored_rows, fitted_na_rows

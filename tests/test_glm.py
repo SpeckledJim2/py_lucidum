@@ -557,6 +557,16 @@ if result.get("iteration") != 10:
         self.assertTrue({row["feature"] for row in manifest["feature_importance"]}.issubset({"Age", "Segment"}))
         self.assert_glm_timing_metadata(manifest["timings"])
         self.assertEqual(result["timings"]["worker_mode"], manifest["timings"]["worker_mode"])
+        prediction_rows = store.read_parquet_records(store.artifact_path(model_id, "predictions"))
+        self.assertTrue(prediction_rows)
+        self.assertIn("glm_prediction_rate", prediction_rows[0])
+        denominators = {1: 100.0, 2: 200.0, 3: 300.0, 4: 300.0, 5: 400.0, 6: 500.0}
+        for row in prediction_rows:
+            self.assertAlmostEqual(
+                float(row["glm_prediction_rate"]),
+                float(row["glm_prediction"]) / denominators[int(row["__lucidum_row_id"])],
+                places=10,
+            )
 
         detail = store.model_detail(model_id)
         self.assertTrue(detail["coefficients"])
@@ -576,9 +586,70 @@ if result.get("iteration") != 10:
         self.assertEqual(glm_source["kind"], "glm_predictions")
         self.assertTrue(glm_source["active"])
         self.assertIn("glm_prediction", [column["name"] for column in glm_source["columns"]])
+        self.assertIn("glm_prediction_rate", [column["name"] for column in glm_source["columns"]])
         with dataset.lock:
-            row = dataset.con.execute(f"SELECT COUNT(*), COUNT(glm_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
-        self.assertEqual(row, (6, 6))
+            row = dataset.con.execute(
+                f"""
+SELECT
+  COUNT(*),
+  COUNT(glm_prediction),
+  COUNT(glm_prediction_rate),
+  SUM(ABS(glm_prediction_rate - glm_prediction / denominator))
+FROM {dataset.relation_sql_for_source(source_id)}
+"""
+            ).fetchone()
+        self.assertEqual(row[:3], (6, 6, 6))
+        self.assertAlmostEqual(float(row[3] or 0.0), 0.0, places=10)
+
+    def test_glm_prediction_source_computes_rate_for_legacy_artifacts(self) -> None:
+        store = GlmModelStore(self.data_path)
+        model_id = "legacy-rate"
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": "Legacy rate",
+                "created_at": "2026-06-09T00:00:00Z",
+                "family": "poisson",
+                "response_column": "actualNumerator",
+                "denominator_column": "denominator",
+                "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
+                "sources": {"predictions": store.source_id(model_id)},
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 100.0 AS glm_prediction
+  UNION ALL
+  SELECT 3, 330.0
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model(model_id)
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(GlmSourceProvider(store))
+        source_id = store.source_id(model_id)
+        sources = dataset.data_sources()
+        source = next(item for item in sources if item["id"] == source_id)
+
+        self.assertIn("glm_prediction_rate", [column["name"] for column in source["columns"]])
+        with dataset.lock:
+            rows = dataset.con.execute(
+                f"""
+SELECT __lucidum_row_id, glm_prediction, glm_prediction_rate
+FROM {dataset.model_prediction_source(source_id).relation_sql}
+ORDER BY __lucidum_row_id
+"""
+            ).fetchall()
+        self.assertEqual([row[0] for row in rows], [1, 3])
+        self.assertAlmostEqual(float(rows[0][2]), float(rows[0][1]) / 100.0, places=10)
+        self.assertAlmostEqual(float(rows[1][2]), float(rows[1][1]) / 300.0, places=10)
 
     def test_glm_feature_importance_splits_interaction_terms_across_features(self) -> None:
         try:

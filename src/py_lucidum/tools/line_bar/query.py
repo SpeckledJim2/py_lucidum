@@ -222,7 +222,14 @@ def add_field_column(
     if prediction_source is not None:
         source_columns = dataset.column_map_for_source(source_id)
         source_column = source_columns.get(column_name)
-        model_prediction_columns = {"gbm_prediction", "gbm_tabulated_prediction", "glm_prediction", "glm_tabulated_prediction"}
+        model_prediction_columns = {
+            "gbm_prediction",
+            "gbm_prediction_rate",
+            "gbm_tabulated_prediction",
+            "glm_prediction",
+            "glm_prediction_rate",
+            "glm_tabulated_prediction",
+        }
         if column_name in model_prediction_columns and source_column is not None and is_numeric_kind(source_column.kind):
             if not prediction_source.relation_sql:
                 raise ValueError("Choose a valid model prediction source")

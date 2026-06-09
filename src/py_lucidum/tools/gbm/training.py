@@ -681,12 +681,18 @@ def train_model(
         prediction = np.exp(log_offset + raw_score)
     else:
         prediction = booster.predict(feature_frame, num_iteration=best_iteration)
-    predictions = pd.DataFrame(
-        {
-            "__lucidum_row_id": work_frame["__lucidum_row_id"].astype("int64").to_numpy(),
-            "gbm_prediction": prediction,
-        }
-    )
+    prediction_data = {
+        "__lucidum_row_id": work_frame["__lucidum_row_id"].astype("int64").to_numpy(),
+        "gbm_prediction": prediction,
+    }
+    if offset_col:
+        prediction_array = np.asarray(prediction, dtype="float64")
+        offset_array = offset_values.to_numpy(dtype="float64")
+        rate = np.full(prediction_array.shape, np.nan, dtype="float64")
+        valid_rate = np.isfinite(prediction_array) & np.isfinite(offset_array) & (offset_array > 0)
+        rate[valid_rate] = prediction_array[valid_rate] / offset_array[valid_rate]
+        prediction_data["gbm_prediction_rate"] = rate
+    predictions = pd.DataFrame(prediction_data)
     write_dataframe_parquet(predictions, store.artifact_path(model_id, "predictions"))
     if use_supplied_init_score and init_score_linear is not None and init_score_prediction is not None:
         write_dataframe_parquet(

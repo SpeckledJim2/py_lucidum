@@ -354,6 +354,7 @@ export function createLineBarTool({
       button.type = "button";
       button.className = `feature ${extraClass} ${value === select.value ? "active" : ""}`.trim();
       if (sourceId) button.dataset.sourceId = sourceId;
+      button.dataset.value = value;
       button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
       button.addEventListener("click", () => {
         const changed = select.value !== value;
@@ -402,6 +403,7 @@ export function createLineBarTool({
       const button = document.createElement("button");
       button.className = `feature ${active ? "active" : ""}`;
       button.dataset.sourceId = sourceId;
+      button.dataset.value = col.name;
       button.innerHTML = `<span>${escapeHtml(col.name)}</span><span class="kind">${col.kind}</span>`;
       button.addEventListener("click", () => {
         state.x = col.name;
@@ -509,6 +511,7 @@ export function createLineBarTool({
     const button = document.createElement("button");
     button.className = `feature ${extraClass} ${active ? "active" : ""}`.trim();
     button.dataset.sourceId = sourceId;
+    button.dataset.value = label;
     button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(detail)}</span>`;
     button.addEventListener("click", onClick);
     list.append(button);

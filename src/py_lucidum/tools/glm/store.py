@@ -71,15 +71,51 @@ def dedupe_columns(columns: list[str]) -> list[str]:
     return projected
 
 
+def parquet_columns(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    con = duckdb.connect(database=":memory:")
+    try:
+        rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(path))})").fetchall()
+    finally:
+        con.close()
+    return {str(row[0]) for row in rows}
+
+
+def source_columns_with_denominator(source_columns: list[str], denominator_col: str) -> list[str]:
+    if not denominator_col or denominator_col in source_columns:
+        return source_columns
+    return dedupe_columns([*source_columns, denominator_col])
+
+
 def row_number_source_projection_sql(source_columns: list[str]) -> str:
     columns_sql = ",\n    ".join(quote_ident(name) for name in source_columns)
     suffix = f",\n    {columns_sql}" if columns_sql else ""
     return f"ROW_NUMBER() OVER () AS __lucidum_row_id{suffix}"
 
 
-def prediction_source_select_sql(source_columns: list[str], *, include_tabulated: bool = False) -> str:
+def glm_prediction_rate_sql(denominator_col: str, *, artifact_has_rate: bool = False, base_alias: str = "base") -> str:
+    if artifact_has_rate:
+        return "prediction.glm_prediction_rate"
+    denominator_sql = quote_ident(denominator_col)
+    return (
+        f"CASE WHEN TRY_CAST({base_alias}.{denominator_sql} AS DOUBLE) > 0 "
+        f"THEN TRY_CAST(prediction.glm_prediction AS DOUBLE) / TRY_CAST({base_alias}.{denominator_sql} AS DOUBLE) "
+        "ELSE NULL END AS glm_prediction_rate"
+    )
+
+
+def prediction_source_select_sql(
+    source_columns: list[str],
+    *,
+    denominator_col: str = "",
+    prediction_has_rate: bool = False,
+    include_tabulated: bool = False,
+) -> str:
     parts = [f"base.{quote_ident(name)}" for name in source_columns]
     parts.append("prediction.glm_prediction")
+    if denominator_col:
+        parts.append(glm_prediction_rate_sql(denominator_col, artifact_has_rate=prediction_has_rate))
     if include_tabulated:
         parts.append("tabulated.glm_tabulated_prediction")
     return ",\n  ".join(parts)
@@ -301,8 +337,14 @@ class GlmModelStore:
         include_tabulated = tabulated_prediction_path.exists()
         denominator_col = str(manifest.get("denominator_column") or "").strip()
         where_sql = f"\n  WHERE {denominator_valid_sql(denominator_col)}" if denominator_col else ""
-        source_columns = self.source_columns(manifest)
-        select_sql = prediction_source_select_sql(source_columns, include_tabulated=include_tabulated)
+        source_columns = source_columns_with_denominator(self.source_columns(manifest), denominator_col)
+        prediction_has_rate = "glm_prediction_rate" in parquet_columns(prediction_path)
+        select_sql = prediction_source_select_sql(
+            source_columns,
+            denominator_col=denominator_col,
+            prediction_has_rate=prediction_has_rate,
+            include_tabulated=include_tabulated,
+        )
         base_projection_sql = row_number_source_projection_sql(source_columns)
         tabulated_join_sql = (
             f"\nLEFT JOIN read_parquet({sql_literal(str(tabulated_prediction_path))}) tabulated USING (__lucidum_row_id)"
@@ -372,15 +414,36 @@ class GlmSourceProvider:
         if ref is None:
             return None
         source_path = self.store.source_path(ref.model_id, "predictions")
+        manifest = self.store.manifest(ref.model_id)
+        denominator_col = str(manifest.get("denominator_column") or "").strip()
+        prediction_has_rate = "glm_prediction_rate" in parquet_columns(source_path)
         tabulated_path = self.store.artifact_path(ref.model_id, "tabulated_predictions")
-        relation_sql = f"read_parquet({sql_literal(str(source_path))})"
+        rate_select_sql = f",\n  {glm_prediction_rate_sql(denominator_col, artifact_has_rate=prediction_has_rate)}" if denominator_col else ""
+        base_join_sql = ""
+        if denominator_col and not prediction_has_rate:
+            denominator_sql = quote_ident(denominator_col)
+            base_join_sql = f"""
+LEFT JOIN (
+  SELECT
+    ROW_NUMBER() OVER () AS __lucidum_row_id,
+    {denominator_sql}
+  FROM {self.store.dataset_relation_sql()}
+) base USING (__lucidum_row_id)"""
+        relation_sql = f"""(
+SELECT
+  prediction.__lucidum_row_id,
+  prediction.glm_prediction{rate_select_sql}
+FROM read_parquet({sql_literal(str(source_path))}) prediction
+{base_join_sql}
+)"""
         if tabulated_path.exists():
             relation_sql = f"""(
 SELECT
   prediction.__lucidum_row_id,
-  prediction.glm_prediction,
+  prediction.glm_prediction{rate_select_sql},
   tabulated.glm_tabulated_prediction
 FROM read_parquet({sql_literal(str(source_path))}) prediction
+{base_join_sql}
 LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lucidum_row_id)
 )"""
         return ModelPredictionSource(

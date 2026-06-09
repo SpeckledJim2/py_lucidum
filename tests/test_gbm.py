@@ -2307,7 +2307,7 @@ COPY (
                 f"SELECT __lucidum_row_id, init_score, init_score_prediction FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'init_score')))}) ORDER BY __lucidum_row_id"
             ).fetchall()
             prediction_rows = con.execute(
-                f"SELECT __lucidum_row_id, gbm_prediction FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'predictions')))}) ORDER BY __lucidum_row_id"
+                f"SELECT __lucidum_row_id, gbm_prediction, gbm_prediction_rate FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'predictions')))}) ORDER BY __lucidum_row_id"
             ).fetchall()
         finally:
             con.close()
@@ -2319,8 +2319,9 @@ COPY (
         features = pd.DataFrame({"Age": [30, 40, 50, 60]})
         raw_scores = booster.predict(features, raw_score=True, num_iteration=result["best_iteration"])
         expected_predictions = [math.exp(math.log(baseline) + float(raw)) for baseline, raw in zip([8, 18, 28, 38], raw_scores)]
-        for (_row_id, actual), expected in zip(prediction_rows, expected_predictions):
+        for (_row_id, actual, rate), expected, denominator in zip(prediction_rows, expected_predictions, [100, 200, 300, 400]):
             self.assertAlmostEqual(actual, expected, places=8)
+            self.assertAlmostEqual(rate, expected / denominator, places=8)
 
     def test_poisson_demo_without_denominator_trains(self) -> None:
         try:
@@ -3490,14 +3491,17 @@ COPY (
         self.assertIn("Age", prediction_columns)
         self.assertIn("Segment", prediction_columns)
         self.assertIn("gbm_prediction", prediction_columns)
+        self.assertIn("gbm_prediction_rate", prediction_columns)
         prediction_columns_by_name = {column["name"]: column for column in prediction_source["columns"]}
         self.assertIsNone(prediction_columns_by_name["Age"]["band_suggestion"])
         self.assertIsNone(prediction_columns_by_name["gbm_prediction"]["band_suggestion"])
+        self.assertIsNone(prediction_columns_by_name["gbm_prediction_rate"]["band_suggestion"])
         shap_source = next(source for source in schema["data_sources"] if source["id"] == "gbm:m1:shap_long")
         shap_columns_by_name = {column["name"]: column for column in shap_source["columns"]}
         self.assertIn("Age", shap_columns_by_name)
         self.assertIn("Segment", shap_columns_by_name)
         self.assertIn("gbm_prediction", shap_columns_by_name)
+        self.assertIn("gbm_prediction_rate", shap_columns_by_name)
         self.assertIn("SHAP__Age", shap_columns_by_name)
         self.assertIn("SHAP__Segment", shap_columns_by_name)
         self.assertEqual(shap_columns_by_name["SHAP__Age"]["label"], "Age")
@@ -3514,10 +3518,17 @@ COPY (
                 "/api/banding/suggestion",
                 {"source": "gbm:m1:predictions", "feature": "gbm_prediction"},
             )
+            rate_band_status, rate_band_body = asgi_post_json(
+                app,
+                "/api/banding/suggestion",
+                {"source": "gbm:m1:predictions", "feature": "gbm_prediction_rate"},
+            )
         self.assertEqual(band_status, 200)
         self.assertEqual(json.loads(band_body)["band_suggestion"], 1)
         self.assertEqual(prediction_band_status, 200)
         self.assertGreater(json.loads(prediction_band_body)["band_suggestion"], 0)
+        self.assertEqual(rate_band_status, 200)
+        self.assertGreater(json.loads(rate_band_body)["band_suggestion"], 0)
 
         dataset = Dataset(self.data_path)
         dataset.register_data_source_provider(GbmSourceProvider(GbmModelStore(self.data_path)))
@@ -3525,6 +3536,17 @@ COPY (
         self.assertIsNotNone(model_prediction_source)
         self.assertEqual(model_prediction_source.column, "gbm_prediction")
         self.assertIn("predictions.parquet", model_prediction_source.relation_sql)
+        with dataset.lock:
+            prediction_rows = dataset.con.execute(
+                f"""
+SELECT __lucidum_row_id, gbm_prediction, gbm_prediction_rate
+FROM {model_prediction_source.relation_sql}
+ORDER BY __lucidum_row_id
+"""
+            ).fetchall()
+        self.assertEqual([row[0] for row in prediction_rows], [1, 2])
+        self.assertAlmostEqual(float(prediction_rows[0][2]), float(prediction_rows[0][1]) / 100.0, places=10)
+        self.assertAlmostEqual(float(prediction_rows[1][2]), float(prediction_rows[1][1]) / 200.0, places=10)
         result = chart(
             dataset,
             {

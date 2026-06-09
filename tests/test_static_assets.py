@@ -198,8 +198,8 @@ const schema = {{
   tools: [{{ id: "line_bar" }}],
   data_sources: [
     {{ id: "dataset", columns: [{{ name: "Actual", kind: "numeric" }}] }},
-    {{ id: "gbm:one:predictions", kind: "gbm_predictions", active: true, columns: [{{ name: "gbm_prediction", kind: "numeric" }}] }},
-    {{ id: "glm:one:predictions", kind: "glm_predictions", active: true, columns: [{{ name: "glm_prediction", kind: "numeric" }}, {{ name: "glm_tabulated_prediction", kind: "numeric" }}] }},
+    {{ id: "gbm:one:predictions", kind: "gbm_predictions", active: true, columns: [{{ name: "gbm_prediction", kind: "numeric" }}, {{ name: "gbm_prediction_rate", kind: "numeric" }}] }},
+    {{ id: "glm:one:predictions", kind: "glm_predictions", active: true, columns: [{{ name: "glm_prediction", kind: "numeric" }}, {{ name: "glm_prediction_rate", kind: "numeric" }}, {{ name: "glm_tabulated_prediction", kind: "numeric" }}] }},
   ],
 }};
 if (dataSourceForId(schema, "dataset").id !== "dataset") throw new Error("dataSourceForId failed");
@@ -207,7 +207,7 @@ if (!dataSourceHasColumn(schema, "gbm:one:predictions", "gbm_prediction")) throw
 if (sourceColumns(schema, "dataset").length !== 1) throw new Error("sourceColumns failed");
 if (!toolEnabled(schema, "line_bar")) throw new Error("toolEnabled failed");
 if (!isModelTool("gbm") || !isModelTool("glm") || isModelTool("line_bar")) throw new Error("isModelTool failed");
-if (!isModelPredictionColumn({{ name: "gbm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_tabulated_prediction" }})) throw new Error("isModelPredictionColumn failed");
+if (!isModelPredictionColumn({{ name: "gbm_prediction" }}) || !isModelPredictionColumn({{ name: "gbm_prediction_rate" }}) || !isModelPredictionColumn({{ name: "glm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction_rate" }}) || !isModelPredictionColumn({{ name: "glm_tabulated_prediction" }})) throw new Error("isModelPredictionColumn failed");
 if (preferredStartupSource(schema.data_sources, "missing") !== "gbm:one:predictions") throw new Error("preferredStartupSource failed");
 schema.data_sources[1].active = false;
 if (preferredStartupSource(schema.data_sources, "missing") !== "glm:one:predictions") throw new Error("preferredStartupSource GLM fallback failed");
@@ -2169,12 +2169,15 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("training_mode: source.training_mode", js)
         self.assertIn("function sourceColumns()", js)
         self.assertIn("function isModelPredictionColumn(column)", js)
-        self.assertIn('return ["gbm_prediction", "glm_prediction", "glm_tabulated_prediction"].includes(String(column?.name || ""));', js)
+        self.assertIn('return ["gbm_prediction", "gbm_prediction_rate", "glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"].includes(String(column?.name || ""));', js)
         self.assertIn("function expectedColumns()", js)
         self.assertIn("function expectedPredictionColumns()", js)
         self.assertIn("option.dataset.sourceId = col.source_id || state.source || \"dataset\";", js)
         self.assertIn("option.dataset.metricKind = isModelPredictionColumn(col) ? \"prediction\" : \"metric\";", js)
         self.assertIn("function setExpectedSelection(value, sourceId = \"\", options = {})", js)
+        self.assertIn("function predictionColumnNamesForModelKind(modelKind)", js)
+        self.assertIn('if (modelKind === "glm") return ["glm_prediction", "glm_prediction_rate"];', js)
+        self.assertIn('if (modelKind === "gbm") return ["gbm_prediction", "gbm_prediction_rate"];', js)
         self.assertIn("function syncExpectedSourceFromSelection({ expectedValue = \"\", expectedSource = \"\" } = {})", js)
         self.assertIn("syncControlsForSourceChange({", js)
         self.assertIn("function expectedDisplayColumns()", js)
@@ -2182,6 +2185,9 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("const predictionColumns = columns.filter(isModelPredictionColumn);", js)
         self.assertIn("return [...predictionColumns, ...otherColumns];", js)
         self.assertIn("button.dataset.sourceId = sourceId;", js)
+        self.assertIn("button.dataset.value = col.name;", js)
+        self.assertIn("button.dataset.value = value;", js)
+        self.assertIn("button.dataset.value = label;", js)
         self.assertIn("const sourceChanged = syncExpectedSourceFromSelection({", js)
         self.assertIn("for (const col of expectedDisplayColumns())", js)
         self.assertIn("function preferredStartupSource(availableSources, requestedSource)", js)
@@ -2192,6 +2198,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn('const previousExpected = el("expectedNumerator").value;', js)
         self.assertIn('const previousExpectedSource = expectedSelectionSourceId();', js)
         self.assertIn('fillMetricSelect(el("expectedNumerator"), true);', js)
+        self.assertIn('setExpectedPredictionSelectionForModelKind(modelKind, previousExpected)', js)
         self.assertIn('setExpectedSelection(previousExpected, previousExpectedSource, { allowAnySource: !previousExpectedIsPrediction })', js)
 
     def test_gbm_model_navigator_incremental_refresh_contract(self) -> None:

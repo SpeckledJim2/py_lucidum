@@ -126,6 +126,23 @@ def dedupe_columns(columns: list[str]) -> list[str]:
     return projected
 
 
+def parquet_columns(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    con = duckdb.connect(database=":memory:")
+    try:
+        rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(path))})").fetchall()
+    finally:
+        con.close()
+    return {str(row[0]) for row in rows}
+
+
+def source_columns_with_offset(source_columns: list[str], offset_col: str) -> list[str]:
+    if not offset_col or offset_col in source_columns:
+        return source_columns
+    return dedupe_columns([*source_columns, offset_col])
+
+
 def unique_output_column_name(base_name: str, used_names: set[str]) -> str:
     base = str(base_name or "column").strip() or "column"
     candidate = base
@@ -137,9 +154,28 @@ def unique_output_column_name(base_name: str, used_names: set[str]) -> str:
     return candidate
 
 
-def prediction_source_select_sql(source_columns: list[str], *, include_tabulated: bool = False) -> str:
+def gbm_prediction_rate_sql(offset_col: str, *, artifact_has_rate: bool = False, base_alias: str = "base") -> str:
+    if artifact_has_rate:
+        return "prediction.gbm_prediction_rate"
+    offset_sql = quote_ident(offset_col)
+    return (
+        f"CASE WHEN TRY_CAST({base_alias}.{offset_sql} AS DOUBLE) > 0 "
+        f"THEN TRY_CAST(prediction.gbm_prediction AS DOUBLE) / TRY_CAST({base_alias}.{offset_sql} AS DOUBLE) "
+        "ELSE NULL END AS gbm_prediction_rate"
+    )
+
+
+def prediction_source_select_sql(
+    source_columns: list[str],
+    *,
+    offset_col: str = "",
+    prediction_has_rate: bool = False,
+    include_tabulated: bool = False,
+) -> str:
     parts = [f"base.{quote_ident(name)}" for name in source_columns]
     parts.append("prediction.gbm_prediction")
+    if offset_col:
+        parts.append(gbm_prediction_rate_sql(offset_col, artifact_has_rate=prediction_has_rate))
     if include_tabulated:
         parts.append("tabulated.gbm_tabulated_prediction")
     return ",\n  ".join(parts)
@@ -150,10 +186,14 @@ def shap_source_select_sql(
     shap_columns: list[dict[str, str]],
     *,
     include_prediction: bool = False,
+    offset_col: str = "",
+    prediction_has_rate: bool = False,
 ) -> str:
     parts = [f"base.{quote_ident(name)}" for name in source_columns]
     if include_prediction:
         parts.append("prediction.gbm_prediction")
+        if offset_col:
+            parts.append(gbm_prediction_rate_sql(offset_col, artifact_has_rate=prediction_has_rate))
     parts.extend(
         f"shap.{quote_ident(column['artifact_column'])} AS {quote_ident(column['name'])}"
         for column in shap_columns
@@ -434,10 +474,16 @@ COPY (
         manifest = self.manifest(ref.model_id)
         offset_col = str(manifest.get("offset_column") or "").strip()
         where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
-        source_columns = self.source_columns(manifest)
+        source_columns = source_columns_with_offset(self.source_columns(manifest), offset_col)
         tabulated_prediction_path = self.artifact_path(ref.model_id, "tabulated_predictions")
         include_tabulated = tabulated_prediction_path.exists()
-        select_sql = prediction_source_select_sql(source_columns, include_tabulated=include_tabulated)
+        prediction_has_rate = "gbm_prediction_rate" in parquet_columns(source_path)
+        select_sql = prediction_source_select_sql(
+            source_columns,
+            offset_col=offset_col,
+            prediction_has_rate=prediction_has_rate,
+            include_tabulated=include_tabulated,
+        )
         base_projection_sql = row_number_source_projection_sql(source_columns)
         tabulated_join_sql = (
             f"\nLEFT JOIN read_parquet({sql_literal(str(tabulated_prediction_path))}) tabulated USING (__lucidum_row_id)"
@@ -465,11 +511,18 @@ INNER JOIN read_parquet({sql_literal(str(source_path))}) prediction USING (__luc
         manifest = self.manifest(model_id)
         offset_col = str(manifest.get("offset_column") or "").strip()
         where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
-        source_columns = self.source_columns(manifest)
+        source_columns = source_columns_with_offset(self.source_columns(manifest), offset_col)
         shap_columns = self.shap_value_columns(model_id, manifest)
         prediction_path = self.source_path(model_id, "predictions")
         include_prediction = prediction_path.exists()
-        select_sql = shap_source_select_sql(source_columns, shap_columns, include_prediction=include_prediction)
+        prediction_has_rate = "gbm_prediction_rate" in parquet_columns(prediction_path)
+        select_sql = shap_source_select_sql(
+            source_columns,
+            shap_columns,
+            include_prediction=include_prediction,
+            offset_col=offset_col,
+            prediction_has_rate=prediction_has_rate,
+        )
         base_projection_sql = row_number_source_projection_sql(source_columns)
         prediction_join_sql = (
             f"\nLEFT JOIN read_parquet({sql_literal(str(prediction_path))}) prediction USING (__lucidum_row_id)"
@@ -561,15 +614,36 @@ class GbmSourceProvider:
         if ref is None or ref.source_kind != "predictions":
             return None
         source_path = self.store.source_path(ref.model_id, "predictions")
+        manifest = self.store.manifest(ref.model_id)
+        offset_col = str(manifest.get("offset_column") or "").strip()
+        prediction_has_rate = "gbm_prediction_rate" in parquet_columns(source_path)
         tabulated_path = self.store.artifact_path(ref.model_id, "tabulated_predictions")
-        relation_sql = f"read_parquet({sql_literal(str(source_path))})"
+        rate_select_sql = f",\n  {gbm_prediction_rate_sql(offset_col, artifact_has_rate=prediction_has_rate)}" if offset_col else ""
+        base_join_sql = ""
+        if offset_col and not prediction_has_rate:
+            offset_sql = quote_ident(offset_col)
+            base_join_sql = f"""
+LEFT JOIN (
+  SELECT
+    ROW_NUMBER() OVER () AS __lucidum_row_id,
+    {offset_sql}
+  FROM {self.store.dataset_relation_sql()}
+) base USING (__lucidum_row_id)"""
+        relation_sql = f"""(
+SELECT
+  prediction.__lucidum_row_id,
+  prediction.gbm_prediction{rate_select_sql}
+FROM read_parquet({sql_literal(str(source_path))}) prediction
+{base_join_sql}
+)"""
         if tabulated_path.exists():
             relation_sql = f"""(
 SELECT
   prediction.__lucidum_row_id,
-  prediction.gbm_prediction,
+  prediction.gbm_prediction{rate_select_sql},
   tabulated.gbm_tabulated_prediction
 FROM read_parquet({sql_literal(str(source_path))}) prediction
+{base_join_sql}
 LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lucidum_row_id)
 )"""
         return ModelPredictionSource(
