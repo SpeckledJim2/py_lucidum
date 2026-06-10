@@ -33,17 +33,19 @@ const FIELD_TITLES = {
 
 export function createSpecificationsTool({
   api,
+  clearGlobalStatus = () => {},
+  datasetColumnNames = () => [],
   el,
   escapeHtml,
   measureToolRender,
   reloadSchemaAfterSpecsSave,
-  setStatus,
   showClipboardToast,
 }) {
   let rendered = false;
   let table = null;
   let activeKind = "feature";
   let contextRowId = "";
+  let contextColumnField = "";
   let rowIdCounter = 0;
   let loading = false;
   let suppressDirty = false;
@@ -65,12 +67,6 @@ export function createSpecificationsTool({
             <button id="specSaveBtn" class="spec-save-button" type="button">Save</button>
           </div>
         </div>
-        <div id="specScenarioToolbar" class="spec-scenario-toolbar hidden">
-          <select id="specScenarioSelect" aria-label="Feature scenario"></select>
-          <button id="specAddScenarioBtn" class="ghost spec-action-button" type="button">Add scenario</button>
-          <button id="specRenameScenarioBtn" class="ghost spec-action-button" type="button">Rename</button>
-          <button id="specRemoveScenarioBtn" class="ghost spec-action-button" type="button">Remove</button>
-        </div>
         <div id="specNotice" class="spec-notice hidden" role="status" aria-live="polite"></div>
         <div id="specGrid" class="spec-grid" tabindex="0"></div>
         <div id="specContextMenu" class="spec-context-menu" role="menu" hidden>
@@ -78,6 +74,7 @@ export function createSpecificationsTool({
           <button class="spec-context-menu-item" type="button" role="menuitem" data-spec-row-action="below">Add row below</button>
           <button class="spec-context-menu-item" type="button" role="menuitem" data-spec-row-action="delete">Delete row</button>
         </div>
+        <div id="specColumnContextMenu" class="spec-context-menu" role="menu" hidden></div>
       </div>
     `;
     bindShell();
@@ -90,9 +87,6 @@ export function createSpecificationsTool({
     });
     el("specValidateBtn").addEventListener("click", validateCurrentSpec);
     el("specSaveBtn").addEventListener("click", saveCurrentSpec);
-    el("specAddScenarioBtn").addEventListener("click", addScenario);
-    el("specRenameScenarioBtn").addEventListener("click", renameScenario);
-    el("specRemoveScenarioBtn").addEventListener("click", removeScenario);
     el("specContextMenu").addEventListener("click", (event) => {
       const button = event.target.closest("[data-spec-row-action]");
       if (!button) return;
@@ -103,8 +97,21 @@ export function createSpecificationsTool({
       if (action === "below") addRowRelative("below");
       if (action === "delete") deleteContextRow();
     });
+    el("specColumnContextMenu").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-spec-column-action]");
+      if (!button) return;
+      event.preventDefault();
+      const action = button.dataset.specColumnAction;
+      const field = contextColumnField;
+      closeMenus();
+      if (action === "add-end") addScenarioAt("", "end");
+      if (action === "add-before") addScenarioAt(field, "before");
+      if (action === "add-after") addScenarioAt(field, "after");
+      if (action === "delete") deleteScenarioField(field);
+      if (action === "rename") renameScenarioField(field);
+    });
     document.addEventListener("click", (event) => {
-      if (!el("specContextMenu")?.contains(event.target)) closeMenus();
+      if (!el("specContextMenu")?.contains(event.target) && !el("specColumnContextMenu")?.contains(event.target)) closeMenus();
     });
     document.addEventListener("keydown", (event) => {
       if (handleSpecKeydown(event)) return;
@@ -117,6 +124,7 @@ export function createSpecificationsTool({
 
   async function activate() {
     renderShell();
+    clearGlobalStatus();
     await loadKind(activeKind);
   }
 
@@ -156,10 +164,8 @@ export function createSpecificationsTool({
       const payload = await api(`/api/specs/${kind}`, { method: "GET" });
       const spec = cacheSpec(payload, false);
       if (kind === activeKind) renderSpec(spec);
-      setStatus("");
     } catch (error) {
       showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message });
-      setStatus(error.message, true);
     } finally {
       loading = false;
       syncButtons();
@@ -183,9 +189,9 @@ export function createSpecificationsTool({
 
   function renderSpec(spec) {
     if (!spec || spec.kind !== activeKind) return;
+    clearGlobalStatus();
     syncKindTabs();
     syncFilePath(spec);
-    syncScenarioToolbar(spec);
     showNotice(null);
     measureToolRender("specs", () => renderTable(spec));
     syncButtons();
@@ -212,19 +218,22 @@ export function createSpecificationsTool({
         table.on("tableBuilt", () => {
           suppressDirty = false;
           table?.redraw?.(true);
-          applySelectionClasses();
+          applyTableDecorations();
         });
         table.on("rowContext", openRowContextMenu);
+        if (spec.kind === "feature") table.on("headerContext", openColumnContextMenu);
         table.on("cellMouseDown", startSelectionFromCell);
         table.on("cellMouseOver", extendSelectionToCell);
         table.on("cellClick", handleSpecCellClick);
         table.on("cellDblClick", handleSpecCellDblClick);
-        table.on("renderComplete", applySelectionClasses);
-        table.on("dataSorted", applySelectionClasses);
+        table.on("renderComplete", applyTableDecorations);
+        table.on("dataSorted", applyTableDecorations);
         table.on("cellEdited", (cell) => {
-          if (isScenarioField(cell.getField())) table.redraw(true);
-          if (!suppressDirty) markDirty();
-          restoreSelectionAfterCellEdit(cell);
+          applyMissingFeatureRowClasses();
+          if (!suppressDirty) {
+            markDirty();
+            restoreSelectionAfterCellEdit(cell);
+          }
         });
         table.on("dataChanged", () => {
           if (!suppressDirty) markDirty();
@@ -241,7 +250,7 @@ export function createSpecificationsTool({
   function tabulatorColumns(spec) {
     return spec.columns.map((field) => {
       const column = {
-        title: fieldTitle(spec.kind, field),
+        title: columnTitle(spec, field),
         field,
         editor: "input",
         headerSort: true,
@@ -271,6 +280,59 @@ export function createSpecificationsTool({
 
   function fieldTitle(kind, field) {
     return FIELD_TITLES[kind]?.[field] || field;
+  }
+
+  function columnTitle(spec, field) {
+    if (spec?.kind === "feature" && isScenarioField(field, spec)) {
+      return scenarioHeaderTitle(spec, field);
+    }
+    return fieldTitle(spec?.kind, field);
+  }
+
+  function scenarioHeaderTitle(spec, field) {
+    return `${field} (${scenarioSelectionCount(spec, field)})`;
+  }
+
+  function scenarioSelectionCount(spec, field) {
+    return scenarioCountRows(spec).filter((row) => scenarioCellSelected(row?.[field])).length;
+  }
+
+  function scenarioCountRows(spec) {
+    if (spec?.kind === activeKind && table) {
+      try {
+        return table.getData?.() || spec.rows || [];
+      } catch (_) {
+        return spec.rows || [];
+      }
+    }
+    return spec?.rows || [];
+  }
+
+  function refreshScenarioHeaderCounts() {
+    const spec = specs.get(activeKind);
+    if (!spec || spec.kind !== "feature" || !table) return;
+    const fields = scenarioFields(spec);
+    if (!fields.length) return;
+    fields.forEach((field) => {
+      const title = scenarioHeaderTitle(spec, field);
+      el("specGrid")?.querySelectorAll(".tabulator-header .tabulator-col[tabulator-field]").forEach((header) => {
+        if (header.getAttribute("tabulator-field") !== field) return;
+        const titleElement = header.querySelector(".tabulator-col-title");
+        if (titleElement) titleElement.textContent = title;
+      });
+    });
+  }
+
+  function captureSpecTableScroll() {
+    const holder = el("specGrid")?.querySelector(".tabulator-tableholder");
+    if (!holder) return null;
+    return { holder, left: holder.scrollLeft, top: holder.scrollTop };
+  }
+
+  function restoreSpecTableScroll(position) {
+    if (!position?.holder) return;
+    position.holder.scrollLeft = position.left;
+    position.holder.scrollTop = position.top;
   }
 
   function columnGrow(kind, field) {
@@ -319,29 +381,12 @@ export function createSpecificationsTool({
     target.title = path;
   }
 
-  function syncScenarioToolbar(spec = specs.get(activeKind)) {
-    const toolbar = el("specScenarioToolbar");
-    if (!toolbar) return;
-    const show = activeKind === "feature";
-    toolbar.classList.toggle("hidden", !show);
-    if (!show) return;
-    const select = el("specScenarioSelect");
-    const scenarios = scenarioFields(spec);
-    select.innerHTML = "";
-    scenarios.forEach((field) => select.append(new Option(field, field)));
-    const hasScenarios = scenarios.length > 0;
-    select.disabled = !hasScenarios;
-    el("specRenameScenarioBtn").disabled = !hasScenarios || loading;
-    el("specRemoveScenarioBtn").disabled = !hasScenarios || loading;
-  }
-
   function syncButtons() {
     if (!rendered) return;
     const dirty = Boolean(specs.get(activeKind)?.dirty);
     el("specValidateBtn").disabled = loading;
     el("specSaveBtn").disabled = loading;
     el("specSaveBtn").classList.toggle("dirty", dirty);
-    syncScenarioToolbar();
   }
 
   function showNotice(result, isError = false) {
@@ -363,6 +408,10 @@ export function createSpecificationsTool({
       <strong>${escapeHtml(result.message || "")}</strong>
       ${items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
     `;
+  }
+
+  function showErrorNotice(message) {
+    showNotice({ valid: false, errors: [message], warnings: [], message }, true);
   }
 
   function saveActiveDraft() {
@@ -405,10 +454,8 @@ export function createSpecificationsTool({
         body: JSON.stringify(payload),
       });
       showNotice(result);
-      setStatus(result.message, !result.valid);
     } catch (error) {
       showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message }, true);
-      setStatus(error.message, true);
     } finally {
       loading = false;
       syncButtons();
@@ -429,11 +476,9 @@ export function createSpecificationsTool({
       renderSpec(spec);
       await reloadSchemaAfterSpecsSave(activeKind);
       showNotice(result);
-      setStatus(result.message);
       showClipboardToast(`${result.message}: ${result.path || spec.path}`);
     } catch (error) {
       showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message }, true);
-      setStatus(error.message, true);
     } finally {
       loading = false;
       syncButtons();
@@ -641,18 +686,25 @@ export function createSpecificationsTool({
       const cell = table?.getRow?.(point.rowId)?.getCell?.(point.field);
       if (!cell?.edit) return false;
       cell.edit(true);
-      window.requestAnimationFrame(() => {
-        const input = cell.getElement?.()?.querySelector?.("input, textarea");
-        if (!input) return;
-        input.value = initialText;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.focus?.();
-        input.setSelectionRange?.(initialText.length, initialText.length);
-      });
+      if (!setEditorInitialText(cell, initialText)) {
+        window.requestAnimationFrame(() => {
+          setEditorInitialText(cell, initialText);
+        });
+      }
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  function setEditorInitialText(cell, initialText) {
+    const input = cell.getElement?.()?.querySelector?.("input, textarea");
+    if (!input) return false;
+    input.value = initialText;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus?.();
+    input.setSelectionRange?.(initialText.length, initialText.length);
+    return true;
   }
 
   function restoreSelectionAfterCellEdit(cell) {
@@ -692,6 +744,32 @@ export function createSpecificationsTool({
     if (!target) return;
     target.querySelectorAll(".spec-cell-selected, .spec-cell-active").forEach((cell) => {
       cell.classList.remove("spec-cell-selected", "spec-cell-active");
+    });
+  }
+
+  function applyTableDecorations() {
+    applyMissingFeatureRowClasses();
+    applySelectionClasses();
+  }
+
+  function datasetFeatureNameSet() {
+    try {
+      return new Set((datasetColumnNames() || []).map((name) => String(name || "")).filter(Boolean));
+    } catch (_) {
+      return new Set();
+    }
+  }
+
+  function featureRowMissingDatasetFeature(rowData, spec = specs.get(activeKind), datasetNames = datasetFeatureNameSet()) {
+    const feature = String(rowData?.Feature || "").trim();
+    return Boolean(spec?.kind === "feature" && feature && !datasetNames.has(feature));
+  }
+
+  function applyMissingFeatureRowClasses() {
+    const spec = specs.get(activeKind);
+    const datasetNames = datasetFeatureNameSet();
+    displayedRows().forEach((row) => {
+      row.getElement?.()?.classList.toggle("spec-missing-feature-row", featureRowMissingDatasetFeature(row.getData?.(), spec, datasetNames));
     });
   }
 
@@ -763,6 +841,8 @@ export function createSpecificationsTool({
     }));
     const changed = normalisedUpdates.filter((update) => rowDataById(update.rowId)?.[update.field] !== update.value);
     if (!changed.length) return;
+    const scenarioChanged = changed.some((update) => isScenarioField(update.field));
+    const scrollPosition = scenarioChanged ? captureSpecTableScroll() : null;
     suppressDirty = true;
     try {
       changed.forEach(({ rowId, field, value }) => {
@@ -785,7 +865,14 @@ export function createSpecificationsTool({
       suppressDirty = false;
     }
     markDirty();
-    window.requestAnimationFrame(applySelectionClasses);
+    if (scenarioChanged) {
+      restoreSpecTableScroll(scrollPosition);
+      refreshScenarioHeaderCounts();
+    }
+    window.requestAnimationFrame(() => {
+      applyTableDecorations();
+      if (scenarioChanged) restoreSpecTableScroll(scrollPosition);
+    });
   }
 
   function clearSelectedCells() {
@@ -820,7 +907,7 @@ export function createSpecificationsTool({
     const origin = { rowId: bounds.rowIds[bounds.top], field: bounds.columns[bounds.left] };
     applyCellUpdates(updates);
     selection = { anchor: origin, focus, active: origin };
-    window.requestAnimationFrame(applySelectionClasses);
+    window.requestAnimationFrame(applyTableDecorations);
   }
 
   async function copySelectionToSystemClipboard() {
@@ -830,7 +917,7 @@ export function createSpecificationsTool({
       await navigator.clipboard?.writeText?.(text);
       showClipboardToast("Copied selection");
     } catch (error) {
-      setStatus(`Copy failed: ${error.message}`, true);
+      showErrorNotice(`Copy failed: ${error.message}`);
     }
   }
 
@@ -839,7 +926,7 @@ export function createSpecificationsTool({
       const text = await navigator.clipboard?.readText?.();
       if (text !== undefined) pasteTextIntoSelection(text);
     } catch (error) {
-      setStatus(`Paste failed: ${error.message}`, true);
+      showErrorNotice(`Paste failed: ${error.message}`);
     }
   }
 
@@ -931,12 +1018,19 @@ export function createSpecificationsTool({
     return index;
   }
 
-  function addScenario() {
+  function addScenarioAt(referenceField = "", position = "end") {
     const spec = saveActiveDraft();
     if (!spec || spec.kind !== "feature") return;
-    const name = uniqueScenarioName(window.prompt("Scenario name", nextScenarioName(spec)) || "", spec);
+    const promptValue = window.prompt("Scenario name", nextScenarioName(spec));
+    if (promptValue === null) return;
+    const name = uniqueScenarioName(promptValue, spec);
     if (!name) return;
-    spec.columns.push(name);
+    let insertAt = spec.columns.length;
+    if ((position === "before" || position === "after") && isScenarioField(referenceField, spec)) {
+      const referenceIndex = spec.columns.indexOf(referenceField);
+      if (referenceIndex >= 0) insertAt = referenceIndex + (position === "after" ? 1 : 0);
+    }
+    spec.columns.splice(insertAt, 0, name);
     spec.rows.forEach((row) => {
       row[name] = "";
     });
@@ -944,12 +1038,12 @@ export function createSpecificationsTool({
     renderSpec(spec);
   }
 
-  function renameScenario() {
+  function renameScenarioField(oldName) {
     const spec = saveActiveDraft();
-    if (!spec || spec.kind !== "feature") return;
-    const oldName = el("specScenarioSelect").value;
-    if (!oldName) return;
-    const nextName = uniqueScenarioName(window.prompt("Scenario name", oldName) || "", spec, oldName);
+    if (!spec || !isScenarioField(oldName, spec)) return;
+    const promptValue = window.prompt("Scenario name", oldName);
+    if (promptValue === null) return;
+    const nextName = uniqueScenarioName(promptValue, spec, oldName);
     if (!nextName || nextName === oldName) return;
     spec.columns = spec.columns.map((column) => column === oldName ? nextName : column);
     spec.rows.forEach((row) => {
@@ -960,11 +1054,9 @@ export function createSpecificationsTool({
     renderSpec(spec);
   }
 
-  function removeScenario() {
+  function deleteScenarioField(name) {
     const spec = saveActiveDraft();
-    if (!spec || spec.kind !== "feature") return;
-    const name = el("specScenarioSelect").value;
-    if (!name) return;
+    if (!spec || !isScenarioField(name, spec)) return;
     spec.columns = spec.columns.filter((column) => column !== name);
     spec.rows.forEach((row) => delete row[name]);
     spec.dirty = true;
@@ -981,11 +1073,11 @@ export function createSpecificationsTool({
     const name = String(rawName || "").trim();
     if (!name || name === existing) return name;
     if (["Feature", "Grouping", "Base", "min", "max", "banding"].includes(name)) {
-      setStatus(`Scenario name is reserved: ${name}`, true);
+      showErrorNotice(`Scenario name is reserved: ${name}`);
       return "";
     }
     if (spec.columns.includes(name)) {
-      setStatus(`Scenario already exists: ${name}`, true);
+      showErrorNotice(`Scenario already exists: ${name}`);
       return "";
     }
     return name;
@@ -995,6 +1087,38 @@ export function createSpecificationsTool({
     event.preventDefault();
     contextRowId = row.getData()?._row_id || "";
     const menu = el("specContextMenu");
+    el("specColumnContextMenu").hidden = true;
+    positionContextMenu(menu, event);
+  }
+
+  function openColumnContextMenu(event, column) {
+    event.preventDefault();
+    const spec = specs.get(activeKind);
+    const field = column?.getField?.() || "";
+    if (!spec || spec.kind !== "feature" || !field) {
+      closeMenus();
+      return;
+    }
+    contextColumnField = field;
+    const scenario = isScenarioField(field, spec);
+    const actions = scenario
+      ? [
+          ["add-before", "Add scenario before"],
+          ["add-after", "Add scenario after"],
+          ["delete", "Delete scenario"],
+          ["rename", "Rename scenario"],
+        ]
+      : [["add-end", "Add scenario"]];
+    const menu = el("specColumnContextMenu");
+    menu.innerHTML = actions.map(([action, label]) => (
+      `<button class="spec-context-menu-item" type="button" role="menuitem" data-spec-column-action="${action}">${escapeHtml(label)}</button>`
+    )).join("");
+    el("specContextMenu").hidden = true;
+    positionContextMenu(menu, event);
+  }
+
+  function positionContextMenu(menu, event) {
+    if (!menu) return;
     menu.hidden = false;
     const maxLeft = window.innerWidth - menu.offsetWidth - 8;
     const maxTop = window.innerHeight - menu.offsetHeight - 8;
@@ -1003,8 +1127,11 @@ export function createSpecificationsTool({
   }
 
   function closeMenus() {
-    const menu = el("specContextMenu");
-    if (menu) menu.hidden = true;
+    const rowMenu = el("specContextMenu");
+    const columnMenu = el("specColumnContextMenu");
+    if (rowMenu) rowMenu.hidden = true;
+    if (columnMenu) columnMenu.hidden = true;
+    contextColumnField = "";
   }
 
   function addRowRelative(position) {

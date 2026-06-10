@@ -258,14 +258,11 @@ def validate_feature_spec(dataset: Dataset, columns: list[str], rows: list[dict[
         if column not in FEATURE_SPEC_METADATA_COLUMNS:
             errors.append(f"feature_spec.csv has an unsupported metadata column: {column}")
             return
-    column_map = dataset.all_column_map()
     for row_number, row in nonblank_rows(rows, columns):
         feature = str(row.get("Feature") or "").strip()
         if not feature:
             errors.append(f"feature_spec.csv row {row_number} is missing: Feature")
             continue
-        if feature not in column_map:
-            errors.append(f"feature_spec.csv row {row_number} feature column does not exist: {feature}")
         for scenario in columns[metadata_stop:]:
             value = str(row.get(scenario) or "").strip()
             if value and "feature" not in value.lower():

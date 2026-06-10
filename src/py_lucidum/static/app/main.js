@@ -317,11 +317,12 @@
       });
       const specificationsTool = createSpecificationsTool({
         api,
+        clearGlobalStatus: () => setStatus(""),
+        datasetColumnNames,
         el,
         escapeHtml,
         measureToolRender,
         reloadSchemaAfterSpecsSave,
-        setStatus,
         showClipboardToast,
       });
 
@@ -604,6 +605,12 @@
 
       function dataSourceHasColumn(sourceId, columnName) {
         return schemaDataSourceHasColumn(state.schema, sourceId, columnName);
+      }
+
+      function datasetColumnNames() {
+        const readable = (state.schema?.columns || []).map((column) => column.name);
+        const invalid = (state.schema?.invalid_columns || []).map((column) => column.name);
+        return [...readable, ...invalid].filter(Boolean);
       }
 
       function preferredStartupSource(availableSources, requestedSource) {

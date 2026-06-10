@@ -102,21 +102,6 @@
         opacity: 0.55;
       }
 
-      .spec-scenario-toolbar {
-        align-items: center;
-        display: flex;
-        flex: 0 0 auto;
-        gap: 8px;
-        justify-content: flex-end;
-        margin-bottom: 10px;
-        min-width: 0;
-      }
-
-      .spec-scenario-toolbar select {
-        flex: 0 1 240px;
-        max-width: min(320px, 40vw);
-      }
-
       .spec-notice {
         align-self: flex-end;
         background: color-mix(in srgb, var(--panel) 94%, #15803d);
@@ -230,6 +215,10 @@
 
       .spec-grid .tabulator-row .tabulator-cell.spec-scenario-cell {
         justify-content: center;
+      }
+
+      .spec-grid .tabulator-row.spec-missing-feature-row .tabulator-cell {
+        background: #fff8d7 !important;
       }
 
       .spec-grid .tabulator-row .tabulator-cell.spec-cell-selected {

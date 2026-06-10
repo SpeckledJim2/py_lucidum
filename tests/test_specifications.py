@@ -181,6 +181,47 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertEqual(schema_status, 200)
         self.assertEqual(schema["feature_bases"], {"Age": "40"})
 
+    def test_validate_feature_spec_allows_rows_not_in_dataset(self) -> None:
+        app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/specs/feature/validate",
+            {
+                "columns": ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1"],
+                "rows": [{"Feature": "FutureFeature", "Grouping": "Reference", "Base": "", "min": "", "max": "", "banding": "", "scenario1": "feature"}],
+            },
+        )
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["valid"])
+        self.assertEqual(payload["errors"], [])
+        self.assertEqual(payload["warnings"], [])
+
+    def test_save_feature_spec_allows_rows_not_in_dataset(self) -> None:
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)
+            status, _, body = asgi_post_json(
+                app,
+                "/api/specs/feature/save",
+                {
+                    "columns": ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1"],
+                    "rows": [{"Feature": "FutureFeature", "Grouping": "Reference", "Base": "", "min": "", "max": "", "banding": "", "scenario1": "feature"}],
+                },
+            )
+        finally:
+            os.chdir(previous_cwd)
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["valid"])
+        self.assertEqual(payload["errors"], [])
+        self.assertEqual(app.state.feature_spec["rows"][0]["feature"], "FutureFeature")
+        self.assertIn("FutureFeature", (self.root / "specs" / "feature_spec.csv").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -72,10 +72,16 @@ class BrowserSmokeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             features_path = tmp_path / "feature_spec.csv"
+            extra_feature_rows = "".join(
+                f"FutureFeature{i},REFERENCE,,,,,\n"
+                for i in range(1, 80)
+            )
             features_path.write_text(
                 "Feature,Grouping,Base,min,max,banding,scenario1\n"
                 "vehicle_age,VEHICLE,1,0,10,1,feature\n"
-                "PostcodeArea,POSTCODE,AB,,,,feature\n",
+                "PostcodeArea,POSTCODE,AB,,,,feature\n"
+                "FutureFeature,REFERENCE,,,,,feature\n"
+                + extra_feature_rows,
                 encoding="utf-8",
             )
             kpis_path = tmp_path / "kpi_spec.csv"
@@ -2591,6 +2597,148 @@ COPY (
             def spec_cell(field: str, row_index: int = 0):
                 return page.locator("#specGrid .tabulator-row").nth(row_index).locator(f'.tabulator-cell[tabulator-field="{field}"]')
 
+            def spec_cell_background(field: str, row_index: int = 0) -> str:
+                return spec_cell(field, row_index).evaluate("node => getComputedStyle(node).backgroundColor")
+
+            def assert_global_status_clear() -> None:
+                page.wait_for_function(
+                    """
+                    () => {
+                      const status = document.querySelector("#status");
+                      return status && status.classList.contains("hidden") && !status.textContent.trim();
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
+            def spec_header(field: str):
+                return page.locator(f'#specGrid .tabulator-header .tabulator-col[tabulator-field="{field}"]').first
+
+            def spec_header_title(field: str) -> str:
+                return spec_header(field).locator(".tabulator-col-title").first.inner_text().strip()
+
+            def wait_for_spec_header_title(field: str, title: str) -> None:
+                page.wait_for_function(
+                    """
+                    expected => {
+                      const header = document.querySelector(`#specGrid .tabulator-header .tabulator-col[tabulator-field="${expected.field}"] .tabulator-col-title`);
+                      return header?.textContent.trim() === expected.title;
+                    }
+                    """,
+                    arg={"field": field, "title": title},
+                    timeout=10_000,
+                )
+                self.assertEqual(spec_header_title(field), title)
+
+            def spec_table_scroll_top() -> float:
+                return float(page.locator("#specGrid .tabulator-tableholder").evaluate("node => node.scrollTop"))
+
+            def scroll_specs_table_down() -> float:
+                state = page.locator("#specGrid .tabulator-tableholder").evaluate(
+                    """
+                    node => {
+                      node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight - 80);
+                      return {
+                        scrollTop: node.scrollTop,
+                        scrollHeight: node.scrollHeight,
+                        clientHeight: node.clientHeight,
+                      };
+                    }
+                    """
+                )
+                self.assertGreater(state["scrollHeight"], state["clientHeight"])
+                page.wait_for_function(
+                    "() => document.querySelector('#specGrid .tabulator-tableholder')?.scrollTop > 0",
+                    timeout=10_000,
+                )
+                return spec_table_scroll_top()
+
+            def assert_specs_table_scroll_stable(before: float) -> None:
+                current = spec_table_scroll_top()
+                self.assertLessEqual(abs(current - before), 2)
+
+            def reset_specs_table_scroll() -> None:
+                page.locator("#specGrid .tabulator-tableholder").evaluate("node => { node.scrollTop = 0; }")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const holder = document.querySelector('#specGrid .tabulator-tableholder');
+                      const first = document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field="Feature"]');
+                      return holder && holder.scrollTop === 0 && first?.textContent.trim() === "vehicle_age";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
+            def click_visible_scenario_checkbox() -> None:
+                point = page.evaluate(
+                    """
+                    () => {
+                      const holder = document.querySelector("#specGrid .tabulator-tableholder");
+                      if (!holder) return null;
+                      const holderRect = holder.getBoundingClientRect();
+                      const checkboxes = Array.from(holder.querySelectorAll('.tabulator-cell[tabulator-field="scenario1"] .spec-checkbox-cell'));
+                      const candidates = checkboxes
+                        .map((checkbox) => {
+                          const rect = checkbox.getBoundingClientRect();
+                          return {
+                            x: rect.left + rect.width / 2,
+                            y: rect.top + rect.height / 2,
+                            distance: Math.abs((rect.top + rect.height / 2) - (holderRect.top + holderRect.height / 2)),
+                            visible: rect.top >= holderRect.top + 16 && rect.bottom <= holderRect.bottom - 16,
+                          };
+                        })
+                        .filter((item) => item.visible)
+                        .sort((left, right) => left.distance - right.distance);
+                      return candidates[0] || null;
+                    }
+                    """
+                )
+                self.assertIsNotNone(point)
+                assert point is not None
+                page.mouse.click(point["x"], point["y"])
+
+            def spec_header_fields() -> list[str]:
+                return page.evaluate(
+                    """
+                    () => Array.from(document.querySelectorAll('#specGrid .tabulator-header .tabulator-col[tabulator-field]'))
+                      .map((column) => column.getAttribute('tabulator-field') || '')
+                    """
+                )
+
+            def column_menu_labels() -> list[str]:
+                return page.locator("#specColumnContextMenu .spec-context-menu-item").evaluate_all(
+                    "items => items.map((item) => item.textContent.trim())"
+                )
+
+            def click_column_menu_action(action: str, prompt_value: str | None = None) -> None:
+                button = page.locator(f'#specColumnContextMenu [data-spec-column-action="{action}"]')
+                if prompt_value is None:
+                    button.click()
+                    return
+                dialog_types = []
+
+                def accept_prompt(dialog) -> None:
+                    dialog_types.append(dialog.type)
+                    dialog.accept(prompt_value)
+
+                page.once("dialog", accept_prompt)
+                button.click()
+                self.assertEqual(dialog_types, ["prompt"])
+
+            def assert_header_order(before: str, after: str) -> None:
+                fields = spec_header_fields()
+                self.assertLess(fields.index(before), fields.index(after))
+
+            def wait_for_header_absent(field: str) -> None:
+                page.wait_for_function(
+                    """
+                    field => !document.querySelector(`#specGrid .tabulator-header .tabulator-col[tabulator-field="${field}"]`)
+                    """,
+                    arg=field,
+                    timeout=10_000,
+                )
+
             def specs_selection_state() -> dict:
                 return page.evaluate(
                     """
@@ -2689,6 +2837,114 @@ COPY (
                 self.assertFalse(page.locator("#chartControlsResizer").is_visible())
                 assert_specs_full_width()
                 assert_specs_table_style()
+                wait_for_spec_header_title("scenario1", "scenario1 (3)")
+                scrolled_top = scroll_specs_table_down()
+                click_visible_scenario_checkbox()
+                wait_for_spec_header_title("scenario1", "scenario1 (4)")
+                assert_specs_table_scroll_stable(scrolled_top)
+                self.assertEqual(specs_selection_state()["activeField"], "scenario1")
+                page.keyboard.press("Delete")
+                wait_for_spec_header_title("scenario1", "scenario1 (3)")
+                assert_specs_table_scroll_stable(scrolled_top)
+                self.assertEqual(specs_selection_state()["selectedCount"], 1)
+                page.evaluate("() => { window.__lucidumClipboardText = 'feature'; }")
+                page.keyboard.press("Control+V")
+                wait_for_spec_header_title("scenario1", "scenario1 (4)")
+                assert_specs_table_scroll_stable(scrolled_top)
+                page.keyboard.press("Delete")
+                wait_for_spec_header_title("scenario1", "scenario1 (3)")
+                assert_specs_table_scroll_stable(scrolled_top)
+                reset_specs_table_scroll()
+                self.assertEqual(spec_cell_background("Feature", 2), "rgb(255, 248, 215)")
+                self.assertNotEqual(spec_cell_background("Feature", 0), "rgb(255, 248, 215)")
+                spec_cell("Feature", 2).dblclick()
+                page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("price")
+                page.keyboard.press("Enter")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const row = document.querySelectorAll("#specGrid .tabulator-row")[2];
+                      const cell = row?.querySelector('.tabulator-cell[tabulator-field="Feature"]');
+                      return cell?.textContent.trim() === "price" && getComputedStyle(cell).backgroundColor !== "rgb(255, 248, 215)";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                spec_cell("Feature", 2).click()
+                page.keyboard.press("Delete")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const row = document.querySelectorAll("#specGrid .tabulator-row")[2];
+                      const cell = row?.querySelector('.tabulator-cell[tabulator-field="Feature"]');
+                      return cell?.textContent.trim() === "" && getComputedStyle(cell).backgroundColor !== "rgb(255, 248, 215)";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                spec_cell("Feature", 2).click()
+                page.evaluate("() => { window.__lucidumClipboardText = 'FutureFeature'; }")
+                page.keyboard.press("Control+V")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const row = document.querySelectorAll("#specGrid .tabulator-row")[2];
+                      const cell = row?.querySelector('.tabulator-cell[tabulator-field="Feature"]');
+                      return cell?.textContent.trim() === "FutureFeature" && row?.classList.contains("spec-missing-feature-row");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#specValidateBtn").click()
+                page.locator("#specNotice", has_text="Feature spec is valid").wait_for(timeout=10_000)
+                assert_global_status_clear()
+                page.locator("#specSaveBtn").click()
+                page.locator("#specNotice", has_text="Feature spec saved").wait_for(timeout=10_000)
+                assert_global_status_clear()
+                self.assertEqual(page.locator("#specScenarioToolbar").count(), 0)
+                spec_header("Feature").click(button="right")
+                page.locator("#specColumnContextMenu:not([hidden])").wait_for(timeout=10_000)
+                self.assertEqual(column_menu_labels(), ["Add scenario"])
+                self.assertEqual(page.locator("#specColumnContextMenu").evaluate("node => getComputedStyle(node).padding"), "3px")
+                self.assertEqual(page.locator("#specColumnContextMenu .spec-context-menu-item").first.evaluate("node => getComputedStyle(node).fontWeight"), "400")
+                click_column_menu_action("add-end", "scenario_from_header")
+                spec_header("scenario_from_header").wait_for(timeout=10_000)
+                wait_for_spec_header_title("scenario_from_header", "scenario_from_header (0)")
+                assert_header_order("scenario1", "scenario_from_header")
+                spec_header("scenario_from_header").click(button="right")
+                page.locator("#specColumnContextMenu:not([hidden])").wait_for(timeout=10_000)
+                self.assertEqual(column_menu_labels(), ["Add scenario before", "Add scenario after", "Delete scenario", "Rename scenario"])
+                click_column_menu_action("delete")
+                wait_for_header_absent("scenario_from_header")
+                spec_header("scenario1").click(button="right")
+                page.locator("#specColumnContextMenu:not([hidden])").wait_for(timeout=10_000)
+                self.assertEqual(column_menu_labels(), ["Add scenario before", "Add scenario after", "Delete scenario", "Rename scenario"])
+                click_column_menu_action("add-before", "scenario_before")
+                spec_header("scenario_before").wait_for(timeout=10_000)
+                wait_for_spec_header_title("scenario_before", "scenario_before (0)")
+                assert_header_order("scenario_before", "scenario1")
+                spec_header("scenario_before").click(button="right")
+                page.locator("#specColumnContextMenu:not([hidden])").wait_for(timeout=10_000)
+                click_column_menu_action("delete")
+                wait_for_header_absent("scenario_before")
+                spec_header("scenario1").click(button="right")
+                page.locator("#specColumnContextMenu:not([hidden])").wait_for(timeout=10_000)
+                click_column_menu_action("add-after", "scenario_after")
+                spec_header("scenario_after").wait_for(timeout=10_000)
+                wait_for_spec_header_title("scenario_after", "scenario_after (0)")
+                assert_header_order("scenario1", "scenario_after")
+                spec_header("scenario_after").click(button="right")
+                page.locator("#specColumnContextMenu:not([hidden])").wait_for(timeout=10_000)
+                click_column_menu_action("rename", "scenario_renamed")
+                spec_header("scenario_renamed").wait_for(timeout=10_000)
+                wait_for_spec_header_title("scenario_renamed", "scenario_renamed (0)")
+                wait_for_header_absent("scenario_after")
+                spec_header("scenario_renamed").click(button="right")
+                page.locator("#specColumnContextMenu:not([hidden])").wait_for(timeout=10_000)
+                click_column_menu_action("delete")
+                wait_for_header_absent("scenario_renamed")
+                spec_header("scenario1").wait_for(timeout=10_000)
+                self.assertEqual(spec_header_fields()[-1], "scenario1")
                 scenario_cell = spec_cell("scenario1", 0)
                 scenario_checkbox = scenario_cell.locator(".spec-checkbox-cell")
                 self.assertTrue(scenario_checkbox.is_checked())
@@ -2703,12 +2959,14 @@ COPY (
                     "() => !document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field=\"scenario1\"] .spec-checkbox-cell')?.checked",
                     timeout=10_000,
                 )
+                wait_for_spec_header_title("scenario1", "scenario1 (2)")
                 self.assertTrue(page.locator("#specSaveBtn").evaluate("node => node.classList.contains('dirty')"))
                 scenario_cell.locator(".spec-checkbox-cell").click()
                 page.wait_for_function(
                     "() => Boolean(document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field=\"scenario1\"] .spec-checkbox-cell')?.checked)",
                     timeout=10_000,
                 )
+                wait_for_spec_header_title("scenario1", "scenario1 (3)")
                 page.evaluate("() => { window.__lucidumClipboardText = 'unset'; }")
                 page.keyboard.press("Control+C")
                 page.wait_for_function("() => window.__lucidumClipboardText === 'feature'", timeout=10_000)
@@ -2717,6 +2975,7 @@ COPY (
                     "() => !document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field=\"scenario1\"] .spec-checkbox-cell')?.checked",
                     timeout=10_000,
                 )
+                wait_for_spec_header_title("scenario1", "scenario1 (2)")
                 page.evaluate("() => { window.__lucidumClipboardText = 'unset'; }")
                 page.keyboard.press("Control+C")
                 page.wait_for_function("() => window.__lucidumClipboardText === ''", timeout=10_000)
@@ -2725,6 +2984,7 @@ COPY (
                     "() => Boolean(document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field=\"scenario1\"] .spec-checkbox-cell')?.checked)",
                     timeout=10_000,
                 )
+                wait_for_spec_header_title("scenario1", "scenario1 (3)")
                 drag_specs_selection(spec_cell("scenario1", 0), spec_cell("scenario1", 1), 2)
                 page.keyboard.press("Delete")
                 page.wait_for_function(
@@ -2735,6 +2995,18 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                wait_for_spec_header_title("scenario1", "scenario1 (1)")
+                page.evaluate("() => { window.__lucidumClipboardText = 'feature\\nfeature'; }")
+                page.keyboard.press("Control+V")
+                page.wait_for_function(
+                    """
+                    () => Array.from(document.querySelectorAll('#specGrid .tabulator-row .tabulator-cell[tabulator-field="scenario1"] .spec-checkbox-cell'))
+                        .slice(0, 2)
+                        .every((checkbox) => checkbox.checked)
+                    """,
+                    timeout=10_000,
+                )
+                wait_for_spec_header_title("scenario1", "scenario1 (3)")
                 spec_cell("Feature", 0).click()
                 assert_active_cell("Feature", 0)
                 page.keyboard.press("ArrowRight")
@@ -2757,7 +3029,9 @@ COPY (
                 page.keyboard.press("ArrowDown")
                 assert_active_cell("scenario1", 1)
                 page.keyboard.press("ArrowDown")
-                assert_active_cell("scenario1", 1)
+                assert_active_cell("scenario1", 2)
+                page.keyboard.press("ArrowDown")
+                assert_active_cell("scenario1", 3)
                 spec_cell("Base", 0).click()
                 assert_active_cell("Base", 0)
                 page.keyboard.press("9")
@@ -2805,12 +3079,19 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                spec_cell("scenario1", 2).click(button="right")
+                page.locator("#specContextMenu:not([hidden])").wait_for(timeout=10_000)
+                page.locator('#specContextMenu [data-spec-row-action="delete"]').click()
+                wait_for_spec_header_title("scenario1", "scenario1 (2)")
 
                 page.locator('[data-spec-kind="kpi"]').click()
                 page.locator('[data-spec-kind="kpi"][aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
                 assert_specs_full_width()
                 assert_specs_table_style()
+                spec_header("group").click(button="right")
+                page.wait_for_timeout(100)
+                self.assertTrue(page.locator("#specColumnContextMenu").evaluate("node => node.hidden"))
                 page.locator("#specGrid").focus()
                 page.keyboard.press("ArrowRight")
                 assert_active_cell("name", 0)
@@ -2834,12 +3115,21 @@ COPY (
                 assert_active_cell("group", 1, 2)
                 page.keyboard.press("ArrowDown")
                 assert_active_cell("group", 2, 1)
+                spec_cell("actual", 0).dblclick()
+                page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("MissingActual")
+                page.keyboard.press("Enter")
+                page.locator("#specValidateBtn").click()
+                page.locator("#specNotice.error", has_text="kpi_spec.csv row 2 actual column does not exist: MissingActual").wait_for(timeout=10_000)
+                assert_global_status_clear()
 
                 page.locator('[data-spec-kind="filter"]').click()
                 page.locator('[data-spec-kind="filter"][aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
                 assert_specs_full_width()
                 assert_specs_table_style()
+                spec_header("theme").click(button="right")
+                page.wait_for_timeout(100)
+                self.assertTrue(page.locator("#specColumnContextMenu").evaluate("node => node.hidden"))
                 page.locator("#specGrid").focus()
                 page.keyboard.press("ArrowRight")
                 assert_active_cell("name", 0)
@@ -2853,6 +3143,12 @@ COPY (
                 page.locator("#specGrid .tabulator-cell.tabulator-editing input").wait_for(timeout=10_000)
                 page.keyboard.press("Enter")
                 page.locator("#specGrid .tabulator-row").first.locator('.tabulator-cell[tabulator-field="name"]', has_text="Edited filter").wait_for(timeout=10_000)
+                spec_cell("expression", 0).dblclick()
+                page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("MissingColumn = 1")
+                page.keyboard.press("Enter")
+                page.locator("#specValidateBtn").click()
+                page.locator("#specNotice.error", has_text="MissingColumn").wait_for(timeout=10_000)
+                assert_global_status_clear()
                 spec_cell("theme", 0).click(button="right")
                 page.locator("#specContextMenu:not([hidden])").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#specContextMenu").evaluate("node => getComputedStyle(node).padding"), "3px")
