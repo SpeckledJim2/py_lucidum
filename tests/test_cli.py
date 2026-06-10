@@ -607,6 +607,12 @@ class CliRuntimeTests(unittest.TestCase):
                 {"path": demo_path, "tools": "line-bar"},
                 True,
             ),
+            (
+                "specs_tool",
+                ["lucidum", "--demo", "--tools", "specs"],
+                {"path": demo_path, "tools": "specs"},
+                True,
+            ),
         ]
 
         for name, argv, expected_kwargs, expects_demo_path in cases:

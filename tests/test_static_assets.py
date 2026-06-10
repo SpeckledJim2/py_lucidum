@@ -54,6 +54,7 @@ class StaticAssetTests(unittest.TestCase):
         "/static/styles/uk-map.css",
         "/static/styles/column-profile.css",
         "/static/styles/model-shell.css",
+        "/static/styles/specifications.css",
         "/static/styles/glm.css",
         "/static/styles/gbm.css",
     ]
@@ -90,6 +91,7 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/glm-formula-builder.js",
             "/static/app/glm-model-navigator.js",
             "/static/app/glm-tabulations.js",
+            "/static/app/specifications-tool.js",
             "/static/app/shared/api.js",
             "/static/app/shared/format.js",
             "/static/app/shared/model-ui.js",
@@ -963,6 +965,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/glm-formula-builder.js")
         self.assert_no_store("/static/app/glm-model-navigator.js")
         self.assert_no_store("/static/app/glm-tabulations.js")
+        self.assert_no_store("/static/app/specifications-tool.js")
         self.assert_no_store("/static/app/shared/api.js")
         self.assert_no_store("/static/app/shared/format.js")
         self.assert_no_store("/static/app/shared/model-ui.js")
@@ -2070,7 +2073,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertNotIn(".gbm-model-activate-button", css)
         self.assertIn(".gbm-parameter-select", css)
         self.assertIn(".gbm-fallback-table select", css)
-        self.assertIn('document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "column_profile");', js)
+        self.assertIn('document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "column_profile" || tool === "specs");', js)
         self.assertIn("syncSidebarAccordion();", js)
         self.assertNotIn('document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile");', js)
         self.assertNotIn('document.querySelector(".sidebar-filter-section")?.classList.toggle("hidden", isModelTool(tool));', js)
@@ -2443,7 +2446,72 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertNotIn('replace(/\\.$/, "")', js)
         self.assertNotIn('saveToolPresentation("line_bar", { groupMeta, status, chartMessage: labelMessage });', js)
         self.assertIn("#visualArea:not(.profile-mode):not(.map-mode) .workspace-messages {\n        max-width: min(860px, calc(100% - 150px));", css)
+        self.assertIn(".visual-area.specs-mode {\n        grid-template-columns: minmax(0, 1fr);", css)
         self.assertIn(".workspace-meta,\n      .chart-message {\n        color: var(--muted);\n        font-size: 10px;", css)
+
+    def test_specifications_table_uses_glm_model_navigator_style(self) -> None:
+        js = self.app_js_contract()
+        css = self.app_css_contract()
+
+        self.assertNotIn("selectableRange", js)
+        self.assertNotIn("clipboardCopyRowRange", js)
+        self.assertNotIn("clipboardPasteParser", js)
+        self.assertNotIn("clipboardPasteAction", js)
+        self.assertIn('class="tabs spec-kind-tabs"', js)
+        self.assertIn('class="tab ${kind.id === activeKind ? "active" : ""}"', js)
+        self.assertIn('id="specContextMenu" class="spec-context-menu" role="menu" hidden', js)
+        self.assertIn('class="spec-context-menu-item" type="button" role="menuitem"', js)
+        self.assertIn(".glm-tabulation-context-menu,\n      .spec-context-menu {", css)
+        self.assertIn(".glm-tabulation-context-menu-item,\n      .spec-context-menu-item {", css)
+        self.assertIn(".spec-kind-tabs .tab {\n        font-weight: 700;", css)
+        self.assertIn("--spec-table-border: #999;", css)
+        self.assertIn(".spec-grid {\n        --spec-table-border: #999;\n        background: var(--panel);\n        border: 1px solid var(--spec-table-border);\n        border-radius: 6px;", css)
+        self.assertIn("user-select: none;\n        -webkit-user-select: none;", css)
+        self.assertIn(".spec-grid.tabulator {\n        border-color: var(--spec-table-border);", css)
+        self.assertIn(".spec-grid .tabulator-header {\n        background: var(--panel-2) !important;", css)
+        self.assertIn(".glm-grid.tabulator .tabulator-header .tabulator-col {\n        font-size: 11px;", css)
+        self.assertIn(".glm-grid .tabulator-row .tabulator-cell {\n        align-items: center;", css)
+        self.assertIn("font-size: 11px;\n        line-height: 1.15;\n        min-height: 20px;\n        padding: 1px 6px;", css)
+        self.assertIn(".spec-grid .tabulator-col,\n      .spec-grid .tabulator-header .tabulator-col {\n        background: var(--panel-2) !important;\n        border-color: var(--line) !important;\n        color: var(--text) !important;\n        font-size: 11px;\n        justify-content: center;\n        line-height: 1.15;\n        min-height: 20px;", css)
+        self.assertIn(".spec-grid .tabulator-row .tabulator-cell {\n        align-items: center;\n        background: transparent !important;\n        border-right-color: color-mix(in srgb, var(--line) 80%, transparent);\n        color: var(--text) !important;\n        display: inline-flex;\n        font-size: 11px;\n        line-height: 1.15;\n        min-height: 20px;\n        padding: 1px 6px;", css)
+        self.assertIn("column.cssClass = \"spec-scenario-cell\";", js)
+        self.assertIn("delete column.editor;", js)
+        self.assertIn("column.editable = false;", js)
+        self.assertIn('table.on("cellClick", handleSpecCellClick);', js)
+        self.assertIn("function toggleScenarioCheckbox(event, cell)", js)
+        self.assertIn("function specGridOwnsKeyboardEvent(event)", js)
+        self.assertIn("function moveSelectionWithArrow(key, extend)", js)
+        self.assertIn("function scrollSelectionPointIntoView(point, rows = displayedRows())", js)
+        self.assertIn("function activeSingleCell()", js)
+        self.assertIn("function isPrintableEditKey(event)", js)
+        self.assertIn("function startEditingActiveCell(initialText)", js)
+        self.assertIn("function restoreSelectionAfterCellEdit(cell)", js)
+        self.assertIn("restoreSelectionAfterCellEdit(cell);", js)
+        self.assertIn("if (!specToolVisible() || isEditableTarget(event.target)) return false;", js)
+        self.assertIn("if (!specGridOwnsKeyboardEvent(event)) return false;", js)
+        self.assertIn('["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) && !shortcut && !event.altKey', js)
+        self.assertIn("moveSelectionWithArrow(event.key, event.shiftKey);", js)
+        self.assertIn("const currentPoint = extend && pointInGrid(selection?.focus, rowIds, columns) ? selection.focus : selection?.active;", js)
+        self.assertIn("const active = extend && pointInGrid(selection?.active, rowIds, columns) ? selection.active : next;", js)
+        self.assertIn("selection = { anchor, focus: next, active };", js)
+        self.assertIn("const origin = { rowId: bounds.rowIds[bounds.top], field: bounds.columns[bounds.left] };", js)
+        self.assertIn("selection = { anchor: origin, focus, active: origin };", js)
+        self.assertNotIn("selection.active = point;", js)
+        self.assertIn("if (isPrintableEditKey(event)) {", js)
+        self.assertIn("if (!startEditingActiveCell(event.key)) return false;", js)
+        self.assertIn("if (!point || isScenarioField(point.field)) return false;", js)
+        self.assertIn("input.setSelectionRange?.(initialText.length, initialText.length);", js)
+        self.assertIn('cell?.getElement?.()?.scrollIntoView?.({ block: "nearest", inline: "nearest" });', js)
+        self.assertIn('return `<input class="spec-checkbox-cell" type="checkbox" tabindex="-1" aria-label="${escapeHtml(cell.getField())}" ${checked ? "checked" : ""}>`;', js)
+        self.assertNotIn('class="spec-checkbox-cell" type="checkbox" tabindex="-1" ${checked ? "checked" : ""} disabled', js)
+        self.assertIn(".spec-grid .tabulator-row .tabulator-cell.spec-scenario-cell {\n        justify-content: center;", css)
+        self.assertIn(".spec-checkbox-cell {\n        accent-color: var(--accent);\n        cursor: pointer;", css)
+        checkbox_block = css[css.index(".spec-checkbox-cell {"):css.index(".spec-empty-state {")]
+        self.assertNotIn("pointer-events: none;", checkbox_block)
+        self.assertIn(".spec-grid .tabulator-row .tabulator-cell.spec-cell-selected", css)
+        self.assertIn(".spec-grid .tabulator-row .tabulator-cell.spec-cell-active", css)
+        self.assertNotIn(".spec-grid .tabulator-row .tabulator-cell.tabulator-range-selected", css)
+        self.assertNotIn(".spec-context-menu button", css)
 
     def test_line_bar_table_summary_row_is_client_computed(self) -> None:
         js = self.app_js_contract()
@@ -3430,8 +3498,8 @@ if (summary.responses[0] !== null) throw new Error("empty denominator summary " 
         self.assertIn(".profile-sort-button {", css)
         self.assertIn(".profile-summary-row {\n        cursor: pointer;\n        user-select: none;\n        -webkit-user-select: none;", css)
         self.assertIn(".profile-summary-row.selected td {", css)
-        self.assertIn(".profile-context-menu,\n      .gbm-feature-context-menu,\n      .glm-coefficient-context-menu,\n      .glm-tabulation-context-menu {", css)
-        self.assertIn(".profile-context-menu-item,\n      .gbm-feature-context-menu-item,\n      .glm-coefficient-context-menu-item,\n      .glm-tabulation-context-menu-item {", css)
+        self.assertIn(".profile-context-menu,\n      .gbm-feature-context-menu,\n      .glm-coefficient-context-menu,\n      .glm-tabulation-context-menu,\n      .spec-context-menu {", css)
+        self.assertIn(".profile-context-menu-item,\n      .gbm-feature-context-menu-item,\n      .glm-coefficient-context-menu-item,\n      .glm-tabulation-context-menu-item,\n      .spec-context-menu-item {", css)
         self.assertIn(".clipboard-toast {\n        position: fixed;", css)
         self.assertIn(".clipboard-toast[hidden] {\n        display: none;", css)
         self.assertIn(".gbm-model-grid .tabulator-row,\n      .gbm-tree-summary-grid .tabulator-row,\n      .gbm-model-table tr[data-gbm-model-row],\n      .gbm-tree-fallback-table tr[data-gbm-tree-row] {\n        cursor: pointer;\n        user-select: none;\n        -webkit-user-select: none;", css)

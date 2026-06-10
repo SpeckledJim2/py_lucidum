@@ -3,6 +3,7 @@
       import { createUkMapTool, ukMapPostcodeAvailability } from "./uk-map-tool.js";
       import { createGlmTool } from "./glm-tool.js";
       import { createGbmTool } from "./gbm-tool.js";
+      import { createSpecificationsTool } from "./specifications-tool.js";
       import { createApiClient, monitorPath } from "./shared/api.js";
       import { createFormatters, escapeHtml } from "./shared/format.js";
       import {
@@ -39,6 +40,7 @@
         uk_map: "Map render",
         glm: "GLM render",
         gbm: "GBM render",
+        specs: "Specs render",
       };
       const state = {
         schema: null,
@@ -96,6 +98,7 @@
           uk_map: { requestKey: null, data: null, presentation: null },
           glm: { requestKey: null, data: null, presentation: null },
           gbm: { requestKey: null, data: null, presentation: null },
+          specs: { requestKey: null, data: null, presentation: null },
         },
         actionTimings: freshActionTimings(),
         mapGeoJsonCache: {},
@@ -311,6 +314,15 @@
         refreshActiveTool,
         setDatasetGbmCount,
         reloadSchema: reloadSchemaAfterModelMutation,
+      });
+      const specificationsTool = createSpecificationsTool({
+        api,
+        el,
+        escapeHtml,
+        measureToolRender,
+        reloadSchemaAfterSpecsSave,
+        setStatus,
+        showClipboardToast,
       });
 
       function monitorUrl() {
@@ -613,6 +625,7 @@
           uk_map: { requestKey: null, data: null, presentation: null },
           glm: { requestKey: null, data: null, presentation: null },
           gbm: { requestKey: null, data: null, presentation: null },
+          specs: { requestKey: null, data: null, presentation: null },
         };
       }
 
@@ -748,6 +761,7 @@
       }
 
       function refreshActiveTool(options = {}) {
+        if (state.tool === "specs") return specificationsTool.refresh(options);
         return refreshTool(state.tool, options);
       }
 
@@ -767,6 +781,7 @@
         if (toolEnabled("uk_map")) return "uk_map";
         if (toolEnabled("glm")) return "glm";
         if (toolEnabled("gbm")) return "gbm";
+        if (toolEnabled("specs")) return "specs";
         return "column_profile";
       }
 
@@ -776,17 +791,20 @@
         const ukMapEnabled = toolEnabled("uk_map");
         const glmEnabled = toolEnabled("glm");
         const gbmEnabled = toolEnabled("gbm");
+        const specsEnabled = toolEnabled("specs");
         el("profileTool").disabled = !profileEnabled;
         el("lineBarTool").disabled = !lineBarEnabled;
         el("ukMapTool").disabled = !ukMapEnabled;
         el("glmTool").disabled = !glmEnabled;
         el("gbmTool").disabled = !gbmEnabled;
+        el("specsTool").disabled = !specsEnabled;
         el("profileTool").classList.toggle("hidden", !profileEnabled);
         el("lineBarTool").classList.toggle("hidden", !lineBarEnabled);
         el("ukMapTool").classList.toggle("hidden", !ukMapEnabled);
         el("glmTool").classList.toggle("hidden", !glmEnabled);
         el("gbmTool").classList.toggle("hidden", !gbmEnabled);
-        el("toolSelectorSection").classList.toggle("hidden", !(profileEnabled || lineBarEnabled || ukMapEnabled || glmEnabled || gbmEnabled));
+        el("specsTool").classList.toggle("hidden", !specsEnabled);
+        el("toolSelectorSection").classList.toggle("hidden", !(profileEnabled || lineBarEnabled || ukMapEnabled || glmEnabled || gbmEnabled || specsEnabled));
       }
 
       function schemaFileMeta() {
@@ -920,19 +938,22 @@
         const previousTool = state.tool;
         if (previousTool === "uk_map" && tool !== "uk_map") ukMapTool.captureView("tool-switch");
         if (previousTool === "column_profile" && tool !== "column_profile") columnProfileTool.closeMenus();
+        if (previousTool === "specs" && tool !== "specs") specificationsTool.closeMenus();
         state.tool = tool;
         el("profileTool").classList.toggle("active", tool === "column_profile");
         el("lineBarTool").classList.toggle("active", tool === "line_bar");
         el("ukMapTool").classList.toggle("active", tool === "uk_map");
         el("glmTool").classList.toggle("active", tool === "glm");
         el("gbmTool").classList.toggle("active", tool === "gbm");
-        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "column_profile");
+        el("specsTool").classList.toggle("active", tool === "specs");
+        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "column_profile" || tool === "specs");
         glmTool.syncSidebarFromSchema();
         gbmTool.syncSidebarFromSchema();
         syncSidebarAccordion();
         el("lineBarToolbar").classList.toggle("hidden", tool !== "line_bar");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
         el("visualArea").classList.toggle("profile-mode", tool === "column_profile");
+        el("visualArea").classList.toggle("specs-mode", tool === "specs");
         el("visualArea").classList.toggle("model-mode", isModelTool(tool));
         el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
         el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
@@ -947,6 +968,7 @@
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
         el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
         el("modelToolWrap").classList.toggle("hidden", !isModelTool(tool));
+        el("specificationsWrap").classList.toggle("hidden", tool !== "specs");
         syncActiveFilterLabels();
         syncActionTimingMonitor(tool);
         setStatus("");
@@ -954,6 +976,7 @@
         if (tool === "line_bar") {
           el("profileWrap").classList.add("hidden");
           el("modelToolWrap").classList.add("hidden");
+          el("specificationsWrap").classList.add("hidden");
           el("ukMap").classList.add("hidden");
           el("mapLegend").classList.add("hidden");
           lineBarTool.setView(state.view);
@@ -962,15 +985,25 @@
         } else if (tool === "uk_map") {
           el("profileWrap").classList.add("hidden");
           el("modelToolWrap").classList.add("hidden");
+          el("specificationsWrap").classList.add("hidden");
           el("chart").classList.add("hidden");
           el("tableWrap").classList.add("hidden");
           el("ukMap").classList.remove("hidden");
           ukMapTool.activate();
+        } else if (tool === "specs") {
+          el("chart").classList.add("hidden");
+          el("tableWrap").classList.add("hidden");
+          el("ukMap").classList.add("hidden");
+          el("mapLegend").classList.add("hidden");
+          el("profileWrap").classList.add("hidden");
+          el("modelToolWrap").classList.add("hidden");
+          el("specificationsWrap").classList.remove("hidden");
         } else {
           el("chart").classList.add("hidden");
           el("tableWrap").classList.add("hidden");
           el("ukMap").classList.add("hidden");
           el("mapLegend").classList.add("hidden");
+          el("specificationsWrap").classList.add("hidden");
           if (isModelTool(tool)) {
             el("profileWrap").classList.add("hidden");
             el("modelToolWrap").classList.remove("hidden");
@@ -989,6 +1022,8 @@
           glmTool.resize();
         } else if (state.tool === "gbm") {
           gbmTool.resize?.();
+        } else if (state.tool === "specs") {
+          specificationsTool.resize();
         } else {
           lineBarTool.resize();
         }
@@ -1396,6 +1431,35 @@
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
+      }
+
+      async function reloadSchemaAfterSpecsSave() {
+        const previousFilterSignature = savedFilterSpecSignature();
+        const previousSavedFilterSelection = savedFilterSelectionSnapshot();
+        const previousCollapsedSavedFilterThemes = new Set(state.collapsedSavedFilterThemes);
+        const previousSavedFilterThemesInitialised = state.savedFilterThemesInitialised;
+        state.schema = await api("/api/schema");
+        const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
+        clearToolCaches({ preserve: ["specs"] });
+        renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
+        setFilterRowMeta(state.schema.row_count);
+        if (filtersUnchanged) {
+          state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
+          state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
+        } else {
+          state.collapsedSavedFilterThemes = new Set();
+          state.savedFilterThemesInitialised = false;
+        }
+        state.kpiGroupsInitialised = false;
+        renderSavedFilters();
+        if (filtersUnchanged) restoreSavedFilterSelection(previousSavedFilterSelection);
+        renderKpis();
+        syncKpiSelectionFromMetrics();
+        lineBarTool.renderExpectedNumerators();
+        lineBarTool.renderFeatures();
+        lineBarTool.updateAxisControls();
+        glmTool.syncSidebarFromSchema();
+        gbmTool.syncSidebarFromSchema();
       }
 
       function requestedDefault(name) {
@@ -2120,6 +2184,7 @@
         el("ukMapTool").addEventListener("click", () => handleToolClick("uk_map"));
         el("glmTool").addEventListener("click", () => handleToolClick("glm"));
         el("gbmTool").addEventListener("click", () => handleToolClick("gbm"));
+        el("specsTool").addEventListener("click", () => handleToolClick("specs"));
         el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
         el("filterFooterToggleBtn").addEventListener("click", () => setFilterFooterVisible(state.filterFooterCollapsed));
         el("kpiCollapseBtn").addEventListener("click", () => toggleSidebarSection("kpi"));
@@ -2135,6 +2200,7 @@
           if (state.tool === "uk_map") ukMapTool.refreshTheme();
           if (state.tool === "glm") measureToolRender("glm", () => glmTool.refreshTheme());
           if (state.tool === "gbm") measureToolRender("gbm", () => gbmTool.refreshTheme());
+          if (state.tool === "specs") measureToolRender("specs", () => specificationsTool.refreshTheme());
         });
         el("reloadBtn").addEventListener("click", async () => {
           setStatus("");

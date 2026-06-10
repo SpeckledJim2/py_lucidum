@@ -1,0 +1,287 @@
+      .specifications-wrap {
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        box-sizing: border-box;
+        display: block;
+        overflow: hidden;
+        padding: 12px;
+      }
+
+      .spec-tool {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        box-shadow: var(--shadow);
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        padding: 14px;
+        position: relative;
+      }
+
+      .spec-topbar {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 12px;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        min-width: 0;
+      }
+
+      .spec-kind-tabs {
+        flex: 0 0 auto;
+      }
+
+      .spec-kind-tabs .tab {
+        font-weight: 700;
+      }
+
+      .spec-file-actions {
+        align-items: center;
+        display: flex;
+        flex: 1 1 auto;
+        gap: 8px;
+        justify-content: flex-end;
+        min-width: 0;
+      }
+
+      .spec-file-path {
+        color: var(--muted);
+        flex: 1 1 auto;
+        font-size: 12px;
+        font-weight: 600;
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .spec-action-button,
+      .spec-save-button {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+        flex: 0 0 auto;
+        font-size: 12px;
+        font-weight: 700;
+        min-height: 28px;
+        padding: 0 10px;
+      }
+
+      .spec-action-button {
+        background: var(--panel);
+        color: var(--text);
+      }
+
+      .spec-action-button:hover:not(:disabled) {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .spec-save-button {
+        background: #74a982;
+        border-color: #74a982;
+        color: #fff;
+      }
+
+      .spec-save-button.dirty {
+        background: #15803d;
+        border-color: #15803d;
+      }
+
+      .spec-action-button:disabled,
+      .spec-save-button:disabled {
+        cursor: default;
+        opacity: 0.55;
+      }
+
+      .spec-scenario-toolbar {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-bottom: 10px;
+        min-width: 0;
+      }
+
+      .spec-scenario-toolbar select {
+        flex: 0 1 240px;
+        max-width: min(320px, 40vw);
+      }
+
+      .spec-notice {
+        align-self: flex-end;
+        background: color-mix(in srgb, var(--panel) 94%, #15803d);
+        border: 1px solid color-mix(in srgb, #15803d 44%, var(--line));
+        border-radius: 6px;
+        color: #15803d;
+        flex: 0 0 auto;
+        font-size: 12px;
+        font-weight: 650;
+        line-height: 1.25;
+        margin: 0 0 8px;
+        max-width: min(760px, 70%);
+        padding: 7px 9px;
+      }
+
+      .spec-notice.error {
+        background: color-mix(in srgb, var(--panel) 92%, var(--danger));
+        border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+        color: var(--danger);
+      }
+
+      .spec-notice.warning {
+        background: color-mix(in srgb, var(--panel) 92%, #d97706);
+        border-color: color-mix(in srgb, #d97706 55%, var(--line));
+        color: #b45309;
+      }
+
+      .spec-notice strong {
+        display: block;
+      }
+
+      .spec-notice ul {
+        margin: 5px 0 0;
+        padding-left: 18px;
+      }
+
+      .spec-grid {
+        --spec-table-border: #999;
+        background: var(--panel);
+        border: 1px solid var(--spec-table-border);
+        border-radius: 6px;
+        color: var(--text);
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .spec-grid.tabulator {
+        border-color: var(--spec-table-border);
+      }
+
+      .spec-grid .tabulator {
+        background: var(--panel) !important;
+        border: 0;
+        color: var(--text) !important;
+        font-size: 11px;
+      }
+
+      .spec-grid .tabulator-header {
+        background: var(--panel-2) !important;
+        border-bottom: 1px solid var(--line);
+        color: var(--text) !important;
+        font-weight: 800;
+      }
+
+      .spec-grid .tabulator-col,
+      .spec-grid .tabulator-header .tabulator-col {
+        background: var(--panel-2) !important;
+        border-color: var(--line) !important;
+        color: var(--text) !important;
+        font-size: 11px;
+        justify-content: center;
+        line-height: 1.15;
+        min-height: 20px;
+      }
+
+      .spec-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content {
+        align-items: center;
+        display: flex;
+        min-height: 20px;
+        padding: 1px 6px;
+      }
+
+      .spec-grid .tabulator-row {
+        background: var(--panel) !important;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+        color: var(--text) !important;
+        min-height: 20px;
+      }
+
+      .spec-grid .tabulator-row.tabulator-row-even {
+        background: var(--panel) !important;
+      }
+
+      .spec-grid .tabulator-row .tabulator-cell {
+        align-items: center;
+        background: transparent !important;
+        border-right-color: color-mix(in srgb, var(--line) 80%, transparent);
+        color: var(--text) !important;
+        display: inline-flex;
+        font-size: 11px;
+        line-height: 1.15;
+        min-height: 20px;
+        padding: 1px 6px;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .spec-grid .tabulator-row .tabulator-cell.spec-scenario-cell {
+        justify-content: center;
+      }
+
+      .spec-grid .tabulator-row .tabulator-cell.spec-cell-selected {
+        background: color-mix(in srgb, var(--accent) 12%, var(--panel)) !important;
+      }
+
+      .spec-grid .tabulator-row .tabulator-cell.spec-cell-active {
+        box-shadow: inset 0 0 0 2px var(--accent);
+      }
+
+      .spec-grid .tabulator-cell.tabulator-editing {
+        border-color: var(--accent);
+        user-select: text;
+        -webkit-user-select: text;
+      }
+
+      .spec-grid .tabulator-cell.tabulator-editing input {
+        background: var(--panel);
+        color: var(--text);
+        font-size: 11px;
+        height: 100%;
+        padding: 0 5px;
+        user-select: text;
+        -webkit-user-select: text;
+      }
+
+      .spec-checkbox-cell {
+        accent-color: var(--accent);
+        cursor: pointer;
+        height: 14px;
+        margin: 0;
+        width: 14px;
+      }
+
+      .spec-empty-state {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 14px;
+      }
+
+      @media (max-width: 900px) {
+        .spec-topbar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .spec-file-actions {
+          justify-content: stretch;
+        }
+
+        .spec-file-path {
+          text-align: left;
+        }
+      }

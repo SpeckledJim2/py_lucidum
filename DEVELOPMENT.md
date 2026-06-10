@@ -28,6 +28,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
 - `py_lucidum.tools.glm` implements the opt-in `glum` GLM tool. GLM validation, training jobs, persistence, coefficient/model-detail routes, and model-output data sources live in separate backend modules.
 - `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM active config payloads, training, validation, persistence, tree summary/detail, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
+- `py_lucidum.tools.specifications` implements the opt-in `specs` tool for editing feature, KPI, and filter specification CSV files. It reads and writes raw CSV rows, validates against the durable spec loaders, and refreshes loaded app metadata after successful saves.
 - `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/glm-tool.js` owns GLM high-level orchestration, API mutation, and model build/detail flow, `src/py_lucidum/static/app/glm-formula-builder.js`, `src/py_lucidum/static/app/glm-model-navigator.js`, and `src/py_lucidum/static/app/glm-tabulations.js` own focused GLM frontend submodules, `src/py_lucidum/static/app/gbm-tool.js` owns GBM high-level orchestration, API mutation, and cross-tool invalidation, `src/py_lucidum/static/app/gbm-feature-parameter-controls.js`, `src/py_lucidum/static/app/gbm-evaluation-chart.js`, `src/py_lucidum/static/app/gbm-model-navigator.js`, and `src/py_lucidum/static/app/gbm-tab-orchestration.js` own focused GBM frontend submodules, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-stacked-shap-tool.js` and `src/py_lucidum/static/app/gbm-stacked-shap-chart.js` own the Stacked SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
 - `src/py_lucidum/static/app.css` is the stable linked CSS entrypoint and import manifest. Split styles live under `src/py_lucidum/static/styles/`; `foundations.css` and `controls.css` own shared primitives, while shell/tool files own boundary-specific selectors.
 - Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/`. Core ECharts and Leaflet are loaded locally from `index.html` because the default app tools need them at startup. GLM lazy-loads Ace for formula editing. GBM lazy-loads Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
@@ -92,6 +93,9 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `POST /api/gbm/models/{model_id}/activate`
   - `POST /api/gbm/models/{model_id}/rename`
   - `DELETE /api/gbm/models/{model_id}`
+  - `GET /api/specs/{kind}`
+  - `POST /api/specs/{kind}/validate`
+  - `POST /api/specs/{kind}/save`
 
 `/api/chart` is retained for compatibility with the current frontend. New integrations should prefer the namespaced line-bar endpoint.
 
@@ -127,6 +131,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Saved-filter rows support `Single`, `Multi`, and `Grouped` modes. `Single` keeps one selected row, `Multi` toggles rows and combines them with the active All/Any/Not all/None operator, and `Grouped` toggles rows while combining rows within a theme with `OR` and selected themes with `AND`.
 - `--no-filters` disables saved-filter discovery.
 - `--no-features` disables feature spec discovery.
+- The opt-in Specifications tool is enabled with `--tools specs`. It exposes Feature, KPI, and Filter spec screens backed by `/api/specs/*`, edits raw CSV fields rather than normalized schema metadata, validates the same file contracts used at startup/reload, and atomically saves the selected spec file before refreshing the in-memory app metadata.
 - Filters are DuckDB `WHERE` expressions and apply before column profiling, chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 
 **Column profile**

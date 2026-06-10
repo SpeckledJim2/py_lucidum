@@ -60,6 +60,56 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_specs_tool_uses_full_workspace_width(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long\n"
+                "AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1\n"
+                "AB,AB10 1,2,200,20,AB10 1AB,57.2,-2.2\n"
+                "AL,AL1 1,3,300,30,AL1 1AA,51.8,-0.3\n",
+                encoding="utf-8",
+            )
+            features_path = tmp_path / "feature_spec.csv"
+            features_path.write_text(
+                "Feature,Grouping,Base,min,max,banding,scenario1\n"
+                "vehicle_age,VEHICLE,1,0,10,1,feature\n"
+                "PostcodeArea,POSTCODE,AB,,,,feature\n",
+                encoding="utf-8",
+            )
+            kpis_path = tmp_path / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "PRICE,Price,price,Average row value,2,currency\n"
+                "VALUE,Value,value,Average row value,0,number\n"
+                "COUNT,Count,price,N,0,number\n",
+                encoding="utf-8",
+            )
+            filters_path = tmp_path / "filter_spec.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "POSTCODE,AB,PostcodeArea = 'AB'\n"
+                "VEHICLE,Young vehicle_age,vehicle_age < 3\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["specs"],
+                filters_path=filters_path,
+                use_saved_filters=True,
+                kpis_path=kpis_path,
+                use_kpis=True,
+                features_path=features_path,
+            )
+            try:
+                self.exercise_specs_tool_layout(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_tool_loads_feature_grid(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -2481,6 +2531,333 @@ COPY (
                 self.assertGreater(chart_requests, chart_requests_before)
                 self.assertEqual(shap_request_body["source"], "gbm:browser-smoke-model:shap_long")
                 self.assertEqual(shap_request_body["responses"][0]["numerator"], "SHAP__Age")
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
+
+    def exercise_specs_tool_layout(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+            def assert_specs_full_width() -> None:
+                layout = page.evaluate(
+                    """
+                    () => {
+                        const visual = document.querySelector("#visualArea").getBoundingClientRect();
+                        const workspace = document.querySelector(".workspace").getBoundingClientRect();
+                        const specs = document.querySelector("#specificationsWrap").getBoundingClientRect();
+                        return {
+                            visualWidth: visual.width,
+                            workspaceWidth: workspace.width,
+                            specsWidth: specs.width,
+                        };
+                    }
+                    """
+                )
+                self.assertGreaterEqual(layout["workspaceWidth"], layout["visualWidth"] * 0.8)
+                self.assertGreaterEqual(layout["specsWidth"], layout["visualWidth"] * 0.8)
+
+            def assert_specs_table_style() -> None:
+                page.wait_for_function(
+                    """
+                    () => {
+                      const cell = document.querySelector("#specGrid .tabulator-row .tabulator-cell");
+                      return cell && getComputedStyle(cell).display === "inline-flex";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                style = page.evaluate(
+                    """
+                    () => {
+                      const cell = document.querySelector("#specGrid .tabulator-row .tabulator-cell");
+                      const computed = getComputedStyle(cell);
+                      return {
+                        alignItems: computed.alignItems,
+                        display: computed.display,
+                        fontSize: computed.fontSize,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(style, {"alignItems": "center", "display": "inline-flex", "fontSize": "11px"})
+                self.assertEqual(page.locator("#specGrid").evaluate("node => getComputedStyle(node).borderTopLeftRadius"), "6px")
+                self.assertEqual(page.locator(".spec-kind-tabs .tab").first.evaluate("node => getComputedStyle(node).fontWeight"), "700")
+
+            def spec_cell(field: str, row_index: int = 0):
+                return page.locator("#specGrid .tabulator-row").nth(row_index).locator(f'.tabulator-cell[tabulator-field="{field}"]')
+
+            def specs_selection_state() -> dict:
+                return page.evaluate(
+                    """
+                    () => {
+                      const rows = Array.from(document.querySelectorAll("#specGrid .tabulator-row"));
+                      let activeField = "";
+                      let activeRowIndex = -1;
+                      rows.forEach((row, rowIndex) => {
+                        const active = row.querySelector(".tabulator-cell.spec-cell-active");
+                        if (active) {
+                          activeField = active.getAttribute("tabulator-field") || "";
+                          activeRowIndex = rowIndex;
+                        }
+                      });
+                      return {
+                        activeField,
+                        activeRowIndex,
+                        selectedCount: document.querySelectorAll("#specGrid .spec-cell-selected").length,
+                        nativeSelection: window.getSelection()?.toString() || "",
+                      };
+                    }
+                    """
+                )
+
+            def assert_active_cell(field: str, row_index: int, selected_count: int | None = 1) -> None:
+                page.wait_for_function(
+                    """
+                    expected => {
+                      const rows = Array.from(document.querySelectorAll("#specGrid .tabulator-row"));
+                      let activeField = "";
+                      let activeRowIndex = -1;
+                      rows.forEach((row, rowIndex) => {
+                        const active = row.querySelector(".tabulator-cell.spec-cell-active");
+                        if (active) {
+                          activeField = active.getAttribute("tabulator-field") || "";
+                          activeRowIndex = rowIndex;
+                        }
+                      });
+                      const selectedCount = document.querySelectorAll("#specGrid .spec-cell-selected").length;
+                      return activeField === expected.field
+                        && activeRowIndex === expected.rowIndex
+                        && (expected.selectedCount === null || selectedCount === expected.selectedCount);
+                    }
+                    """,
+                    arg={"field": field, "rowIndex": row_index, "selectedCount": selected_count},
+                    timeout=10_000,
+                )
+                state = specs_selection_state()
+                self.assertEqual(state["activeField"], field)
+                self.assertEqual(state["activeRowIndex"], row_index)
+                if selected_count is not None:
+                    self.assertEqual(state["selectedCount"], selected_count)
+                self.assertEqual(state["nativeSelection"], "")
+
+            def drag_specs_selection(start, end, expected_count: int) -> None:
+                start_box = start.bounding_box()
+                end_box = end.bounding_box()
+                self.assertIsNotNone(start_box)
+                self.assertIsNotNone(end_box)
+                assert start_box is not None and end_box is not None
+                page.mouse.move(start_box["x"] + 4, start_box["y"] + start_box["height"] / 2)
+                page.mouse.down()
+                page.mouse.move(end_box["x"] + end_box["width"] - 4, end_box["y"] + end_box["height"] / 2, steps=8)
+                page.mouse.up()
+                page.wait_for_function(
+                    "expected => document.querySelectorAll('#specGrid .spec-cell-selected').length >= expected",
+                    arg=expected_count,
+                    timeout=10_000,
+                )
+                self.assertEqual(page.evaluate("() => window.getSelection()?.toString() || ''"), "")
+
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.evaluate(
+                    """
+                    () => {
+                        window.__lucidumClipboardText = "";
+                        Object.defineProperty(navigator, "clipboard", {
+                            configurable: true,
+                            value: {
+                                writeText: async (text) => {
+                                    window.__lucidumClipboardText = text;
+                                },
+                                readText: async () => window.__lucidumClipboardText,
+                            },
+                        });
+                    }
+                    """
+                )
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#specsTool:not(.hidden)").click()
+                page.locator("#specificationsWrap:not(.hidden) .spec-tool").wait_for(timeout=10_000)
+                page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
+                self.assertTrue(page.locator("#visualArea").evaluate("node => node.classList.contains('specs-mode')"))
+                self.assertFalse(page.locator("#chartSideControls").is_visible())
+                self.assertFalse(page.locator("#chartControlsResizer").is_visible())
+                assert_specs_full_width()
+                assert_specs_table_style()
+                scenario_cell = spec_cell("scenario1", 0)
+                scenario_checkbox = scenario_cell.locator(".spec-checkbox-cell")
+                self.assertTrue(scenario_checkbox.is_checked())
+                self.assertIsNone(scenario_checkbox.get_attribute("disabled"))
+                self.assertEqual(scenario_checkbox.evaluate("node => getComputedStyle(node).pointerEvents"), "auto")
+                self.assertEqual(scenario_checkbox.evaluate("node => getComputedStyle(node).opacity"), "1")
+                scenario_cell.dblclick(position={"x": 4, "y": 8})
+                page.wait_for_function("() => !document.querySelector('#specGrid .tabulator-cell.tabulator-editing')")
+                self.assertNotIn("feature", scenario_cell.inner_text())
+                scenario_checkbox.click()
+                page.wait_for_function(
+                    "() => !document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field=\"scenario1\"] .spec-checkbox-cell')?.checked",
+                    timeout=10_000,
+                )
+                self.assertTrue(page.locator("#specSaveBtn").evaluate("node => node.classList.contains('dirty')"))
+                scenario_cell.locator(".spec-checkbox-cell").click()
+                page.wait_for_function(
+                    "() => Boolean(document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field=\"scenario1\"] .spec-checkbox-cell')?.checked)",
+                    timeout=10_000,
+                )
+                page.evaluate("() => { window.__lucidumClipboardText = 'unset'; }")
+                page.keyboard.press("Control+C")
+                page.wait_for_function("() => window.__lucidumClipboardText === 'feature'", timeout=10_000)
+                scenario_cell.locator(".spec-checkbox-cell").click()
+                page.wait_for_function(
+                    "() => !document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field=\"scenario1\"] .spec-checkbox-cell')?.checked",
+                    timeout=10_000,
+                )
+                page.evaluate("() => { window.__lucidumClipboardText = 'unset'; }")
+                page.keyboard.press("Control+C")
+                page.wait_for_function("() => window.__lucidumClipboardText === ''", timeout=10_000)
+                scenario_cell.locator(".spec-checkbox-cell").click()
+                page.wait_for_function(
+                    "() => Boolean(document.querySelector('#specGrid .tabulator-row .tabulator-cell[tabulator-field=\"scenario1\"] .spec-checkbox-cell')?.checked)",
+                    timeout=10_000,
+                )
+                drag_specs_selection(spec_cell("scenario1", 0), spec_cell("scenario1", 1), 2)
+                page.keyboard.press("Delete")
+                page.wait_for_function(
+                    """
+                    () => Array.from(document.querySelectorAll('#specGrid .tabulator-row .tabulator-cell[tabulator-field="scenario1"] .spec-checkbox-cell'))
+                        .slice(0, 2)
+                        .every((checkbox) => !checkbox.checked)
+                    """,
+                    timeout=10_000,
+                )
+                spec_cell("Feature", 0).click()
+                assert_active_cell("Feature", 0)
+                page.keyboard.press("ArrowRight")
+                assert_active_cell("Grouping", 0)
+                page.keyboard.press("ArrowDown")
+                assert_active_cell("Grouping", 1)
+                page.keyboard.press("ArrowLeft")
+                assert_active_cell("Feature", 1)
+                page.keyboard.press("ArrowLeft")
+                assert_active_cell("Feature", 1)
+                page.keyboard.press("ArrowUp")
+                assert_active_cell("Feature", 0)
+                page.keyboard.press("ArrowUp")
+                assert_active_cell("Feature", 0)
+                for _ in range(6):
+                    page.keyboard.press("ArrowRight")
+                assert_active_cell("scenario1", 0)
+                page.keyboard.press("ArrowRight")
+                assert_active_cell("scenario1", 0)
+                page.keyboard.press("ArrowDown")
+                assert_active_cell("scenario1", 1)
+                page.keyboard.press("ArrowDown")
+                assert_active_cell("scenario1", 1)
+                spec_cell("Base", 0).click()
+                assert_active_cell("Base", 0)
+                page.keyboard.press("9")
+                page.locator("#specGrid .tabulator-cell.tabulator-editing input").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#specGrid .tabulator-cell.tabulator-editing input").input_value(), "9")
+                page.keyboard.press("Enter")
+                page.wait_for_function(
+                    "() => !document.querySelector('#specGrid .tabulator-cell.tabulator-editing')",
+                    timeout=10_000,
+                )
+                page.locator("#specGrid .tabulator-row").first.locator('.tabulator-cell[tabulator-field="Base"]', has_text="9").wait_for(timeout=10_000)
+                assert_active_cell("Base", 0)
+                page.keyboard.press("ArrowRight")
+                assert_active_cell("min", 0)
+                spec_cell("Feature", 0).click()
+                assert_active_cell("Feature", 0)
+                page.keyboard.press("Shift+ArrowRight")
+                assert_active_cell("Feature", 0, 2)
+                page.keyboard.press("Shift+ArrowDown")
+                assert_active_cell("Feature", 0, 4)
+                page.evaluate("() => { window.__lucidumClipboardText = 'unset'; }")
+                page.keyboard.press("Control+C")
+                page.wait_for_function("() => window.__lucidumClipboardText === 'vehicle_age\\tVEHICLE\\nPostcodeArea\\tPOSTCODE'", timeout=10_000)
+                page.keyboard.press("Delete")
+                page.wait_for_function(
+                    """
+                    () => {
+                        const rows = document.querySelectorAll("#specGrid .tabulator-row");
+                        return rows[0]?.querySelector('.tabulator-cell[tabulator-field="Feature"]')?.textContent.trim() === ""
+                            && rows[1]?.querySelector('.tabulator-cell[tabulator-field="Grouping"]')?.textContent.trim() === "";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                drag_specs_selection(spec_cell("Feature", 0), spec_cell("Grouping", 1), 4)
+                assert_active_cell("Feature", 0, 4)
+                page.keyboard.press("Delete")
+                page.wait_for_function(
+                    """
+                    () => {
+                        const rows = document.querySelectorAll("#specGrid .tabulator-row");
+                        return rows[0]?.querySelector('.tabulator-cell[tabulator-field="Feature"]')?.textContent.trim() === ""
+                            && rows[1]?.querySelector('.tabulator-cell[tabulator-field="Grouping"]')?.textContent.trim() === "";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
+                page.locator('[data-spec-kind="kpi"]').click()
+                page.locator('[data-spec-kind="kpi"][aria-selected="true"]').wait_for(timeout=10_000)
+                page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
+                assert_specs_full_width()
+                assert_specs_table_style()
+                page.locator("#specGrid").focus()
+                page.keyboard.press("ArrowRight")
+                assert_active_cell("name", 0)
+                page.keyboard.press("Shift+ArrowDown")
+                assert_active_cell("name", 0, 2)
+                drag_specs_selection(spec_cell("group", 0), spec_cell("name", 0), 2)
+                page.keyboard.press("Control+C")
+                page.wait_for_function("() => window.__lucidumClipboardText === 'PRICE\\tPrice'", timeout=10_000)
+                drag_specs_selection(spec_cell("group", 1), spec_cell("name", 1), 2)
+                page.keyboard.press("Control+V")
+                page.wait_for_function(
+                    """
+                    () => {
+                        const row = document.querySelectorAll("#specGrid .tabulator-row")[1];
+                        return row?.querySelector('.tabulator-cell[tabulator-field="group"]')?.textContent.trim() === "PRICE"
+                            && row?.querySelector('.tabulator-cell[tabulator-field="name"]')?.textContent.trim() === "Price";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                assert_active_cell("group", 1, 2)
+                page.keyboard.press("ArrowDown")
+                assert_active_cell("group", 2, 1)
+
+                page.locator('[data-spec-kind="filter"]').click()
+                page.locator('[data-spec-kind="filter"][aria-selected="true"]').wait_for(timeout=10_000)
+                page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
+                assert_specs_full_width()
+                assert_specs_table_style()
+                page.locator("#specGrid").focus()
+                page.keyboard.press("ArrowRight")
+                assert_active_cell("name", 0)
+                page.keyboard.press("Shift+ArrowDown")
+                assert_active_cell("name", 0, 2)
+                drag_specs_selection(spec_cell("theme", 0), spec_cell("name", 1), 4)
+                assert_active_cell("theme", 0, 4)
+                spec_cell("name", 0).dblclick()
+                page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("Edited filter")
+                page.keyboard.press("ArrowLeft")
+                page.locator("#specGrid .tabulator-cell.tabulator-editing input").wait_for(timeout=10_000)
+                page.keyboard.press("Enter")
+                page.locator("#specGrid .tabulator-row").first.locator('.tabulator-cell[tabulator-field="name"]', has_text="Edited filter").wait_for(timeout=10_000)
+                spec_cell("theme", 0).click(button="right")
+                page.locator("#specContextMenu:not([hidden])").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#specContextMenu").evaluate("node => getComputedStyle(node).padding"), "3px")
+                self.assertEqual(page.locator("#specContextMenu .spec-context-menu-item").first.evaluate("node => getComputedStyle(node).fontWeight"), "400")
+
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()

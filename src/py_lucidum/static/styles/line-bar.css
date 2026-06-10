@@ -18,6 +18,10 @@
         grid-template-columns: minmax(0, 1fr);
       }
 
+      .visual-area.specs-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       .chart-controls-resizer {
         cursor: col-resize;
         min-width: 6px;

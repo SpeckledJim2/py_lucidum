@@ -16,6 +16,7 @@ TOOL_MODULES = (
     "py_lucidum.tools.uk_map",
     "py_lucidum.tools.glm",
     "py_lucidum.tools.gbm",
+    "py_lucidum.tools.specifications",
 )
 MANDATORY_TOOL_ID = "column_profile"
 TOOL_GROUP_ALIASES = {
