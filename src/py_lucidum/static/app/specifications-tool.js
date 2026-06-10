@@ -58,16 +58,18 @@ export function createSpecificationsTool({
     el("specificationsWrap").innerHTML = `
       <div class="spec-tool">
         <div class="spec-topbar">
-          <div class="tabs spec-kind-tabs" role="tablist" aria-label="Specification type">
-            ${SPEC_KINDS.map((kind) => `<button class="tab ${kind.id === activeKind ? "active" : ""}" type="button" role="tab" data-spec-kind="${kind.id}" aria-selected="${kind.id === activeKind ? "true" : "false"}">${escapeHtml(kind.label)}</button>`).join("")}
+          <div class="spec-control-row">
+            <div class="tabs spec-kind-tabs" role="tablist" aria-label="Specification type">
+              ${SPEC_KINDS.map((kind) => `<button class="tab ${kind.id === activeKind ? "active" : ""}" type="button" role="tab" data-spec-kind="${kind.id}" aria-selected="${kind.id === activeKind ? "true" : "false"}">${escapeHtml(kind.label)}</button>`).join("")}
+            </div>
+            <div class="spec-file-actions">
+              <div id="specNotice" class="spec-notice hidden" role="status" aria-live="polite"></div>
+              <button id="specValidateBtn" class="ghost spec-action-button" type="button">Validate</button>
+              <button id="specSaveBtn" class="spec-save-button" type="button">Save</button>
+            </div>
           </div>
-          <div class="spec-file-actions">
-            <span id="specFilePath" class="spec-file-path"></span>
-            <button id="specValidateBtn" class="ghost spec-action-button" type="button">Validate</button>
-            <button id="specSaveBtn" class="spec-save-button" type="button">Save</button>
-          </div>
+          <span id="specFilePath" class="spec-file-path"></span>
         </div>
-        <div id="specNotice" class="spec-notice hidden" role="status" aria-live="polite"></div>
         <div id="specGrid" class="spec-grid" tabindex="0"></div>
         <div id="specContextMenu" class="spec-context-menu" role="menu" hidden>
           <button class="spec-context-menu-item" type="button" role="menuitem" data-spec-row-action="above">Add row above</button>
@@ -138,13 +140,19 @@ export function createSpecificationsTool({
   }
 
   function refreshTheme() {
-    table?.redraw?.(true);
+    const scrollPosition = captureSpecTableScroll();
+    table?.redraw?.(false);
+    restoreSpecTableScroll(scrollPosition);
+    window.requestAnimationFrame(() => {
+      restoreSpecTableScroll(scrollPosition);
+    });
   }
 
   async function selectKind(kind) {
     const nextKind = SPEC_KINDS.some((entry) => entry.id === kind) ? kind : "feature";
     if (nextKind === activeKind) return;
     saveActiveDraft();
+    clearValidationRowIssuesForSpec(specs.get(activeKind));
     activeKind = nextKind;
     syncKindTabs();
     await loadKind(activeKind);
@@ -155,6 +163,7 @@ export function createSpecificationsTool({
     const cached = specs.get(kind);
     if (cached?.dirty || (cached && !options.force)) {
       renderSpec(cached);
+      if (cached && !cached.dirty) await validateSpecOnLoad(cached);
       return;
     }
     loading = true;
@@ -163,7 +172,10 @@ export function createSpecificationsTool({
     try {
       const payload = await api(`/api/specs/${kind}`, { method: "GET" });
       const spec = cacheSpec(payload, false);
-      if (kind === activeKind) renderSpec(spec);
+      if (kind === activeKind) {
+        renderSpec(spec);
+        await validateSpecOnLoad(spec);
+      }
     } catch (error) {
       showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message });
     } finally {
@@ -181,6 +193,7 @@ export function createSpecificationsTool({
       kind,
       columns,
       rows,
+      rowIssues: normaliseRowIssues(payload.row_issues),
       dirty: Boolean(dirty),
     };
     specs.set(kind, spec);
@@ -189,10 +202,11 @@ export function createSpecificationsTool({
 
   function renderSpec(spec) {
     if (!spec || spec.kind !== activeKind) return;
+    renumberSpecRows(spec);
     clearGlobalStatus();
     syncKindTabs();
     syncFilePath(spec);
-    showNotice(null);
+    showValidationNotice(spec.validationResult || null, { showValid: false });
     measureToolRender("specs", () => renderTable(spec));
     syncButtons();
   }
@@ -210,9 +224,10 @@ export function createSpecificationsTool({
           data: spec.rows,
           height: "100%",
           index: "_row_id",
-          layout: "fitColumns",
+          layout: "fitDataStretch",
           placeholder: "No specification rows",
           editTriggerEvent: "dblclick",
+          rowHeader: specRowHeader(),
           columns: tabulatorColumns(spec),
         });
         table.on("tableBuilt", () => {
@@ -229,11 +244,12 @@ export function createSpecificationsTool({
         table.on("renderComplete", applyTableDecorations);
         table.on("dataSorted", applyTableDecorations);
         table.on("cellEdited", (cell) => {
-          applyMissingFeatureRowClasses();
           if (!suppressDirty) {
+            clearValidationRowIssuesForActiveSpec();
             markDirty();
             restoreSelectionAfterCellEdit(cell);
           }
+          applyTableDecorations();
         });
         table.on("dataChanged", () => {
           if (!suppressDirty) markDirty();
@@ -249,12 +265,14 @@ export function createSpecificationsTool({
 
   function tabulatorColumns(spec) {
     return spec.columns.map((field) => {
+      const title = columnTitle(spec, field);
       const column = {
-        title: columnTitle(spec, field),
+        title,
         field,
         editor: "input",
         headerSort: true,
         formatter: textFormatter,
+        minWidth: columnMinWidth(spec, field, title),
         widthGrow: columnGrow(spec.kind, field),
       };
       if (spec.kind === "feature" && isScenarioField(field, spec)) {
@@ -264,11 +282,8 @@ export function createSpecificationsTool({
         column.formatter = scenarioFormatter;
         column.hozAlign = "center";
         column.headerHozAlign = "center";
-        column.width = 116;
-        column.widthGrow = 0;
       }
       if (spec.kind === "kpi" && field === "decimals") {
-        column.width = 92;
         column.widthGrow = 0;
       }
       if (["Base", "min", "max", "banding", "format"].includes(field)) {
@@ -276,6 +291,26 @@ export function createSpecificationsTool({
       }
       return column;
     });
+  }
+
+  function specRowHeader() {
+    return {
+      title: "",
+      field: "_spec_row_number",
+      formatter: rowNumberFormatter,
+      headerSort: false,
+      hozAlign: "center",
+      headerHozAlign: "center",
+      width: 38,
+      minWidth: 38,
+      resizable: false,
+      frozen: true,
+      cssClass: "spec-row-number-cell",
+    };
+  }
+
+  function rowNumberFormatter(cell) {
+    return escapeHtml(cell.getValue() ?? "");
   }
 
   function fieldTitle(kind, field) {
@@ -287,6 +322,23 @@ export function createSpecificationsTool({
       return scenarioHeaderTitle(spec, field);
     }
     return fieldTitle(spec?.kind, field);
+  }
+
+  function columnMinWidth(spec, field, title = columnTitle(spec, field)) {
+    const headerWidth = headerMinWidth(title);
+    if (spec?.kind === "feature" && field === "Feature") return Math.max(headerWidth, 180);
+    if (spec?.kind === "feature" && field === "Grouping") return Math.max(headerWidth, 112);
+    if (spec?.kind === "feature" && isScenarioField(field, spec)) return Math.max(headerWidth, 116);
+    if (spec?.kind === "filter" && field === "expression") return Math.max(headerWidth, 360);
+    if (spec?.kind === "filter" && field === "name") return Math.max(headerWidth, 220);
+    if (spec?.kind === "kpi" && field === "name") return Math.max(headerWidth, 180);
+    if (spec?.kind === "kpi" && field === "denominator") return Math.max(headerWidth, 160);
+    if (["Base", "min", "max", "banding", "decimals", "format"].includes(field)) return Math.max(headerWidth, 86);
+    return headerWidth;
+  }
+
+  function headerMinWidth(title) {
+    return Math.max(64, Math.ceil(String(title || "").length * 7.5) + 34);
   }
 
   function scenarioHeaderTitle(spec, field) {
@@ -394,6 +446,7 @@ export function createSpecificationsTool({
     if (!notice) return;
     if (!result) {
       notice.textContent = "";
+      notice.title = "";
       notice.classList.add("hidden");
       notice.classList.remove("error", "warning");
       return;
@@ -404,20 +457,37 @@ export function createSpecificationsTool({
     notice.classList.toggle("error", isError || errors.length > 0 || result.valid === false);
     notice.classList.toggle("warning", !errors.length && warnings.length > 0);
     notice.classList.remove("hidden");
-    notice.innerHTML = `
-      <strong>${escapeHtml(result.message || "")}</strong>
-      ${items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
-    `;
+    const messageParts = [];
+    [result.message || "", ...items].forEach((item) => {
+      if (item && !messageParts.includes(item)) messageParts.push(item);
+    });
+    const message = messageParts.join("; ");
+    notice.textContent = message;
+    notice.title = message;
   }
 
   function showErrorNotice(message) {
     showNotice({ valid: false, errors: [message], warnings: [], message }, true);
   }
 
+  function showValidationNotice(result, options = {}) {
+    if (!result) {
+      showNotice(null);
+      return;
+    }
+    const errors = Array.isArray(result.errors) ? result.errors : [];
+    const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+    if (options.showValid || errors.length || warnings.length || result.valid === false) {
+      showNotice(result);
+    } else {
+      showNotice(null);
+    }
+  }
+
   function saveActiveDraft() {
     const spec = specs.get(activeKind);
     if (!spec || !table) return spec;
-    spec.rows = table.getData().map((row) => cleanRow(row, spec.columns));
+    spec.rows = rowsWithIds(table.getData().map((row) => cleanRow(row, spec.columns)), spec.columns);
     return spec;
   }
 
@@ -453,7 +523,7 @@ export function createSpecificationsTool({
         method: "POST",
         body: JSON.stringify(payload),
       });
-      showNotice(result);
+      storeValidationResult(specs.get(activeKind), result, { showValid: true });
     } catch (error) {
       showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message }, true);
     } finally {
@@ -490,6 +560,68 @@ export function createSpecificationsTool({
     const spec = specs.get(activeKind);
     if (spec) spec.dirty = true;
     syncButtons();
+  }
+
+  function normaliseRowIssues(rowIssues) {
+    if (!Array.isArray(rowIssues)) return [];
+    return rowIssues
+      .map((issue) => ({
+        rowNumber: Number(issue?.row_number),
+        severity: String(issue?.severity || ""),
+        message: String(issue?.message || ""),
+      }))
+      .filter((issue) => Number.isFinite(issue.rowNumber) && issue.rowNumber >= 2);
+  }
+
+  async function validateSpecOnLoad(spec) {
+    if (!spec || spec.dirty || spec.autoValidated) return;
+    try {
+      const result = await api(`/api/specs/${spec.kind}/validate`, {
+        method: "POST",
+        body: JSON.stringify(payloadForSpec(spec)),
+      });
+      storeValidationResult(spec, result, { showValid: false });
+    } catch (error) {
+      const result = { valid: false, errors: [error.message], warnings: [], row_issues: [], message: error.message };
+      storeValidationResult(spec, result, { showValid: false });
+    }
+  }
+
+  function payloadForSpec(spec) {
+    return {
+      columns: spec.columns,
+      rows: rowsForApi(spec),
+    };
+  }
+
+  function storeValidationResult(spec, result, options = {}) {
+    if (!spec || !result) return;
+    spec.validationResult = result;
+    spec.autoValidated = true;
+    applyValidationResultRowIssues(result, spec);
+    if (spec.kind === activeKind) showValidationNotice(result, options);
+  }
+
+  function applyValidationResultRowIssues(result, spec = specs.get(activeKind)) {
+    if (!spec) return;
+    spec.rowIssues = normaliseRowIssues(result?.row_issues);
+    if (spec.kind === activeKind) applyValidationRowIssueClasses();
+  }
+
+  function clearValidationRowIssuesForActiveSpec() {
+    const spec = specs.get(activeKind);
+    clearValidationRowIssuesForSpec(spec);
+  }
+
+  function clearValidationRowIssuesForSpec(spec) {
+    if (!spec) return;
+    const hadValidationState = Boolean(spec.validationResult || spec.autoValidated || (Array.isArray(spec.rowIssues) && spec.rowIssues.length));
+    if (!hadValidationState) return;
+    if (["kpi", "filter"].includes(spec.kind)) spec.rowIssues = [];
+    spec.validationResult = null;
+    spec.autoValidated = false;
+    if (spec.kind === activeKind) showNotice(null);
+    applyValidationRowIssueClasses();
   }
 
   function specToolVisible() {
@@ -749,6 +881,7 @@ export function createSpecificationsTool({
 
   function applyTableDecorations() {
     applyMissingFeatureRowClasses();
+    applyValidationRowIssueClasses();
     applySelectionClasses();
   }
 
@@ -770,6 +903,23 @@ export function createSpecificationsTool({
     const datasetNames = datasetFeatureNameSet();
     displayedRows().forEach((row) => {
       row.getElement?.()?.classList.toggle("spec-missing-feature-row", featureRowMissingDatasetFeature(row.getData?.(), spec, datasetNames));
+    });
+  }
+
+  function validationRowIssueNumberSet(spec = specs.get(activeKind)) {
+    if (!spec || !["kpi", "filter"].includes(spec.kind)) return new Set();
+    return new Set((spec.rowIssues || []).map((issue) => Number(issue.rowNumber)).filter(Number.isFinite));
+  }
+
+  function rowHasValidationIssue(rowData, spec = specs.get(activeKind), issueNumbers = validationRowIssueNumberSet(spec)) {
+    return Boolean(["kpi", "filter"].includes(spec?.kind) && issueNumbers.has(Number(rowData?._spec_row_number)));
+  }
+
+  function applyValidationRowIssueClasses() {
+    const spec = specs.get(activeKind);
+    const issueNumbers = validationRowIssueNumberSet(spec);
+    displayedRows().forEach((row) => {
+      row.getElement?.()?.classList.toggle("spec-validation-issue-row", rowHasValidationIssue(row.getData?.(), spec, issueNumbers));
     });
   }
 
@@ -841,6 +991,7 @@ export function createSpecificationsTool({
     }));
     const changed = normalisedUpdates.filter((update) => rowDataById(update.rowId)?.[update.field] !== update.value);
     if (!changed.length) return;
+    clearValidationRowIssuesForActiveSpec();
     const scenarioChanged = changed.some((update) => isScenarioField(update.field));
     const scrollPosition = scenarioChanged ? captureSpecTableScroll() : null;
     suppressDirty = true;
@@ -981,11 +1132,17 @@ export function createSpecificationsTool({
   }
 
   function rowsWithIds(rows, columns) {
-    return rows.map((row) => {
+    return rows.map((row, index) => {
       const next = cleanRow(row, columns);
       next._row_id = row._row_id || `spec-row-${++rowIdCounter}`;
+      next._spec_row_number = index + 2;
       return next;
     });
+  }
+
+  function renumberSpecRows(spec) {
+    if (!spec) return;
+    spec.rows = rowsWithIds(Array.isArray(spec.rows) ? spec.rows : [], spec.columns || []);
   }
 
   function cleanRow(row, columns) {
@@ -1142,6 +1299,7 @@ export function createSpecificationsTool({
     const insertAt = index < 0 ? rows.length : index + (position === "below" ? 1 : 0);
     rows.splice(insertAt, 0, newRow(spec));
     spec.rows = rows;
+    clearValidationRowIssuesForSpec(spec);
     spec.dirty = true;
     renderSpec(spec);
   }
@@ -1150,6 +1308,7 @@ export function createSpecificationsTool({
     const spec = saveActiveDraft();
     if (!spec || !contextRowId) return;
     spec.rows = spec.rows.filter((row) => row._row_id !== contextRowId);
+    clearValidationRowIssuesForSpec(spec);
     spec.dirty = true;
     renderSpec(spec);
   }

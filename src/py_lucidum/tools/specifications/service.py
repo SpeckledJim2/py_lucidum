@@ -170,12 +170,13 @@ def validate_spec(dataset: Dataset, kind: str, columns: list[str], rows: list[di
     kind = normalise_kind(kind)
     errors: list[str] = []
     warnings: list[str] = []
+    row_issues: list[dict[str, Any]] = []
     if kind == "feature":
-        validate_feature_spec(dataset, columns, rows, errors, warnings)
+        validate_feature_spec(dataset, columns, rows, errors, warnings, row_issues)
     elif kind == "kpi":
-        validate_kpi_spec(dataset, columns, rows, errors, warnings)
+        validate_kpi_spec(dataset, columns, rows, errors, warnings, row_issues)
     elif kind == "filter":
-        validate_filter_spec(dataset, columns, rows, errors, warnings)
+        validate_filter_spec(dataset, columns, rows, errors, warnings, row_issues)
     if not errors:
         try:
             parse_submitted_spec(kind, columns, rows)
@@ -186,6 +187,7 @@ def validate_spec(dataset: Dataset, kind: str, columns: list[str], rows: list[di
         "valid": not errors,
         "errors": errors,
         "warnings": warnings,
+        "row_issues": row_issues,
         "message": validation_message(kind, errors, warnings),
     }
 
@@ -199,7 +201,22 @@ def validation_message(kind: str, errors: list[str], warnings: list[str]) -> str
     return f"{label} is valid"
 
 
-def validate_filter_spec(dataset: Dataset, columns: list[str], rows: list[dict[str, str]], errors: list[str], warnings: list[str]) -> None:
+def add_row_issue(row_issues: list[dict[str, Any]], row_number: int, severity: str, message: str) -> None:
+    row_issues.append({
+        "row_number": row_number,
+        "severity": severity,
+        "message": message,
+    })
+
+
+def validate_filter_spec(
+    dataset: Dataset,
+    columns: list[str],
+    rows: list[dict[str, str]],
+    errors: list[str],
+    warnings: list[str],
+    row_issues: list[dict[str, Any]],
+) -> None:
     if columns != FILTER_SPEC_COLUMNS:
         errors.append("filter_spec.csv must have exactly these columns: theme,name,expression")
         return
@@ -209,15 +226,26 @@ def validate_filter_spec(dataset: Dataset, columns: list[str], rows: list[dict[s
         expression = str(row.get("expression") or "").strip()
         missing = [label for label, value in (("theme", theme), ("name", name), ("expression", expression)) if not value]
         if missing:
-            errors.append(f"filter_spec.csv row {row_number} is missing: {', '.join(missing)}")
+            message = f"filter_spec.csv row {row_number} is missing: {', '.join(missing)}"
+            errors.append(message)
+            add_row_issue(row_issues, row_number, "error", message)
             continue
         try:
             dataset.normalise_filter(expression)
         except ValueError as exc:
-            errors.append(f"filter_spec.csv row {row_number}: {exc}")
+            message = f"filter_spec.csv row {row_number}: {exc}"
+            errors.append(message)
+            add_row_issue(row_issues, row_number, "error", message)
 
 
-def validate_kpi_spec(dataset: Dataset, columns: list[str], rows: list[dict[str, str]], errors: list[str], warnings: list[str]) -> None:
+def validate_kpi_spec(
+    dataset: Dataset,
+    columns: list[str],
+    rows: list[dict[str, str]],
+    errors: list[str],
+    warnings: list[str],
+    row_issues: list[dict[str, Any]],
+) -> None:
     if columns != KPI_SPEC_COLUMNS:
         errors.append("kpi_spec.csv must have exactly these columns: group,name,actual,denominator,decimals,format")
         return
@@ -232,24 +260,41 @@ def validate_kpi_spec(dataset: Dataset, columns: list[str], rows: list[dict[str,
         }
         missing = [name for name, value in required.items() if not value]
         if missing:
-            errors.append(f"kpi_spec.csv row {row_number} is missing: {', '.join(missing)}")
+            message = f"kpi_spec.csv row {row_number} is missing: {', '.join(missing)}"
+            errors.append(message)
+            add_row_issue(row_issues, row_number, "error", message)
             continue
         actual = required["actual"]
         actual_column = column_map.get(actual)
         if actual_column is None:
-            errors.append(f"kpi_spec.csv row {row_number} actual column does not exist: {actual}")
+            message = f"kpi_spec.csv row {row_number} actual column does not exist: {actual}"
+            errors.append(message)
+            add_row_issue(row_issues, row_number, "error", message)
         elif not is_numeric_kind(actual_column.kind):
-            errors.append(f"kpi_spec.csv row {row_number} actual column must be numeric: {actual}")
+            message = f"kpi_spec.csv row {row_number} actual column must be numeric: {actual}"
+            errors.append(message)
+            add_row_issue(row_issues, row_number, "error", message)
         denominator = normalise_kpi_denominator(row.get("denominator"))
         if denominator != "__none__":
             denominator_column = column_map.get(denominator)
             if denominator_column is None:
-                errors.append(f"kpi_spec.csv row {row_number} denominator column does not exist: {denominator}")
+                message = f"kpi_spec.csv row {row_number} denominator column does not exist: {denominator}"
+                errors.append(message)
+                add_row_issue(row_issues, row_number, "error", message)
             elif not is_numeric_kind(denominator_column.kind):
-                errors.append(f"kpi_spec.csv row {row_number} denominator column must be numeric: {denominator}")
+                message = f"kpi_spec.csv row {row_number} denominator column must be numeric: {denominator}"
+                errors.append(message)
+                add_row_issue(row_issues, row_number, "error", message)
 
 
-def validate_feature_spec(dataset: Dataset, columns: list[str], rows: list[dict[str, str]], errors: list[str], warnings: list[str]) -> None:
+def validate_feature_spec(
+    dataset: Dataset,
+    columns: list[str],
+    rows: list[dict[str, str]],
+    errors: list[str],
+    warnings: list[str],
+    row_issues: list[dict[str, Any]],
+) -> None:
     if columns[:2] != FEATURE_SPEC_REQUIRED_COLUMNS:
         errors.append("feature_spec.csv must start with these columns: Feature,Grouping")
         return
@@ -261,12 +306,16 @@ def validate_feature_spec(dataset: Dataset, columns: list[str], rows: list[dict[
     for row_number, row in nonblank_rows(rows, columns):
         feature = str(row.get("Feature") or "").strip()
         if not feature:
-            errors.append(f"feature_spec.csv row {row_number} is missing: Feature")
+            message = f"feature_spec.csv row {row_number} is missing: Feature"
+            errors.append(message)
+            add_row_issue(row_issues, row_number, "error", message)
             continue
         for scenario in columns[metadata_stop:]:
             value = str(row.get(scenario) or "").strip()
             if value and "feature" not in value.lower():
-                warnings.append(f"feature_spec.csv row {row_number} scenario {scenario!r} value will not select the feature: {value!r}")
+                message = f"feature_spec.csv row {row_number} scenario {scenario!r} value will not select the feature: {value!r}"
+                warnings.append(message)
+                add_row_issue(row_issues, row_number, "warning", message)
 
 
 def feature_metadata_stop(columns: list[str]) -> int:

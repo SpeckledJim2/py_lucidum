@@ -30,6 +30,7 @@ def register(app: FastAPI, context: AppContext) -> None:
                 "valid": False,
                 "errors": [str(exc)],
                 "warnings": [],
+                "row_issues": [],
                 "message": str(exc),
             }
 

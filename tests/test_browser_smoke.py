@@ -96,7 +96,8 @@ class BrowserSmokeTests(unittest.TestCase):
             filters_path.write_text(
                 "theme,name,expression\n"
                 "POSTCODE,AB,PostcodeArea = 'AB'\n"
-                "VEHICLE,Young vehicle_age,vehicle_age < 3\n",
+                "VEHICLE,Young vehicle_age,vehicle_age < 3\n"
+                "POSTCODE,Broken auto,AutoMissingColumn = 1\n",
                 encoding="utf-8",
             )
             base_url, server, thread = self.start_app(
@@ -2593,6 +2594,81 @@ COPY (
                 self.assertEqual(style, {"alignItems": "center", "display": "inline-flex", "fontSize": "11px"})
                 self.assertEqual(page.locator("#specGrid").evaluate("node => getComputedStyle(node).borderTopLeftRadius"), "6px")
                 self.assertEqual(page.locator(".spec-kind-tabs .tab").first.evaluate("node => getComputedStyle(node).fontWeight"), "700")
+                topbar_layout = page.evaluate(
+                    """
+                    () => {
+                      const topbar = document.querySelector(".spec-topbar")?.getBoundingClientRect();
+                      const tabs = document.querySelector(".spec-kind-tabs")?.getBoundingClientRect();
+                      const path = document.querySelector("#specFilePath")?.getBoundingClientRect();
+                      const notice = document.querySelector("#specNotice")?.getBoundingClientRect();
+                      const validate = document.querySelector("#specValidateBtn")?.getBoundingClientRect();
+                      const pathStyle = getComputedStyle(document.querySelector("#specFilePath"));
+                      const noticeStyle = getComputedStyle(document.querySelector("#specNotice"));
+                      return {
+                        pathBelowTabs: path.top > tabs.bottom,
+                        pathFullWidth: path.width >= topbar.width * 0.95,
+                        pathStartsAtLeft: Math.abs(path.left - topbar.left) <= 2,
+                        pathWeight: pathStyle.fontWeight,
+                        noticeBeforeValidate: notice.right <= validate.left,
+                        noticeWeight: noticeStyle.fontWeight,
+                        noticeOverflow: noticeStyle.textOverflow,
+                        noticeWhiteSpace: noticeStyle.whiteSpace,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(topbar_layout["pathBelowTabs"])
+                self.assertTrue(topbar_layout["pathFullWidth"])
+                self.assertTrue(topbar_layout["pathStartsAtLeft"])
+                self.assertEqual(topbar_layout["pathWeight"], "400")
+                self.assertTrue(topbar_layout["noticeBeforeValidate"])
+                self.assertEqual(topbar_layout["noticeWeight"], "400")
+                self.assertEqual(topbar_layout["noticeOverflow"], "ellipsis")
+                self.assertEqual(topbar_layout["noticeWhiteSpace"], "nowrap")
+
+            def assert_spec_row_numbers() -> None:
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = document.querySelectorAll("#specGrid .tabulator-row");
+                      return rows[0]?.querySelector(".tabulator-row-header")?.textContent.trim() === "2"
+                        && rows[1]?.querySelector(".tabulator-row-header")?.textContent.trim() === "3";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                row_header_style = page.locator("#specGrid .tabulator-row").first.locator(".tabulator-row-header").evaluate(
+                    """
+                    node => {
+                      const style = getComputedStyle(node);
+                      return {
+                        justifyContent: style.justifyContent,
+                        textAlign: style.textAlign,
+                        width: Math.round(node.getBoundingClientRect().width),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(row_header_style["justifyContent"], "center")
+                self.assertEqual(row_header_style["textAlign"], "center")
+                self.assertLessEqual(row_header_style["width"], 42)
+
+            def assert_spec_headers_untruncated() -> None:
+                clipped = page.evaluate(
+                    """
+                    () => Array.from(document.querySelectorAll("#specGrid .tabulator-header .tabulator-col[tabulator-field] .tabulator-col-title"))
+                      .map((title) => {
+                        const column = title.closest(".tabulator-col");
+                        return {
+                          text: title.textContent.trim(),
+                          titleWidth: title.scrollWidth,
+                          columnWidth: column ? column.getBoundingClientRect().width : 0,
+                        };
+                      })
+                      .filter((entry) => entry.text && entry.titleWidth > entry.columnWidth + 1)
+                    """
+                )
+                self.assertEqual(clipped, [])
 
             def spec_cell(field: str, row_index: int = 0):
                 return page.locator("#specGrid .tabulator-row").nth(row_index).locator(f'.tabulator-cell[tabulator-field="{field}"]')
@@ -2610,6 +2686,52 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+
+            def assert_validation_row_highlight(row_index: int, row_number: str = "2") -> None:
+                page.wait_for_function(
+                    """
+                    expected => {
+                      const row = document.querySelectorAll("#specGrid .tabulator-row")[expected.rowIndex];
+                      const rowHeader = row?.querySelector(".tabulator-row-header");
+                      const firstCell = row?.querySelector(".tabulator-cell[tabulator-field]");
+                      return row?.classList.contains("spec-validation-issue-row")
+                        && rowHeader?.textContent.trim() === expected.rowNumber
+                        && firstCell
+                        && getComputedStyle(firstCell).backgroundColor === "rgb(255, 248, 215)";
+                    }
+                    """,
+                    arg={"rowIndex": row_index, "rowNumber": row_number},
+                    timeout=10_000,
+                )
+
+            def assert_no_validation_row_highlight(row_index: int) -> None:
+                page.wait_for_function(
+                    """
+                    rowIndex => {
+                      const row = document.querySelectorAll("#specGrid .tabulator-row")[rowIndex];
+                      const firstCell = row?.querySelector(".tabulator-cell[tabulator-field]");
+                      return row
+                        && !row.classList.contains("spec-validation-issue-row")
+                        && firstCell
+                        && getComputedStyle(firstCell).backgroundColor !== "rgb(255, 248, 215)";
+                    }
+                    """,
+                    arg=row_index,
+                    timeout=10_000,
+                )
+
+            def assert_notice_extends_left() -> None:
+                notice_layout = page.evaluate(
+                    """
+                    () => {
+                      const notice = document.querySelector("#specNotice")?.getBoundingClientRect();
+                      const validate = document.querySelector("#specValidateBtn")?.getBoundingClientRect();
+                      return { noticeLeft: notice.left, noticeRight: notice.right, validateLeft: validate.left };
+                    }
+                    """
+                )
+                self.assertLess(notice_layout["noticeLeft"], notice_layout["validateLeft"] - 430)
+                self.assertLessEqual(notice_layout["noticeRight"], notice_layout["validateLeft"])
 
             def spec_header(field: str):
                 return page.locator(f'#specGrid .tabulator-header .tabulator-col[tabulator-field="{field}"]').first
@@ -2837,8 +2959,25 @@ COPY (
                 self.assertFalse(page.locator("#chartControlsResizer").is_visible())
                 assert_specs_full_width()
                 assert_specs_table_style()
+                assert_spec_row_numbers()
+                assert_spec_headers_untruncated()
                 wait_for_spec_header_title("scenario1", "scenario1 (3)")
                 scrolled_top = scroll_specs_table_down()
+                initial_dark_mode = bool(page.evaluate("() => document.body.classList.contains('dark')"))
+                page.locator("#themeBtn").click()
+                page.wait_for_function(
+                    "expected => document.body.classList.contains('dark') === expected",
+                    arg=not initial_dark_mode,
+                    timeout=10_000,
+                )
+                assert_specs_table_scroll_stable(scrolled_top)
+                page.locator("#themeBtn").click()
+                page.wait_for_function(
+                    "expected => document.body.classList.contains('dark') === expected",
+                    arg=initial_dark_mode,
+                    timeout=10_000,
+                )
+                assert_specs_table_scroll_stable(scrolled_top)
                 click_visible_scenario_checkbox()
                 wait_for_spec_header_title("scenario1", "scenario1 (4)")
                 assert_specs_table_scroll_stable(scrolled_top)
@@ -2910,6 +3049,7 @@ COPY (
                 click_column_menu_action("add-end", "scenario_from_header")
                 spec_header("scenario_from_header").wait_for(timeout=10_000)
                 wait_for_spec_header_title("scenario_from_header", "scenario_from_header (0)")
+                assert_spec_headers_untruncated()
                 assert_header_order("scenario1", "scenario_from_header")
                 spec_header("scenario_from_header").click(button="right")
                 page.locator("#specColumnContextMenu:not([hidden])").wait_for(timeout=10_000)
@@ -3089,6 +3229,8 @@ COPY (
                 page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
                 assert_specs_full_width()
                 assert_specs_table_style()
+                assert_spec_row_numbers()
+                assert_spec_headers_untruncated()
                 spec_header("group").click(button="right")
                 page.wait_for_timeout(100)
                 self.assertTrue(page.locator("#specColumnContextMenu").evaluate("node => node.hidden"))
@@ -3120,13 +3262,24 @@ COPY (
                 page.keyboard.press("Enter")
                 page.locator("#specValidateBtn").click()
                 page.locator("#specNotice.error", has_text="kpi_spec.csv row 2 actual column does not exist: MissingActual").wait_for(timeout=10_000)
+                assert_validation_row_highlight(0, "2")
+                assert_notice_extends_left()
                 assert_global_status_clear()
+                spec_cell("actual", 0).dblclick()
+                page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("price")
+                page.keyboard.press("Enter")
+                assert_no_validation_row_highlight(0)
 
                 page.locator('[data-spec-kind="filter"]').click()
                 page.locator('[data-spec-kind="filter"][aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
                 assert_specs_full_width()
                 assert_specs_table_style()
+                assert_spec_row_numbers()
+                assert_spec_headers_untruncated()
+                page.locator("#specNotice.error", has_text="AutoMissingColumn").wait_for(timeout=10_000)
+                assert_validation_row_highlight(2, "4")
+                assert_global_status_clear()
                 spec_header("theme").click(button="right")
                 page.wait_for_timeout(100)
                 self.assertTrue(page.locator("#specColumnContextMenu").evaluate("node => node.hidden"))
@@ -3148,7 +3301,12 @@ COPY (
                 page.keyboard.press("Enter")
                 page.locator("#specValidateBtn").click()
                 page.locator("#specNotice.error", has_text="MissingColumn").wait_for(timeout=10_000)
+                assert_validation_row_highlight(0, "2")
                 assert_global_status_clear()
+                spec_cell("expression", 0).dblclick()
+                page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("vehicle_age < 3")
+                page.keyboard.press("Enter")
+                assert_no_validation_row_highlight(0)
                 spec_cell("theme", 0).click(button="right")
                 page.locator("#specContextMenu:not([hidden])").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#specContextMenu").evaluate("node => getComputedStyle(node).padding"), "3px")

@@ -158,6 +158,55 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(payload["valid"])
         self.assertIn("Invalid filter", payload["errors"][0])
+        self.assertEqual(len(payload["row_issues"]), 1)
+        self.assertEqual(payload["row_issues"][0]["row_number"], 2)
+        self.assertEqual(payload["row_issues"][0]["severity"], "error")
+        self.assertEqual(payload["row_issues"][0]["message"], payload["errors"][0])
+
+    def test_validate_filter_spec_reports_row_issues_for_missing_fields(self) -> None:
+        app = create_app(self.data_path, token="", tools=["specs"], use_kpis=False, use_features=False)
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/specs/filter/validate",
+            {
+                "columns": ["theme", "name", "expression"],
+                "rows": [{"theme": "Sample", "name": "", "expression": "Age = 20"}],
+            },
+        )
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["valid"])
+        self.assertEqual(payload["errors"], ["filter_spec.csv row 2 is missing: name"])
+        self.assertEqual(payload["row_issues"], [{"row_number": 2, "severity": "error", "message": payload["errors"][0]}])
+
+    def test_validate_kpi_spec_reports_row_issues(self) -> None:
+        app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_features=False)
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/specs/kpi/validate",
+            {
+                "columns": ["group", "name", "actual", "denominator", "decimals", "format"],
+                "rows": [
+                    {
+                        "group": "Pricing",
+                        "name": "Missing actual",
+                        "actual": "MissingActual",
+                        "denominator": "",
+                        "decimals": "2",
+                        "format": "currency",
+                    }
+                ],
+            },
+        )
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["valid"])
+        self.assertEqual(payload["errors"], ["kpi_spec.csv row 2 actual column does not exist: MissingActual"])
+        self.assertEqual(payload["row_issues"], [{"row_number": 2, "severity": "error", "message": payload["errors"][0]}])
 
     def test_save_feature_spec_updates_feature_bases_in_schema(self) -> None:
         previous_cwd = Path.cwd()
@@ -198,6 +247,7 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertTrue(payload["valid"])
         self.assertEqual(payload["errors"], [])
         self.assertEqual(payload["warnings"], [])
+        self.assertEqual(payload["row_issues"], [])
 
     def test_save_feature_spec_allows_rows_not_in_dataset(self) -> None:
         previous_cwd = Path.cwd()
@@ -219,6 +269,7 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["valid"])
         self.assertEqual(payload["errors"], [])
+        self.assertEqual(payload["row_issues"], [])
         self.assertEqual(app.state.feature_spec["rows"][0]["feature"], "FutureFeature")
         self.assertIn("FutureFeature", (self.root / "specs" / "feature_spec.csv").read_text(encoding="utf-8"))
 

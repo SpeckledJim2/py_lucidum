@@ -25,13 +25,23 @@
       }
 
       .spec-topbar {
+        align-items: stretch;
+        display: flex;
+        flex: 0 0 auto;
+        flex-direction: column;
+        gap: 5px;
+        margin-bottom: 8px;
+        min-width: 0;
+      }
+
+      .spec-control-row {
         align-items: center;
         display: flex;
         flex: 0 0 auto;
         gap: 12px;
         justify-content: space-between;
-        margin-bottom: 8px;
         min-width: 0;
+        width: 100%;
       }
 
       .spec-kind-tabs {
@@ -48,19 +58,23 @@
         flex: 1 1 auto;
         gap: 8px;
         justify-content: flex-end;
+        max-width: none;
         min-width: 0;
       }
 
       .spec-file-path {
+        align-self: stretch;
         color: var(--muted);
-        flex: 1 1 auto;
+        display: block;
+        flex: 0 0 auto;
         font-size: 12px;
-        font-weight: 600;
+        font-weight: 400;
         min-width: 0;
         overflow: hidden;
-        text-align: right;
+        text-align: left;
         text-overflow: ellipsis;
         white-space: nowrap;
+        width: 100%;
       }
 
       .spec-action-button,
@@ -103,39 +117,28 @@
       }
 
       .spec-notice {
-        align-self: flex-end;
-        background: color-mix(in srgb, var(--panel) 94%, #15803d);
-        border: 1px solid color-mix(in srgb, #15803d 44%, var(--line));
-        border-radius: 6px;
+        background: transparent;
+        border: 0;
         color: #15803d;
-        flex: 0 0 auto;
+        flex: 1 1 auto;
         font-size: 12px;
-        font-weight: 650;
+        font-weight: 400;
         line-height: 1.25;
-        margin: 0 0 8px;
-        max-width: min(760px, 70%);
-        padding: 7px 9px;
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        padding: 0;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .spec-notice.error {
-        background: color-mix(in srgb, var(--panel) 92%, var(--danger));
-        border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
         color: var(--danger);
       }
 
       .spec-notice.warning {
-        background: color-mix(in srgb, var(--panel) 92%, #d97706);
-        border-color: color-mix(in srgb, #d97706 55%, var(--line));
         color: #b45309;
-      }
-
-      .spec-notice strong {
-        display: block;
-      }
-
-      .spec-notice ul {
-        margin: 5px 0 0;
-        padding-left: 18px;
       }
 
       .spec-grid {
@@ -188,6 +191,12 @@
         padding: 1px 6px;
       }
 
+      .spec-grid .tabulator-header .tabulator-col .tabulator-col-title {
+        overflow: visible;
+        text-overflow: clip;
+        white-space: nowrap;
+      }
+
       .spec-grid .tabulator-row {
         background: var(--panel) !important;
         border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
@@ -217,12 +226,24 @@
         justify-content: center;
       }
 
-      .spec-grid .tabulator-row.spec-missing-feature-row .tabulator-cell {
+      .spec-grid .tabulator-row .tabulator-cell.spec-row-number-cell {
+        align-items: center;
+        color: var(--muted) !important;
+        display: inline-flex !important;
+        justify-content: center;
+        padding: 1px 4px;
+        text-align: center;
+      }
+
+      .spec-grid .tabulator-row.spec-missing-feature-row .tabulator-cell,
+      .spec-grid .tabulator-row.spec-validation-issue-row .tabulator-cell {
         background: #fff8d7 !important;
+        color: #1f2937 !important;
       }
 
       .spec-grid .tabulator-row .tabulator-cell.spec-cell-selected {
         background: color-mix(in srgb, var(--accent) 12%, var(--panel)) !important;
+        color: var(--text) !important;
       }
 
       .spec-grid .tabulator-row .tabulator-cell.spec-cell-active {
@@ -263,14 +284,15 @@
       @media (max-width: 900px) {
         .spec-topbar {
           align-items: stretch;
+        }
+
+        .spec-control-row {
+          align-items: stretch;
           flex-direction: column;
         }
 
         .spec-file-actions {
           justify-content: stretch;
-        }
-
-        .spec-file-path {
-          text-align: left;
+          max-width: none;
         }
       }
