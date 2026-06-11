@@ -72,7 +72,6 @@ export function createSpecificationsTool({
           </div>
           <span id="specFilePath" class="spec-file-path"></span>
           <div id="specNotice" class="spec-notice hidden" role="status" aria-live="polite"></div>
-          <div id="specGenerationNotice" class="spec-generation-notice hidden" role="status" aria-live="polite"></div>
         </div>
         <div id="specGrid" class="spec-grid" tabindex="0"></div>
         <div id="specContextMenu" class="spec-context-menu" role="menu" hidden>
@@ -209,7 +208,6 @@ export function createSpecificationsTool({
     clearGlobalStatus();
     syncKindTabs();
     syncFilePath(spec);
-    syncGenerationNotice(spec);
     showValidationNotice(spec.validationResult || null);
     measureToolRender("specs", () => renderTable(spec));
     syncButtons();
@@ -478,20 +476,20 @@ export function createSpecificationsTool({
     }[kind] || "--no-*";
   }
 
-  function syncGenerationNotice(spec = specs.get(activeKind)) {
-    const target = el("specGenerationNotice");
-    if (!target) return;
-    const message = spec?.generated ? String(spec.generation_message || "") : "";
-    target.textContent = message;
-    target.title = message;
-    target.classList.toggle("hidden", !message);
-  }
-
   function syncButtons() {
     if (!rendered) return;
-    const dirty = Boolean(specs.get(activeKind)?.dirty);
-    el("specSaveBtn").disabled = loading;
-    el("specSaveBtn").classList.toggle("dirty", dirty);
+    const spec = specs.get(activeKind);
+    const dirty = Boolean(spec?.dirty);
+    const canSave = specCanSave(spec);
+    const button = el("specSaveBtn");
+    button.disabled = loading || !canSave;
+    button.classList.toggle("dirty", dirty);
+    button.classList.toggle("pending", !dirty && canSave);
+  }
+
+  function specCanSave(spec) {
+    if (!spec) return false;
+    return Boolean(spec.dirty || (spec.generated && !spec.exists));
   }
 
   function showNotice(result, isError = false) {
@@ -561,6 +559,7 @@ export function createSpecificationsTool({
   }
 
   async function saveCurrentSpec() {
+    if (loading || !specCanSave(specs.get(activeKind))) return;
     const payload = activePayload();
     if (!payload) return;
     cancelPendingValidation();

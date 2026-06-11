@@ -138,8 +138,40 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     page.goto(base_url, wait_until="domcontentloaded")
                     page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+
+                    def save_button_state() -> dict[str, bool]:
+                        return page.locator("#specSaveBtn").evaluate(
+                            """
+                            node => ({
+                              disabled: node.disabled,
+                              dirty: node.classList.contains("dirty"),
+                              pending: node.classList.contains("pending"),
+                            })
+                            """
+                        )
+
+                    def wait_for_save_button_state(expected: dict[str, bool]) -> None:
+                        page.wait_for_function(
+                            """
+                            expected => {
+                              const button = document.querySelector("#specSaveBtn");
+                              return button
+                                && button.disabled === expected.disabled
+                                && button.classList.contains("dirty") === expected.dirty
+                                && button.classList.contains("pending") === expected.pending;
+                            }
+                            """,
+                            arg=expected,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(save_button_state(), expected)
+
+                    def edit_kpi_cell(field: str, value: str) -> None:
+                        page.locator(f'#specGrid .tabulator-row .tabulator-cell[tabulator-field="{field}"]').first.dblclick()
+                        page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill(value)
+                        page.keyboard.press("Enter")
+
                     page.locator("#specsTool:not(.hidden)").click()
-                    page.locator("#specGenerationNotice", has_text="No feature spec was found").wait_for(timeout=10_000)
                     page.locator("#specFilePath", has_text="Save target:").wait_for(timeout=10_000)
                     page.locator("#specFilePath", has_text=re.compile(r"\((new file|existing file ignored by --no-features)\)")).wait_for(timeout=10_000)
                     page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
@@ -149,12 +181,29 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     self.assertFalse(kpis_path.exists())
                     page.locator('[data-spec-kind="kpi"]').click()
-                    page.locator("#specGenerationNotice", has_text="No kpi spec was found").wait_for(timeout=10_000)
                     page.locator("#specFilePath", has_text="kpi_spec.csv (new file)").wait_for(timeout=10_000)
                     page.locator("#specNotice", has_text="Valid KPI spec").wait_for(timeout=10_000)
                     page.locator(".spec-cell-placeholder", has_text="Numeric column").wait_for(timeout=10_000)
+                    wait_for_save_button_state({"disabled": False, "dirty": False, "pending": True})
                     page.locator("#specSaveBtn").click()
                     page.locator("#specNotice", has_text="KPI spec saved").wait_for(timeout=10_000)
+                    wait_for_save_button_state({"disabled": True, "dirty": False, "pending": False})
+                    edit_kpi_cell("group", "PRICE")
+                    edit_kpi_cell("name", "Price")
+                    edit_kpi_cell("actual", "price")
+                    edit_kpi_cell("decimals", "2")
+                    edit_kpi_cell("format", "currency")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const button = document.querySelector("#specSaveBtn");
+                          return button && !button.disabled && button.classList.contains("dirty") && !button.classList.contains("pending");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#specSaveBtn").click()
+                    wait_for_save_button_state({"disabled": True, "dirty": False, "pending": False})
                     self.assertEqual(page_errors, [])
                     browser.close()
             finally:
@@ -2769,10 +2818,11 @@ COPY (
                         pathFullWidth: path.width >= topbar.width * 0.95,
                         pathStartsAtLeft: Math.abs(path.left - topbar.left) <= 2,
                         noticeBelowPath: notice.top > path.bottom,
-                        noticeFullWidth: notice.width >= topbar.width * 0.95,
-                        noticeStartsAtLeft: Math.abs(notice.left - topbar.left) <= 2,
+                        noticeRightAligned: Math.abs(notice.right - save.right) <= 2,
+                        noticeUnderSave: notice.left <= save.right && notice.right >= save.left,
                         pathWeight: pathStyle.fontWeight,
                         saveRightAligned: Math.abs(save.right - topbar.right) <= 2,
+                        noticeTextAlign: noticeStyle.textAlign,
                         noticeWeight: noticeStyle.fontWeight,
                         noticeOverflow: noticeStyle.textOverflow,
                         noticeWhiteSpace: noticeStyle.whiteSpace,
@@ -2784,10 +2834,11 @@ COPY (
                 self.assertTrue(topbar_layout["pathFullWidth"])
                 self.assertTrue(topbar_layout["pathStartsAtLeft"])
                 self.assertTrue(topbar_layout["noticeBelowPath"])
-                self.assertTrue(topbar_layout["noticeFullWidth"])
-                self.assertTrue(topbar_layout["noticeStartsAtLeft"])
+                self.assertTrue(topbar_layout["noticeRightAligned"])
+                self.assertTrue(topbar_layout["noticeUnderSave"])
                 self.assertEqual(topbar_layout["pathWeight"], "400")
                 self.assertTrue(topbar_layout["saveRightAligned"])
+                self.assertEqual(topbar_layout["noticeTextAlign"], "right")
                 self.assertEqual(topbar_layout["noticeWeight"], "400")
                 self.assertEqual(topbar_layout["noticeOverflow"], "ellipsis")
                 self.assertEqual(topbar_layout["noticeWhiteSpace"], "nowrap")
@@ -2886,26 +2937,27 @@ COPY (
                     timeout=10_000,
                 )
 
-            def assert_notice_extends_left() -> None:
+            def assert_notice_right_aligned() -> None:
                 notice_layout = page.evaluate(
                     """
                     () => {
-                      const topbar = document.querySelector(".spec-topbar")?.getBoundingClientRect();
                       const path = document.querySelector("#specFilePath")?.getBoundingClientRect();
                       const notice = document.querySelector("#specNotice")?.getBoundingClientRect();
+                      const save = document.querySelector("#specSaveBtn")?.getBoundingClientRect();
+                      const noticeStyle = getComputedStyle(document.querySelector("#specNotice"));
                       return {
                         noticeBelowPath: notice.top > path.bottom,
-                        noticeLeft: notice.left,
-                        noticeWidth: notice.width,
-                        topbarLeft: topbar.left,
-                        topbarWidth: topbar.width,
+                        noticeRightAligned: Math.abs(notice.right - save.right) <= 2,
+                        noticeUnderSave: notice.left <= save.right && notice.right >= save.left,
+                        noticeTextAlign: noticeStyle.textAlign,
                       };
                     }
                     """
                 )
                 self.assertTrue(notice_layout["noticeBelowPath"])
-                self.assertLessEqual(abs(notice_layout["noticeLeft"] - notice_layout["topbarLeft"]), 2)
-                self.assertGreaterEqual(notice_layout["noticeWidth"], notice_layout["topbarWidth"] * 0.95)
+                self.assertTrue(notice_layout["noticeRightAligned"])
+                self.assertTrue(notice_layout["noticeUnderSave"])
+                self.assertEqual(notice_layout["noticeTextAlign"], "right")
 
             def spec_header(field: str):
                 return page.locator(f'#specGrid .tabulator-header .tabulator-col[tabulator-field="{field}"]').first
@@ -3478,7 +3530,7 @@ COPY (
                 page.keyboard.press("Enter")
                 page.locator("#specNotice.error", has_text="kpi_spec.csv row 2 actual column does not exist: MissingActual").wait_for(timeout=10_000)
                 assert_validation_row_highlight(0, "2")
-                assert_notice_extends_left()
+                assert_notice_right_aligned()
                 assert_global_status_clear()
                 spec_cell("actual", 0).dblclick()
                 page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("price")

@@ -166,10 +166,6 @@ def should_load_spec_file(state: Any, kind: str) -> bool:
     return configured_spec_path(state, kind) is not None
 
 
-def generation_message(kind: str) -> str:
-    return f"No {spec_label(kind).lower()} was found, so a starter spec was generated and is not saved yet."
-
-
 def starter_spec(dataset: Dataset | None, kind: str) -> tuple[list[str], list[dict[str, str]], dict[str, str]]:
     columns = default_columns(kind)
     if kind == "feature":
@@ -214,7 +210,6 @@ def read_spec_file(state: Any, kind: str, dataset: Dataset | None = None) -> dic
         "exists": exists,
         "loaded": loaded,
         "generated": generated,
-        "generation_message": generation_message(kind) if generated else "",
         "placeholders": placeholders,
         "enabled": spec_state_enabled(state, kind),
         "columns": columns,

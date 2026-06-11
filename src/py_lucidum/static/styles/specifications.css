@@ -77,21 +77,6 @@
         width: 100%;
       }
 
-      .spec-generation-notice {
-        align-self: stretch;
-        color: var(--muted);
-        display: block;
-        flex: 0 0 auto;
-        font-size: 12px;
-        line-height: 1.25;
-        min-width: 0;
-        overflow: hidden;
-        text-align: left;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        width: 100%;
-      }
-
       .spec-save-button {
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -109,7 +94,8 @@
         color: #fff;
       }
 
-      .spec-save-button.dirty {
+      .spec-save-button.dirty,
+      .spec-save-button.pending {
         background: #15803d;
         border-color: #15803d;
       }
@@ -120,6 +106,7 @@
       }
 
       .spec-notice {
+        align-self: flex-end;
         background: transparent;
         border: 0;
         color: #15803d;
@@ -129,14 +116,15 @@
         font-weight: 400;
         line-height: 1.25;
         margin: 0;
+        max-width: 100%;
         min-height: 15px;
         min-width: 0;
         overflow: hidden;
         padding: 0;
-        text-align: left;
+        text-align: right;
         text-overflow: ellipsis;
         white-space: nowrap;
-        width: 100%;
+        width: auto;
       }
 
       .spec-notice.error {
