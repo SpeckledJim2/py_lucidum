@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import subprocess
 import unittest
@@ -73,6 +74,25 @@ class StaticAssetTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("cache-control"), "no-store")
         return headers, body
+
+    def root_html_for_tools(self, tools: list[str] | None) -> str:
+        app = create_app(self.data_path, tools=tools)
+        status, headers, body = asgi_get(app, "/")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("cache-control"), "no-store")
+        return body.decode("utf-8")
+
+    def assert_tool_button_visibility(self, html: str, expected_visible_tools: set[str]) -> None:
+        all_tools = {"column_profile", "line_bar", "histogram", "uk_map", "glm", "gbm", "specs"}
+        for tool_id in all_tools:
+            with self.subTest(tool=tool_id):
+                match = re.search(rf'<button\b[^>]*\bdata-tool="{re.escape(tool_id)}"[^>]*>', html)
+                self.assertIsNotNone(match)
+                class_match = re.search(r'\bclass="([^"]*)"', match.group(0))
+                self.assertIsNotNone(class_match)
+                classes = set(class_match.group(1).split())
+                self.assertEqual("hidden" not in classes, tool_id in expected_visible_tools)
 
     def app_css_contract(self) -> str:
         module_paths = ["/static/app.css", *self.CSS_MODULE_PATHS]
@@ -962,6 +982,18 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".gbm-model-list .gbm-empty-state", css)
         self.assertNotIn('id="gbmActiveModelSelect"', html)
         self.assertNotIn("?v=", html)
+
+    def test_initial_tool_buttons_match_enabled_tools(self) -> None:
+        cases = [
+            (None, {"column_profile", "line_bar", "histogram", "uk_map"}),
+            (["line-bar"], {"column_profile", "line_bar"}),
+            (["gbm"], {"column_profile", "glm", "gbm"}),
+            (["specs"], {"column_profile", "specs"}),
+        ]
+        for tools, expected_visible_tools in cases:
+            with self.subTest(tools=tools):
+                html = self.root_html_for_tools(tools)
+                self.assert_tool_button_visibility(html, expected_visible_tools)
 
     def test_static_app_assets_disable_cache(self) -> None:
         self.assert_no_store("/static/app.js")

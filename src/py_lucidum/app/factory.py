@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import os
+import re
 import threading
 import time
 from collections.abc import Sequence
@@ -47,6 +48,8 @@ DEFAULT_KEYS = {
     "longitude",
     "source",
 }
+TOOL_BUTTON_RE = re.compile(r'<button\b[^>]*\bdata-tool="([^"]+)"[^>]*>')
+CLASS_ATTR_RE = re.compile(r'\bclass="([^"]*)"')
 
 
 def favicon_media_type(path: Path) -> str:
@@ -56,10 +59,29 @@ def favicon_media_type(path: Path) -> str:
     return "image/x-icon"
 
 
-def index_html(dataset_name: str) -> str:
+def render_initial_tool_visibility(html_text: str, enabled_tools: Sequence[str]) -> str:
+    enabled = {str(tool) for tool in enabled_tools}
+
+    def replace_tool_button(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        tool_id = match.group(1)
+        class_match = CLASS_ATTR_RE.search(tag)
+        if not class_match:
+            return tag
+        classes = [class_name for class_name in class_match.group(1).split() if class_name != "hidden"]
+        if tool_id not in enabled:
+            classes.append("hidden")
+        class_value = " ".join(classes)
+        return f"{tag[:class_match.start(1)]}{class_value}{tag[class_match.end(1):]}"
+
+    return TOOL_BUTTON_RE.sub(replace_tool_button, html_text)
+
+
+def index_html(dataset_name: str, enabled_tools: Sequence[str]) -> str:
     title = f"lucidum · {html.escape(dataset_name)}" if dataset_name else "lucidum"
     html_text = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    return html_text.replace("<title>lucidum</title>", f"<title>{title}</title>", 1)
+    html_text = html_text.replace("<title>lucidum</title>", f"<title>{title}</title>", 1)
+    return render_initial_tool_visibility(html_text, enabled_tools)
 
 
 def monitor_html(dataset_name: str) -> str:
@@ -157,7 +179,7 @@ def create_app(
 
     @app.get("/")
     def index() -> HTMLResponse:
-        return no_store_html_response(index_html(app.state.dataset.path.name))
+        return no_store_html_response(index_html(app.state.dataset.path.name, app.state.enabled_tools))
 
     app.mount("/static", NoStoreStaticFiles(directory=STATIC_DIR), name="static")
 
