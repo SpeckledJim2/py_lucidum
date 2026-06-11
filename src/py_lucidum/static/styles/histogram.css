@@ -19,7 +19,7 @@
 
       .histogram-wrap {
         display: grid;
-        grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+        grid-template-columns: minmax(240px, 310px) minmax(0, 1fr);
         gap: 10px;
         height: 100%;
         min-height: 0;
@@ -50,8 +50,9 @@
 
       .histogram-grid {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 6px;
+        border: solid var(--line);
+        border-width: 1px 0 0 1px;
+        border-radius: 0;
         color: var(--text);
         flex: 1 1 auto;
         min-height: 0;
@@ -73,7 +74,8 @@
       }
 
       .histogram-grid.tabulator {
-        border-color: var(--line);
+        border: solid var(--line);
+        border-width: 1px 0 0 1px;
       }
 
       .histogram-grid.tabulator .tabulator-header .tabulator-col {
@@ -88,6 +90,11 @@
         display: flex;
         min-height: 20px;
         padding: 1px 6px;
+      }
+
+      .histogram-grid.tabulator .tabulator-header .tabulator-col[tabulator-field="value"] .tabulator-col-content {
+        justify-content: flex-end;
+        text-align: right;
       }
 
       .histogram-grid .tabulator-row,

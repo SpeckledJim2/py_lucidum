@@ -154,7 +154,7 @@ export function createHistogramTool({
         selectable: false,
         columns: [
           { title: "Statistic", field: "statistic", headerSort: false, widthGrow: 1.1 },
-          { title: "Value", field: "value", headerSort: false, hozAlign: "right", widthGrow: 0.9 },
+          { title: "Value", field: "value", headerSort: false, headerHozAlign: "right", hozAlign: "right", widthGrow: 0.9 },
         ],
       });
     }).catch((error) => {
