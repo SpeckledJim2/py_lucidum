@@ -90,6 +90,16 @@
         max-width: min(760px, calc(100% - 190px));
       }
 
+      .profile-column-search-row {
+        flex: 0 0 auto;
+        margin-bottom: 6px;
+      }
+
+      .profile-column-search {
+        height: 26px;
+        font-size: 11px;
+      }
+
       .profile-full-calc-button {
         min-height: 24px;
         padding: 2px 8px;

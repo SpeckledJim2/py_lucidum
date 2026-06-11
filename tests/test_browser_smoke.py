@@ -3666,6 +3666,20 @@ COPY (
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")
+                profile_requests_before_search = profile_requests
+                page.locator("#profileColumnSearch").fill("Postcode")
+                page.wait_for_function(
+                    '() => document.querySelector("#profileWrap .profile-summary-row[data-profile-column=\\"vehicle_age\\"]")?.hidden === true'
+                )
+                postcode_area_row = page.locator('#profileWrap .profile-summary-row[data-profile-column="PostcodeArea"]')
+                self.assertEqual(postcode_area_row.get_attribute("aria-selected"), "true")
+                self.assertFalse(postcode_area_row.evaluate("node => node.hidden"))
+                self.assertEqual(profile_requests, profile_requests_before_search)
+                page.locator("#profileColumnSearch").fill("")
+                page.wait_for_function(
+                    '() => document.querySelector("#profileWrap .profile-summary-row[data-profile-column=\\"vehicle_age\\"]")?.hidden === false'
+                )
+                self.assertEqual(profile_requests, profile_requests_before_search)
                 vehicle_age_row = page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]')
                 self.assertEqual(vehicle_age_row.evaluate("node => getComputedStyle(node).userSelect"), "none")
                 page.evaluate(

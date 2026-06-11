@@ -91,6 +91,7 @@
         savedFilterThemesInitialised: false,
         activeFilter: "",
         profileSort: { key: "", direction: "asc" },
+        profileColumnSearch: "",
         profileDetailSort: { key: "count", direction: "desc" },
         profileSummaryMode: "auto",
         selectedProfileColumn: "",

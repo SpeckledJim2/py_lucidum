@@ -120,15 +120,16 @@ export function createColumnProfileTool({
       renderProfileDetailLoading(state.selectedProfileColumn);
       scheduleProfileDetailRefresh(state.selectedProfileColumn);
     } else {
-      renderProfileDetailEmpty("Select a column to view details.");
+      renderProfileDetailEmpty(profileEmptyDetailMessage());
     }
   }
 
   function renderProfileTable(data, columns = sortedProfileColumns(data.columns || [])) {
     closeProfileColumnContextMenu();
     ensureSelectedProfileColumn(columns);
+    const visibleColumns = searchedProfileColumns(columns);
     const rows = columns.map((column) => `
-      <tr class="profile-summary-row${column.name === state.selectedProfileColumn ? " selected" : ""}" data-profile-column="${escapeHtml(column.name)}" tabindex="0" aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}">
+      <tr class="profile-summary-row${column.name === state.selectedProfileColumn ? " selected" : ""}" data-profile-column="${escapeHtml(column.name)}" tabindex="0" aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}"${profileColumnMatchesSearch(column.name) ? "" : " hidden"}>
         <td class="profile-column-name">${escapeHtml(column.name)}</td>
         <td>${profileTypeBadgeHtml(column)}</td>
         <td>${profileMissingHtml(column)}</td>
@@ -136,13 +137,14 @@ export function createColumnProfileTool({
         <td>${profileRangeHtml(column)}</td>
       </tr>
     `).join("");
-    const empty = columns.length
-      ? ""
-      : '<div class="profile-empty">No columns were found in the loaded dataset.</div>';
+    const empty = profileTableEmptyHtml(columns, visibleColumns);
     const currentDetail = el("profileDetailPane")?.innerHTML || profileDetailEmptyHtml("Select a column to view details.");
     el("profileWrap").innerHTML = `
       <div class="profile-summary-pane">
         ${profileSummaryActionsHtml(data)}
+        <div class="profile-column-search-row">
+          <input id="profileColumnSearch" class="search profile-column-search" type="search" placeholder="Search columns" aria-label="Search profile columns" autocomplete="off" value="${escapeHtml(state.profileColumnSearch || "")}" />
+        </div>
         <div class="profile-table-scroll">
           <table class="profile-table">
             <thead>
@@ -166,6 +168,7 @@ export function createColumnProfileTool({
 
   function bindProfileTable() {
     el("profileFullCalcBtn")?.addEventListener("click", calculateFullProfile);
+    el("profileColumnSearch")?.addEventListener("input", handleProfileColumnSearch);
     el("profileWrap").querySelectorAll("[data-profile-sort]").forEach((button) => {
       button.addEventListener("click", () => setProfileSort(button.dataset.profileSort));
     });
@@ -178,6 +181,43 @@ export function createColumnProfileTool({
         selectProfileColumn(row.dataset.profileColumn || "");
       });
     });
+  }
+
+  function profileTableEmptyHtml(columns, visibleColumns) {
+    if (!columns.length) {
+      return '<div class="profile-empty">No columns were found in the loaded dataset.</div>';
+    }
+    return `<div id="profileSearchEmpty" class="profile-empty"${visibleColumns.length ? " hidden" : ""}>No columns match the search.</div>`;
+  }
+
+  function handleProfileColumnSearch(event) {
+    state.profileColumnSearch = event.target.value;
+    applyProfileColumnSearch();
+  }
+
+  function applyProfileColumnSearch() {
+    if (!state.lastProfileData) return;
+    const columns = sortedProfileColumns(state.lastProfileData.columns || []);
+    const selectedBefore = state.selectedProfileColumn;
+    ensureSelectedProfileColumn(columns);
+    el("profileWrap").querySelectorAll("[data-profile-column]").forEach((row) => {
+      row.hidden = !profileColumnMatchesSearch(row.dataset.profileColumn || "");
+    });
+    syncProfileSelectedRows();
+    syncProfileSearchEmptyState(columns);
+    if (state.selectedProfileColumn === selectedBefore) return;
+    if (!state.selectedProfileColumn) {
+      renderProfileDetailEmpty("No columns match the search.");
+      return;
+    }
+    renderProfileDetailLoading(state.selectedProfileColumn);
+    refreshSelectedProfileDetail();
+  }
+
+  function syncProfileSearchEmptyState(columns) {
+    const empty = el("profileSearchEmpty");
+    if (!empty) return;
+    empty.hidden = Boolean(searchedProfileColumns(columns).length);
   }
 
   async function calculateFullProfile() {
@@ -397,13 +437,32 @@ export function createColumnProfileTool({
   }
 
   function ensureSelectedProfileColumn(columns) {
-    if (!columns.length) {
+    const visibleColumns = searchedProfileColumns(columns);
+    if (!visibleColumns.length) {
       state.selectedProfileColumn = "";
       return;
     }
-    if (!columns.some((column) => column.name === state.selectedProfileColumn)) {
-      state.selectedProfileColumn = columns[0].name;
+    if (!visibleColumns.some((column) => column.name === state.selectedProfileColumn)) {
+      state.selectedProfileColumn = visibleColumns[0].name;
     }
+  }
+
+  function searchedProfileColumns(columns) {
+    return columns.filter((column) => profileColumnMatchesSearch(column.name));
+  }
+
+  function profileColumnMatchesSearch(columnName) {
+    const query = profileColumnSearchQuery();
+    if (!query) return true;
+    return String(columnName || "").toLowerCase().includes(query);
+  }
+
+  function profileColumnSearchQuery() {
+    return String(state.profileColumnSearch || "").trim().toLowerCase();
+  }
+
+  function profileEmptyDetailMessage() {
+    return profileColumnSearchQuery() ? "No columns match the search." : "Select a column to view details.";
   }
 
   function selectProfileColumn(columnName) {
