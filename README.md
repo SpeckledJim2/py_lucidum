@@ -111,6 +111,7 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
+- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When `--tools specs` is also enabled, disabled spec kinds open as empty editable templates instead of preloading default-discovered CSVs.
 - `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `glm` after installing the `glm` extra to train GLMs. Add `models` after installing the `glm` and `gbm` extras to enable both modelling tools; requesting `gbm` also enables `glm` so model comparison and tabulation workflows remain available. Add `specs` to edit feature, KPI, and filter spec CSV files from the browser.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:

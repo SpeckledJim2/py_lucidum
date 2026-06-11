@@ -86,6 +86,25 @@ class SpecificationsToolTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_default_specs(self) -> None:
+        specs_dir = self.root / "specs"
+        specs_dir.mkdir()
+        (specs_dir / "feature_spec.csv").write_text(
+            "Feature,Grouping,Base,min,max,banding,scenario1\n"
+            "Age,Driver,40,20,80,5,feature\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "kpi_spec.csv").write_text(
+            "group,name,actual,denominator,decimals,format\n"
+            "Pricing,Premium,Premium,N,2,currency\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "filter_spec.csv").write_text(
+            "theme,name,expression\n"
+            "Sample,Age 20,Age = 20\n",
+            encoding="utf-8",
+        )
+
     def test_specs_tool_can_be_enabled_and_registers_routes(self) -> None:
         app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False, use_features=False)
         paths = {route.path for route in app.routes}
@@ -110,6 +129,64 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertFalse(payload["exists"])
         self.assertEqual(payload["columns"], ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1"])
         self.assertEqual(Path(payload["path"]), (self.root / "specs" / "feature_spec.csv").resolve())
+
+    def test_disabled_specs_do_not_preload_default_discovered_files(self) -> None:
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            self.write_default_specs()
+            app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False, use_features=False)
+            feature_status, _, feature_body = asgi_get(app, "/api/specs/feature")
+            kpi_status, _, kpi_body = asgi_get(app, "/api/specs/kpi")
+            filter_status, _, filter_body = asgi_get(app, "/api/specs/filter")
+            schema_status, _, schema_body = asgi_get(app, "/api/schema")
+        finally:
+            os.chdir(previous_cwd)
+
+        payloads = {
+            "feature": json.loads(feature_body),
+            "kpi": json.loads(kpi_body),
+            "filter": json.loads(filter_body),
+        }
+        self.assertEqual((feature_status, kpi_status, filter_status, schema_status), (200, 200, 200, 200))
+        self.assertEqual(payloads["feature"]["columns"], ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1"])
+        self.assertEqual(payloads["kpi"]["columns"], ["group", "name", "actual", "denominator", "decimals", "format"])
+        self.assertEqual(payloads["filter"]["columns"], ["theme", "name", "expression"])
+        for kind, payload in payloads.items():
+            with self.subTest(kind=kind):
+                self.assertFalse(payload["enabled"])
+                self.assertTrue(payload["exists"])
+                self.assertFalse(payload["loaded"])
+                self.assertEqual(payload["rows"], [])
+                self.assertEqual(payload["row_count"], 0)
+                self.assertEqual(Path(payload["path"]), (self.root / "specs" / f"{kind}_spec.csv").resolve())
+        schema = json.loads(schema_body)
+        self.assertEqual(schema["filters"], [])
+        self.assertEqual(schema["kpis"], [])
+        self.assertEqual(schema["feature_bases"], {})
+
+    def test_disabled_explicit_spec_path_loads_for_editor_only(self) -> None:
+        kpis_path = self.root / "custom_kpis.csv"
+        kpis_path.write_text(
+            "group,name,actual,denominator,decimals,format\n"
+            "Pricing,Premium,Premium,N,2,currency\n",
+            encoding="utf-8",
+        )
+
+        app = create_app(self.data_path, token="", tools=["specs"], kpis_path=kpis_path, use_kpis=False)
+        status, _, body = asgi_get(app, "/api/specs/kpi")
+        schema_status, _, schema_body = asgi_get(app, "/api/schema")
+
+        payload = json.loads(body)
+        schema = json.loads(schema_body)
+        self.assertEqual((status, schema_status), (200, 200))
+        self.assertFalse(payload["enabled"])
+        self.assertTrue(payload["exists"])
+        self.assertTrue(payload["loaded"])
+        self.assertEqual(payload["rows"][0]["name"], "Premium")
+        self.assertEqual(Path(payload["path"]), kpis_path.resolve())
+        self.assertEqual(app.state.kpis, [])
+        self.assertEqual(schema["kpis"], [])
 
     def test_save_kpi_spec_creates_file_and_refreshes_loaded_metadata(self) -> None:
         previous_cwd = Path.cwd()
@@ -141,6 +218,72 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertTrue(payload["valid"])
         self.assertEqual(app.state.kpis[0]["name"], "Premium")
         self.assertEqual((self.root / "specs" / "kpi_spec.csv").read_text(encoding="utf-8").splitlines()[0], "group,name,actual,denominator,decimals,format")
+
+    def test_disabled_spec_save_writes_without_loading_schema_metadata(self) -> None:
+        save_payloads = {
+            "feature": {
+                "columns": ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1"],
+                "rows": [{"Feature": "Age", "Grouping": "Driver", "Base": "40", "min": "20", "max": "80", "banding": "5", "scenario1": "feature"}],
+            },
+            "kpi": {
+                "columns": ["group", "name", "actual", "denominator", "decimals", "format"],
+                "rows": [{"group": "Pricing", "name": "Premium", "actual": "Premium", "denominator": "Weight", "decimals": "2", "format": "currency"}],
+            },
+            "filter": {
+                "columns": ["theme", "name", "expression"],
+                "rows": [{"theme": "Sample", "name": "Age 20", "expression": "Age = 20"}],
+            },
+        }
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False, use_features=False)
+            save_results = {
+                kind: asgi_post_json(app, f"/api/specs/{kind}/save", payload)
+                for kind, payload in save_payloads.items()
+            }
+            reloaded_specs = {
+                kind: asgi_get(app, f"/api/specs/{kind}")
+                for kind in save_payloads
+            }
+            schema_status, _, schema_body = asgi_get(app, "/api/schema")
+            reload_status, _, reload_body = asgi_post_json(app, "/api/reload", {})
+        finally:
+            os.chdir(previous_cwd)
+
+        for kind, result in save_results.items():
+            status, _, body = result
+            payload = json.loads(body)
+            with self.subTest(kind=kind, action="save"):
+                self.assertEqual(status, 200)
+                self.assertTrue(payload["valid"])
+                self.assertTrue(payload["saved"])
+                self.assertFalse(payload["spec"]["enabled"])
+                self.assertTrue(payload["spec"]["exists"])
+                self.assertTrue(payload["spec"]["loaded"])
+                self.assertEqual(payload["spec"]["rows"], save_payloads[kind]["rows"])
+                self.assertTrue((self.root / "specs" / f"{kind}_spec.csv").exists())
+        for kind, result in reloaded_specs.items():
+            status, _, body = result
+            payload = json.loads(body)
+            with self.subTest(kind=kind, action="get"):
+                self.assertEqual(status, 200)
+                self.assertFalse(payload["enabled"])
+                self.assertTrue(payload["loaded"])
+                self.assertEqual(payload["rows"], save_payloads[kind]["rows"])
+
+        schema = json.loads(schema_body)
+        reloaded_schema = json.loads(reload_body)
+        self.assertEqual((schema_status, reload_status), (200, 200))
+        self.assertEqual(schema["filters"], [])
+        self.assertEqual(schema["kpis"], [])
+        self.assertEqual(schema["feature_bases"], {})
+        self.assertEqual(reloaded_schema["filters"], [])
+        self.assertEqual(reloaded_schema["kpis"], [])
+        self.assertEqual(reloaded_schema["feature_bases"], {})
+        self.assertEqual(app.state.saved_filters, [])
+        self.assertEqual(app.state.kpis, [])
+        self.assertEqual(app.state.feature_spec["rows"], [])
 
     def test_validate_filter_spec_checks_duckdb_expression(self) -> None:
         app = create_app(self.data_path, token="", tools=["specs"], use_kpis=False, use_features=False)

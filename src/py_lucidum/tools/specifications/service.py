@@ -33,6 +33,11 @@ FEATURE_SPEC_DEFAULT_COLUMNS = [
     "scenario1",
 ]
 SPEC_KINDS = ("feature", "kpi", "filter")
+SPEC_FILE_NAMES = {
+    "feature": "feature_spec.csv",
+    "kpi": "kpi_spec.csv",
+    "filter": "filter_spec.csv",
+}
 
 
 def normalise_kind(raw: object) -> str:
@@ -83,23 +88,69 @@ def spec_state_enabled(state: Any, kind: str) -> bool:
     raise ValueError(f"Unknown specification kind {kind!r}")
 
 
+def configured_spec_path(state: Any, kind: str) -> Path | None:
+    if kind == "feature":
+        path = getattr(state, "features_path", None)
+    elif kind == "kpi":
+        path = getattr(state, "kpis_path", None)
+    elif kind == "filter":
+        path = getattr(state, "filters_path", None)
+    else:
+        raise ValueError(f"Unknown specification kind {kind!r}")
+    if not path:
+        return None
+    return Path(path).expanduser().resolve()
+
+
+def default_editor_spec_path(kind: str) -> Path:
+    return (Path.cwd() / "specs" / SPEC_FILE_NAMES[kind]).resolve()
+
+
+def session_saved_spec_paths(state: Any) -> dict[str, Path]:
+    paths = getattr(state, "spec_editor_saved_paths", None)
+    if isinstance(paths, dict):
+        return paths
+    paths = {}
+    state.spec_editor_saved_paths = paths
+    return paths
+
+
+def remember_session_saved_spec_path(state: Any, kind: str, path: Path) -> None:
+    session_saved_spec_paths(state)[kind] = path
+
+
 def spec_path(state: Any, kind: str) -> Path:
+    saved = session_saved_spec_paths(state).get(kind)
+    if saved:
+        return Path(saved)
+
     if kind == "feature":
         resolved = getattr(state, "resolved_features_path", None)
         if resolved:
             return Path(resolved)
-        return resolve_features_path(getattr(state, "features_path", None), use_features=True)  # type: ignore[return-value]
+        if spec_state_enabled(state, kind):
+            return resolve_features_path(getattr(state, "features_path", None), use_features=True)  # type: ignore[return-value]
     if kind == "kpi":
         resolved = getattr(state, "resolved_kpis_path", None)
         if resolved:
             return Path(resolved)
-        return resolve_kpis_path(getattr(state, "kpis_path", None), use_kpis=True)  # type: ignore[return-value]
+        if spec_state_enabled(state, kind):
+            return resolve_kpis_path(getattr(state, "kpis_path", None), use_kpis=True)  # type: ignore[return-value]
     if kind == "filter":
         resolved = getattr(state, "resolved_filters_path", None)
         if resolved:
             return Path(resolved)
-        return resolve_filters_path(getattr(state, "filters_path", None), use_saved_filters=True)  # type: ignore[return-value]
-    raise ValueError(f"Unknown specification kind {kind!r}")
+        if spec_state_enabled(state, kind):
+            return resolve_filters_path(getattr(state, "filters_path", None), use_saved_filters=True)  # type: ignore[return-value]
+    return configured_spec_path(state, kind) or default_editor_spec_path(kind)
+
+
+def should_load_spec_file(state: Any, kind: str) -> bool:
+    if kind in session_saved_spec_paths(state):
+        return True
+    if spec_state_enabled(state, kind):
+        return True
+    return configured_spec_path(state, kind) is not None
 
 
 def read_spec_file(state: Any, kind: str) -> dict[str, Any]:
@@ -108,7 +159,8 @@ def read_spec_file(state: Any, kind: str) -> dict[str, Any]:
     columns = default_columns(kind)
     rows: list[dict[str, str]] = []
     exists = path.exists()
-    if exists:
+    loaded = exists and should_load_spec_file(state, kind)
+    if loaded:
         with path.open(newline="", encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle)
             if reader.fieldnames:
@@ -123,6 +175,7 @@ def read_spec_file(state: Any, kind: str) -> dict[str, Any]:
         "path": str(path),
         "file_name": path.name,
         "exists": exists,
+        "loaded": loaded,
         "enabled": spec_state_enabled(state, kind),
         "columns": columns,
         "rows": rows,
@@ -353,6 +406,7 @@ def save_spec_file(state: Any, dataset: Dataset, kind: str, columns: list[str], 
         return result
     path = spec_path(state, kind)
     write_csv_atomic(path, columns, rows)
+    remember_session_saved_spec_path(state, kind, path)
     refresh_loaded_spec_state(state, kind)
     result["saved"] = True
     result["path"] = str(path)

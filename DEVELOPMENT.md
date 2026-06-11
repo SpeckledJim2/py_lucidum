@@ -129,9 +129,8 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - `Base` values are exposed through schema and GBM SHAP config payloads. For numeric chart axes, rescale matching uses the displayed numeric band containing the base, falling back to the nearest displayed numeric band when needed. GLM tabulations also use `Base` to define base cells, and numeric `min/max/banding` to define rating-table grids.
 - The free-form DuckDB filter expression lives in the collapsible footer; hiding the footer does not clear the active filter.
 - Saved-filter rows support `Single`, `Multi`, and `Grouped` modes. `Single` keeps one selected row, `Multi` toggles rows and combines them with the active All/Any/Not all/None operator, and `Grouped` toggles rows while combining rows within a theme with `OR` and selected themes with `AND`.
-- `--no-filters` disables saved-filter discovery.
-- `--no-features` disables feature spec discovery.
-- The opt-in Specifications tool is enabled with `--tools specs`. It exposes Feature, KPI, and Filter spec screens backed by `/api/specs/*`, edits raw CSV fields rather than normalized schema metadata, validates the same file contracts used at startup/reload, and atomically saves the selected spec file before refreshing the in-memory app metadata.
+- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for app metadata and prevent the Specifications tool from preloading default-discovered files for those disabled spec kinds.
+- The opt-in Specifications tool is enabled with `--tools specs`. It exposes Feature, KPI, and Filter spec screens backed by `/api/specs/*`, edits raw CSV fields rather than normalized schema metadata, validates the same file contracts used at startup/reload, and atomically saves the selected spec file. Saving a disabled spec writes the CSV for editing but leaves the running app metadata disabled until restart/recreate without the corresponding `--no-*` option.
 - Filters are DuckDB `WHERE` expressions and apply before column profiling, chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 
 **Column profile**
