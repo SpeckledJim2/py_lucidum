@@ -168,6 +168,112 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_spec_save_preserves_open_filter_and_kpi_sidebar_groups(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "vehicle_age,price,value\n"
+                "1,100,10\n"
+                "2,200,20\n"
+                "3,300,30\n",
+                encoding="utf-8",
+            )
+            filters_path = tmp_path / "filter_spec.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "AGE,Young,vehicle_age < 3\n",
+                encoding="utf-8",
+            )
+            kpis_path = tmp_path / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "PRICE,Price,price,N,0,number\n"
+                "VALUE,Value,value,N,0,number\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line-bar", "specs"],
+                filters_path=filters_path,
+                use_saved_filters=True,
+                kpis_path=kpis_path,
+                use_kpis=True,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+
+                    page.locator("#filterCollapseBtn").click()
+                    page.locator('.saved-filter-theme[data-filter-theme="AGE"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#filterCollapseBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector('.saved-filter-theme[data-filter-theme="AGE"]')?.getAttribute("aria-expanded") === "true"
+                          && !document.querySelector('.saved-filter-option[data-filter-theme="AGE"]')?.hidden
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator("#specsTool:not(.hidden)").click()
+                    page.locator('[data-spec-kind="filter"]').click()
+                    page.locator('[data-spec-kind="filter"][aria-selected="true"]').wait_for(timeout=10_000)
+                    page.locator('#specGrid .tabulator-row .tabulator-cell[tabulator-field="name"]').first.dblclick()
+                    page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("Young updated")
+                    page.keyboard.press("Enter")
+                    page.locator("#specSaveBtn").click()
+                    page.locator("#specNotice", has_text="Filter spec saved").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#filterCollapseBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector('.saved-filter-theme[data-filter-theme="AGE"]')?.getAttribute("aria-expanded") === "true"
+                          && Boolean(document.querySelector('.saved-filter-option[data-filter-name="Young updated"]:not([hidden])'))
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator("#kpiCollapseBtn").click()
+                    page.locator('.kpi-theme[data-kpi-group="VALUE"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#kpiCollapseBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector('.kpi-theme[data-kpi-group="VALUE"]')?.getAttribute("aria-expanded") === "true"
+                          && !document.querySelector('.kpi-option[data-kpi-group="VALUE"]')?.hidden
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator('[data-spec-kind="kpi"]').click()
+                    page.locator('[data-spec-kind="kpi"][aria-selected="true"]').wait_for(timeout=10_000)
+                    page.locator("#specGrid .tabulator-row").nth(1).locator('.tabulator-cell[tabulator-field="name"]').dblclick()
+                    page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("Value updated")
+                    page.keyboard.press("Enter")
+                    page.locator("#specSaveBtn").click()
+                    page.locator("#specNotice", has_text="KPI spec saved").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#kpiCollapseBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector('.kpi-theme[data-kpi-group="VALUE"]')?.getAttribute("aria-expanded") === "true"
+                          && Boolean([...document.querySelectorAll('.kpi-option[data-kpi-group="VALUE"]:not([hidden])')]
+                            .some((node) => node.textContent.includes("Value updated")))
+                        """,
+                        timeout=10_000,
+                    )
+
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_tool_loads_feature_grid(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

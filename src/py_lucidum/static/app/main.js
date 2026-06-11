@@ -1445,19 +1445,17 @@
         const previousSavedFilterSelection = savedFilterSelectionSnapshot();
         const previousCollapsedSavedFilterThemes = new Set(state.collapsedSavedFilterThemes);
         const previousSavedFilterThemesInitialised = state.savedFilterThemesInitialised;
+        const previousCollapsedKpiGroups = new Set(state.collapsedKpiGroups);
+        const previousKpiGroupsInitialised = state.kpiGroupsInitialised;
         state.schema = await api("/api/schema");
         const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
         clearToolCaches({ preserve: ["specs"] });
         renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
         setFilterRowMeta(state.schema.row_count);
-        if (filtersUnchanged) {
-          state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
-          state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
-        } else {
-          state.collapsedSavedFilterThemes = new Set();
-          state.savedFilterThemesInitialised = false;
-        }
-        state.kpiGroupsInitialised = false;
+        state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
+        state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
+        state.collapsedKpiGroups = previousCollapsedKpiGroups;
+        state.kpiGroupsInitialised = previousKpiGroupsInitialised;
         renderSavedFilters();
         if (filtersUnchanged) restoreSavedFilterSelection(previousSavedFilterSelection);
         renderKpis();
