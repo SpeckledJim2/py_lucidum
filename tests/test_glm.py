@@ -598,6 +598,33 @@ if result.get("iteration") != 10:
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["formula"]["fit_intercept"], fit_intercept, formula)
 
+        for formula in ("1", "actualNumerator ~ 1", "0 + 1", "offset(log(denominator))"):
+            result = validate_request(
+                dataset,
+                {
+                    "formula": formula,
+                    "response_column": "actualNumerator",
+                    "family": "normal",
+                    "training_scope": "all",
+                },
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertFalse(result["formula"]["has_predictor_terms"], formula)
+            self.assertTrue(result["formula"]["intercept_only"], formula)
+
+        for formula in ("0", "1 + 0", "actualNumerator ~ -1"):
+            result = validate_request(
+                dataset,
+                {
+                    "formula": formula,
+                    "response_column": "actualNumerator",
+                    "family": "normal",
+                    "training_scope": "all",
+                },
+            )
+            self.assertFalse(result["ok"], formula)
+            self.assertIn("predictor term or an intercept", "; ".join(result["errors"]))
+
     def test_regularization_validation_defaults_and_rejects_invalid_manual_values(self) -> None:
         dataset = Dataset(self.data_path)
         base_payload = {
@@ -848,6 +875,77 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertIn("deviance", result["diagnostics"])
         self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
         self.assertTrue(store.artifact_path(model_id, "feature_importance").exists())
+        self.assertTrue(store.artifact_path(model_id, "predictions").exists())
+        self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
+        self.assertTrue(store.artifact_path(model_id, "manifest").exists())
+
+    def test_intercept_only_demo_formula_fits_and_tabulates_constant_predictions(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.demo_dataset_copy_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "1",
+                "response_column": "PREMIUM",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "none"},
+                "label": "Intercept only",
+            },
+        )
+        model_id = result["model_id"]
+        manifest = store.manifest(model_id)
+        internal_column = manifest["formula"].get("internal_intercept_column")
+
+        self.assertTrue(manifest["formula"]["fit_intercept"])
+        self.assertFalse(manifest["formula"]["estimator_fit_intercept"])
+        self.assertTrue(manifest["formula"]["intercept_only"])
+        self.assertEqual(manifest["formula"]["fitted"], "__lucidum_glm_target ~ 1")
+        self.assertTrue(internal_column)
+        self.assertNotIn(internal_column, manifest["source_columns"])
+        self.assertEqual(len(result["coefficients"]), 1)
+        self.assertEqual(result["coefficients"][0]["term"], "(Intercept)")
+        self.assertEqual(result["coefficients"][0]["features"], [])
+        self.assertEqual(result["feature_importance"], [])
+
+        prediction_path = store.artifact_path(model_id, "predictions")
+        with duckdb.connect(database=":memory:") as con:
+            row_count, scored_count, min_prediction, max_prediction = con.execute(
+                f"""
+SELECT COUNT(*), COUNT(glm_prediction), MIN(glm_prediction), MAX(glm_prediction)
+FROM read_parquet({sql_literal(str(prediction_path))})
+"""
+            ).fetchone()
+        self.assertEqual(row_count, manifest["row_count"])
+        self.assertEqual(scored_count, manifest["row_count"])
+        self.assertAlmostEqual(float(min_prediction), float(max_prediction), places=10)
+
+        dataset.register_data_source_provider(GlmSourceProvider(store))
+        source = next(source for source in dataset.data_sources() if source["id"] == store.source_id(model_id))
+        self.assertNotIn(internal_column, [column["name"] for column in source["columns"]])
+
+        payload = build_tabulations(dataset, store, {"model_ids": [model_id]}, {"rows": []})
+        self.assertEqual(payload["model_ids"], [model_id])
+        self.assertEqual(payload["models"][0]["status"], "tabulated")
+        base_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "base.parquet")
+        self.assertEqual(len(base_rows), 1)
+        self.assertAlmostEqual(float(base_rows[0]["tabulated_linear"]), float(result["coefficients"][0]["estimate"]), places=10)
+
+        tabulated_path = store.artifact_path(model_id, "tabulated_predictions")
+        with duckdb.connect(database=":memory:") as con:
+            tab_count, max_delta = con.execute(
+                f"""
+SELECT COUNT(*), MAX(ABS(t.glm_tabulated_prediction - p.glm_prediction))
+FROM read_parquet({sql_literal(str(tabulated_path))}) t
+INNER JOIN read_parquet({sql_literal(str(prediction_path))}) p USING (__lucidum_row_id)
+"""
+            ).fetchone()
+        self.assertEqual(tab_count, manifest["row_count"])
+        self.assertLessEqual(float(max_delta or 0.0), 1e-8)
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
         self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
         self.assertTrue(store.artifact_path(model_id, "manifest").exists())

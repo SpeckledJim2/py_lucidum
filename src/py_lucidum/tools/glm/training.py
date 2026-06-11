@@ -31,6 +31,7 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 _GLUM_FIRST_IMPORT_SAW_LIGHTGBM: bool | None = None
 FEATURE_IMPORTANCE_METRIC = "weighted_mean_abs_centered_linear_predictor_contribution"
 FEATURE_IMPORTANCE_METRIC_LABEL = "GLM eta MAD"
+INTERNAL_INTERCEPT_COLUMN_BASE = "__lucidum_glm_intercept_only"
 
 
 def _elapsed_ms(started: float) -> float:
@@ -42,6 +43,43 @@ def _safe_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def internal_intercept_column_name(columns: list[str]) -> str:
+    existing = {str(column) for column in columns}
+    column = INTERNAL_INTERCEPT_COLUMN_BASE
+    suffix = 2
+    while column in existing:
+        column = f"{INTERNAL_INTERCEPT_COLUMN_BASE}_{suffix}"
+        suffix += 1
+    return column
+
+
+def internal_intercept_column_from_manifest(manifest: dict[str, Any]) -> str:
+    formula = manifest.get("formula")
+    if not isinstance(formula, dict):
+        return ""
+    column = str(formula.get("internal_intercept_column") or "").strip()
+    return column
+
+
+def add_internal_intercept_column(frame: Any, column: str) -> Any:
+    if column:
+        frame[column] = 1.0
+    return frame
+
+
+def estimator_intercept_value(estimator: Any, manifest: dict[str, Any]) -> float:
+    value = _safe_float(getattr(estimator, "intercept_", 0.0))
+    internal_column = internal_intercept_column_from_manifest(manifest)
+    if internal_column:
+        feature_names = [str(name) for name in getattr(estimator, "feature_names_", [])]
+        coefficients = list(getattr(estimator, "coef_", []))
+        for index, name in enumerate(feature_names):
+            if name == internal_column and index < len(coefficients):
+                value += _safe_float(coefficients[index])
+                break
+    return value
 
 
 def _result_timings(result: dict[str, Any]) -> dict[str, Any]:
@@ -592,6 +630,7 @@ def coefficient_rows(
     source_columns: list[str] | None = None,
     *,
     include_inference: bool = True,
+    internal_intercept_column: str = "",
 ) -> list[dict[str, Any]]:
     coefficient_features = coefficient_feature_rows(model, source_columns or [])
     coefficient_feature_by_name = {
@@ -602,12 +641,17 @@ def coefficient_rows(
     def features_for_coefficient(term: str, coefficient_index: int) -> list[str]:
         if term.lower() == "intercept" or term == "(Intercept)":
             return []
+        if internal_intercept_column and term == internal_intercept_column:
+            return []
         features = coefficient_feature_by_name.get(term)
         if features is None and 0 <= coefficient_index < len(coefficient_features):
             features = coefficient_features[coefficient_index]
         if not features and source_columns:
             features = column_tokens(term, source_columns)
         return list(features or [])
+
+    def is_intercept_term(term: str) -> bool:
+        return term.lower() == "intercept" or term == "(Intercept)" or bool(internal_intercept_column and term == internal_intercept_column)
 
     table = None
     if include_inference:
@@ -620,8 +664,9 @@ def coefficient_rows(
         coefficient_index = 0
         for term, row in table.iterrows():
             raw_name = str(term)
-            name = "(Intercept)" if raw_name.lower() == "intercept" else raw_name
-            features = features_for_coefficient(raw_name, coefficient_index)
+            intercept_term = is_intercept_term(raw_name)
+            name = "(Intercept)" if intercept_term else raw_name
+            features = [] if intercept_term else features_for_coefficient(raw_name, coefficient_index)
             if raw_name.lower() != "intercept" and raw_name != "(Intercept)":
                 coefficient_index += 1
             rows.append(
@@ -648,10 +693,10 @@ def coefficient_rows(
         estimates = list(getattr(model, "coef_", []))
     return [
         {
-            "term": term,
+            "term": "(Intercept)" if is_intercept_term(term) else term,
             "features": (
                 []
-                if has_intercept and index == 0
+                if (has_intercept and index == 0) or is_intercept_term(term)
                 else features_for_coefficient(term, index - 1 if has_intercept else index)
             ),
             "estimate": jsonable(estimate, np, pd),
@@ -942,8 +987,20 @@ def _train_model_impl(
     drop_first = glm_formula_drop_first(regularization_mode)
     formula = validation["formula"]
     fit_intercept = bool(formula.get("fit_intercept", True))
+    has_predictor_terms = bool(formula.get("has_predictor_terms", True))
+    intercept_only = bool(formula.get("intercept_only", False))
     context = formula_context(np)
     offset_terms = [str(term) for term in formula.get("offset_terms", [])]
+
+    internal_intercept_column = ""
+    estimator_fitted_formula = str(formula["fitted"])
+    estimator_fit_intercept = fit_intercept
+    if intercept_only:
+        internal_intercept_column = internal_intercept_column_name(list(frame.columns))
+        add_internal_intercept_column(frame, internal_intercept_column)
+        estimator_fitted_formula = f"{TARGET_COLUMN} ~ 0 + `{internal_intercept_column}`"
+        estimator_fit_intercept = False
+
     offset_values = offset_values_for_frame(frame, offset_terms, context, np, pd)
 
     response = pd.to_numeric(frame[response_column], errors="coerce")
@@ -983,12 +1040,15 @@ def _train_model_impl(
     estimator_kwargs = {
         "family": glum_family(glum, family, float(family_param) if family_param is not None else None),
         "link": "auto",
-        "fit_intercept": fit_intercept,
-        "formula": str(formula["fitted"]),
+        "fit_intercept": estimator_fit_intercept,
+        "formula": estimator_fitted_formula,
         "drop_first": drop_first,
         "robust": True,
         "scale_predictors": bool(regularization.get("scale_predictors")),
     }
+    if internal_intercept_column:
+        estimator_kwargs["P1"] = np.zeros(1)
+        estimator_kwargs["P2"] = np.zeros((1, 1))
     if regularization_mode == "auto":
         estimator = GeneralizedLinearRegressorCV(
             l1_ratio=regularization.get("l1_ratio") or [0.0, 0.5, 1.0],
@@ -1037,6 +1097,7 @@ def _train_model_impl(
             pd,
             source_columns,
             include_inference=not is_penalized,
+            internal_intercept_column=internal_intercept_column,
         )
         feature_importance = glm_feature_importance_rows(
             estimator,
@@ -1092,9 +1153,14 @@ def _train_model_impl(
             "stripped": formula["stripped"],
             "rhs": formula["rhs"],
             "fitted": formula["fitted"],
+            "estimator_fitted": estimator_fitted_formula,
             "offset_terms": offset_terms,
             "drop_first": drop_first,
             "fit_intercept": fit_intercept,
+            "estimator_fit_intercept": estimator_fit_intercept,
+            "has_predictor_terms": has_predictor_terms,
+            "intercept_only": intercept_only,
+            "internal_intercept_column": internal_intercept_column,
         },
         "diagnostics": jsonable(diagnostics, np, pd),
         "feature_importance": jsonable(feature_importance, np, pd),
@@ -1145,8 +1211,11 @@ __all__ = [
     "FEATURE_IMPORTANCE_METRIC",
     "FEATURE_IMPORTANCE_METRIC_LABEL",
     "MissingGlmDependency",
+    "add_internal_intercept_column",
+    "estimator_intercept_value",
     "glm_dependencies",
     "glm_feature_importance_rows",
+    "internal_intercept_column_from_manifest",
     "train_model",
     "write_dataframe_parquet",
 ]

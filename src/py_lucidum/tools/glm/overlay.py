@@ -36,7 +36,14 @@ from .tabulation import (
     _json_value,
     _term_groups,
 )
-from .training import MissingGlmDependency, formula_context, glm_dependencies, offset_values_for_frame
+from .training import (
+    MissingGlmDependency,
+    add_internal_intercept_column,
+    formula_context,
+    glm_dependencies,
+    internal_intercept_column_from_manifest,
+    offset_values_for_frame,
+)
 from .validation import TARGET_COLUMN
 
 
@@ -1260,6 +1267,7 @@ def predict_glm_numerators(
     pd: Any,
 ) -> Any:
     work = frame.copy()
+    add_internal_intercept_column(work, internal_intercept_column_from_manifest(manifest))
     work[TARGET_COLUMN] = 0.0
     valid = pd.Series(True, index=work.index)
     predict_kwargs: dict[str, Any] = {"context": context}

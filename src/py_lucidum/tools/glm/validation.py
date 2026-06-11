@@ -60,6 +60,8 @@ class FormulaParts:
     fitted_formula: str
     offset_terms: list[str]
     fit_intercept: bool
+    has_predictor_terms: bool
+    intercept_only: bool
 
 
 def family_options_payload() -> list[dict[str, Any]]:
@@ -456,6 +458,14 @@ def formula_fit_intercept(rhs: str) -> bool:
     return fit_intercept
 
 
+def formula_has_predictor_terms(rhs: str) -> bool:
+    for _sign, term in top_level_formula_terms(rhs):
+        normalized = re.sub(r"\s+", "", term)
+        if normalized not in {"0", "1"}:
+            return True
+    return False
+
+
 def strip_offset_terms(rhs: str) -> tuple[str, list[str]]:
     remaining = str(rhs or "")
     offset_terms: list[str] = []
@@ -501,6 +511,10 @@ def parse_formula(raw_formula: Any, response_column: Any) -> FormulaParts:
         raise ValueError("Enter the right-hand side of the GLM formula")
     fitted_rhs, offset_terms = strip_offset_terms(rhs)
     fit_intercept = formula_fit_intercept(fitted_rhs)
+    has_predictor_terms = formula_has_predictor_terms(fitted_rhs)
+    intercept_only = fit_intercept and not has_predictor_terms
+    if not fit_intercept and not has_predictor_terms:
+        raise ValueError("GLM formula must include at least one predictor term or an intercept")
     return FormulaParts(
         raw_formula=raw,
         stripped_formula=stripped,
@@ -509,6 +523,8 @@ def parse_formula(raw_formula: Any, response_column: Any) -> FormulaParts:
         fitted_formula=f"{TARGET_COLUMN} ~ {fitted_rhs}",
         offset_terms=offset_terms,
         fit_intercept=fit_intercept,
+        has_predictor_terms=has_predictor_terms,
+        intercept_only=intercept_only,
     )
 
 
@@ -634,6 +650,8 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
             "fitted": formula.fitted_formula,
             "offset_terms": formula.offset_terms,
             "fit_intercept": formula.fit_intercept,
+            "has_predictor_terms": formula.has_predictor_terms,
+            "intercept_only": formula.intercept_only,
         }
     return result
 

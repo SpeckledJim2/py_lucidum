@@ -26,7 +26,15 @@ from .store import GlmModelStore, json_safe_number
 from .terms import column_tokens as _column_tokens
 from .terms import model_matrix as _model_matrix
 from .terms import term_groups as _term_groups
-from .training import formula_context, glm_dependencies, offset_values_for_frame, write_dataframe_parquet
+from .training import (
+    add_internal_intercept_column,
+    estimator_intercept_value,
+    formula_context,
+    glm_dependencies,
+    internal_intercept_column_from_manifest,
+    offset_values_for_frame,
+    write_dataframe_parquet,
+)
 from .validation import TARGET_COLUMN
 
 
@@ -992,7 +1000,7 @@ def _build_model_tabulations(
                 pd,
             )[0]
         )
-    base_value = float(getattr(estimator, "intercept_", 0.0) or 0.0) + cumulative_adjustment
+    base_value = estimator_intercept_value(estimator, manifest) + cumulative_adjustment
     base_table = pd.DataFrame([{"table_id": "base", "status": "ok", "tabulated_linear": base_value, "base_adjustment": cumulative_adjustment}])
     write_dataframe_parquet(base_table, _table_file_path(store, model_id, "base"))
     tables.insert(0, {"table_id": "base", "label": "base", "index": 0, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": base_value, "max": base_value})
@@ -1027,6 +1035,7 @@ def _build_model_tabulations(
     tabulated["glm_tabulation_missing"] = missing
 
     score_frame = frame.copy()
+    add_internal_intercept_column(score_frame, internal_intercept_column_from_manifest(manifest))
     score_frame[TARGET_COLUMN] = 0.0
     score_mask = pd.Series(True, index=frame.index)
     offset_values = offset_values_for_frame(score_frame, offset_terms, context, np, pd)
