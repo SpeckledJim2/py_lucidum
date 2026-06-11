@@ -205,7 +205,8 @@ class GlmToolTests(unittest.TestCase):
         path.write_text(
             "y,Segment,SAMPLE\n"
             "10,A,training\n"
-            "20,B,training\n",
+            "20,B,training\n"
+            "30,C,test\n",
             encoding="utf-8",
         )
         return path
@@ -1298,44 +1299,94 @@ ORDER BY __lucidum_row_id
 
         self.assertEqual(captured_columns, [["Age"]])
 
-    def test_glm_tabulation_vectorized_categorical_unseen_rows_stay_missing(self) -> None:
-        self.require_glm_dependencies()
-        data_path = self.categorical_unseen_data_path()
-        dataset = Dataset(data_path)
-        store = GlmModelStore(data_path)
-        result = train_model(
-            dataset,
-            store,
-            {
-                "formula": "C(Segment)",
-                "response_column": "y",
-                "family": "normal",
-                "training_scope": "training",
-                "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
-            },
-        )
-        model_id = result["model_id"]
+    def test_glm_workspace_changes_after_same_path_dataset_replacement(self) -> None:
+        data_path = self.root / "replace.csv"
         data_path.write_text(
-            "y,Segment,SAMPLE\n"
-            "10,A,training\n"
-            "20,B,training\n"
-            "30,C,test\n",
+            "ID,LIMIT_BAL\n"
+            "1,1000\n"
+            "2,2000\n",
             encoding="utf-8",
         )
-        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        model_dir = store.create_model_dir("replace-glm")
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": "replace-glm",
+                "label": "replace-glm",
+                "created_at": "2026-05-25T00:00:00Z",
+                "family": "normal",
+                "link": "auto",
+                "response_column": "ID",
+                "denominator_column": "",
+                "source_columns": ["ID", "LIMIT_BAL"],
+                "sources": {"predictions": "glm:replace-glm:predictions"},
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 1.5 AS glm_prediction
+  UNION ALL
+  SELECT 2, 2.5
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model("replace-glm")
+        original_root = store.root
 
-        build_tabulations(dataset, store, {"model_ids": [model_id]}, {"rows": [{"feature": "Segment", "grouping": "Test", "base": "A"}]})
-        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+        before_app = create_app(data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        before_status, before_body = asgi_get(before_app, "/api/schema")
+        before_source_ids = [source["id"] for source in json.loads(before_body)["data_sources"]]
 
-        self.assertEqual(tab_manifest["diagnostics"]["missing_tabulated_prediction_rows"], 1)
-        self.assertIn("1 dataset level for Segment", "\n".join(tab_manifest["warnings"]))
-        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "Segment.parquet")
-        self.assertEqual(next(row["status"] for row in table_rows if row["Segment"] == "C"), "unseen")
-        with dataset.lock:
-            rows = dataset.con.execute(
-                f"SELECT COUNT(*), COUNT(glm_tabulated_prediction), SUM(CASE WHEN glm_tabulation_missing THEN 1 ELSE 0 END) FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'tabulated_predictions')))})"
-            ).fetchone()
-        self.assertEqual(rows, (3, 2, 1))
+        data_path.write_text(
+            "ID,LIMIT_BAL,EXTRA\n"
+            "1,1000,A\n"
+            "2,2000,B\n"
+            "3,3000,C\n",
+            encoding="utf-8",
+        )
+        replacement_store = GlmModelStore(data_path)
+        after_app = create_app(data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        after_status, after_body = asgi_get(after_app, "/api/schema")
+        after_source_ids = [source["id"] for source in json.loads(after_body)["data_sources"]]
+
+        self.assertEqual(before_status, 200)
+        self.assertIn("glm:replace-glm:predictions", before_source_ids)
+        self.assertNotEqual(replacement_store.root, original_root)
+        self.assertEqual(after_status, 200)
+        self.assertNotIn("glm:replace-glm:predictions", after_source_ids)
+
+    def test_glm_tabulation_vectorized_categorical_unseen_rows_stay_missing(self) -> None:
+        self.require_glm_dependencies()
+        _glum, _glr, _glrcv, np, pd = glm_dependencies()
+        del _glum, _glr, _glrcv
+        frame = pd.DataFrame({"Segment": ["A", "B", "C", None]})
+        table = pd.DataFrame(
+            {
+                "Segment": ["A", "B", "C"],
+                "tabulated_linear": [0.0, 0.25, None],
+                "status": ["ok", "ok", "unseen"],
+            }
+        )
+
+        component = glm_tabulation._component_from_table(
+            frame,
+            table,
+            ["Segment"],
+            {"Segment": {"kind": "categorical"}},
+            np,
+            pd,
+        )
+
+        self.assertEqual(component.iloc[0], 0.0)
+        self.assertEqual(component.iloc[1], 0.25)
+        self.assertTrue(pd.isna(component.iloc[2]))
+        self.assertTrue(pd.isna(component.iloc[3]))
 
     def test_glm_tabulation_vectorized_interaction_lookup_writes_components(self) -> None:
         self.require_glm_dependencies()
@@ -1925,6 +1976,58 @@ ORDER BY __lucidum_row_id
         self.assertEqual(store.active_model_id(), second["model_id"])
         store.delete_model(second["model_id"])
         self.assertIsNone(store.active_model_id())
+
+    def test_glm_workspaces_are_isolated_by_dataset_file(self) -> None:
+        other_path = self.root / "other.csv"
+        other_path.write_text(
+            "ID,LIMIT_BAL\n"
+            "1,1000\n"
+            "2,2000\n",
+            encoding="utf-8",
+        )
+        store = GlmModelStore(other_path)
+        model_dir = store.create_model_dir("other-glm")
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": "other-glm",
+                "label": "other-glm",
+                "created_at": "2026-05-25T00:00:00Z",
+                "family": "normal",
+                "link": "auto",
+                "response_column": "ID",
+                "denominator_column": "",
+                "source_columns": ["ID", "LIMIT_BAL"],
+                "sources": {"predictions": "glm:other-glm:predictions"},
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 1.5 AS glm_prediction
+  UNION ALL
+  SELECT 2, 2.5
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model("other-glm")
+
+        current_app = create_app(self.data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        current_status, current_body = asgi_get(current_app, "/api/schema")
+        current_source_ids = [source["id"] for source in json.loads(current_body)["data_sources"]]
+
+        other_app = create_app(other_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        other_status, other_body = asgi_get(other_app, "/api/schema")
+        other_source_ids = [source["id"] for source in json.loads(other_body)["data_sources"]]
+
+        self.assertEqual(current_status, 200)
+        self.assertNotIn("glm:other-glm:predictions", current_source_ids)
+        self.assertEqual(other_status, 200)
+        self.assertIn("glm:other-glm:predictions", other_source_ids)
 
     def test_glm_api_build_job_and_model_mutations(self) -> None:
         self.require_glm_dependencies()

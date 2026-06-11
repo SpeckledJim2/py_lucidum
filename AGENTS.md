@@ -44,7 +44,7 @@ Use this map before opening large files:
 - GBM is opt-in via `--tools gbm` and optional Python dependencies from `pip install -e ".[gbm]"`.
 - LightGBM, pandas, and numpy must be imported lazily in GBM training paths, not at base app import time.
 - On macOS, LightGBM may need Homebrew `libomp`; missing native runtime errors should stay actionable rather than surfacing as server 500s.
-- GBM artifacts are sidecars under `.lucidum/models/gbm/` beside the dataset and must not be committed.
+- GBM and GLM artifacts are sidecars under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/` beside the dataset folder and must not be committed.
 - The GBM SHAP tab reads saved SHAP sidecars only. Keep SHAP aggregation in backend GBM modules, keep SHAP UI/chart code separate, return dense grids for 3D surfaces, and lazy-load vendored ECharts GL only for those surface plots.
 
 ## Before Committing

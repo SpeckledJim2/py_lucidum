@@ -74,6 +74,18 @@ lucidum path/to/my_data.csv --open
 
 Parquet is recommended for normal use because DuckDB can read it efficiently.
 
+## Dataset Workspaces
+
+Lucidum stores model sidecars beside the data folder under a hidden dataset-scoped workspace:
+
+```text
+.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/
+```
+
+The dataset slug comes from the CSV or Parquet filename. The dataset signature is based on the file size, modification time, row count, and schema fingerprint. This means one folder can safely contain many datasets: models trained for one file do not attach to another file in the same folder.
+
+If a dataset file is replaced or edited, it gets a new signature workspace. Existing GLM/GBM models from the previous version remain on disk but are not shown or used; rebuild models after changing the source file. Older root-level `.lucidum/models/` folders are ignored by current Lucidum versions.
+
 ## Common Options
 
 ```bash
@@ -211,7 +223,7 @@ The GLM tool is opt-in. Column Profile remains enabled and opens first:
 
 The Formula builder accepts either a full `response ~ terms` Formulaic formula, or RHS-only `terms` that use the sidebar Actual metric as the response. Lines can include `#` comments; comments are stored with the model but stripped before fitting. The formula context includes `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms. Explicit `offset(...)` terms are supported; they are stripped from the fitted formula, stored in the manifest, and passed to `glum.fit()` and prediction.
 
-Families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`, with `link="auto"` in the first implementation. Tweedie power and negative-binomial theta can be set from the family parameter input. If a sidebar Weight is selected, GLM fits `Actual / Weight` with `sample_weight=Weight`, stores `glm_prediction` back on the original Actual scale, and exposes `glm_prediction_rate = glm_prediction / Weight`. Saved models live beside the dataset under `.lucidum/models/glm/`, and the active model publishes a `glm:<model_id>:predictions` data source.
+Families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`, with `link="auto"` in the first implementation. Tweedie power and negative-binomial theta can be set from the family parameter input. If a sidebar Weight is selected, GLM fits `Actual / Weight` with `sample_weight=Weight`, stores `glm_prediction` back on the original Actual scale, and exposes `glm_prediction_rate = glm_prediction / Weight`. Saved models live under the current dataset workspace in `models/glm/`, and the active model publishes a `glm:<model_id>:predictions` data source.
 
 The `Tabulations` tab builds insurance-style rating tables on demand from selected saved GLMs. It uses the fitted `glum` estimator, formula terms, feature spec `Base/min/max/banding`, and any stored `offset(...)` expressions to create base-adjusted linear-predictor tables, table/plot payloads, and row-level `glm_tabulated_prediction`. Single-model GLM non-base tables can be rebased from a selected cell into either a compatible one-way table row or the `base` table; the app preserves raw tables, rewrites adjusted tables, and recalculates `glm_tabulated_prediction`. Numeric feature spec metadata that is missing or blank is estimated from scored rows and reported in the GLM notice. Existing GLMs built before `estimator.pkl` persistence must be rebuilt before tabulation.
 
@@ -256,7 +268,7 @@ The `10k` and `100k` SHAP row options save a deterministic random sample from al
 
 When feature interaction constraint groups are selected during training, saved `shap_values.parquet` files also include one grouped SHAP contribution column per selected grouping, named like `POSTCODE_INTERACTION_GROUP`. These grouped columns and the active model's prediction column are available in the Line and Bar Actual chooser under separate Dataset, Model predictions, and SHAP values sections.
 
-If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under `.lucidum/models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved beside the dataset under `.lucidum/models/gbm/`.
+If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under the current dataset workspace in `models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved under the same dataset-version workspace.
 
 During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Use the inline `All` / `Tail` control to switch between the full history and a focused tail view. Long evaluation histories are sampled only for browser rendering; saved training logs and artifacts remain complete.
 
@@ -276,7 +288,7 @@ When the active sample source has both `training` and `test` rows, either from a
 
 Choosing a saved GBM in the sidebar, or selecting one model in the Model navigator and clicking Activate, makes it active and refreshes the feature table, parameter table, training mode, evaluation plot, tree viewer, SHAP screen, and plot-ready model outputs.
 
-The Model navigator shows the active model with a green dot and lets users select one or more rows for model-folder actions: rename or activate one selected model folder, or delete all selected model folders from `.lucidum/models/gbm/`. Deleting the active model selects the newest remaining model when one exists.
+The Model navigator shows the active model with a green dot and lets users select one or more rows for model-folder actions: rename or activate one selected model folder, or delete all selected model folders from the current dataset workspace. Deleting the active model selects the newest remaining model when one exists.
 
 The tree viewer reads saved `tree_table.parquet` artifacts, shows a searchable tree list, and renders the selected tree with zoom and colour controls. Tree split labels use compact numeric formatting, tightly wrap categorical splits on the diagram, and summarize long categorical splits while keeping the full split in tooltips. Node cover shows count and percentage of the selected tree, and clicking a node highlights its path from the root.
 

@@ -66,7 +66,7 @@ Reset restores `tabulations_raw/`, clears `rebasing`, and rebuilds `tabulated_pr
 
 ## Artifacts
 
-Each model directory under `.lucidum/models/glm/<model_id>/` may contain:
+Each GLM model directory under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/glm/<model_id>/` may contain:
 
 - `estimator.pkl`: fitted `glum` estimator.
 - `tabulation_manifest.json`: tables, warnings, diagnostics, feature metadata, and build time.

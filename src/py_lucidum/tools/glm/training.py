@@ -1107,6 +1107,7 @@ def _train_model_impl(
         },
         "source_columns": source_columns,
         "sources": {"predictions": store.source_id(model_id)},
+        "dataset": store.dataset_metadata(),
         "row_count": int(len(frame)),
         "training_rows": int(fit_mask.sum()),
         "scored_rows": scored_rows,

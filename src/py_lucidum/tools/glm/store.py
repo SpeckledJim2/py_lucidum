@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import duckdb
 
-from py_lucidum.core import Dataset, ModelPredictionSource, quote_ident, sql_literal
+from py_lucidum.core import Dataset, ModelPredictionSource, dataset_workspace_metadata, quote_ident, sql_literal
 
 from .validation import denominator_valid_sql, dataset_relation_sql
 
@@ -122,9 +122,36 @@ def prediction_source_select_sql(
 
 
 class GlmModelStore:
-    def __init__(self, dataset_path: str | Path):
+    def __init__(self, dataset_path: str | Path, dataset: Dataset | None = None):
         self.dataset_path = Path(dataset_path).expanduser().resolve()
-        self.root = self.dataset_path.parent / ".lucidum" / "models" / "glm"
+        self._dataset = dataset
+        self._workspace_stat_key: tuple[int, int] | None = None
+        self._workspace_metadata: dict[str, Any] | None = None
+        self._root: Path | None = None
+
+    @property
+    def root(self) -> Path:
+        return self.dataset_workspace_root() / "models" / "glm"
+
+    def dataset_workspace_root(self) -> Path:
+        self._ensure_workspace_cache()
+        if self._root is None:
+            raise ValueError("Could not resolve dataset workspace")
+        return self._root
+
+    def dataset_metadata(self) -> dict[str, Any]:
+        self._ensure_workspace_cache()
+        return dict(self._workspace_metadata or {})
+
+    def _ensure_workspace_cache(self) -> None:
+        stat = self.dataset_path.stat()
+        stat_key = (int(stat.st_size), int(stat.st_mtime_ns))
+        if self._workspace_stat_key == stat_key and self._workspace_metadata is not None and self._root is not None:
+            return
+        metadata = dataset_workspace_metadata(self.dataset_path, self._dataset)
+        self._workspace_metadata = metadata
+        self._root = self.dataset_path.parent / ".lucidum" / "datasets" / str(metadata["slug"]) / str(metadata["signature"])
+        self._workspace_stat_key = stat_key
 
     @property
     def active_path(self) -> Path:

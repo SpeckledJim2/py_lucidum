@@ -2927,6 +2927,118 @@ COPY (
         store.activate_model("m1")
         return store
 
+    def write_minimal_gbm_source(self, data_path: Path, model_id: str = "m1") -> GbmModelStore:
+        store = GbmModelStore(data_path)
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": model_id,
+                "created_at": "2026-05-25T00:00:00Z",
+                "objective": "poisson",
+                "metric": "poisson",
+                "response_column": "ID",
+                "offset_column": None,
+                "best_iteration": 1,
+                "training_rows": 1,
+                "test_rows": 1,
+                "scored_rows": 2,
+                "source_columns": ["ID", "LIMIT_BAL"],
+                "sources": {"predictions": f"gbm:{model_id}:predictions"},
+            },
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 1.5 AS gbm_prediction
+  UNION ALL
+  SELECT 2, 2.5
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model(model_id)
+        return store
+
+    def test_gbm_ignores_legacy_root_model_store(self) -> None:
+        legacy_root = self.root / ".lucidum" / "models" / "gbm" / "legacy"
+        legacy_root.mkdir(parents=True)
+        (legacy_root / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "model_id": "legacy",
+                    "label": "legacy",
+                    "created_at": "2026-05-25T00:00:00Z",
+                    "response_column": "ID",
+                    "source_columns": ["ID", "LIMIT_BAL"],
+                    "sources": {"predictions": "gbm:legacy:predictions"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 1.5 AS gbm_prediction
+) TO {sql_literal(str(legacy_root / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+
+        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        status, body = asgi_get(app, "/api/schema")
+        source_ids = [source["id"] for source in json.loads(body)["data_sources"]]
+
+        self.assertEqual(status, 200)
+        self.assertNotIn("gbm:legacy:predictions", source_ids)
+        self.assertNotEqual(GbmModelStore(self.data_path).root, self.root / ".lucidum" / "models" / "gbm")
+
+    def test_gbm_workspaces_are_isolated_by_dataset_file_and_signature(self) -> None:
+        other_path = self.root / "credit.csv"
+        other_path.write_text(
+            "ID,LIMIT_BAL\n"
+            "1,1000\n"
+            "2,2000\n",
+            encoding="utf-8",
+        )
+        other_store = self.write_minimal_gbm_source(other_path, "credit-model")
+        original_other_root = other_store.root
+
+        current_app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        current_status, current_body = asgi_get(current_app, "/api/schema")
+        current_source_ids = [source["id"] for source in json.loads(current_body)["data_sources"]]
+
+        other_app = create_app(other_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        other_status, other_body = asgi_get(other_app, "/api/schema")
+        other_source_ids = [source["id"] for source in json.loads(other_body)["data_sources"]]
+
+        other_path.write_text(
+            "ID,LIMIT_BAL,EXTRA\n"
+            "1,1000,A\n"
+            "2,2000,B\n"
+            "3,3000,C\n",
+            encoding="utf-8",
+        )
+        replacement_store = GbmModelStore(other_path)
+        replacement_app = create_app(other_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        replacement_status, replacement_body = asgi_get(replacement_app, "/api/schema")
+        replacement_source_ids = [source["id"] for source in json.loads(replacement_body)["data_sources"]]
+
+        self.assertEqual(current_status, 200)
+        self.assertNotIn("gbm:credit-model:predictions", current_source_ids)
+        self.assertEqual(other_status, 200)
+        self.assertIn("gbm:credit-model:predictions", other_source_ids)
+        self.assertNotEqual(replacement_store.root, original_other_root)
+        self.assertEqual(replacement_status, 200)
+        self.assertNotIn("gbm:credit-model:predictions", replacement_source_ids)
+
     def write_single_split_tree_model(
         self,
         model_id: str,

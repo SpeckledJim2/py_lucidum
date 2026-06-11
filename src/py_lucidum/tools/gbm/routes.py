@@ -18,7 +18,7 @@ from .trees import ebm_gain_summary, tree_detail, tree_summary
 
 
 def register(app: FastAPI, context: AppContext) -> None:
-    store = GbmModelStore(context.dataset.path)
+    store = GbmModelStore(context.dataset.path, dataset=context.dataset)
     context.dataset.register_data_source_provider(GbmSourceProvider(store))
     jobs = GbmJobManager()
     app.state.gbm_store = store

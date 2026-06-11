@@ -14,7 +14,7 @@ from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payl
 
 
 def register(app: FastAPI, context: AppContext) -> None:
-    store = GlmModelStore(context.dataset.path)
+    store = GlmModelStore(context.dataset.path, dataset=context.dataset)
     context.dataset.register_data_source_provider(GlmSourceProvider(store))
     jobs = GlmJobManager()
     app.state.glm_store = store

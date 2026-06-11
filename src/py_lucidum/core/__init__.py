@@ -20,12 +20,16 @@ from .metrics import (
 )
 from .schema import ColumnInfo, duckdb_error_message, infer_kind, is_numeric_kind, json_number, parse_positive_float, suggested_band_width
 from .sql import quote_ident, sql_literal
+from .workspace import dataset_slug, dataset_workspace_metadata, dataset_workspace_root
 
 __all__ = [
     "build_denominator_summary_sql",
     "build_response_summary_sql",
     "ColumnInfo",
     "Dataset",
+    "dataset_slug",
+    "dataset_workspace_metadata",
+    "dataset_workspace_root",
     "denominator_valid_condition",
     "denominator_value_sql",
     "denominator_warnings",

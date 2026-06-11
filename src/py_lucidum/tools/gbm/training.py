@@ -798,6 +798,7 @@ def train_model(
             "predictions": store.source_id(model_id, "predictions"),
             **({"shap_long": store.source_id(model_id, "shap_long"), "shap_summary": store.source_id(model_id, "shap_summary")} if shap_summary_rows else {}),
         },
+        "dataset": store.dataset_metadata(),
     }
     if feature_scenario:
         manifest["feature_scenario"] = feature_scenario
