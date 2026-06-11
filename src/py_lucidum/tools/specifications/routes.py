@@ -12,7 +12,7 @@ def register(app: FastAPI, context: AppContext) -> None:
     async def get_spec(request: Request, kind: str) -> dict:
         context.check_token(request)
         try:
-            return read_spec_file(app.state, normalise_kind(kind))
+            return read_spec_file(app.state, normalise_kind(kind), context.dataset)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

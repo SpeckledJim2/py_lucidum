@@ -115,7 +115,7 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertIn("/api/specs/{kind}/validate", paths)
         self.assertIn("/api/specs/{kind}/save", paths)
 
-    def test_get_missing_default_feature_spec_returns_editable_empty_table(self) -> None:
+    def test_get_missing_default_feature_spec_returns_generated_starter(self) -> None:
         previous_cwd = Path.cwd()
         try:
             os.chdir(self.root)
@@ -127,8 +127,41 @@ class SpecificationsToolTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertFalse(payload["exists"])
+        self.assertFalse(payload["loaded"])
+        self.assertTrue(payload["generated"])
+        self.assertIn("starter spec was generated", payload["generation_message"])
         self.assertEqual(payload["columns"], ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1"])
+        self.assertEqual([row["Feature"] for row in payload["rows"]], ["Age", "Premium", "Weight", "Segment"])
+        self.assertTrue(all(row["Grouping"] == row["Base"] == row["min"] == row["max"] == row["banding"] == row["scenario1"] == "" for row in payload["rows"]))
         self.assertEqual(Path(payload["path"]), (self.root / "specs" / "feature_spec.csv").resolve())
+        self.assertFalse((self.root / "specs" / "feature_spec.csv").exists())
+
+    def test_missing_kpi_and_filter_specs_return_generated_placeholder_rows(self) -> None:
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            app = create_app(self.data_path, token="", tools=["specs"])
+            kpi_status, _, kpi_body = asgi_get(app, "/api/specs/kpi")
+            filter_status, _, filter_body = asgi_get(app, "/api/specs/filter")
+        finally:
+            os.chdir(previous_cwd)
+
+        kpi_payload = json.loads(kpi_body)
+        filter_payload = json.loads(filter_body)
+        self.assertEqual((kpi_status, filter_status), (200, 200))
+        self.assertFalse(kpi_payload["exists"])
+        self.assertFalse(filter_payload["exists"])
+        self.assertFalse(kpi_payload["loaded"])
+        self.assertFalse(filter_payload["loaded"])
+        self.assertTrue(kpi_payload["generated"])
+        self.assertTrue(filter_payload["generated"])
+        self.assertEqual(kpi_payload["rows"], [{"group": "", "name": "", "actual": "", "denominator": "", "decimals": "", "format": ""}])
+        self.assertEqual(filter_payload["rows"], [{"theme": "", "name": "", "expression": ""}])
+        self.assertEqual(kpi_payload["placeholders"]["actual"], "Numeric column")
+        self.assertEqual(kpi_payload["placeholders"]["format"], "number, currency, or percent")
+        self.assertEqual(filter_payload["placeholders"]["expression"], "DuckDB WHERE expression")
+        self.assertFalse((self.root / "specs" / "kpi_spec.csv").exists())
+        self.assertFalse((self.root / "specs" / "filter_spec.csv").exists())
 
     def test_disabled_specs_do_not_preload_default_discovered_files(self) -> None:
         previous_cwd = Path.cwd()
@@ -157,9 +190,12 @@ class SpecificationsToolTests(unittest.TestCase):
                 self.assertFalse(payload["enabled"])
                 self.assertTrue(payload["exists"])
                 self.assertFalse(payload["loaded"])
-                self.assertEqual(payload["rows"], [])
-                self.assertEqual(payload["row_count"], 0)
+                self.assertTrue(payload["generated"])
+                self.assertIn("starter spec was generated", payload["generation_message"])
                 self.assertEqual(Path(payload["path"]), (self.root / "specs" / f"{kind}_spec.csv").resolve())
+        self.assertEqual([row["Feature"] for row in payloads["feature"]["rows"]], ["Age", "Premium", "Weight", "Segment"])
+        self.assertEqual(payloads["kpi"]["rows"], [{"group": "", "name": "", "actual": "", "denominator": "", "decimals": "", "format": ""}])
+        self.assertEqual(payloads["filter"]["rows"], [{"theme": "", "name": "", "expression": ""}])
         schema = json.loads(schema_body)
         self.assertEqual(schema["filters"], [])
         self.assertEqual(schema["kpis"], [])
@@ -183,10 +219,27 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertFalse(payload["enabled"])
         self.assertTrue(payload["exists"])
         self.assertTrue(payload["loaded"])
+        self.assertFalse(payload["generated"])
+        self.assertEqual(payload["generation_message"], "")
         self.assertEqual(payload["rows"][0]["name"], "Premium")
         self.assertEqual(Path(payload["path"]), kpis_path.resolve())
         self.assertEqual(app.state.kpis, [])
         self.assertEqual(schema["kpis"], [])
+
+    def test_missing_explicit_spec_path_returns_generated_starter(self) -> None:
+        kpis_path = self.root / "missing_kpis.csv"
+        app = create_app(self.data_path, token="", tools=["specs"], kpis_path=kpis_path)
+
+        status, _, body = asgi_get(app, "/api/specs/kpi")
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(Path(payload["path"]), kpis_path.resolve())
+        self.assertFalse(payload["exists"])
+        self.assertFalse(payload["loaded"])
+        self.assertTrue(payload["generated"])
+        self.assertEqual(payload["rows"], [{"group": "", "name": "", "actual": "", "denominator": "", "decimals": "", "format": ""}])
+        self.assertFalse(kpis_path.exists())
 
     def test_save_kpi_spec_creates_file_and_refreshes_loaded_metadata(self) -> None:
         previous_cwd = Path.cwd()
@@ -261,6 +314,7 @@ class SpecificationsToolTests(unittest.TestCase):
                 self.assertFalse(payload["spec"]["enabled"])
                 self.assertTrue(payload["spec"]["exists"])
                 self.assertTrue(payload["spec"]["loaded"])
+                self.assertFalse(payload["spec"]["generated"])
                 self.assertEqual(payload["spec"]["rows"], save_payloads[kind]["rows"])
                 self.assertTrue((self.root / "specs" / f"{kind}_spec.csv").exists())
         for kind, result in reloaded_specs.items():

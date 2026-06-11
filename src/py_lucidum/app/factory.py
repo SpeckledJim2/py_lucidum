@@ -98,6 +98,7 @@ def create_app(
     no_features: bool = False,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
+    allow_missing_spec_paths = "specs" in enabled_tools
     if kpis and kpis_path and Path(kpis).expanduser() != Path(kpis_path).expanduser():
         raise ValueError("Specify either kpis or kpis_path, not both")
     if features and features_path and Path(features).expanduser() != Path(features_path).expanduser():
@@ -118,16 +119,17 @@ def create_app(
     }
     app.state.filters_path = filters_path
     app.state.use_saved_filters = use_saved_filters
+    app.state.allow_missing_spec_paths = allow_missing_spec_paths
     app.state.resolved_filters_path = resolve_filters_path(filters_path, use_saved_filters=use_saved_filters)
-    app.state.saved_filters = load_saved_filters(filters_path, use_saved_filters=use_saved_filters)
+    app.state.saved_filters = load_saved_filters(filters_path, use_saved_filters=use_saved_filters, missing_ok=allow_missing_spec_paths)
     app.state.kpis_path = selected_kpis_path
     app.state.use_kpis = kpis_enabled
     app.state.resolved_kpis_path = resolve_kpis_path(selected_kpis_path, use_kpis=kpis_enabled)
-    app.state.kpis = load_kpis(selected_kpis_path, use_kpis=kpis_enabled)
+    app.state.kpis = load_kpis(selected_kpis_path, use_kpis=kpis_enabled, missing_ok=allow_missing_spec_paths)
     app.state.features_path = selected_features_path
     app.state.use_features = features_enabled
     app.state.resolved_features_path = resolve_features_path(selected_features_path, use_features=features_enabled)
-    app.state.feature_spec = load_features(selected_features_path, use_features=features_enabled)
+    app.state.feature_spec = load_features(selected_features_path, use_features=features_enabled, missing_ok=allow_missing_spec_paths)
     app.state.enabled_tools = enabled_tools
     app.state.defaults = {
         key: value
@@ -238,6 +240,7 @@ def create_app(
         app.state.saved_filters = load_saved_filters(
             app.state.filters_path,
             use_saved_filters=app.state.use_saved_filters,
+            missing_ok=app.state.allow_missing_spec_paths,
         )
         app.state.resolved_kpis_path = resolve_kpis_path(
             app.state.kpis_path,
@@ -246,6 +249,7 @@ def create_app(
         app.state.kpis = load_kpis(
             app.state.kpis_path,
             use_kpis=app.state.use_kpis,
+            missing_ok=app.state.allow_missing_spec_paths,
         )
         app.state.resolved_features_path = resolve_features_path(
             app.state.features_path,
@@ -254,6 +258,7 @@ def create_app(
         app.state.feature_spec = load_features(
             app.state.features_path,
             use_features=app.state.use_features,
+            missing_ok=app.state.allow_missing_spec_paths,
         )
         return schema_payload()
 

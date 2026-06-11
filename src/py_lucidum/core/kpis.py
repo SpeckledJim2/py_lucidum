@@ -19,12 +19,12 @@ def resolve_kpis_path(kpis_path: str | Path | None, use_kpis: bool = True) -> Pa
     return (Path.cwd() / "specs" / "kpi_spec.csv").resolve()
 
 
-def load_kpis(kpis_path: str | Path | None, use_kpis: bool = True) -> list[dict[str, str | int]]:
+def load_kpis(kpis_path: str | Path | None, use_kpis: bool = True, missing_ok: bool = False) -> list[dict[str, str | int]]:
     path = resolve_kpis_path(kpis_path, use_kpis=use_kpis)
     if path is None:
         return []
     if not path.exists():
-        if kpis_path:
+        if kpis_path and not missing_ok:
             raise FileNotFoundError(f"KPI specification file does not exist: {path}")
         return []
     with path.open(newline="", encoding="utf-8-sig") as handle:

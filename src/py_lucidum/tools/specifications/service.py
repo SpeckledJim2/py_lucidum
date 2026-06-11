@@ -38,6 +38,19 @@ SPEC_FILE_NAMES = {
     "kpi": "kpi_spec.csv",
     "filter": "filter_spec.csv",
 }
+KPI_PLACEHOLDERS = {
+    "group": "KPI group",
+    "name": "Display name",
+    "actual": "Numeric column",
+    "denominator": "Weight column or N",
+    "decimals": "Decimal places",
+    "format": "number, currency, or percent",
+}
+FILTER_PLACEHOLDERS = {
+    "theme": "Filter group",
+    "name": "Display name",
+    "expression": "DuckDB WHERE expression",
+}
 
 
 def normalise_kind(raw: object) -> str:
@@ -153,11 +166,32 @@ def should_load_spec_file(state: Any, kind: str) -> bool:
     return configured_spec_path(state, kind) is not None
 
 
-def read_spec_file(state: Any, kind: str) -> dict[str, Any]:
+def generation_message(kind: str) -> str:
+    return f"No {spec_label(kind).lower()} was found, so a starter spec was generated and is not saved yet."
+
+
+def starter_spec(dataset: Dataset | None, kind: str) -> tuple[list[str], list[dict[str, str]], dict[str, str]]:
+    columns = default_columns(kind)
+    if kind == "feature":
+        dataset_columns = dataset.valid_schema_columns() if dataset is not None else []
+        rows = [
+            {column: source.name if column == "Feature" else "" for column in columns}
+            for source in dataset_columns
+        ]
+        return columns, rows, {}
+    if kind == "kpi":
+        return columns, [{column: "" for column in columns}], dict(KPI_PLACEHOLDERS)
+    if kind == "filter":
+        return columns, [{column: "" for column in columns}], dict(FILTER_PLACEHOLDERS)
+    raise ValueError(f"Unknown specification kind {kind!r}")
+
+
+def read_spec_file(state: Any, kind: str, dataset: Dataset | None = None) -> dict[str, Any]:
     kind = normalise_kind(kind)
     path = spec_path(state, kind)
     columns = default_columns(kind)
     rows: list[dict[str, str]] = []
+    placeholders: dict[str, str] = {}
     exists = path.exists()
     loaded = exists and should_load_spec_file(state, kind)
     if loaded:
@@ -169,6 +203,9 @@ def read_spec_file(state: Any, kind: str) -> dict[str, Any]:
                 {column: str(row.get(column) or "") for column in columns}
                 for row in reader
             ]
+    generated = not loaded
+    if generated:
+        columns, rows, placeholders = starter_spec(dataset, kind)
     return {
         "kind": kind,
         "label": spec_label(kind),
@@ -176,6 +213,9 @@ def read_spec_file(state: Any, kind: str) -> dict[str, Any]:
         "file_name": path.name,
         "exists": exists,
         "loaded": loaded,
+        "generated": generated,
+        "generation_message": generation_message(kind) if generated else "",
+        "placeholders": placeholders,
         "enabled": spec_state_enabled(state, kind),
         "columns": columns,
         "rows": rows,
@@ -410,7 +450,7 @@ def save_spec_file(state: Any, dataset: Dataset, kind: str, columns: list[str], 
     refresh_loaded_spec_state(state, kind)
     result["saved"] = True
     result["path"] = str(path)
-    result["spec"] = read_spec_file(state, kind)
+    result["spec"] = read_spec_file(state, kind, dataset)
     result["message"] = f"{spec_label(kind)} saved"
     return result
 
@@ -436,12 +476,13 @@ def write_csv(path: Path, columns: list[str], rows: list[dict[str, str]]) -> Non
 
 
 def refresh_loaded_spec_state(state: Any, kind: str) -> None:
+    missing_ok = bool(getattr(state, "allow_missing_spec_paths", False))
     if kind == "feature":
         state.resolved_features_path = resolve_features_path(state.features_path, use_features=state.use_features)
-        state.feature_spec = load_features(state.features_path, use_features=state.use_features)
+        state.feature_spec = load_features(state.features_path, use_features=state.use_features, missing_ok=missing_ok)
     elif kind == "kpi":
         state.resolved_kpis_path = resolve_kpis_path(state.kpis_path, use_kpis=state.use_kpis)
-        state.kpis = load_kpis(state.kpis_path, use_kpis=state.use_kpis)
+        state.kpis = load_kpis(state.kpis_path, use_kpis=state.use_kpis, missing_ok=missing_ok)
     elif kind == "filter":
         state.resolved_filters_path = resolve_filters_path(state.filters_path, use_saved_filters=state.use_saved_filters)
-        state.saved_filters = load_saved_filters(state.filters_path, use_saved_filters=state.use_saved_filters)
+        state.saved_filters = load_saved_filters(state.filters_path, use_saved_filters=state.use_saved_filters, missing_ok=missing_ok)

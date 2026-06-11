@@ -77,6 +77,21 @@
         width: 100%;
       }
 
+      .spec-generation-notice {
+        align-self: stretch;
+        color: var(--muted);
+        display: block;
+        flex: 0 0 auto;
+        font-size: 12px;
+        line-height: 1.25;
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        width: 100%;
+      }
+
       .spec-action-button,
       .spec-save-button {
         border: 1px solid var(--line);
@@ -139,6 +154,11 @@
 
       .spec-notice.warning {
         color: #b45309;
+      }
+
+      .spec-cell-placeholder {
+        color: var(--muted);
+        font-style: italic;
       }
 
       .spec-grid {

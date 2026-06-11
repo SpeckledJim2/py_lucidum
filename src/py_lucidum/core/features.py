@@ -26,12 +26,12 @@ def resolve_features_path(features_path: str | Path | None, use_features: bool =
     return (Path.cwd() / "specs" / "feature_spec.csv").resolve()
 
 
-def load_features(features_path: str | Path | None, use_features: bool = True) -> dict[str, Any]:
+def load_features(features_path: str | Path | None, use_features: bool = True, missing_ok: bool = False) -> dict[str, Any]:
     path = resolve_features_path(features_path, use_features=use_features)
     if path is None:
         return empty_feature_spec()
     if not path.exists():
-        if features_path:
+        if features_path and not missing_ok:
             raise FileNotFoundError(f"Feature specification file does not exist: {path}")
         return empty_feature_spec()
     with path.open(newline="", encoding="utf-8-sig") as handle:

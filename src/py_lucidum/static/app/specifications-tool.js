@@ -69,6 +69,7 @@ export function createSpecificationsTool({
               <button id="specSaveBtn" class="spec-save-button" type="button">Save</button>
             </div>
           </div>
+          <div id="specGenerationNotice" class="spec-generation-notice hidden" role="status" aria-live="polite"></div>
           <span id="specFilePath" class="spec-file-path"></span>
         </div>
         <div id="specGrid" class="spec-grid" tabindex="0"></div>
@@ -172,7 +173,7 @@ export function createSpecificationsTool({
       const spec = cacheSpec(payload, false);
       if (kind === activeKind) {
         renderSpec(spec);
-        await validateSpecOnLoad(spec);
+        if (!spec.generated) await validateSpecOnLoad(spec);
       }
     } catch (error) {
       showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message });
@@ -191,6 +192,7 @@ export function createSpecificationsTool({
       kind,
       columns,
       rows,
+      placeholders: payload.placeholders && typeof payload.placeholders === "object" ? payload.placeholders : {},
       rowIssues: normaliseRowIssues(payload.row_issues),
       dirty: Boolean(dirty),
     };
@@ -205,6 +207,7 @@ export function createSpecificationsTool({
     clearGlobalStatus();
     syncKindTabs();
     syncFilePath(spec);
+    syncGenerationNotice(spec);
     showValidationNotice(spec.validationResult || null, { showValid: false });
     measureToolRender("specs", () => renderTable(spec));
     syncButtons();
@@ -271,7 +274,7 @@ export function createSpecificationsTool({
         field,
         editor: "input",
         headerSort: true,
-        formatter: textFormatter,
+        formatter: (cell) => textFormatter(cell, spec),
         minWidth: columnMinWidth(spec, field, title),
         widthGrow: columnGrow(spec.kind, field),
       };
@@ -413,8 +416,12 @@ export function createSpecificationsTool({
     return 1;
   }
 
-  function textFormatter(cell) {
-    return escapeHtml(cell.getValue() ?? "");
+  function textFormatter(cell, spec) {
+    const value = cell.getValue() ?? "";
+    if (String(value) === "" && spec?.generated && spec?.placeholders?.[cell.getField()]) {
+      return `<span class="spec-cell-placeholder">${escapeHtml(spec.placeholders[cell.getField()])}</span>`;
+    }
+    return escapeHtml(value);
   }
 
   function scenarioFormatter(cell) {
@@ -449,6 +456,15 @@ export function createSpecificationsTool({
     const path = String(spec?.path || "");
     target.textContent = path;
     target.title = path;
+  }
+
+  function syncGenerationNotice(spec = specs.get(activeKind)) {
+    const target = el("specGenerationNotice");
+    if (!target) return;
+    const message = spec?.generated ? String(spec.generation_message || "") : "";
+    target.textContent = message;
+    target.title = message;
+    target.classList.toggle("hidden", !message);
   }
 
   function syncButtons() {
@@ -592,7 +608,7 @@ export function createSpecificationsTool({
   }
 
   async function validateSpecOnLoad(spec) {
-    if (!spec || spec.dirty || spec.autoValidated) return;
+    if (!spec || spec.generated || spec.dirty || spec.autoValidated) return;
     await validateSpecDraft(spec, { showValid: false });
   }
 

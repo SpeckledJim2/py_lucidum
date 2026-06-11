@@ -15,12 +15,12 @@ def resolve_filters_path(filters_path: str | Path | None, use_saved_filters: boo
     return (Path.cwd() / "specs" / "filter_spec.csv").resolve()
 
 
-def load_saved_filters(filters_path: str | Path | None, use_saved_filters: bool = True) -> list[dict[str, str]]:
+def load_saved_filters(filters_path: str | Path | None, use_saved_filters: bool = True, missing_ok: bool = False) -> list[dict[str, str]]:
     path = resolve_filters_path(filters_path, use_saved_filters=use_saved_filters)
     if path is None:
         return []
     if not path.exists():
-        if filters_path:
+        if filters_path and not missing_ok:
             raise FileNotFoundError(f"Filter specification file does not exist: {path}")
         return []
     with path.open(newline="", encoding="utf-8-sig") as handle:

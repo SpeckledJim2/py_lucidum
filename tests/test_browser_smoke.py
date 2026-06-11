@@ -117,6 +117,52 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_specs_tool_shows_generated_starters_without_saving_placeholders(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "vehicle_age,price,value\n"
+                "1,100,10\n"
+                "2,200,20\n",
+                encoding="utf-8",
+            )
+            kpis_path = tmp_path / "specs" / "kpi_spec.csv"
+            base_url, server, thread = self.start_app(data_path, tools=["specs"], kpis_path=kpis_path, use_kpis=False, use_features=False)
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                    page.locator("#specsTool:not(.hidden)").click()
+                    page.locator("#specGenerationNotice", has_text="No feature spec was found").wait_for(timeout=10_000)
+                    self.assertEqual(
+                        page.locator('#specGrid .tabulator-row .tabulator-cell[tabulator-field="Feature"]').first.inner_text().strip(),
+                        "vehicle_age",
+                    )
+                    self.assertFalse(kpis_path.exists())
+                    page.locator('[data-spec-kind="kpi"]').click()
+                    page.locator("#specGenerationNotice", has_text="No kpi spec was found").wait_for(timeout=10_000)
+                    page.locator(".spec-cell-placeholder", has_text="Numeric column").wait_for(timeout=10_000)
+                    page.locator("#specSaveBtn").click()
+                    page.locator("#specNotice", has_text="KPI spec saved").wait_for(timeout=10_000)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+            saved_text = kpis_path.read_text(encoding="utf-8")
+            self.assertIn("group,name,actual,denominator,decimals,format", saved_text)
+            self.assertNotIn("Numeric column", saved_text)
+            self.assertNotIn("number, currency, or percent", saved_text)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_tool_loads_feature_grid(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -569,6 +615,7 @@ COPY (
         kpis_path: Path | None = None,
         use_kpis: bool = False,
         features_path: Path | None = None,
+        use_features: bool = True,
         token: str | None = None,
         defaults: dict[str, str] | None = None,
         tools: list[str] | None = None,
@@ -588,6 +635,7 @@ COPY (
             kpis_path=kpis_path,
             use_kpis=use_kpis,
             features_path=features_path,
+            use_features=use_features,
             token=token,
             tools=tools,
         )

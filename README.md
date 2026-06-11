@@ -111,7 +111,7 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
-- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When `--tools specs` is also enabled, disabled spec kinds open as empty editable templates instead of preloading default-discovered CSVs.
+- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When `--tools specs` is also enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save.
 - `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `glm` after installing the `glm` extra to train GLMs. Add `models` after installing the `glm` and `gbm` extras to enable both modelling tools; requesting `gbm` also enables `glm` so model comparison and tabulation workflows remain available. Add `specs` to edit feature, KPI, and filter spec CSV files from the browser.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
@@ -188,6 +188,8 @@ DRIVER AGE,Older drivers,DRIVER_AGE > 70
 
 Saved-filter rows can be used in `Single`, `Multi`, or `Grouped` mode. The generated expression is written to the footer expression box and applies to the active tool.
 
+When the Specifications tool opens a missing filter spec, it starts with one blank row and visual placeholder hints for `theme`, `name`, and `expression`; those hints are not saved as cell values.
+
 ## KPIs
 
 KPI specs are CSV files with exactly these columns:
@@ -201,6 +203,8 @@ FINANCIAL,Premium,PREMIUM,N,2,currency
 
 `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`.
 
+When the Specifications tool opens a missing KPI spec, it starts with one blank row and visual placeholder hints for each field; those hints are not saved as cell values.
+
 ## Feature Specs
 
 Feature Specification CSV files drive GBM feature scenarios, interaction-constraint groups, optional chart Base metadata, and GLM numeric tabulation metadata. The current format starts with these columns, followed by any number of scenario columns:
@@ -213,6 +217,8 @@ POSTCODE_AREA,POSTCODE,B,,,,,feature,feature
 ```
 
 `Feature` must match a dataset column name exactly. `Grouping` is optional metadata shown in the GBM Feature table and, when present, is also used to offer GBM feature interaction constraints. `Base` is optional metadata used to anchor Line/Bar and GBM SHAP chart rescaling to `0` or `1` and to define GLM tabulation base cells; `1` rescaling is displayed as an uplift percentage, so the base level shows as `0%`. Numeric `min`, `max`, and `banding` define GLM rating-table grids; leave them blank for categorical features. Older specs without these metadata columns are still accepted, in which case every column after `Grouping` is treated as a scenario. Each scenario column appears in the GBM scenario dropdown; if a scenario cell contains the word `feature`, case-insensitive, that row is selected when the scenario is chosen.
+
+When the Specifications tool opens a missing Feature spec, it starts with one row per valid dataset column, populates only `Feature`, and leaves `Grouping`, `Base`, `min`, `max`, `banding`, and `scenario1` blank.
 
 ## GLM Models
 
