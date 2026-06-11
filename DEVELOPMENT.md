@@ -258,6 +258,12 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Chart animations are disabled for fast interaction.
 - The app should continue to work as a static ECharts and Leaflet frontend unless future tool complexity justifies a larger frontend framework.
 
+**Frontend event hygiene**
+
+- Tool-owned `document` and `window` listeners must either be removed when leaving the tool or be strictly gated by the tool's visible state and active interaction state.
+- Global capture listeners must not clear focus, native selection, clipboard state, or editable input state outside their owning tool.
+- Selection-clearing helpers must receive the original event when available and skip editable targets such as inputs, textareas, selects, and contenteditable nodes.
+
 ## Testing
 
 Use these tiers to keep iteration focused while preserving the full suite.
@@ -307,6 +313,10 @@ UI text or selectors.
 ```bash
 .venv/bin/python scripts/run_browser_smoke.py
 ```
+
+Browser smoke coverage should include cross-tool focus and listener regressions
+after visiting tools that install global listeners, especially document/window
+capture handlers.
 
 - Full pre-commit checks: run the complete command block below.
 
@@ -371,7 +381,7 @@ The current test suite should cover:
 - Tool registry defaults, optional GLM/GBM registration, and the default `dataset` data-source contract.
 - GLM config without optional dependencies, formula validation/comment stripping and `offset(...)` extraction, lazy dependency failures, training jobs, coefficient/diagnostic artifacts, active-model mutation routes, tabulation routes/artifacts, and `glm_prediction` / `glm_prediction_rate` / `glm_tabulated_prediction` data-source publishing.
 - GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, live job progress, active-model feature/parameter refresh, model data-source publishing, Gain ordering, SHAP row limits, SHAP plot aggregation routes, tree summary/detail routes, and chart/map use of prediction sources.
-- Browser smoke behavior for loading profile, chart, histogram, map, and GBM tools without unexpected extra API requests or stale active-model state, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.
+- Browser smoke behavior for loading profile, chart, histogram, map, and GBM tools without unexpected extra API requests, stale active-model state, or leaked cross-tool focus/listener side effects, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.
 
 ## Future Work
 

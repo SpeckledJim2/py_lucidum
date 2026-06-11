@@ -123,7 +123,7 @@ export function createSpecificationsTool({
     });
     document.addEventListener("copy", handleSpecCopy);
     document.addEventListener("paste", handleSpecPaste);
-    document.addEventListener("mouseup", endSelectionDrag, true);
+    document.addEventListener("mouseup", handleSpecDocumentMouseup, true);
   }
 
   async function activate() {
@@ -712,7 +712,7 @@ export function createSpecificationsTool({
   }
 
   function handleSpecCellDblClick(event, cell) {
-    endSelectionDrag();
+    endSelectionDrag(event);
     if (!isScenarioField(cell?.getField?.())) return;
     event.preventDefault();
     clearNativeSelection(event);
@@ -729,7 +729,7 @@ export function createSpecificationsTool({
     selection = { anchor: point, focus: point, active: point };
     el("specGrid")?.focus?.({ preventScroll: true });
     applyCellUpdates([{ rowId: point.rowId, field: point.field, value: nextValue }]);
-    clearNativeSelection();
+    clearNativeSelection(event);
     return true;
   }
 
@@ -740,10 +740,16 @@ export function createSpecificationsTool({
     el("specGrid")?.classList.remove("spec-selecting");
   }
 
-  function endSelectionDrag() {
+  function handleSpecDocumentMouseup(event) {
+    if (!selectionDragging) return;
+    endSelectionDrag(event);
+  }
+
+  function endSelectionDrag(event = null) {
+    if (!selectionDragging) return;
     selectionDragging = false;
     el("specGrid")?.classList.remove("spec-selecting");
-    clearNativeSelection();
+    clearNativeSelection(event);
   }
 
   function startSelectionFromCell(event, cell) {

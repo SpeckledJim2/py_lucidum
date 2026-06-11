@@ -102,7 +102,7 @@ class BrowserSmokeTests(unittest.TestCase):
             )
             base_url, server, thread = self.start_app(
                 data_path,
-                tools=["specs"],
+                tools=["specs", "histogram"],
                 filters_path=filters_path,
                 use_saved_filters=True,
                 kpis_path=kpis_path,
@@ -3583,6 +3583,38 @@ COPY (
                 page.locator("#specContextMenu:not([hidden])").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#specContextMenu").evaluate("node => getComputedStyle(node).padding"), "3px")
                 self.assertEqual(page.locator("#specContextMenu .spec-context-menu-item").first.evaluate("node => getComputedStyle(node).fontWeight"), "400")
+
+                page.evaluate(
+                    """
+                    () => {
+                      window.__lucidumRemoveAllRangesCalls = 0;
+                      const proto = Selection.prototype;
+                      if (!proto.__lucidumOriginalRemoveAllRanges) {
+                        Object.defineProperty(proto, "__lucidumOriginalRemoveAllRanges", {
+                          configurable: true,
+                          value: proto.removeAllRanges,
+                        });
+                      }
+                      proto.removeAllRanges = function(...args) {
+                        window.__lucidumRemoveAllRangesCalls += 1;
+                        return proto.__lucidumOriginalRemoveAllRanges.apply(this, args);
+                      };
+                    }
+                    """
+                )
+                page.locator("#histogramTool:not(.hidden)").click()
+                page.locator("#histogramWrap:not(.hidden)").wait_for(timeout=10_000)
+                page.evaluate("() => { document.querySelector('#histogramBins').value = ''; }")
+                page.locator("#histogramBins").click()
+                page.keyboard.type("17")
+                page.wait_for_function(
+                    """
+                    () => document.activeElement?.id === "histogramBins"
+                      && document.querySelector("#histogramBins")?.value === "17"
+                      && window.__lucidumRemoveAllRangesCalls === 0
+                    """,
+                    timeout=10_000,
+                )
 
                 self.assertEqual(page_errors, [])
             finally:
