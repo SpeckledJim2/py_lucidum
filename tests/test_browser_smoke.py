@@ -2569,20 +2569,21 @@ COPY (
                 self.assertGreaterEqual(layout["specsWidth"], layout["visualWidth"] * 0.8)
 
             def assert_specs_table_style() -> None:
+                cell_locator = page.locator("#specGrid .tabulator-row .tabulator-cell[tabulator-field]").first
+                cell_locator.wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
                     () => {
-                      const cell = document.querySelector("#specGrid .tabulator-row .tabulator-cell");
+                      const cell = document.querySelector("#specGrid .tabulator-row .tabulator-cell[tabulator-field]");
                       return cell && getComputedStyle(cell).display === "inline-flex";
                     }
                     """,
                     timeout=10_000,
                 )
-                style = page.evaluate(
+                style = cell_locator.evaluate(
                     """
-                    () => {
-                      const cell = document.querySelector("#specGrid .tabulator-row .tabulator-cell");
-                      const computed = getComputedStyle(cell);
+                    node => {
+                      const computed = getComputedStyle(node);
                       return {
                         alignItems: computed.alignItems,
                         display: computed.display,
@@ -2820,6 +2821,39 @@ COPY (
                 assert point is not None
                 page.mouse.click(point["x"], point["y"])
 
+            def delete_visible_missing_feature_row() -> None:
+                point = page.evaluate(
+                    """
+                    () => {
+                      const holder = document.querySelector("#specGrid .tabulator-tableholder");
+                      if (!holder) return null;
+                      const holderRect = holder.getBoundingClientRect();
+                      const rows = Array.from(holder.querySelectorAll(".tabulator-row.spec-missing-feature-row"));
+                      const candidates = rows
+                        .map((row) => {
+                          const cell = row.querySelector('.tabulator-cell[tabulator-field="Feature"]');
+                          const rect = cell?.getBoundingClientRect();
+                          if (!cell || !rect) return null;
+                          return {
+                            x: rect.left + Math.min(rect.width - 8, 24),
+                            y: rect.top + rect.height / 2,
+                            text: cell.textContent.trim(),
+                            distance: Math.abs((rect.top + rect.height / 2) - (holderRect.top + holderRect.height / 2)),
+                            visible: rect.top >= holderRect.top + 16 && rect.bottom <= holderRect.bottom - 16,
+                          };
+                        })
+                        .filter((item) => item && item.visible)
+                        .sort((left, right) => left.distance - right.distance);
+                      return candidates[0] || null;
+                    }
+                    """
+                )
+                self.assertIsNotNone(point)
+                assert point is not None
+                page.mouse.click(point["x"], point["y"], button="right")
+                page.locator("#specContextMenu:not([hidden])").wait_for(timeout=10_000)
+                page.locator('#specContextMenu [data-spec-row-action="delete"]').click()
+
             def spec_header_fields() -> list[str]:
                 return page.evaluate(
                     """
@@ -2993,6 +3027,16 @@ COPY (
                 page.keyboard.press("Delete")
                 wait_for_spec_header_title("scenario1", "scenario1 (3)")
                 assert_specs_table_scroll_stable(scrolled_top)
+                delete_visible_missing_feature_row()
+                assert_specs_table_scroll_stable(scrolled_top)
+                page.wait_for_function(
+                    """
+                    () => Boolean(
+                      document.querySelector('#specGrid .tabulator-row.spec-missing-feature-row .tabulator-cell[tabulator-field="Feature"]')
+                    )
+                    """,
+                    timeout=10_000,
+                )
                 reset_specs_table_scroll()
                 self.assertEqual(spec_cell_background("Feature", 2), "rgb(255, 248, 215)")
                 self.assertNotEqual(spec_cell_background("Feature", 0), "rgb(255, 248, 215)")
@@ -3279,6 +3323,12 @@ COPY (
                 assert_spec_headers_untruncated()
                 page.locator("#specNotice.error", has_text="AutoMissingColumn").wait_for(timeout=10_000)
                 assert_validation_row_highlight(2, "4")
+                assert_global_status_clear()
+                spec_cell("theme", 0).click(button="right")
+                page.locator("#specContextMenu:not([hidden])").wait_for(timeout=10_000)
+                page.locator('#specContextMenu [data-spec-row-action="delete"]').click()
+                page.locator("#specNotice.error", has_text="AutoMissingColumn").wait_for(timeout=10_000)
+                assert_validation_row_highlight(1, "3")
                 assert_global_status_clear()
                 spec_header("theme").click(button="right")
                 page.wait_for_timeout(100)

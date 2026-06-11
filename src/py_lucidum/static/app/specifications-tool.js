@@ -51,6 +51,7 @@ export function createSpecificationsTool({
   let suppressDirty = false;
   let selection = null;
   let selectionDragging = false;
+  let pendingScrollRestore = null;
   const specs = new Map();
 
   function renderShell() {
@@ -97,7 +98,7 @@ export function createSpecificationsTool({
       closeMenus();
       if (action === "above") addRowRelative("above");
       if (action === "below") addRowRelative("below");
-      if (action === "delete") deleteContextRow();
+      if (action === "delete") void deleteContextRow();
     });
     el("specColumnContextMenu").addEventListener("click", (event) => {
       const button = event.target.closest("[data-spec-column-action]");
@@ -142,10 +143,7 @@ export function createSpecificationsTool({
   function refreshTheme() {
     const scrollPosition = captureSpecTableScroll();
     table?.redraw?.(false);
-    restoreSpecTableScroll(scrollPosition);
-    window.requestAnimationFrame(() => {
-      restoreSpecTableScroll(scrollPosition);
-    });
+    scheduleSpecTableScrollRestore(scrollPosition);
   }
 
   async function selectKind(kind) {
@@ -200,8 +198,9 @@ export function createSpecificationsTool({
     return spec;
   }
 
-  function renderSpec(spec) {
+  function renderSpec(spec, options = {}) {
     if (!spec || spec.kind !== activeKind) return;
+    if (options.preserveScroll) pendingScrollRestore = captureSpecTableScroll();
     renumberSpecRows(spec);
     clearGlobalStatus();
     syncKindTabs();
@@ -234,6 +233,7 @@ export function createSpecificationsTool({
           suppressDirty = false;
           table?.redraw?.(true);
           applyTableDecorations();
+          restorePendingSpecTableScroll();
         });
         table.on("rowContext", openRowContextMenu);
         if (spec.kind === "feature") table.on("headerContext", openColumnContextMenu);
@@ -378,13 +378,31 @@ export function createSpecificationsTool({
   function captureSpecTableScroll() {
     const holder = el("specGrid")?.querySelector(".tabulator-tableholder");
     if (!holder) return null;
-    return { holder, left: holder.scrollLeft, top: holder.scrollTop };
+    return { holder, kind: activeKind, left: holder.scrollLeft, top: holder.scrollTop };
   }
 
   function restoreSpecTableScroll(position) {
-    if (!position?.holder) return;
-    position.holder.scrollLeft = position.left;
-    position.holder.scrollTop = position.top;
+    if (!position || (position.kind && position.kind !== activeKind)) return;
+    const holder = position.holder?.isConnected
+      ? position.holder
+      : el("specGrid")?.querySelector(".tabulator-tableholder");
+    if (!holder) return;
+    holder.scrollLeft = position.left;
+    holder.scrollTop = position.top;
+  }
+
+  function scheduleSpecTableScrollRestore(position) {
+    restoreSpecTableScroll(position);
+    window.requestAnimationFrame(() => {
+      restoreSpecTableScroll(position);
+      window.setTimeout(() => restoreSpecTableScroll(position), 0);
+    });
+  }
+
+  function restorePendingSpecTableScroll() {
+    const position = pendingScrollRestore;
+    pendingScrollRestore = null;
+    scheduleSpecTableScrollRestore(position);
   }
 
   function columnGrow(kind, field) {
@@ -575,15 +593,20 @@ export function createSpecificationsTool({
 
   async function validateSpecOnLoad(spec) {
     if (!spec || spec.dirty || spec.autoValidated) return;
+    await validateSpecDraft(spec, { showValid: false });
+  }
+
+  async function validateSpecDraft(spec, options = {}) {
+    if (!spec) return;
     try {
       const result = await api(`/api/specs/${spec.kind}/validate`, {
         method: "POST",
         body: JSON.stringify(payloadForSpec(spec)),
       });
-      storeValidationResult(spec, result, { showValid: false });
+      storeValidationResult(spec, result, options);
     } catch (error) {
       const result = { valid: false, errors: [error.message], warnings: [], row_issues: [], message: error.message };
-      storeValidationResult(spec, result, { showValid: false });
+      storeValidationResult(spec, result, options);
     }
   }
 
@@ -1304,13 +1327,13 @@ export function createSpecificationsTool({
     renderSpec(spec);
   }
 
-  function deleteContextRow() {
+  async function deleteContextRow() {
     const spec = saveActiveDraft();
     if (!spec || !contextRowId) return;
     spec.rows = spec.rows.filter((row) => row._row_id !== contextRowId);
-    clearValidationRowIssuesForSpec(spec);
     spec.dirty = true;
-    renderSpec(spec);
+    renderSpec(spec, { preserveScroll: true });
+    await validateSpecDraft(spec, { showValid: false });
   }
 
   function newRow(spec) {
