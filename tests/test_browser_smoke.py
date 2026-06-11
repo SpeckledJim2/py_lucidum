@@ -3545,12 +3545,13 @@ COPY (
             profile_requests = 0
             profile_detail_requests = 0
             chart_requests = 0
+            histogram_requests = 0
             map_requests = 0
 
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
             def count_request(request: object) -> None:
-                nonlocal profile_requests, profile_detail_requests, chart_requests, map_requests
+                nonlocal profile_requests, profile_detail_requests, chart_requests, histogram_requests, map_requests
                 url = request.url
                 if url.endswith("/api/column-profile/summary"):
                     profile_requests += 1
@@ -3558,6 +3559,8 @@ COPY (
                     profile_detail_requests += 1
                 elif url.endswith("/api/chart"):
                     chart_requests += 1
+                elif url.endswith("/api/histogram/chart"):
+                    histogram_requests += 1
                 elif url.endswith("/api/uk-map/summary"):
                     map_requests += 1
 
@@ -3664,6 +3667,7 @@ COPY (
                 self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))
                 self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
+                self.assertTrue(page.locator("#histogramTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
@@ -3674,6 +3678,7 @@ COPY (
                 page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"')
                 self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
+                self.assertTrue(page.locator("#histogramTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
@@ -3723,6 +3728,88 @@ COPY (
                     """
                 )
 
+                page.locator("#histogramTool").click()
+                page.locator("#histogramWrap:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#histogramChart canvas").wait_for(timeout=10_000)
+                page.locator("#histogramStatsGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                        const text = document.querySelector("#actionTimingMonitor")?.textContent || "";
+                        return /^DuckDB: \\d+(?:ns|us|ms), JSON: \\d+ms, Histogram render: \\d+(?:ns|us|ms), Total: \\d+ms$/.test(text);
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                        const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                        const zoom = chart?.getOption?.().dataZoom || [];
+                        return zoom.some((item) => item.type === "slider" && item.xAxisIndex === 0);
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
+                with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
+                    page.locator('.segmented[data-control="histogramDistribution"] button[data-value="cumulative"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                        const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                        if (!chart) return false;
+                        const series = chart.getOption().series?.[0];
+                        const values = (series?.data || [])
+                          .map((item) => Number(item.row?.height ?? item.value?.[1]))
+                          .filter(Number.isFinite);
+                        const maxHeight = Math.max(...values);
+                        const yExtent = chart.getModel()?.getComponent("yAxis")?.axis?.scale?.getExtent?.();
+                        return Number.isFinite(maxHeight)
+                          && maxHeight > 10
+                          && Array.isArray(yExtent)
+                          && Number(yExtent[1]) >= maxHeight;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
+                with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_filter_request_info:
+                    with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
+                        page.evaluate(
+                            """
+                            () => {
+                                document.querySelector("#filterInput").value = "vehicle_age >= 0";
+                                document.querySelector("#filterApplyBtn").click();
+                            }
+                            """
+                        )
+                histogram_filter_payload = json.loads(histogram_filter_request_info.value.post_data or "{}")
+                self.assertEqual(histogram_filter_payload["filter"], "vehicle_age >= 0")
+
+                with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_metric_request_info:
+                    with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
+                        page.evaluate(
+                            """
+                            () => {
+                                document.querySelector("#actualNumerator").value = "vehicle_age";
+                                document.querySelector("#denominator").value = "price";
+                                document.querySelector("#denominator").dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                histogram_metric_payload = json.loads(histogram_metric_request_info.value.post_data or "{}")
+                self.assertEqual(histogram_metric_payload["actual"], "vehicle_age")
+                self.assertEqual(histogram_metric_payload["denominator"], "price")
+                self.assertEqual(histogram_metric_payload["filter"], "vehicle_age >= 0")
+                page.locator("#histogramStatsGrid .tabulator-row").first.wait_for(timeout=10_000)
+
+                with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_bins_request_info:
+                    with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
+                        page.locator("#histogramBins").fill("5")
+                histogram_bins_payload = json.loads(histogram_bins_request_info.value.post_data or "{}")
+                self.assertEqual(histogram_bins_payload["bins"], "5")
+                page.locator("#histogramStatsGrid .tabulator-row").first.wait_for(timeout=10_000)
+
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
@@ -3764,7 +3851,7 @@ COPY (
                     page.evaluate(
                         """
                         () => {
-                            document.querySelector("#filterInput").value = "vehicle_age >= 0";
+                            document.querySelector("#filterInput").value = "vehicle_age >= 1";
                             document.querySelector("#filterApplyBtn").click();
                         }
                         """
@@ -3810,7 +3897,8 @@ COPY (
                 self.assertEqual(profile_requests, 2)
                 self.assertEqual(profile_detail_requests, 3)
                 self.assertEqual(chart_requests, 1)
-                self.assertEqual(map_requests, 7)
+                self.assertEqual(histogram_requests, 5)
+                self.assertEqual(map_requests, 8)
             finally:
                 browser.close()
 

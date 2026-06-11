@@ -17,6 +17,7 @@ export function freshActionTimings() {
   return {
     column_profile: freshActionTiming(),
     line_bar: freshActionTiming(),
+    histogram: freshActionTiming(),
     uk_map: freshActionTiming(),
     glm: freshActionTiming(),
     gbm: freshActionTiming(),

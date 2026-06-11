@@ -761,6 +761,7 @@
 
 
       #profileFilter,
+      #histogramFilter,
       #lineBarFilter {
         color: var(--muted);
         font-size: 10px;

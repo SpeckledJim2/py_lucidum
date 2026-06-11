@@ -25,13 +25,14 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.demo` resolves the bundled synthetic demo dataset from either the source tree or installed package resources.
 - `py_lucidum.tools.column_profile` implements filtered column summary/detail profiling and routes.
 - `py_lucidum.tools.line_bar` implements chart aggregation and line/bar routes.
+- `py_lucidum.tools.histogram` implements filtered histogram binning, exact metric summaries, and histogram routes.
 - `py_lucidum.tools.uk_map` implements UK map aggregation and UK map routes.
 - `py_lucidum.tools.glm` implements the opt-in `glum` GLM tool. GLM validation, training jobs, persistence, coefficient/model-detail routes, and model-output data sources live in separate backend modules.
 - `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM active config payloads, training, validation, persistence, tree summary/detail, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
 - `py_lucidum.tools.specifications` implements the opt-in `specs` tool for editing feature, KPI, and filter specification CSV files. It reads and writes raw CSV rows, continuously validates against the durable spec loaders, generates unsaved starter drafts for missing/disabled specs, and refreshes enabled app metadata after successful saves.
-- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/glm-tool.js` owns GLM high-level orchestration, API mutation, and model build/detail flow, `src/py_lucidum/static/app/glm-formula-builder.js`, `src/py_lucidum/static/app/glm-model-navigator.js`, and `src/py_lucidum/static/app/glm-tabulations.js` own focused GLM frontend submodules, `src/py_lucidum/static/app/gbm-tool.js` owns GBM high-level orchestration, API mutation, and cross-tool invalidation, `src/py_lucidum/static/app/gbm-feature-parameter-controls.js`, `src/py_lucidum/static/app/gbm-evaluation-chart.js`, `src/py_lucidum/static/app/gbm-model-navigator.js`, and `src/py_lucidum/static/app/gbm-tab-orchestration.js` own focused GBM frontend submodules, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-stacked-shap-tool.js` and `src/py_lucidum/static/app/gbm-stacked-shap-chart.js` own the Stacked SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
+- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/histogram-tool.js` owns the Histogram frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/glm-tool.js` owns GLM high-level orchestration, API mutation, and model build/detail flow, `src/py_lucidum/static/app/glm-formula-builder.js`, `src/py_lucidum/static/app/glm-model-navigator.js`, and `src/py_lucidum/static/app/glm-tabulations.js` own focused GLM frontend submodules, `src/py_lucidum/static/app/gbm-tool.js` owns GBM high-level orchestration, API mutation, and cross-tool invalidation, `src/py_lucidum/static/app/gbm-feature-parameter-controls.js`, `src/py_lucidum/static/app/gbm-evaluation-chart.js`, `src/py_lucidum/static/app/gbm-model-navigator.js`, and `src/py_lucidum/static/app/gbm-tab-orchestration.js` own focused GBM frontend submodules, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-stacked-shap-tool.js` and `src/py_lucidum/static/app/gbm-stacked-shap-chart.js` own the Stacked SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
 - `src/py_lucidum/static/app.css` is the stable linked CSS entrypoint and import manifest. Split styles live under `src/py_lucidum/static/styles/`; `foundations.css` and `controls.css` own shared primitives, while shell/tool files own boundary-specific selectors.
-- Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/`. Core ECharts and Leaflet are loaded locally from `index.html` because the default app tools need them at startup. GLM lazy-loads Ace for formula editing. GBM lazy-loads Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
+- Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/`. Core ECharts and Leaflet are loaded locally from `index.html` because the default app tools need them at startup. Histogram lazy-loads Tabulator for the metrics grid. GLM lazy-loads Ace for formula editing. GBM lazy-loads Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
 
 Tool packages own their training, validation, persistence, routes, and artifacts. GLM and GBM intentionally publish model outputs through the shared `data_sources` contract, and Line/Bar intentionally consumes those outputs for prediction plotting, GBM SHAP ribbons, and GLM overlays. Optional modelling dependencies must still be imported lazily and must not become base app imports. Shared reusable logic should move into `core`, `static/app/shared/`, or a modelling/shared backend helper when there is real reuse.
 
@@ -63,6 +64,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `POST /api/column-profile/detail`
   - `POST /api/chart`
   - `POST /api/line-bar/chart`
+  - `POST /api/histogram/chart`
   - `POST /api/uk-map/summary`
   - `GET /api/glm/summary`
   - `GET /api/glm/config`
@@ -131,7 +133,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Saved-filter rows support `Single`, `Multi`, and `Grouped` modes. `Single` keeps one selected row, `Multi` toggles rows and combines them with the active All/Any/Not all/None operator, and `Grouped` toggles rows while combining rows within a theme with `OR` and selected themes with `AND`.
 - `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for app metadata and prevent the Specifications tool from preloading default-discovered files for those disabled spec kinds.
 - The opt-in Specifications tool is enabled with `--tools specs`. It exposes Feature, KPI, and Filter spec screens backed by `/api/specs/*`, edits raw CSV fields rather than normalized schema metadata, continuously validates the same file contracts used at startup/reload, and atomically saves the selected spec file. Missing or disabled specs return generated starter drafts only: Feature specs get one row per valid dataset column with only `Feature` populated, while KPI and filter specs get one blank row with visual-only placeholder hints. Generated drafts are not written until Save; the file-path line labels the save target as a new file or as an existing file suppressed by `--no-*` when applicable. Saving a disabled spec writes the CSV for editing but leaves the running app metadata disabled until restart/recreate without the corresponding `--no-*` option.
-- Filters are DuckDB `WHERE` expressions and apply before column profiling, chart aggregation, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
+- Filters are DuckDB `WHERE` expressions and apply before column profiling, chart aggregation, histogram binning/statistics, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 
 **Column profile**
 
@@ -156,6 +158,15 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Low-weight grouping uses selected Weight total, not raw row count.
 - Table output renders directly up to 1,000 rows; larger results paginate client-side. The table footer is a client-computed `Total` row over all returned table rows, summing returned volume and recomposing response averages from per-row numerator/denominator components without a separate summary query.
 - Chart requests allow up to 10,000 x-axis groups before backend grouping limits apply.
+
+**Histogram**
+
+- Histogram is a default-enabled chart tool registered after Line/Bar and before UK Mapping. Aliases are `histogram`, `hist`, and `histo`.
+- Histogram uses the shared sidebar data source, Actual, Weight, KPI, and active filter controls. With `Average row value`, `N`, empty, or `__none__` Weight, the plotted value is Actual and bar volume is row count. With a numeric Weight column, the plotted value is `Actual / Weight` and bar volume is Weight sum.
+- Rows with missing Actual are excluded. When a numeric Weight is selected, rows with missing, zero, or negative Weight are also excluded and warned. Log x-scale excludes nonpositive plotted values and warns.
+- `bins` accepts `auto` or an explicit count. Explicit counts clamp to `1..10000`; `auto` uses `sqrt(valid_count)` clamped to `10..200`. `sampleMode=100k` deterministically samples only the chart binning; the metrics table remains exact for the full filtered valid population.
+- `distribution` supports incremental and cumulative bars. `yAxis` supports sum and probability; probability divides by the same valid chart volume used for the sum axis. Log x/y settings are render controls around the returned valid histogram values.
+- The response includes bin rows, exact metric rows, row-count metadata, denominator metadata, warnings, and timings. The frontend renders an ECharts histogram with mean/median reference lines and a compact Tabulator metrics grid.
 
 **UK mapping**
 
@@ -225,7 +236,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Timing values can use `ns`, `us`, or `ms` depending on duration.
 - `DuckDB` is measured on the Python server for the active tool API request. UK maps use a route-local DuckDB execute/fetch timer so the footer can show whether the database query is the bottleneck.
 - This does not include browser-to-server network latency, JSON transfer or parsing, profile table rendering, chart drawing, map drawing, GeoJSON loading, or map tile loading.
-- `Profile render`, `Chart render`, and `Map render` are measured in the browser after data arrives. All tools also show `JSON` and `Total`; `Total = DuckDB + JSON + render` using the rounded millisecond values shown in the footer.
+- `Profile render`, `Chart render`, `Histogram render`, and `Map render` are measured in the browser after data arrives. All tools also show `JSON` and `Total`; `Total = DuckDB + JSON + render` using the rounded millisecond values shown in the footer.
 - Cached UI rerenders can update render timing without running a new DuckDB query, so DuckDB may show the last cached query time. Collapsing the filter footer hides the timing monitor with the filter input.
 
 **Local server behavior**
@@ -268,6 +279,7 @@ find src/py_lucidum/static -path '*/vendor/*' -prune -o -name '*.js' -print0 | x
   tests/test_column_profile.py \
   tests/test_demo_dataset.py \
   tests/test_features.py \
+  tests/test_histogram.py \
   tests/test_line_bar.py \
   tests/test_telemetry.py \
   tests/test_uk_map.py
@@ -307,6 +319,7 @@ node --check src/py_lucidum/static/app.js
 node --check src/py_lucidum/static/app/main.js
 node --check src/py_lucidum/static/app/column-profile-tool.js
 node --check src/py_lucidum/static/app/line-bar-tool.js
+node --check src/py_lucidum/static/app/histogram-tool.js
 node --check src/py_lucidum/static/app/uk-map-tool.js
 node --check src/py_lucidum/static/app/shared/api.js
 node --check src/py_lucidum/static/app/shared/format.js
@@ -358,7 +371,7 @@ The current test suite should cover:
 - Tool registry defaults, optional GLM/GBM registration, and the default `dataset` data-source contract.
 - GLM config without optional dependencies, formula validation/comment stripping and `offset(...)` extraction, lazy dependency failures, training jobs, coefficient/diagnostic artifacts, active-model mutation routes, tabulation routes/artifacts, and `glm_prediction` / `glm_prediction_rate` / `glm_tabulated_prediction` data-source publishing.
 - GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, live job progress, active-model feature/parameter refresh, model data-source publishing, Gain ordering, SHAP row limits, SHAP plot aggregation routes, tree summary/detail routes, and chart/map use of prediction sources.
-- Browser smoke behavior for loading profile, chart, map, and GBM tools without unexpected extra API requests or stale active-model state, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.
+- Browser smoke behavior for loading profile, chart, histogram, map, and GBM tools without unexpected extra API requests or stale active-model state, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.
 
 ## Future Work
 

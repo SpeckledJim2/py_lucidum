@@ -1,5 +1,6 @@
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import { createLineBarTool } from "./line-bar-tool.js";
+      import { createHistogramTool } from "./histogram-tool.js";
       import { createUkMapTool, ukMapPostcodeAvailability } from "./uk-map-tool.js";
       import { createGlmTool } from "./glm-tool.js";
       import { createGbmTool } from "./gbm-tool.js";
@@ -37,6 +38,7 @@
       const ACTION_RENDER_LABELS = {
         column_profile: "Profile render",
         line_bar: "Chart render",
+        histogram: "Histogram render",
         uk_map: "Map render",
         glm: "GLM render",
         gbm: "GBM render",
@@ -56,6 +58,10 @@
         transform: "none",
         sigma: "0",
         partialDependence: "none",
+        histogramDistribution: "incremental",
+        histogramYAxis: "sum",
+        histogramLogScale: "none",
+        histogramSampleMode: "100k",
         source: locationParams.get("source") || "dataset",
         tool: "column_profile",
         view: "chart",
@@ -91,10 +97,12 @@
         lastProfileData: null,
         lastProfileDetailData: null,
         lastData: null,
+        lastHistogramData: null,
         lastMapData: null,
         toolCache: {
           column_profile: freshProfileCache(),
           line_bar: { requestKey: null, data: null, presentation: null },
+          histogram: { requestKey: null, data: null, presentation: null },
           uk_map: { requestKey: null, data: null, presentation: null },
           glm: { requestKey: null, data: null, presentation: null },
           gbm: { requestKey: null, data: null, presentation: null },
@@ -119,6 +127,7 @@
         profileRequestSeq: 0,
         profileDetailRequestSeq: 0,
         chartRequestSeq: 0,
+        histogramRequestSeq: 0,
         mapRequestSeq: 0,
         glmRequestSeq: 0,
         gbmRequestSeq: 0,
@@ -224,6 +233,32 @@
         getCss,
         bandSteps: BAND_STEPS,
         refreshLineBar,
+      });
+      const histogramTool = createHistogramTool({
+        api,
+        el,
+        state,
+        echartsImpl: echarts,
+        escapeHtml,
+        formatNumber,
+        formatLineValue,
+        formatWeightValue,
+        formatRowMeta,
+        measureToolRender,
+        startToolTiming,
+        setToolTimingFailed,
+        syncDuckDbTimingFromData,
+        syncClientTimingFromData,
+        setStatus,
+        setChartMessage,
+        setFilterRowMeta,
+        setGroupMeta,
+        applyToolPresentation,
+        saveToolPresentation,
+        toolCache,
+        renderMetricTitle,
+        getCss,
+        refreshActiveTool,
       });
       const ukMapTool = createUkMapTool({
         api,
@@ -492,7 +527,7 @@
       function setGroupMeta(tool, message) {
         const id = tool === "uk_map"
           ? "mapGroupMeta"
-          : (tool === "column_profile" ? "profileGroupMeta" : (isModelTool(tool) ? "modelToolGroupMeta" : "lineBarGroupMeta"));
+          : (tool === "column_profile" ? "profileGroupMeta" : (tool === "histogram" ? "histogramGroupMeta" : (isModelTool(tool) ? "modelToolGroupMeta" : "lineBarGroupMeta")));
         el(id).textContent = message || "";
       }
 
@@ -504,6 +539,7 @@
         const label = activeFilterLabel();
         el("profileFilter").textContent = label;
         el("lineBarFilter").textContent = label;
+        el("histogramFilter").textContent = label;
         el("modelToolFilter").textContent = label;
         el("mapControlFilter").textContent = label;
       }
@@ -629,6 +665,7 @@
         return {
           column_profile: freshProfileCache(),
           line_bar: { requestKey: null, data: null, presentation: null },
+          histogram: { requestKey: null, data: null, presentation: null },
           uk_map: { requestKey: null, data: null, presentation: null },
           glm: { requestKey: null, data: null, presentation: null },
           gbm: { requestKey: null, data: null, presentation: null },
@@ -652,6 +689,7 @@
           clearProfileDetailCache();
         }
         state.lastData = null;
+        state.lastHistogramData = null;
         ukMapTool.resetRenderState();
         syncActionTimingMonitor();
       }
@@ -722,6 +760,13 @@
             useCached: (cache, options) => lineBarTool.useCached(cache, options),
           };
         }
+        if (tool === "histogram") {
+          return {
+            buildRequest: () => histogramTool.buildRequest(),
+            fetch: (request, requestKey) => histogramTool.fetchData(request, requestKey),
+            useCached: (cache, options) => histogramTool.useCached(cache, options),
+          };
+        }
         if (tool === "uk_map") {
           return {
             buildRequest: () => ukMapTool.buildRequest(),
@@ -785,6 +830,7 @@
         if (requested && toolEnabled(requested)) return requested;
         if (toolEnabled("column_profile")) return "column_profile";
         if (toolEnabled("line_bar")) return "line_bar";
+        if (toolEnabled("histogram")) return "histogram";
         if (toolEnabled("uk_map")) return "uk_map";
         if (toolEnabled("glm")) return "glm";
         if (toolEnabled("gbm")) return "gbm";
@@ -795,23 +841,26 @@
       function renderToolSelector() {
         const profileEnabled = toolEnabled("column_profile");
         const lineBarEnabled = toolEnabled("line_bar");
+        const histogramEnabled = toolEnabled("histogram");
         const ukMapEnabled = toolEnabled("uk_map");
         const glmEnabled = toolEnabled("glm");
         const gbmEnabled = toolEnabled("gbm");
         const specsEnabled = toolEnabled("specs");
         el("profileTool").disabled = !profileEnabled;
         el("lineBarTool").disabled = !lineBarEnabled;
+        el("histogramTool").disabled = !histogramEnabled;
         el("ukMapTool").disabled = !ukMapEnabled;
         el("glmTool").disabled = !glmEnabled;
         el("gbmTool").disabled = !gbmEnabled;
         el("specsTool").disabled = !specsEnabled;
         el("profileTool").classList.toggle("hidden", !profileEnabled);
         el("lineBarTool").classList.toggle("hidden", !lineBarEnabled);
+        el("histogramTool").classList.toggle("hidden", !histogramEnabled);
         el("ukMapTool").classList.toggle("hidden", !ukMapEnabled);
         el("glmTool").classList.toggle("hidden", !glmEnabled);
         el("gbmTool").classList.toggle("hidden", !gbmEnabled);
         el("specsTool").classList.toggle("hidden", !specsEnabled);
-        el("toolSelectorSection").classList.toggle("hidden", !(profileEnabled || lineBarEnabled || ukMapEnabled || glmEnabled || gbmEnabled || specsEnabled));
+        el("toolSelectorSection").classList.toggle("hidden", !(profileEnabled || lineBarEnabled || histogramEnabled || ukMapEnabled || glmEnabled || gbmEnabled || specsEnabled));
       }
 
       function schemaFileMeta() {
@@ -949,6 +998,7 @@
         state.tool = tool;
         el("profileTool").classList.toggle("active", tool === "column_profile");
         el("lineBarTool").classList.toggle("active", tool === "line_bar");
+        el("histogramTool").classList.toggle("active", tool === "histogram");
         el("ukMapTool").classList.toggle("active", tool === "uk_map");
         el("glmTool").classList.toggle("active", tool === "glm");
         el("gbmTool").classList.toggle("active", tool === "gbm");
@@ -958,8 +1008,10 @@
         gbmTool.syncSidebarFromSchema();
         syncSidebarAccordion();
         el("lineBarToolbar").classList.toggle("hidden", tool !== "line_bar");
+        el("histogramToolbar").classList.toggle("hidden", tool !== "histogram");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
         el("visualArea").classList.toggle("profile-mode", tool === "column_profile");
+        el("visualArea").classList.toggle("histogram-mode", tool === "histogram");
         el("visualArea").classList.toggle("specs-mode", tool === "specs");
         el("visualArea").classList.toggle("model-mode", isModelTool(tool));
         el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
@@ -969,6 +1021,8 @@
         el("profileFilter").classList.toggle("hidden", tool !== "column_profile");
         el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarFilter").classList.toggle("hidden", tool !== "line_bar");
+        el("histogramGroupMeta").classList.toggle("hidden", tool !== "histogram");
+        el("histogramFilter").classList.toggle("hidden", tool !== "histogram");
         el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");
         el("modelToolFilter").classList.add("hidden");
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
@@ -984,22 +1038,35 @@
           el("profileWrap").classList.add("hidden");
           el("modelToolWrap").classList.add("hidden");
           el("specificationsWrap").classList.add("hidden");
+          el("histogramWrap").classList.add("hidden");
           el("ukMap").classList.add("hidden");
           el("mapLegend").classList.add("hidden");
           lineBarTool.setView(state.view);
           lineBarTool.updateAxisControls();
           requestAnimationFrame(() => lineBarTool.resize());
+        } else if (tool === "histogram") {
+          el("profileWrap").classList.add("hidden");
+          el("modelToolWrap").classList.add("hidden");
+          el("specificationsWrap").classList.add("hidden");
+          el("chart").classList.add("hidden");
+          el("tableWrap").classList.add("hidden");
+          el("ukMap").classList.add("hidden");
+          el("mapLegend").classList.add("hidden");
+          el("histogramWrap").classList.remove("hidden");
+          histogramTool.activate();
         } else if (tool === "uk_map") {
           el("profileWrap").classList.add("hidden");
           el("modelToolWrap").classList.add("hidden");
           el("specificationsWrap").classList.add("hidden");
           el("chart").classList.add("hidden");
           el("tableWrap").classList.add("hidden");
+          el("histogramWrap").classList.add("hidden");
           el("ukMap").classList.remove("hidden");
           ukMapTool.activate();
         } else if (tool === "specs") {
           el("chart").classList.add("hidden");
           el("tableWrap").classList.add("hidden");
+          el("histogramWrap").classList.add("hidden");
           el("ukMap").classList.add("hidden");
           el("mapLegend").classList.add("hidden");
           el("profileWrap").classList.add("hidden");
@@ -1008,6 +1075,7 @@
         } else {
           el("chart").classList.add("hidden");
           el("tableWrap").classList.add("hidden");
+          el("histogramWrap").classList.add("hidden");
           el("ukMap").classList.add("hidden");
           el("mapLegend").classList.add("hidden");
           el("specificationsWrap").classList.add("hidden");
@@ -1025,6 +1093,8 @@
       function resizeActiveTool() {
         if (state.tool === "uk_map") {
           ukMapTool.syncViewport({ mode: "preserve" });
+        } else if (state.tool === "histogram") {
+          histogramTool.resize();
         } else if (state.tool === "glm") {
           glmTool.resize();
         } else if (state.tool === "gbm") {
@@ -2141,6 +2211,7 @@
         setupChartControlsResize();
         setupChartControlHeightsResize();
         ukMapTool.bindControls();
+        histogramTool.bindControls();
         syncSidebarToggleButton();
         syncSidebarAccordion();
         syncFilterFooterToggleButton();
@@ -2186,6 +2257,7 @@
         });
         el("profileTool").addEventListener("click", () => handleToolClick("column_profile"));
         el("lineBarTool").addEventListener("click", () => handleToolClick("line_bar"));
+        el("histogramTool").addEventListener("click", () => handleToolClick("histogram"));
         el("ukMapTool").addEventListener("click", () => handleToolClick("uk_map"));
         el("glmTool").addEventListener("click", () => handleToolClick("glm"));
         el("gbmTool").addEventListener("click", () => handleToolClick("gbm"));
@@ -2202,6 +2274,7 @@
           document.body.classList.toggle("dark");
           syncThemeButton();
           if (state.tool === "line_bar") lineBarTool.refreshTheme();
+          if (state.tool === "histogram") histogramTool.refreshTheme();
           if (state.tool === "uk_map") ukMapTool.refreshTheme();
           if (state.tool === "glm") measureToolRender("glm", () => glmTool.refreshTheme());
           if (state.tool === "gbm") measureToolRender("gbm", () => gbmTool.refreshTheme());
@@ -2255,6 +2328,8 @@
             const firstPanel = controls?.querySelector(".chart-side-section");
             if (firstPanel) setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height);
             lineBarTool.resize();
+          } else if (state.tool === "histogram") {
+            histogramTool.resize();
           } else {
             resizeActiveTool();
           }

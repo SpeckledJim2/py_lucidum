@@ -96,7 +96,7 @@ class ColumnProfileToolTests(unittest.TestCase):
         return next(column for column in payload["columns"] if column["name"] == name)
 
     def test_default_tools_include_column_profile_first(self) -> None:
-        self.assertEqual(normalise_tools(None), ["column_profile", "line_bar", "uk_map"])
+        self.assertEqual(normalise_tools(None), ["column_profile", "line_bar", "histogram", "uk_map"])
         self.assertEqual(normalise_tools("profile,line-bar"), ["column_profile", "line_bar"])
         self.assertEqual(normalise_tools("glm,gbm"), ["column_profile", "glm", "gbm"])
         self.assertEqual(normalise_tools("gbm,line-bar,map"), ["column_profile", "glm", "gbm", "line_bar", "uk_map"])
@@ -105,10 +105,11 @@ class ColumnProfileToolTests(unittest.TestCase):
         app = create_app(self.data_path, token="dev-token")
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["column_profile", "line_bar", "uk_map"])
+        self.assertEqual(app.state.enabled_tools, ["column_profile", "line_bar", "histogram", "uk_map"])
         self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/column-profile/detail", paths)
         self.assertIn("/api/chart", paths)
+        self.assertIn("/api/histogram/chart", paths)
         self.assertIn("/api/uk-map/summary", paths)
         self.assertNotIn("/api/glm/summary", paths)
         self.assertNotIn("/api/gbm/summary", paths)

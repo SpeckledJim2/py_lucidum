@@ -1,0 +1,123 @@
+      .visual-area.histogram-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .histogram-bin-control {
+        min-width: 150px;
+      }
+
+      .histogram-bin-input {
+        height: 24px;
+        max-width: 132px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--text);
+        font-size: 12px;
+        padding: 0 8px;
+      }
+
+      .histogram-wrap {
+        display: grid;
+        grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+        gap: 10px;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        padding-top: 22px;
+      }
+
+      .histogram-stats-panel,
+      .histogram-chart-panel {
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .histogram-stats-panel {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .histogram-chart-panel {
+        background: var(--panel);
+        border: 0;
+      }
+
+      #histogramChart {
+        width: 100%;
+        height: 100%;
+      }
+
+      .histogram-grid {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--text);
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .histogram-grid .tabulator,
+      .histogram-grid .tabulator-tableholder,
+      .histogram-grid .tabulator-table {
+        background: var(--panel) !important;
+        color: var(--text) !important;
+      }
+
+      .histogram-grid .tabulator-header,
+      .histogram-grid .tabulator-header .tabulator-col {
+        background: var(--panel-2) !important;
+        border-color: var(--line) !important;
+        color: var(--text) !important;
+      }
+
+      .histogram-grid.tabulator {
+        border-color: var(--line);
+      }
+
+      .histogram-grid.tabulator .tabulator-header .tabulator-col {
+        font-size: 11px;
+        justify-content: center;
+        line-height: 1.15;
+        min-height: 20px;
+      }
+
+      .histogram-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content {
+        align-items: center;
+        display: flex;
+        min-height: 20px;
+        padding: 1px 6px;
+      }
+
+      .histogram-grid .tabulator-row,
+      .histogram-grid .tabulator-row.tabulator-row-even,
+      .histogram-grid .tabulator-row.tabulator-row-odd {
+        background: var(--panel) !important;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+        min-height: 20px;
+      }
+
+      .histogram-grid .tabulator-row .tabulator-cell {
+        align-items: center;
+        background: transparent !important;
+        border-right-color: color-mix(in srgb, var(--line) 80%, transparent);
+        color: var(--text) !important;
+        display: inline-flex;
+        font-size: 11px;
+        line-height: 1.15;
+        min-height: 20px;
+        padding: 1px 6px;
+      }
+
+      .histogram-grid .tabulator-row .tabulator-cell[tabulator-field="value"] {
+        justify-content: flex-end;
+        text-align: right;
+      }
+
+      @media (max-width: 900px) {
+        .histogram-wrap {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: minmax(160px, 34%) minmax(0, 1fr);
+        }
+      }

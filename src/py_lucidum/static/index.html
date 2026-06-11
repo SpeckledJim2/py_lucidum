@@ -75,6 +75,12 @@
                 </span>
                 <span class="tool-label">Line and bar</span>
               </button>
+              <button id="histogramTool" class="tool-option" type="button" data-tool="histogram" aria-label="Histogram" title="Histogram">
+                <span class="tool-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false"><path d="M4 19h16M7 19v-7m4 7V6m4 13v-9m4 9v-5" /></svg>
+                </span>
+                <span class="tool-label">Histogram</span>
+              </button>
               <button id="ukMapTool" class="tool-option" type="button" data-tool="uk_map" aria-label="UK mapping" title="UK mapping">
                 <span class="tool-icon" aria-hidden="true">
                   <img src="/tools/uk-map/static/icons/UK.png" alt="">
@@ -267,6 +273,42 @@
               </div>
             </div>
           </div>
+          <div id="histogramToolbar" class="toolbar hidden">
+            <div class="control histogram-bin-control">
+              <h3>Histogram bins</h3>
+              <input id="histogramBins" class="histogram-bin-input" type="text" inputmode="numeric" placeholder="auto" aria-label="Histogram bins" />
+            </div>
+            <div class="control">
+              <h3>Distribution</h3>
+              <div class="segmented" data-control="histogramDistribution">
+                <button data-value="incremental" class="active" type="button">Incremental</button>
+                <button data-value="cumulative" type="button">Cumulative</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>y-axis type</h3>
+              <div class="segmented" data-control="histogramYAxis">
+                <button data-value="sum" class="active" type="button">Sum</button>
+                <button data-value="probability" type="button">Probability</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>log scale</h3>
+              <div class="segmented" data-control="histogramLogScale">
+                <button data-value="none" class="active" type="button">-</button>
+                <button data-value="x" type="button">X axis</button>
+                <button data-value="y" type="button">Y axis</button>
+                <button data-value="both" type="button">Both</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Sample data for chart</h3>
+              <div class="segmented" data-control="histogramSampleMode">
+                <button data-value="100k" class="active" type="button">Use 100k</button>
+                <button data-value="all" type="button">Use all</button>
+              </div>
+            </div>
+          </div>
           <div id="status" class="status main-status hidden"></div>
 
           <div id="visualArea" class="visual-area profile-mode">
@@ -318,12 +360,22 @@
                 <div id="profileFilter">no filter</div>
                 <div id="lineBarGroupMeta" class="workspace-meta hidden"></div>
                 <div id="lineBarFilter" class="hidden">no filter</div>
+                <div id="histogramGroupMeta" class="workspace-meta hidden"></div>
+                <div id="histogramFilter" class="hidden">no filter</div>
                 <div id="modelToolGroupMeta" class="workspace-meta hidden"></div>
                 <div id="modelToolFilter" class="hidden">no filter</div>
                 <div id="chartMessage" class="chart-message hidden"></div>
               </div>
               <div id="chart" class="hidden"></div>
               <div id="tableWrap" class="table-wrap hidden"></div>
+              <div id="histogramWrap" class="histogram-wrap hidden">
+                <section class="histogram-stats-panel" aria-label="Histogram metrics">
+                  <div id="histogramStatsGrid" class="histogram-grid"></div>
+                </section>
+                <section class="histogram-chart-panel" aria-label="Histogram chart">
+                  <div id="histogramChart"></div>
+                </section>
+              </div>
               <div id="profileWrap" class="profile-wrap"></div>
               <div id="modelToolWrap" class="model-tool-wrap hidden"></div>
               <div id="specificationsWrap" class="specifications-wrap hidden"></div>

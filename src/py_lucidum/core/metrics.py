@@ -8,8 +8,8 @@ from .sql import quote_ident
 
 
 def normalise_denominator(raw: Any, columns: dict[str, ColumnInfo]) -> dict[str, str | None]:
-    value = str(raw or "__none__")
-    if value in {"", "__none__"}:
+    value = str(raw or "__none__").strip()
+    if value.lower() in {"", "__none__", "n", "average row value"}:
         return {"column": None, "label": "Average row value", "bar_label": "Row count"}
     if value not in columns or not is_numeric_kind(columns[value].kind):
         raise ValueError("Choose a valid numeric Weight column")
