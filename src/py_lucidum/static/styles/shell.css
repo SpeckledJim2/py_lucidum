@@ -155,6 +155,7 @@
         white-space: nowrap;
       }
 
+      .dataset-meta-column-link,
       .dataset-meta-gbm-link,
       .dataset-meta-glm-link,
       .dataset-meta-uk-map-link {
@@ -171,6 +172,7 @@
         text-underline-offset: 2px;
       }
 
+      .dataset-meta-column-link:hover,
       .dataset-meta-gbm-link:hover,
       .dataset-meta-glm-link:hover,
       .dataset-meta-uk-map-link:hover {

@@ -908,7 +908,15 @@
         const rows = Number(state.schema?.row_count || 0).toLocaleString();
         const columns = Number(state.schema?.columns?.length || 0).toLocaleString();
         target.textContent = "";
-        target.append(document.createTextNode(`${datasetMetaBase} · ${rows} rows · ${columns} columns`));
+        target.append(document.createTextNode(`${datasetMetaBase} · ${rows} rows · `));
+        const columnButton = document.createElement("button");
+        columnButton.type = "button";
+        columnButton.className = "dataset-meta-column-link";
+        columnButton.textContent = `${columns} columns`;
+        columnButton.title = "Open Column Profile";
+        columnButton.setAttribute("aria-label", `Open Column Profile, ${columns} columns`);
+        columnButton.addEventListener("click", openColumnProfile);
+        target.append(columnButton);
         renderDatasetPostcodeMeta(target);
         if (datasetGlmCount !== null && toolEnabled("glm")) {
           target.append(document.createTextNode(" · "));
@@ -976,6 +984,11 @@
         const refreshOnLevelChange = state.tool === "uk_map";
         if (!ukMapTool.setMapLevel(level, { refresh: refreshOnLevelChange })) return;
         setTool("uk_map", state.tool !== "uk_map");
+      }
+
+      function openColumnProfile() {
+        if (!toolEnabled("column_profile") || state.tool === "column_profile") return;
+        setTool("column_profile");
       }
 
       function openGlmModelNavigator() {

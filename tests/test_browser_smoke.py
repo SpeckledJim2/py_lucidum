@@ -3655,6 +3655,11 @@ COPY (
                     """
                 )
                 self.assertEqual(page.locator("header").evaluate("node => getComputedStyle(node).height"), "52px")
+                self.assertEqual(page.locator(".dataset-meta-column-link").text_content().strip(), "8 columns")
+                self.assertIn(
+                    "underline",
+                    page.locator(".dataset-meta-column-link").evaluate("node => getComputedStyle(node).textDecorationLine"),
+                )
                 self.assertEqual(
                     page.locator(".dataset-meta-uk-map-link").evaluate_all("nodes => nodes.map((node) => node.textContent.trim()).join('/')"),
                     "Area/Sector/Unit",
@@ -3727,7 +3732,6 @@ COPY (
                     }
                     """
                 )
-
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
                 self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))
@@ -3760,8 +3764,13 @@ COPY (
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="area"]').is_checked())
                 self.assertFalse(page.locator("#mapLabelControl").is_hidden())
                 self.assertFalse(page.locator("#mapLabelSize").is_disabled())
+                page.locator(".dataset-meta-column-link").click()
+                page.locator("#profileTool.active").wait_for(timeout=10_000)
+                page.locator("#profileWrap:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#ukMapTool").click()
+                page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
                 page.evaluate(
-                    """
+                  """
                     () => {
                         const map = document.querySelector("#ukMap")?._lucidumMap;
                         map.setView([51.5074, -0.1278], 9, { animate: false });
