@@ -286,12 +286,16 @@ def validate_spec(dataset: Dataset, kind: str, columns: list[str], rows: list[di
 
 
 def validation_message(kind: str, errors: list[str], warnings: list[str]) -> str:
-    label = spec_label(kind)
+    label = {
+        "feature": "feature spec",
+        "kpi": "KPI spec",
+        "filter": "filter spec",
+    }[kind]
     if errors:
-        return f"{label} has {len(errors)} error{'s' if len(errors) != 1 else ''}"
+        return f"{spec_label(kind)} has {len(errors)} error{'s' if len(errors) != 1 else ''}"
     if warnings:
-        return f"{label} is valid with {len(warnings)} warning{'s' if len(warnings) != 1 else ''}"
-    return f"{label} is valid"
+        return f"Valid {label} with {len(warnings)} warning{'s' if len(warnings) != 1 else ''}"
+    return f"Valid {label}"
 
 
 def add_row_issue(row_issues: list[dict[str, Any]], row_number: int, severity: str, message: str) -> None:

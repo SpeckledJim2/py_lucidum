@@ -140,6 +140,9 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                     page.locator("#specsTool:not(.hidden)").click()
                     page.locator("#specGenerationNotice", has_text="No feature spec was found").wait_for(timeout=10_000)
+                    page.locator("#specFilePath", has_text="Save target:").wait_for(timeout=10_000)
+                    page.locator("#specFilePath", has_text=re.compile(r"\((new file|existing file ignored by --no-features)\)")).wait_for(timeout=10_000)
+                    page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
                     self.assertEqual(
                         page.locator('#specGrid .tabulator-row .tabulator-cell[tabulator-field="Feature"]').first.inner_text().strip(),
                         "vehicle_age",
@@ -147,6 +150,8 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertFalse(kpis_path.exists())
                     page.locator('[data-spec-kind="kpi"]').click()
                     page.locator("#specGenerationNotice", has_text="No kpi spec was found").wait_for(timeout=10_000)
+                    page.locator("#specFilePath", has_text="kpi_spec.csv (new file)").wait_for(timeout=10_000)
+                    page.locator("#specNotice", has_text="Valid KPI spec").wait_for(timeout=10_000)
                     page.locator(".spec-cell-placeholder", has_text="Numeric column").wait_for(timeout=10_000)
                     page.locator("#specSaveBtn").click()
                     page.locator("#specNotice", has_text="KPI spec saved").wait_for(timeout=10_000)
@@ -2650,15 +2655,18 @@ COPY (
                       const tabs = document.querySelector(".spec-kind-tabs")?.getBoundingClientRect();
                       const path = document.querySelector("#specFilePath")?.getBoundingClientRect();
                       const notice = document.querySelector("#specNotice")?.getBoundingClientRect();
-                      const validate = document.querySelector("#specValidateBtn")?.getBoundingClientRect();
+                      const save = document.querySelector("#specSaveBtn")?.getBoundingClientRect();
                       const pathStyle = getComputedStyle(document.querySelector("#specFilePath"));
                       const noticeStyle = getComputedStyle(document.querySelector("#specNotice"));
                       return {
                         pathBelowTabs: path.top > tabs.bottom,
                         pathFullWidth: path.width >= topbar.width * 0.95,
                         pathStartsAtLeft: Math.abs(path.left - topbar.left) <= 2,
+                        noticeBelowPath: notice.top > path.bottom,
+                        noticeFullWidth: notice.width >= topbar.width * 0.95,
+                        noticeStartsAtLeft: Math.abs(notice.left - topbar.left) <= 2,
                         pathWeight: pathStyle.fontWeight,
-                        noticeBeforeValidate: notice.right <= validate.left,
+                        saveRightAligned: Math.abs(save.right - topbar.right) <= 2,
                         noticeWeight: noticeStyle.fontWeight,
                         noticeOverflow: noticeStyle.textOverflow,
                         noticeWhiteSpace: noticeStyle.whiteSpace,
@@ -2669,8 +2677,11 @@ COPY (
                 self.assertTrue(topbar_layout["pathBelowTabs"])
                 self.assertTrue(topbar_layout["pathFullWidth"])
                 self.assertTrue(topbar_layout["pathStartsAtLeft"])
+                self.assertTrue(topbar_layout["noticeBelowPath"])
+                self.assertTrue(topbar_layout["noticeFullWidth"])
+                self.assertTrue(topbar_layout["noticeStartsAtLeft"])
                 self.assertEqual(topbar_layout["pathWeight"], "400")
-                self.assertTrue(topbar_layout["noticeBeforeValidate"])
+                self.assertTrue(topbar_layout["saveRightAligned"])
                 self.assertEqual(topbar_layout["noticeWeight"], "400")
                 self.assertEqual(topbar_layout["noticeOverflow"], "ellipsis")
                 self.assertEqual(topbar_layout["noticeWhiteSpace"], "nowrap")
@@ -2773,14 +2784,22 @@ COPY (
                 notice_layout = page.evaluate(
                     """
                     () => {
+                      const topbar = document.querySelector(".spec-topbar")?.getBoundingClientRect();
+                      const path = document.querySelector("#specFilePath")?.getBoundingClientRect();
                       const notice = document.querySelector("#specNotice")?.getBoundingClientRect();
-                      const validate = document.querySelector("#specValidateBtn")?.getBoundingClientRect();
-                      return { noticeLeft: notice.left, noticeRight: notice.right, validateLeft: validate.left };
+                      return {
+                        noticeBelowPath: notice.top > path.bottom,
+                        noticeLeft: notice.left,
+                        noticeWidth: notice.width,
+                        topbarLeft: topbar.left,
+                        topbarWidth: topbar.width,
+                      };
                     }
                     """
                 )
-                self.assertLess(notice_layout["noticeLeft"], notice_layout["validateLeft"] - 430)
-                self.assertLessEqual(notice_layout["noticeRight"], notice_layout["validateLeft"])
+                self.assertTrue(notice_layout["noticeBelowPath"])
+                self.assertLessEqual(abs(notice_layout["noticeLeft"] - notice_layout["topbarLeft"]), 2)
+                self.assertGreaterEqual(notice_layout["noticeWidth"], notice_layout["topbarWidth"] * 0.95)
 
             def spec_header(field: str):
                 return page.locator(f'#specGrid .tabulator-header .tabulator-col[tabulator-field="{field}"]').first
@@ -3126,8 +3145,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#specValidateBtn").click()
-                page.locator("#specNotice", has_text="Feature spec is valid").wait_for(timeout=10_000)
+                page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
                 assert_global_status_clear()
                 page.locator("#specSaveBtn").click()
                 page.locator("#specNotice", has_text="Feature spec saved").wait_for(timeout=10_000)
@@ -3352,7 +3370,6 @@ COPY (
                 spec_cell("actual", 0).dblclick()
                 page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("MissingActual")
                 page.keyboard.press("Enter")
-                page.locator("#specValidateBtn").click()
                 page.locator("#specNotice.error", has_text="kpi_spec.csv row 2 actual column does not exist: MissingActual").wait_for(timeout=10_000)
                 assert_validation_row_highlight(0, "2")
                 assert_notice_extends_left()
@@ -3397,7 +3414,6 @@ COPY (
                 spec_cell("expression", 0).dblclick()
                 page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("MissingColumn = 1")
                 page.keyboard.press("Enter")
-                page.locator("#specValidateBtn").click()
                 page.locator("#specNotice.error", has_text="MissingColumn").wait_for(timeout=10_000)
                 assert_validation_row_highlight(0, "2")
                 assert_global_status_clear()

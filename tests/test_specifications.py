@@ -442,6 +442,7 @@ class SpecificationsToolTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertTrue(payload["valid"])
+        self.assertEqual(payload["message"], "Valid feature spec")
         self.assertEqual(payload["errors"], [])
         self.assertEqual(payload["warnings"], [])
         self.assertEqual(payload["row_issues"], [])

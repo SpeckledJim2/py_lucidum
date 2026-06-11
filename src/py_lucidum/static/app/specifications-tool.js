@@ -30,6 +30,7 @@ const FIELD_TITLES = {
     expression: "Expression",
   },
 };
+const AUTO_VALIDATION_DELAY_MS = 250;
 
 export function createSpecificationsTool({
   api,
@@ -52,6 +53,8 @@ export function createSpecificationsTool({
   let selection = null;
   let selectionDragging = false;
   let pendingScrollRestore = null;
+  let validationTimer = null;
+  let validationRequestId = 0;
   const specs = new Map();
 
   function renderShell() {
@@ -64,13 +67,12 @@ export function createSpecificationsTool({
               ${SPEC_KINDS.map((kind) => `<button class="tab ${kind.id === activeKind ? "active" : ""}" type="button" role="tab" data-spec-kind="${kind.id}" aria-selected="${kind.id === activeKind ? "true" : "false"}">${escapeHtml(kind.label)}</button>`).join("")}
             </div>
             <div class="spec-file-actions">
-              <div id="specNotice" class="spec-notice hidden" role="status" aria-live="polite"></div>
-              <button id="specValidateBtn" class="ghost spec-action-button" type="button">Validate</button>
               <button id="specSaveBtn" class="spec-save-button" type="button">Save</button>
             </div>
           </div>
-          <div id="specGenerationNotice" class="spec-generation-notice hidden" role="status" aria-live="polite"></div>
           <span id="specFilePath" class="spec-file-path"></span>
+          <div id="specNotice" class="spec-notice hidden" role="status" aria-live="polite"></div>
+          <div id="specGenerationNotice" class="spec-generation-notice hidden" role="status" aria-live="polite"></div>
         </div>
         <div id="specGrid" class="spec-grid" tabindex="0"></div>
         <div id="specContextMenu" class="spec-context-menu" role="menu" hidden>
@@ -89,7 +91,6 @@ export function createSpecificationsTool({
     el("specificationsWrap").querySelectorAll("[data-spec-kind]").forEach((button) => {
       button.addEventListener("click", () => selectKind(button.dataset.specKind));
     });
-    el("specValidateBtn").addEventListener("click", validateCurrentSpec);
     el("specSaveBtn").addEventListener("click", saveCurrentSpec);
     el("specContextMenu").addEventListener("click", (event) => {
       const button = event.target.closest("[data-spec-row-action]");
@@ -151,6 +152,7 @@ export function createSpecificationsTool({
     const nextKind = SPEC_KINDS.some((entry) => entry.id === kind) ? kind : "feature";
     if (nextKind === activeKind) return;
     saveActiveDraft();
+    cancelPendingValidation();
     clearValidationRowIssuesForSpec(specs.get(activeKind));
     activeKind = nextKind;
     syncKindTabs();
@@ -173,7 +175,7 @@ export function createSpecificationsTool({
       const spec = cacheSpec(payload, false);
       if (kind === activeKind) {
         renderSpec(spec);
-        if (!spec.generated) await validateSpecOnLoad(spec);
+        await validateSpecOnLoad(spec);
       }
     } catch (error) {
       showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message });
@@ -208,7 +210,7 @@ export function createSpecificationsTool({
     syncKindTabs();
     syncFilePath(spec);
     syncGenerationNotice(spec);
-    showValidationNotice(spec.validationResult || null, { showValid: false });
+    showValidationNotice(spec.validationResult || null);
     measureToolRender("specs", () => renderTable(spec));
     syncButtons();
   }
@@ -454,8 +456,26 @@ export function createSpecificationsTool({
     const target = el("specFilePath");
     if (!target) return;
     const path = String(spec?.path || "");
-    target.textContent = path;
+    target.textContent = specPathLabel(spec, path);
     target.title = path;
+  }
+
+  function specPathLabel(spec, path) {
+    if (!path) return "";
+    if (spec?.generated && !spec.exists) return `Save target: ${path} (new file)`;
+    if (spec?.generated && spec.exists && !spec.enabled) {
+      return `Save target: ${path} (existing file ignored by ${disabledSpecFlag(spec.kind)})`;
+    }
+    if (spec?.generated) return `Save target: ${path} (generated draft)`;
+    return `Editing: ${path}`;
+  }
+
+  function disabledSpecFlag(kind) {
+    return {
+      feature: "--no-features",
+      kpi: "--no-kpis",
+      filter: "--no-filters",
+    }[kind] || "--no-*";
   }
 
   function syncGenerationNotice(spec = specs.get(activeKind)) {
@@ -470,7 +490,6 @@ export function createSpecificationsTool({
   function syncButtons() {
     if (!rendered) return;
     const dirty = Boolean(specs.get(activeKind)?.dirty);
-    el("specValidateBtn").disabled = loading;
     el("specSaveBtn").disabled = loading;
     el("specSaveBtn").classList.toggle("dirty", dirty);
   }
@@ -489,7 +508,7 @@ export function createSpecificationsTool({
     const warnings = Array.isArray(result.warnings) ? result.warnings : [];
     const items = [...errors, ...warnings].slice(0, 8);
     notice.classList.toggle("error", isError || errors.length > 0 || result.valid === false);
-    notice.classList.toggle("warning", !errors.length && warnings.length > 0);
+    notice.classList.remove("warning");
     notice.classList.remove("hidden");
     const messageParts = [];
     [result.message || "", ...items].forEach((item) => {
@@ -504,18 +523,12 @@ export function createSpecificationsTool({
     showNotice({ valid: false, errors: [message], warnings: [], message }, true);
   }
 
-  function showValidationNotice(result, options = {}) {
+  function showValidationNotice(result) {
     if (!result) {
       showNotice(null);
       return;
     }
-    const errors = Array.isArray(result.errors) ? result.errors : [];
-    const warnings = Array.isArray(result.warnings) ? result.warnings : [];
-    if (options.showValid || errors.length || warnings.length || result.valid === false) {
-      showNotice(result);
-    } else {
-      showNotice(null);
-    }
+    showNotice(result);
   }
 
   function saveActiveDraft() {
@@ -547,28 +560,11 @@ export function createSpecificationsTool({
     });
   }
 
-  async function validateCurrentSpec() {
-    const payload = activePayload();
-    if (!payload) return;
-    loading = true;
-    syncButtons();
-    try {
-      const result = await api(`/api/specs/${activeKind}/validate`, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      storeValidationResult(specs.get(activeKind), result, { showValid: true });
-    } catch (error) {
-      showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message }, true);
-    } finally {
-      loading = false;
-      syncButtons();
-    }
-  }
-
   async function saveCurrentSpec() {
     const payload = activePayload();
     if (!payload) return;
+    cancelPendingValidation();
+    validationRequestId += 1;
     loading = true;
     syncButtons();
     try {
@@ -594,6 +590,7 @@ export function createSpecificationsTool({
     const spec = specs.get(activeKind);
     if (spec) spec.dirty = true;
     syncButtons();
+    scheduleValidationForActiveSpec();
   }
 
   function normaliseRowIssues(rowIssues) {
@@ -608,21 +605,43 @@ export function createSpecificationsTool({
   }
 
   async function validateSpecOnLoad(spec) {
-    if (!spec || spec.generated || spec.dirty || spec.autoValidated) return;
-    await validateSpecDraft(spec, { showValid: false });
+    if (!spec || spec.dirty || spec.autoValidated) return;
+    await validateSpecDraft(spec);
   }
 
-  async function validateSpecDraft(spec, options = {}) {
+  async function validateSpecDraft(spec) {
     if (!spec) return;
+    if (spec.kind === activeKind) saveActiveDraft();
+    const requestId = ++validationRequestId;
     try {
       const result = await api(`/api/specs/${spec.kind}/validate`, {
         method: "POST",
         body: JSON.stringify(payloadForSpec(spec)),
       });
-      storeValidationResult(spec, result, options);
+      if (requestId !== validationRequestId) return;
+      storeValidationResult(spec, result);
     } catch (error) {
+      if (requestId !== validationRequestId) return;
       const result = { valid: false, errors: [error.message], warnings: [], row_issues: [], message: error.message };
-      storeValidationResult(spec, result, options);
+      storeValidationResult(spec, result);
+    }
+  }
+
+  function scheduleValidationForActiveSpec() {
+    cancelPendingValidation();
+    const spec = specs.get(activeKind);
+    if (!spec) return;
+    validationRequestId += 1;
+    validationTimer = window.setTimeout(() => {
+      validationTimer = null;
+      void validateSpecDraft(spec);
+    }, AUTO_VALIDATION_DELAY_MS);
+  }
+
+  function cancelPendingValidation() {
+    if (validationTimer !== null) {
+      window.clearTimeout(validationTimer);
+      validationTimer = null;
     }
   }
 
@@ -633,12 +652,12 @@ export function createSpecificationsTool({
     };
   }
 
-  function storeValidationResult(spec, result, options = {}) {
+  function storeValidationResult(spec, result) {
     if (!spec || !result) return;
     spec.validationResult = result;
     spec.autoValidated = true;
     applyValidationResultRowIssues(result, spec);
-    if (spec.kind === activeKind) showValidationNotice(result, options);
+    if (spec.kind === activeKind) showValidationNotice(result);
   }
 
   function applyValidationResultRowIssues(result, spec = specs.get(activeKind)) {
@@ -1230,8 +1249,10 @@ export function createSpecificationsTool({
     spec.rows.forEach((row) => {
       row[name] = "";
     });
+    clearValidationRowIssuesForSpec(spec);
     spec.dirty = true;
     renderSpec(spec);
+    scheduleValidationForActiveSpec();
   }
 
   function renameScenarioField(oldName) {
@@ -1246,8 +1267,10 @@ export function createSpecificationsTool({
       row[nextName] = row[oldName] || "";
       delete row[oldName];
     });
+    clearValidationRowIssuesForSpec(spec);
     spec.dirty = true;
     renderSpec(spec);
+    scheduleValidationForActiveSpec();
   }
 
   function deleteScenarioField(name) {
@@ -1255,8 +1278,10 @@ export function createSpecificationsTool({
     if (!spec || !isScenarioField(name, spec)) return;
     spec.columns = spec.columns.filter((column) => column !== name);
     spec.rows.forEach((row) => delete row[name]);
+    clearValidationRowIssuesForSpec(spec);
     spec.dirty = true;
     renderSpec(spec);
+    scheduleValidationForActiveSpec();
   }
 
   function nextScenarioName(spec) {
@@ -1341,6 +1366,7 @@ export function createSpecificationsTool({
     clearValidationRowIssuesForSpec(spec);
     spec.dirty = true;
     renderSpec(spec);
+    scheduleValidationForActiveSpec();
   }
 
   async function deleteContextRow() {
@@ -1349,7 +1375,7 @@ export function createSpecificationsTool({
     spec.rows = spec.rows.filter((row) => row._row_id !== contextRowId);
     spec.dirty = true;
     renderSpec(spec, { preserveScroll: true });
-    await validateSpecDraft(spec, { showValid: false });
+    await validateSpecDraft(spec);
   }
 
   function newRow(spec) {

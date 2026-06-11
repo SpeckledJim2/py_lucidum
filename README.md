@@ -12,7 +12,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 - **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, and SHAP plotting when SHAP rows are saved during training.
 - **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios/interaction constraints.
-- **Specifications**: optional `--tools specs` editor for feature, KPI, and filter specification CSV files, with validation and save actions against the app's current metadata contracts.
+- **Specifications**: optional `--tools specs` editor for feature, KPI, and filter specification CSV files, with continuous validation and save actions against the app's current metadata contracts.
 
 Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skipped by the shared schema used by normal selectors. Column Profile reports them as skipped, and the GBM feature chooser shows them as disabled invalid rows.
 
@@ -111,7 +111,7 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
-- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When `--tools specs` is also enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save.
+- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When `--tools specs` is also enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save; the path line shows the save target and marks new files or suppressed existing files.
 - `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, and `uk-map`. Add `glm` after installing the `glm` extra to train GLMs. Add `models` after installing the `glm` and `gbm` extras to enable both modelling tools; requesting `gbm` also enables `glm` so model comparison and tabulation workflows remain available. Add `specs` to edit feature, KPI, and filter spec CSV files from the browser.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
