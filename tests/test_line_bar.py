@@ -437,7 +437,7 @@ COPY (
         self.assertIn("Table search covers all groups", " ".join(chart_payload["warnings"]))
         self.assertNotIn("G10004", {row["x"] for row in chart_payload["rows"]})
 
-        table_request = {**request, "tableSearch": "g10004", "tablePage": 1, "tablePageSize": 1000}
+        table_request = {**request, "tableSearch": "g10004", "tablePage": 1}
         status, _, body = asgi_post_json(app, "/api/line-bar/table", table_request)
         table_payload = json.loads(body)
 
@@ -446,6 +446,7 @@ COPY (
         self.assertEqual(table_payload["rows"][0]["resp0"], 10004)
         self.assertEqual(table_payload["summary"]["volume"], 1)
         self.assertEqual(table_payload["summary"]["responses"], [10004])
+        self.assertEqual(table_payload["table"]["page_size"], 10000)
         self.assertEqual(table_payload["table"]["match_count"], 1)
         self.assertEqual(table_payload["table"]["group_count"], 10005)
         self.assertIsInstance(table_payload["timings"]["duckdb_ns"], int)
@@ -509,7 +510,7 @@ COPY (
             "responses": [{"label": "Actual", "numerator": "Actual"}],
             "tableSearch": "1,000",
             "tablePage": 1,
-            "tablePageSize": 1000,
+            "tablePageSize": 10000,
         }
 
         status, _, body = asgi_post_json(app, "/api/line-bar/table", request)
@@ -526,7 +527,7 @@ COPY (
             **self.request("YoungestDriverAge > 40"),
             "tableSearch": "business",
             "tablePage": 1,
-            "tablePageSize": 1000,
+            "tablePageSize": 10000,
         }
 
         status, _, body = asgi_post_json(app, "/api/line-bar/table", request)

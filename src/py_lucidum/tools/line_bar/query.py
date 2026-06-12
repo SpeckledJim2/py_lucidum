@@ -30,7 +30,7 @@ from py_lucidum.tools.gbm.validation import CROSS_ENTROPY_OBJECTIVES, LOG_LINK_O
 
 BINARY_LINK_OBJECTIVES = {"binary", *CROSS_ENTROPY_OBJECTIVES}
 DEFAULT_MAX_GROUPS = 10000
-DEFAULT_TABLE_PAGE_SIZE = 1000
+DEFAULT_TABLE_PAGE_SIZE = 10000
 
 
 def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:

@@ -396,8 +396,10 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.wait_for_function(
                         """
                         () => {
-                            const rows = [...document.querySelectorAll("#tableWrap tbody tr:not(.line-bar-table-empty-row)")];
-                            return rows.length === 1 && rows[0].children[0]?.textContent.trim() === "ALFA ROMEO";
+                            const xCells = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']")]
+                              .map((cell) => cell.textContent.trim())
+                              .filter(Boolean);
+                            return xCells.length === 1 && xCells[0] === "ALFA ROMEO";
                         }
                         """
                     )
@@ -410,12 +412,16 @@ class BrowserSmokeTests(unittest.TestCase):
                               const rect = document.querySelector(selector)?.getBoundingClientRect();
                               return rect ? { top: rect.top, bottom: rect.bottom } : null;
                             };
-                            const footerCells = [...document.querySelectorAll("#tableWrap tfoot td")]
+                            const calcCells = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row.tabulator-calcs .tabulator-cell")]
                               .map((cell) => cell.textContent.trim());
-                            const visibleRows = [...document.querySelectorAll("#tableWrap tbody tr:not(.line-bar-table-empty-row)")]
-                              .map((row) => [...row.children].map((cell) => cell.textContent.trim()));
+                            const visibleRows = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs)")]
+                              .map((row) => [
+                                row.querySelector(".tabulator-cell[tabulator-field='x']")?.textContent.trim(),
+                                row.querySelector(".tabulator-cell[tabulator-field='volume']")?.textContent.trim(),
+                              ])
+                              .filter((row) => row[0]);
                             return {
-                              footerCells,
+                              footerCells: calcCells,
                               visibleRows,
                               search: rectFor(".line-bar-table-search-row"),
                               messages: rectFor(".workspace-messages"),
@@ -430,7 +436,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.locator("#lineBarTableSearchClear").click()
                     page.wait_for_function(
                         """
-                        () => document.querySelectorAll("#tableWrap tbody tr:not(.line-bar-table-empty-row)").length === 2
+                        () => document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']").length === 2
                           && document.querySelector("#lineBarTableSearch")?.value === ""
                         """
                     )
@@ -488,13 +494,48 @@ class BrowserSmokeTests(unittest.TestCase):
                     chart_requests_before_search = chart_requests
                     page.locator("#tableTab").click()
                     page.locator("#tableWrap:not(.hidden) #lineBarTableSearch").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#tableWrap .table-pagination")?.textContent.includes("1-10,000 of 10,005 groups")
+                          && document.querySelector("#lineBarTableGrid .tabulator-tableholder")
+                        """,
+                        timeout=20_000,
+                    )
+                    virtual_state = page.evaluate(
+                        """
+                        () => ({
+                          renderedRows: document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs)").length,
+                          pager: document.querySelector("#tableWrap .table-pagination")?.textContent || "",
+                        })
+                        """
+                    )
+                    self.assertLess(virtual_state["renderedRows"], 500)
+                    self.assertIn("1-10,000 of 10,005 groups", virtual_state["pager"])
+                    page.evaluate(
+                        """
+                        () => {
+                          const holder = document.querySelector("#lineBarTableGrid .tabulator-tableholder");
+                          holder.scrollTop = holder.scrollHeight;
+                          holder.dispatchEvent(new Event("scroll"));
+                        }
+                        """
+                    )
+                    page.wait_for_function(
+                        """
+                        () => [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']")]
+                          .some((cell) => cell.textContent.trim() === "G09999")
+                        """,
+                        timeout=20_000,
+                    )
                     page.locator("#lineBarTableSearch").fill("g10004")
                     page.wait_for_function(
                         """
                         () => {
-                            const rows = [...document.querySelectorAll("#tableWrap tbody tr:not(.line-bar-table-empty-row)")];
-                            return rows.length === 1
-                              && rows[0].children[0]?.textContent.trim() === "G10004"
+                            const xCells = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']")]
+                              .map((cell) => cell.textContent.trim())
+                              .filter(Boolean);
+                            return xCells.length === 1
+                              && xCells[0] === "G10004"
                               && document.querySelector("#tableWrap .table-pagination")?.textContent.includes("1-1 of 1 groups");
                         }
                         """,

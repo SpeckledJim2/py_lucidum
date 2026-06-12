@@ -1,3 +1,5 @@
+import { loadTabulator } from "./shared/tabulator.js";
+
 const LINE_BAR_SPECIAL_COLUMN_NAMES = ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"];
 
 export function createLineBarTool({
@@ -41,7 +43,7 @@ export function createLineBarTool({
   bandSteps,
   refreshLineBar,
 }) {
-  const TABLE_PAGE_SIZE = 1000;
+  const TABLE_PAGE_SIZE = 10000;
   const TABLE_SEARCH_DEBOUNCE_MS = 250;
   const LABEL_DENSITY_LIMIT = 200;
   const DATE_AXIS_TARGET_LABELS = 12;
@@ -70,6 +72,8 @@ export function createLineBarTool({
   let tableSearchTimer = null;
   let tableCacheKey = "";
   let tableCacheData = null;
+  let tableRenderToken = 0;
+  let lineBarTable = null;
 
   function isNumericKind(kind) {
     return kind === "numeric" || kind === "integer";
@@ -1534,8 +1538,10 @@ export function createLineBarTool({
 
   function invalidateLineBarTableCache() {
     tableRequestSeq += 1;
+    tableRenderToken += 1;
     tableCacheKey = "";
     tableCacheData = null;
+    clearLineBarTable();
     if (tableSearchTimer) {
       window.clearTimeout(tableSearchTimer);
       tableSearchTimer = null;
@@ -1594,15 +1600,29 @@ export function createLineBarTool({
     });
   }
 
+  function clearLineBarTable() {
+    if (!lineBarTable) return;
+    try {
+      lineBarTable.destroy();
+    } catch (_) {
+      // Tabulator may already have been removed by a stale render.
+    }
+    lineBarTable = null;
+  }
+
   function renderLineBarTableLoading() {
     const content = document.getElementById("lineBarTableContent");
     if (!content) return;
+    tableRenderToken += 1;
+    clearLineBarTable();
     content.innerHTML = `<div class="line-bar-table-state">Loading table...</div>`;
   }
 
   function renderLineBarTableError(message) {
     const content = document.getElementById("lineBarTableContent");
     if (!content) return;
+    tableRenderToken += 1;
+    clearLineBarTable();
     content.innerHTML = `<div class="line-bar-table-state line-bar-table-state-error">${escapeHtml(message || "Table query failed")}</div>`;
   }
 
@@ -1638,21 +1658,9 @@ export function createLineBarTool({
 
   function renderLineBarTableContents(data) {
     const rowsData = Array.isArray(data.rows) ? data.rows : [];
-    const responseHeaders = data.responses.map((r) => `<th>${escapeHtml(r.label)}</th>`).join("");
     const weightLabel = data.denominator?.bar_label || "Weight";
-    const colspan = 2 + data.responses.length;
-    const rows = rowsData.length
-      ? rowsData
-        .map((r) => {
-          const values = data.responses.map((_, i) => `<td>${formatResponseValue(r[`resp${i}`])}</td>`).join("");
-          return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
-        })
-        .join("")
-      : `<tr class="line-bar-table-empty-row"><td colspan="${colspan}">No matching rows</td></tr>`;
     const summaryResponses = Array.isArray(data.summary?.responses) ? data.summary.responses : [];
-    const summaryValues = data.responses.map((_, index) => `<td>${formatResponseValue(summaryResponses[index])}</td>`).join("");
     const summaryVolume = Number.isFinite(Number(data.summary?.volume)) ? Number(data.summary.volume) : 0;
-    const footer = `<tfoot><tr class="line-bar-summary-row"><td>Total</td><td>${formatNumber(summaryVolume)}</td>${summaryValues}</tr></tfoot>`;
     const tableMeta = data.table || {};
     const page = Math.max(1, Number(tableMeta.page) || 1);
     const pageSize = Math.max(1, Number(tableMeta.page_size) || TABLE_PAGE_SIZE);
@@ -1669,7 +1677,10 @@ export function createLineBarTool({
       </div>`;
     const content = document.getElementById("lineBarTableContent");
     if (!content) return;
-    content.innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>${escapeHtml(weightLabel)}</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody>${footer}</table></div>${pager}`;
+    const renderToken = tableRenderToken + 1;
+    tableRenderToken = renderToken;
+    clearLineBarTable();
+    content.innerHTML = `<div id="lineBarTableGrid" class="line-bar-table-grid"></div>${pager}`;
     document.getElementById("tablePrevBtn")?.addEventListener("click", () => {
       if (state.tablePage <= 1) return;
       state.tablePage -= 1;
@@ -1679,6 +1690,74 @@ export function createLineBarTool({
       if (state.tablePage >= pageCount) return;
       state.tablePage += 1;
       refreshLineBarTable({ force: true });
+    });
+    const tableRows = rowsData.map((row, index) => {
+      const displayRow = {
+        __id: `${page}:${index}`,
+        x: formatXLabel(row.x, data.x_kind),
+        volume: formatNumber(row.volume),
+      };
+      data.responses.forEach((_, responseIndex) => {
+        displayRow[`resp${responseIndex}`] = formatResponseValue(row[`resp${responseIndex}`]);
+      });
+      return displayRow;
+    });
+    const columns = [
+      {
+        title: data.x,
+        field: "x",
+        headerSort: false,
+        frozen: true,
+        minWidth: 130,
+        widthGrow: 2,
+        hozAlign: "left",
+        bottomCalc: () => "Total",
+      },
+      {
+        title: weightLabel,
+        field: "volume",
+        headerSort: false,
+        headerHozAlign: "right",
+        hozAlign: "right",
+        minWidth: 90,
+        widthGrow: 0.7,
+        bottomCalc: () => formatNumber(summaryVolume),
+      },
+      ...data.responses.map((response, responseIndex) => ({
+        title: response.label,
+        field: `resp${responseIndex}`,
+        headerSort: false,
+        headerHozAlign: "right",
+        hozAlign: "right",
+        minWidth: 110,
+        widthGrow: 0.8,
+        bottomCalc: () => formatResponseValue(summaryResponses[responseIndex]),
+      })),
+    ];
+    loadTabulator().then((Tabulator) => {
+      if (renderToken !== tableRenderToken) return;
+      const target = document.getElementById("lineBarTableGrid");
+      if (!target) return;
+      lineBarTable = new Tabulator(target, {
+        data: tableRows,
+        index: "__id",
+        height: "100%",
+        layout: "fitColumns",
+        placeholder: "No matching rows",
+        reactiveData: false,
+        selectable: false,
+        renderVertical: "virtual",
+        rowHeight: 22,
+        columnDefaults: {
+          resizable: false,
+          headerSort: false,
+          formatter: (cell) => escapeHtml(cell.getValue() ?? ""),
+        },
+        columns,
+      });
+    }).catch((error) => {
+      if (renderToken !== tableRenderToken) return;
+      renderLineBarTableError(error.message || String(error));
     });
   }
 
