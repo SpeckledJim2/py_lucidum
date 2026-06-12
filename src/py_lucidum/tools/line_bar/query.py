@@ -29,53 +29,191 @@ from py_lucidum.tools.gbm.validation import CROSS_ENTROPY_OBJECTIVES, LOG_LINK_O
 
 
 BINARY_LINK_OBJECTIVES = {"binary", *CROSS_ENTROPY_OBJECTIVES}
+DEFAULT_MAX_GROUPS = 10000
+DEFAULT_TABLE_PAGE_SIZE = 1000
 
 
 def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
     with dataset.lock:
-        context = chart_context(dataset, request)
-        source_id = context["source_id"]
-        relation = context["relation"]
-        columns = context["columns"]
-        x_col = str(request.get("x") or "")
-        if x_col not in columns:
-            raise ValueError("Choose a valid x-axis feature")
-
-        filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
-        responses = normalise_responses(request.get("responses"), columns)
-        denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
-        x_info = columns[x_col]
-        quantile_count = (
-            normalise_quantile_count(request.get("bandWidth"))
-            if use_quantiles(request.get("quantileMode")) and is_numeric_kind(x_info.kind)
-            else None
-        )
-        x_sql = build_x_sql(
-            x_col=x_col,
-            kind=x_info.kind,
+        result = build_grouped_result(dataset, request, feature_spec=feature_spec, include_partial_dependence=True)
+        sorted_rows = result["rows"]
+        group_count = len(sorted_rows)
+        max_groups = normalise_positive_int(request.get("maxGroups"), DEFAULT_MAX_GROUPS)
+        chart_rows = sorted_rows[:max_groups]
+        transform = str(request.get("transform") or "none")
+        warnings = list(result["warnings"])
+        if group_count > max_groups:
+            warnings.append(f"Chart showing first {max_groups:,} of {group_count:,} groups. Table search covers all groups.")
+        display_rows, transform_metadata = apply_transform(
+            chart_rows,
+            result["responses"],
+            transform,
+            result["sigma_multiplier"],
+            warnings,
+            reference_rows=sorted_rows,
+            x_kind=result["x_group_kind"],
+            base=request.get("base"),
             band_width=request.get("bandWidth"),
-            date_bucket=request.get("dateBucket"),
-            quantile_count=quantile_count,
         )
-        x_group_kind = "quantile" if quantile_count else x_info.kind
-        sigma_multiplier = float(request.get("sigma") or 0)
-        include_sigma = sigma_multiplier > 0 and len(responses) >= 2
-        row_count = context["row_count"]
-        filtered_row_count = relation_row_count(dataset, relation, filter_sql)
-        denominator_summary = relation_denominator_summary(dataset, relation, responses, denominator, filter_sql)
-        response_summaries = relation_response_summary(dataset, relation, responses, denominator, filter_sql)
-        sql = build_chart_sql(relation, x_sql, responses, denominator, include_sigma, filter_sql)
-        raw_rows = [
-            dict(zip([d[0] for d in dataset.con.description], row))
-            for row in dataset.con.execute(sql).fetchall()
-        ]
+        partial_dependence = result["partial_dependence"]
+        if partial_dependence:
+            transform_partial_dependence_overlay(
+                partial_dependence,
+                transform,
+                warnings,
+                x_kind=result["x_group_kind"],
+                base=request.get("base"),
+                band_width=request.get("bandWidth"),
+            )
+            order_partial_dependence_rows(partial_dependence, chart_rows)
+            warnings.extend(partial_dependence_warnings(partial_dependence))
 
-        grouped_rows = apply_low_weight_grouping(
-            rows=raw_rows,
-            responses=responses,
-            x_kind=x_group_kind,
-            threshold=str(request.get("lowGroup") or "0"),
+        payload = {
+            "x": result["x_col"],
+            "x_kind": result["x_kind"],
+            "source": result["source_id"],
+            "row_count": result["row_count"],
+            "filtered_row_count": result["filtered_row_count"],
+            "filter": result["filter_sql"],
+            "group_count": group_count,
+            "max_groups": max_groups,
+            "groups_truncated": group_count > max_groups,
+            "responses": [
+                {"label": r["label"], "numerator": r["numerator"], **({"source": r["source"]} if r.get("source") else {})}
+                for r in result["responses"]
+            ],
+            **({"field_sources": result["field_sources"]} if result.get("field_sources") else {}),
+            "denominator": {
+                "column": result["denominator"]["column"],
+                "label": result["denominator"]["label"],
+                "bar_label": result["denominator"]["bar_label"],
+                "value": json_number(result["denominator_summary"].get("value")),
+                "missing_response_rows": json_number(result["denominator_summary"].get("missing_response_rows")),
+                "missing_weight_rows": json_number(result["denominator_summary"].get("missing_weight_rows")),
+                "zero_weight_rows": json_number(result["denominator_summary"].get("zero_weight_rows")),
+                "negative_weight_rows": json_number(result["denominator_summary"].get("negative_weight_rows")),
+            },
+            "response_summaries": result["response_summaries"],
+            "rows": display_rows,
+            "warnings": warnings,
+            "transform": transform_metadata,
+        }
+        if partial_dependence:
+            payload["partial_dependence"] = partial_dependence
+        return payload
+
+
+def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
+    with dataset.lock:
+        result = build_grouped_result(dataset, request, feature_spec=feature_spec, include_partial_dependence=False)
+        sorted_rows = result["rows"]
+        group_count = len(sorted_rows)
+        search = str(request.get("tableSearch") or "").strip()
+        matched_rows = [row for row in sorted_rows if table_row_matches(row, search, result["x_kind"])]
+        page_size = normalise_positive_int(request.get("tablePageSize"), DEFAULT_TABLE_PAGE_SIZE)
+        page = normalise_positive_int(request.get("tablePage"), 1)
+        match_count = len(matched_rows)
+        page_count = max(1, math.ceil(match_count / page_size))
+        page = min(page, page_count)
+        start = (page - 1) * page_size
+        page_rows = matched_rows[start:start + page_size]
+        transform = str(request.get("transform") or "none")
+        warnings = list(result["warnings"])
+        display_rows, transform_metadata = apply_transform(
+            page_rows,
+            result["responses"],
+            transform,
+            result["sigma_multiplier"],
+            warnings,
+            reference_rows=sorted_rows,
+            x_kind=result["x_group_kind"],
+            base=request.get("base"),
+            band_width=request.get("bandWidth"),
         )
+        return {
+            "x": result["x_col"],
+            "x_kind": result["x_kind"],
+            "source": result["source_id"],
+            "row_count": result["row_count"],
+            "filtered_row_count": result["filtered_row_count"],
+            "filter": result["filter_sql"],
+            "responses": [
+                {"label": r["label"], "numerator": r["numerator"], **({"source": r["source"]} if r.get("source") else {})}
+                for r in result["responses"]
+            ],
+            **({"field_sources": result["field_sources"]} if result.get("field_sources") else {}),
+            "denominator": {
+                "column": result["denominator"]["column"],
+                "label": result["denominator"]["label"],
+                "bar_label": result["denominator"]["bar_label"],
+                "value": json_number(result["denominator_summary"].get("value")),
+                "missing_response_rows": json_number(result["denominator_summary"].get("missing_response_rows")),
+                "missing_weight_rows": json_number(result["denominator_summary"].get("missing_weight_rows")),
+                "zero_weight_rows": json_number(result["denominator_summary"].get("zero_weight_rows")),
+                "negative_weight_rows": json_number(result["denominator_summary"].get("negative_weight_rows")),
+            },
+            "rows": display_rows,
+            "summary": build_table_summary(matched_rows, result["responses"], transform, transform_metadata),
+            "warnings": warnings,
+            "transform": transform_metadata,
+            "table": {
+                "search": search,
+                "page": page,
+                "page_size": page_size,
+                "page_count": page_count,
+                "match_count": match_count,
+                "group_count": group_count,
+            },
+        }
+
+
+def build_grouped_result(
+    dataset: Dataset,
+    request: dict[str, Any],
+    *,
+    feature_spec: Any | None = None,
+    include_partial_dependence: bool,
+) -> dict[str, Any]:
+    context = chart_context(dataset, request)
+    relation = context["relation"]
+    columns = context["columns"]
+    x_col = str(request.get("x") or "")
+    if x_col not in columns:
+        raise ValueError("Choose a valid x-axis feature")
+
+    filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
+    responses = normalise_responses(request.get("responses"), columns)
+    denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
+    x_info = columns[x_col]
+    quantile_count = (
+        normalise_quantile_count(request.get("bandWidth"))
+        if use_quantiles(request.get("quantileMode")) and is_numeric_kind(x_info.kind)
+        else None
+    )
+    x_sql = build_x_sql(
+        x_col=x_col,
+        kind=x_info.kind,
+        band_width=request.get("bandWidth"),
+        date_bucket=request.get("dateBucket"),
+        quantile_count=quantile_count,
+    )
+    x_group_kind = "quantile" if quantile_count else x_info.kind
+    sigma_multiplier = float(request.get("sigma") or 0)
+    include_sigma = sigma_multiplier > 0 and len(responses) >= 2
+    denominator_summary = relation_denominator_summary(dataset, relation, responses, denominator, filter_sql)
+    sql = build_chart_sql(relation, x_sql, responses, denominator, include_sigma, filter_sql)
+    raw_rows = [
+        dict(zip([d[0] for d in dataset.con.description], row))
+        for row in dataset.con.execute(sql).fetchall()
+    ]
+    grouped_rows = apply_low_weight_grouping(
+        rows=raw_rows,
+        responses=responses,
+        x_kind=x_group_kind,
+        threshold=str(request.get("lowGroup") or "0"),
+    )
+    partial_dependence = None
+    if include_partial_dependence or str(request.get("sort") or "alpha") == "shap":
         partial_dependence = build_partial_dependence_overlay(
             dataset,
             request,
@@ -87,68 +225,75 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             responses=responses,
             denominator=denominator,
         )
-        partial_medians = partial_dependence_medians(partial_dependence)
-        sorted_rows = sort_rows(grouped_rows, x_group_kind, str(request.get("sort") or "alpha"), partial_medians)
-        clean_numeric_band_labels(sorted_rows, x_group_kind, request.get("bandWidth"))
-        max_groups = int(request.get("maxGroups") or 10000)
-        if len(sorted_rows) > max_groups:
-            sorted_rows = sorted_rows[:max_groups]
+    sorted_rows = sort_rows(grouped_rows, x_group_kind, str(request.get("sort") or "alpha"), partial_dependence_medians(partial_dependence))
+    clean_numeric_band_labels(sorted_rows, x_group_kind, request.get("bandWidth"))
+    return {
+        "source_id": context["source_id"],
+        "field_sources": context.get("field_sources"),
+        "x_col": x_col,
+        "x_kind": x_info.kind,
+        "x_group_kind": x_group_kind,
+        "row_count": context["row_count"],
+        "filtered_row_count": relation_row_count(dataset, relation, filter_sql),
+        "filter_sql": filter_sql,
+        "responses": responses,
+        "denominator": denominator,
+        "denominator_summary": denominator_summary,
+        "response_summaries": relation_response_summary(dataset, relation, responses, denominator, filter_sql),
+        "sigma_multiplier": sigma_multiplier,
+        "partial_dependence": partial_dependence,
+        "warnings": denominator_warnings(denominator, denominator_summary),
+        "rows": sorted_rows,
+    }
 
-        transform = str(request.get("transform") or "none")
-        warnings: list[str] = []
-        warnings.extend(denominator_warnings(denominator, denominator_summary))
-        display_rows, transform_metadata = apply_transform(
-            sorted_rows,
-            responses,
-            transform,
-            sigma_multiplier,
-            warnings,
-            x_kind=x_group_kind,
-            base=request.get("base"),
-            band_width=request.get("bandWidth"),
-        )
-        if partial_dependence:
-            transform_partial_dependence_overlay(
-                partial_dependence,
-                transform,
-                warnings,
-                x_kind=x_group_kind,
-                base=request.get("base"),
-                band_width=request.get("bandWidth"),
-            )
-            order_partial_dependence_rows(partial_dependence, sorted_rows)
-            warnings.extend(partial_dependence_warnings(partial_dependence))
 
-        payload = {
-            "x": x_col,
-            "x_kind": x_info.kind,
-            "source": source_id,
-            "row_count": row_count,
-            "filtered_row_count": filtered_row_count,
-            "filter": filter_sql,
-            "responses": [
-                {"label": r["label"], "numerator": r["numerator"], **({"source": r["source"]} if r.get("source") else {})}
-                for r in responses
-            ],
-            **({"field_sources": context["field_sources"]} if context.get("field_sources") else {}),
-            "denominator": {
-                "column": denominator["column"],
-                "label": denominator["label"],
-                "bar_label": denominator["bar_label"],
-                "value": json_number(denominator_summary.get("value")),
-                "missing_response_rows": json_number(denominator_summary.get("missing_response_rows")),
-                "missing_weight_rows": json_number(denominator_summary.get("missing_weight_rows")),
-                "zero_weight_rows": json_number(denominator_summary.get("zero_weight_rows")),
-                "negative_weight_rows": json_number(denominator_summary.get("negative_weight_rows")),
-            },
-            "response_summaries": response_summaries,
-            "rows": display_rows,
-            "warnings": warnings,
-            "transform": transform_metadata,
-        }
-        if partial_dependence:
-            payload["partial_dependence"] = partial_dependence
-        return payload
+def normalise_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, parsed)
+
+
+def table_row_matches(row: dict[str, Any], search: str, x_kind: str = "") -> bool:
+    needle = search.strip().lower()
+    if not needle:
+        return True
+    raw_candidates = [row.get("x"), row.get("x_sort")]
+    candidates = list(raw_candidates)
+    if x_kind in {"integer", "numeric"}:
+        candidates.extend(format_table_numeric_search_label(value) for value in raw_candidates)
+    return any(needle in str(value).lower() for value in candidates if value is not None)
+
+
+def format_table_numeric_search_label(value: Any) -> str | None:
+    number = json_number(value)
+    if number is None:
+        return None
+    if float(number).is_integer():
+        return f"{int(number):,}"
+    label = f"{float(number):,.12f}".rstrip("0").rstrip(".")
+    return label if label != "-0" else "0"
+
+
+def build_table_summary(
+    rows: list[dict[str, Any]],
+    responses: list[dict[str, str]],
+    transform: str,
+    transform_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "volume": json_number(sum(float(row.get("volume") or 0) for row in rows)) or 0,
+        "responses": [],
+    }
+    references = transform_metadata.get("values") if isinstance(transform_metadata, dict) else []
+    for index, _ in enumerate(responses):
+        numerator = sum(float(row.get(f"resp{index}_num") or 0) for row in rows)
+        denominator = sum(float(row.get(f"resp{index}_den") or 0) for row in rows)
+        average = numerator / denominator if denominator else None
+        reference = json_number(references[index]) if isinstance(references, list) and index < len(references) else None
+        summary["responses"].append(transform_value(average, transform, reference))
+    return summary
 
 
 def chart_context(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
@@ -1432,16 +1577,18 @@ def apply_transform(
     sigma_multiplier: float,
     warnings: list[str],
     *,
+    reference_rows: list[dict[str, Any]] | None = None,
     x_kind: str = "",
     base: Any = None,
     band_width: Any = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    reference_source = reference_rows if reference_rows is not None else rows
     averages: dict[int, float | None] = {}
     for index, _ in enumerate(responses):
-        num = sum(float(row.get(f"resp{index}_num") or 0) for row in rows)
-        den = sum(float(row.get(f"resp{index}_den") or 0) for row in rows)
+        num = sum(float(row.get(f"resp{index}_num") or 0) for row in reference_source)
+        den = sum(float(row.get(f"resp{index}_den") or 0) for row in reference_source)
         averages[index] = num / den if den else None
-    references = transform_references(rows, responses, transform, averages, warnings, x_kind=x_kind, base=base, band_width=band_width)
+    references = transform_references(reference_source, responses, transform, averages, warnings, x_kind=x_kind, base=base, band_width=band_width)
 
     display: list[dict[str, Any]] = []
     invalid_count = 0
@@ -1584,6 +1731,7 @@ __all__ = [
     "build_response_summary_sql",
     "build_x_sql",
     "chart",
+    "table",
     "combine_rows",
     "combine_sigma",
     "denominator_warnings",

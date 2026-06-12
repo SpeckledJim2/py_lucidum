@@ -25,6 +25,7 @@ export function createLineBarTool({
   setGroupMeta,
   applyToolPresentation,
   saveToolPresentation,
+  stableRequestKey = (request) => JSON.stringify(request),
   toolCache,
   sourceColumns,
   expectedColumns = numericColumns,
@@ -41,6 +42,7 @@ export function createLineBarTool({
   refreshLineBar,
 }) {
   const TABLE_PAGE_SIZE = 1000;
+  const TABLE_SEARCH_DEBOUNCE_MS = 250;
   const LABEL_DENSITY_LIMIT = 200;
   const DATE_AXIS_TARGET_LABELS = 12;
   const DATE_AXIS_MIN_MONTH_LABELS = 2;
@@ -64,6 +66,10 @@ export function createLineBarTool({
   let featureImportancePendingKey = "";
   let featureImportanceRequestSeq = 0;
   let featureImportanceError = "";
+  let tableRequestSeq = 0;
+  let tableSearchTimer = null;
+  let tableCacheKey = "";
+  let tableCacheData = null;
 
   function isNumericKind(kind) {
     return kind === "numeric" || kind === "integer";
@@ -818,11 +824,14 @@ export function createLineBarTool({
     if (options.resetTablePage) {
       state.tablePage = 1;
     }
+    invalidateLineBarTableCache();
     updateMetricTitles(data);
     const labelMessage = renderChart(data);
-    renderTable(data);
+    renderTableShell();
+    if (state.view === "table") refreshLineBarTable({ force: true });
     const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
-    const groupMeta = `${data.rows.length.toLocaleString()} groups · ${rowMeta}`;
+    const groupCount = Number.isFinite(Number(data.group_count)) ? Number(data.group_count) : data.rows.length;
+    const groupMeta = `${groupCount.toLocaleString()} groups · ${rowMeta}`;
     const warnings = [...(data.warnings || [])].filter(Boolean).join(" ");
     const chartMessage = [warnings, labelMessage].filter(Boolean).join(" ");
     setFilterRowMeta(data.row_count, data.filtered_row_count);
@@ -1523,95 +1532,154 @@ export function createLineBarTool({
     return { width: null, maxWidth: 18, categoryGap: "30%" };
   }
 
-  function tableNumber(value) {
-    if (value === null || value === undefined || value === "") return null;
-    const number = Number(value);
-    return Number.isFinite(number) ? number : null;
+  function invalidateLineBarTableCache() {
+    tableRequestSeq += 1;
+    tableCacheKey = "";
+    tableCacheData = null;
+    if (tableSearchTimer) {
+      window.clearTimeout(tableSearchTimer);
+      tableSearchTimer = null;
+    }
   }
 
-  function transformTableSummaryValue(value, reference) {
-    const number = tableNumber(value);
-    if (number === null) return null;
-    const transform = String(state.transform || "none");
-    try {
-      if (transform === "log") return number > 0 ? Math.log(number) : null;
-      if (transform === "exp") {
-        const transformed = Math.exp(number);
-        return Number.isFinite(transformed) ? transformed : null;
+  function buildTableRequest() {
+    const request = buildChartRequest();
+    if (!request) return null;
+    return {
+      ...request,
+      tableSearch: state.lineBarTableSearch || "",
+      tablePage: state.tablePage || 1,
+      tablePageSize: TABLE_PAGE_SIZE,
+    };
+  }
+
+  function scheduleLineBarTableRefresh() {
+    if (tableSearchTimer) window.clearTimeout(tableSearchTimer);
+    tableSearchTimer = window.setTimeout(() => {
+      tableSearchTimer = null;
+      refreshLineBarTable({ force: true });
+    }, TABLE_SEARCH_DEBOUNCE_MS);
+  }
+
+  function renderTableShell() {
+    const tableWrap = el("tableWrap");
+    if (document.getElementById("lineBarTableSearch") && document.getElementById("lineBarTableContent")) {
+      const input = el("lineBarTableSearch");
+      if (document.activeElement !== input && input.value !== (state.lineBarTableSearch || "")) {
+        input.value = state.lineBarTableSearch || "";
       }
-      if (transform === "logit") return number > 0 && number < 1 ? Math.log(number / (1 - number)) : null;
-      if (transform === "zero") return reference !== null ? number - reference : null;
-      if (transform === "one") return reference !== null && reference !== 0 ? number / reference : null;
-    } catch (_) {
+      return;
+    }
+    tableWrap.innerHTML = `
+      <div class="line-bar-table-search-row">
+        <input id="lineBarTableSearch" class="search" placeholder="search table" />
+        <button id="lineBarTableSearchClear" class="filter-action" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
+      </div>
+      <div id="lineBarTableContent" class="line-bar-table-content"></div>`;
+    const searchInput = el("lineBarTableSearch");
+    searchInput.value = state.lineBarTableSearch || "";
+    searchInput.addEventListener("input", () => {
+      state.lineBarTableSearch = searchInput.value;
+      state.tablePage = 1;
+      scheduleLineBarTableRefresh();
+    });
+    el("lineBarTableSearchClear").addEventListener("click", () => {
+      if (state.lineBarTableSearch || searchInput.value) {
+        state.lineBarTableSearch = "";
+        searchInput.value = "";
+        state.tablePage = 1;
+        refreshLineBarTable({ force: true });
+      }
+      searchInput.focus();
+    });
+  }
+
+  function renderLineBarTableLoading() {
+    const content = document.getElementById("lineBarTableContent");
+    if (!content) return;
+    content.innerHTML = `<div class="line-bar-table-state">Loading table...</div>`;
+  }
+
+  function renderLineBarTableError(message) {
+    const content = document.getElementById("lineBarTableContent");
+    if (!content) return;
+    content.innerHTML = `<div class="line-bar-table-state line-bar-table-state-error">${escapeHtml(message || "Table query failed")}</div>`;
+  }
+
+  async function refreshLineBarTable(options = {}) {
+    if (state.tool !== "line_bar" || state.view !== "table") return null;
+    renderTableShell();
+    const request = buildTableRequest();
+    if (!request) return null;
+    const requestKey = stableRequestKey(request);
+    if (!options.force && tableCacheData && tableCacheKey === requestKey) {
+      measureToolRender("line_bar", () => renderLineBarTableContents(tableCacheData));
+      return tableCacheData;
+    }
+    const requestSeq = tableRequestSeq + 1;
+    tableRequestSeq = requestSeq;
+    renderLineBarTableLoading();
+    try {
+      const data = await api("/api/line-bar/table", { method: "POST", body: JSON.stringify(request), clientTiming: true });
+      if (requestSeq !== tableRequestSeq) return null;
+      tableCacheKey = requestKey;
+      tableCacheData = data;
+      syncDuckDbTimingFromData("line_bar", data);
+      syncClientTimingFromData("line_bar", data);
+      measureToolRender("line_bar", () => renderLineBarTableContents(data));
+      return data;
+    } catch (error) {
+      if (requestSeq !== tableRequestSeq) return null;
+      renderLineBarTableError(error.message);
+      setStatus(error.message, true);
       return null;
     }
-    return number;
   }
 
-  function buildTableSummary(data) {
-    const rows = Array.isArray(data.rows) ? data.rows : [];
-    const responseCount = Array.isArray(data.responses) ? data.responses.length : 0;
-    const transformReferences = Array.isArray(data.transform?.values) ? data.transform.values : [];
-    const summary = {
-      volume: 0,
-      responses: [],
-    };
-    rows.forEach((row) => {
-      const volume = tableNumber(row.volume);
-      if (volume !== null) summary.volume += volume;
-    });
-    for (let index = 0; index < responseCount; index += 1) {
-      let numerator = 0;
-      let denominator = 0;
-      rows.forEach((row) => {
-        const rowNumerator = tableNumber(row[`resp${index}_num`]);
-        const rowDenominator = tableNumber(row[`resp${index}_den`]);
-        if (rowNumerator !== null) numerator += rowNumerator;
-        if (rowDenominator !== null) denominator += rowDenominator;
-      });
-      const average = denominator ? numerator / denominator : null;
-      const reference = tableNumber(transformReferences[index]);
-      summary.responses[index] = transformTableSummaryValue(average, reference !== null ? reference : average);
-    }
-    return summary;
-  }
-
-  function renderTable(data) {
-    const responseHeaders = data.responses.map((r, i) => `<th>${escapeHtml(r.label)}</th>`).join("");
+  function renderLineBarTableContents(data) {
+    const rowsData = Array.isArray(data.rows) ? data.rows : [];
+    const responseHeaders = data.responses.map((r) => `<th>${escapeHtml(r.label)}</th>`).join("");
     const weightLabel = data.denominator?.bar_label || "Weight";
-    const needsPagination = data.rows.length > TABLE_PAGE_SIZE;
-    const pageCount = needsPagination ? Math.ceil(data.rows.length / TABLE_PAGE_SIZE) : 1;
-    state.tablePage = Math.min(Math.max(state.tablePage, 1), pageCount);
-    const start = needsPagination ? (state.tablePage - 1) * TABLE_PAGE_SIZE : 0;
-    const pageRows = needsPagination ? data.rows.slice(start, start + TABLE_PAGE_SIZE) : data.rows;
-    const rows = pageRows
-      .map((r) => {
-        const values = data.responses.map((_, i) => `<td>${formatResponseValue(r[`resp${i}`])}</td>`).join("");
-        return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
-      })
-      .join("");
-    const summary = buildTableSummary(data);
-    const summaryValues = summary.responses.map((value) => `<td>${formatResponseValue(value)}</td>`).join("");
-    const footer = `<tfoot><tr class="line-bar-summary-row"><td>Total</td><td>${formatNumber(summary.volume)}</td>${summaryValues}</tr></tfoot>`;
-    const pager = needsPagination
-      ? `<div class="table-pagination">
-          <span>${(start + 1).toLocaleString()}-${(start + pageRows.length).toLocaleString()} of ${data.rows.length.toLocaleString()} rows</span>
-          <button id="tablePrevBtn" type="button"${state.tablePage === 1 ? " disabled" : ""}>Previous</button>
-          <span>Page ${state.tablePage.toLocaleString()} of ${pageCount.toLocaleString()}</span>
-          <button id="tableNextBtn" type="button"${state.tablePage === pageCount ? " disabled" : ""}>Next</button>
-        </div>`
-      : "";
-    el("tableWrap").innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>${escapeHtml(weightLabel)}</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody>${footer}</table></div>${pager}`;
-    if (needsPagination) {
-      el("tablePrevBtn").addEventListener("click", () => {
-        state.tablePage -= 1;
-        renderTable(data);
-      });
-      el("tableNextBtn").addEventListener("click", () => {
-        state.tablePage += 1;
-        renderTable(data);
-      });
-    }
+    const colspan = 2 + data.responses.length;
+    const rows = rowsData.length
+      ? rowsData
+        .map((r) => {
+          const values = data.responses.map((_, i) => `<td>${formatResponseValue(r[`resp${i}`])}</td>`).join("");
+          return `<tr><td>${escapeHtml(formatXLabel(r.x, data.x_kind))}</td><td>${formatNumber(r.volume)}</td>${values}</tr>`;
+        })
+        .join("")
+      : `<tr class="line-bar-table-empty-row"><td colspan="${colspan}">No matching rows</td></tr>`;
+    const summaryResponses = Array.isArray(data.summary?.responses) ? data.summary.responses : [];
+    const summaryValues = data.responses.map((_, index) => `<td>${formatResponseValue(summaryResponses[index])}</td>`).join("");
+    const summaryVolume = Number.isFinite(Number(data.summary?.volume)) ? Number(data.summary.volume) : 0;
+    const footer = `<tfoot><tr class="line-bar-summary-row"><td>Total</td><td>${formatNumber(summaryVolume)}</td>${summaryValues}</tr></tfoot>`;
+    const tableMeta = data.table || {};
+    const page = Math.max(1, Number(tableMeta.page) || 1);
+    const pageSize = Math.max(1, Number(tableMeta.page_size) || TABLE_PAGE_SIZE);
+    const pageCount = Math.max(1, Number(tableMeta.page_count) || 1);
+    const matchCount = Math.max(0, Number(tableMeta.match_count) || 0);
+    state.tablePage = page;
+    const start = matchCount ? (page - 1) * pageSize + 1 : 0;
+    const end = matchCount ? Math.min((page - 1) * pageSize + rowsData.length, matchCount) : 0;
+    const pager = `<div class="table-pagination">
+        <span>${start.toLocaleString()}-${end.toLocaleString()} of ${matchCount.toLocaleString()} groups</span>
+        <button id="tablePrevBtn" type="button"${page <= 1 ? " disabled" : ""}>Previous</button>
+        <span>Page ${page.toLocaleString()} of ${pageCount.toLocaleString()}</span>
+        <button id="tableNextBtn" type="button"${page >= pageCount ? " disabled" : ""}>Next</button>
+      </div>`;
+    const content = document.getElementById("lineBarTableContent");
+    if (!content) return;
+    content.innerHTML = `<div class="table-scroll"><table><thead><tr><th>${escapeHtml(data.x)}</th><th>${escapeHtml(weightLabel)}</th>${responseHeaders}</tr></thead><tbody>${rows}</tbody>${footer}</table></div>${pager}`;
+    document.getElementById("tablePrevBtn")?.addEventListener("click", () => {
+      if (state.tablePage <= 1) return;
+      state.tablePage -= 1;
+      refreshLineBarTable({ force: true });
+    });
+    document.getElementById("tableNextBtn")?.addEventListener("click", () => {
+      if (state.tablePage >= pageCount) return;
+      state.tablePage += 1;
+      refreshLineBarTable({ force: true });
+    });
   }
 
   function setView(view) {
@@ -1624,7 +1692,12 @@ export function createLineBarTool({
     el("ukMap").classList.add("hidden");
     el("mapLegend").classList.add("hidden");
     el("chartMessage").classList.toggle("hidden", view !== "chart" || !el("chartMessage").textContent);
-    if (view === "chart") chart.resize();
+    if (view === "chart") {
+      chart.resize();
+    } else {
+      renderTableShell();
+      refreshLineBarTable();
+    }
   }
 
   function bindControls() {

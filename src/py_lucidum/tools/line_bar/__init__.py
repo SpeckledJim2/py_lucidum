@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .query import chart
+from .query import chart, table
 
 TOOL_ID = "line_bar"
 TOOL_LABEL = "Line and bar chart"
@@ -20,5 +20,6 @@ __all__ = [
     "TOOL_ID",
     "TOOL_LABEL",
     "chart",
+    "table",
     "register",
 ]

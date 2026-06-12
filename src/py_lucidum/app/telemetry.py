@@ -22,6 +22,7 @@ APP_ACTIONS = {
     ("POST", "/api/column-profile/detail"): "Column profile detail",
     ("POST", "/api/chart"): "Line/bar chart",
     ("POST", "/api/line-bar/chart"): "Line/bar chart",
+    ("POST", "/api/line-bar/table"): "Line/bar table",
     ("POST", "/api/uk-map/summary"): "UK map summary",
     ("GET", "/api/glm/summary"): "GLM summary",
     ("GET", "/api/glm/config"): "GLM config",

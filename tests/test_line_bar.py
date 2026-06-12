@@ -370,6 +370,7 @@ COPY (
 
         self.assertIn("/api/chart", paths)
         self.assertIn("/api/line-bar/chart", paths)
+        self.assertIn("/api/line-bar/table", paths)
         self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/schema", paths)
         self.assertIn("/api/shutdown", paths)
@@ -404,6 +405,137 @@ COPY (
         self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
         self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
+
+    def test_line_bar_table_endpoint_searches_beyond_chart_group_cap(self) -> None:
+        data_path = self.root / "many_categories.csv"
+        lines = ["Category,Actual"]
+        lines.extend(f"G{index:05d},{index}" for index in range(10005))
+        data_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        app = create_app(data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        request = {
+            "x": "Category",
+            "bandWidth": "0",
+            "dateBucket": "none",
+            "lowGroup": "0",
+            "sort": "alpha",
+            "sigma": 0,
+            "transform": "none",
+            "filter": "",
+            "denominator": "__none__",
+            "maxGroups": 10000,
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+        }
+
+        status, _, body = asgi_post_json(app, "/api/chart", request)
+        chart_payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(chart_payload["rows"]), 10000)
+        self.assertEqual(chart_payload["group_count"], 10005)
+        self.assertEqual(chart_payload["max_groups"], 10000)
+        self.assertTrue(chart_payload["groups_truncated"])
+        self.assertIn("Table search covers all groups", " ".join(chart_payload["warnings"]))
+        self.assertNotIn("G10004", {row["x"] for row in chart_payload["rows"]})
+
+        table_request = {**request, "tableSearch": "g10004", "tablePage": 1, "tablePageSize": 1000}
+        status, _, body = asgi_post_json(app, "/api/line-bar/table", table_request)
+        table_payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual([row["x"] for row in table_payload["rows"]], ["G10004"])
+        self.assertEqual(table_payload["rows"][0]["resp0"], 10004)
+        self.assertEqual(table_payload["summary"]["volume"], 1)
+        self.assertEqual(table_payload["summary"]["responses"], [10004])
+        self.assertEqual(table_payload["table"]["match_count"], 1)
+        self.assertEqual(table_payload["table"]["group_count"], 10005)
+        self.assertIsInstance(table_payload["timings"]["duckdb_ns"], int)
+
+    def test_line_bar_table_endpoint_paginates_and_summarises_all_matches(self) -> None:
+        data_path = self.root / "paged_categories.csv"
+        data_path.write_text(
+            "Category,Actual\n"
+            "A,10\n"
+            "B,20\n"
+            "C,30\n"
+            "D,40\n"
+            "E,50\n",
+            encoding="utf-8",
+        )
+        app = create_app(data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        request = {
+            "x": "Category",
+            "bandWidth": "0",
+            "dateBucket": "none",
+            "lowGroup": "0",
+            "sort": "alpha",
+            "sigma": 0,
+            "transform": "none",
+            "filter": "",
+            "denominator": "__none__",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "tableSearch": "",
+            "tablePage": 2,
+            "tablePageSize": 2,
+        }
+
+        status, _, body = asgi_post_json(app, "/api/line-bar/table", request)
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual([row["x"] for row in payload["rows"]], ["C", "D"])
+        self.assertEqual(payload["table"], {"search": "", "page": 2, "page_size": 2, "page_count": 3, "match_count": 5, "group_count": 5})
+        self.assertEqual(payload["summary"]["volume"], 5)
+        self.assertEqual(payload["summary"]["responses"], [30])
+
+    def test_line_bar_table_endpoint_search_matches_numeric_display_label(self) -> None:
+        data_path = self.root / "numeric_display_categories.csv"
+        data_path.write_text(
+            "Band,Actual\n"
+            "1000,10\n"
+            "2000,20\n",
+            encoding="utf-8",
+        )
+        app = create_app(data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        request = {
+            "x": "Band",
+            "bandWidth": "0",
+            "dateBucket": "none",
+            "lowGroup": "0",
+            "sort": "alpha",
+            "sigma": 0,
+            "transform": "none",
+            "filter": "",
+            "denominator": "__none__",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "tableSearch": "1,000",
+            "tablePage": 1,
+            "tablePageSize": 1000,
+        }
+
+        status, _, body = asgi_post_json(app, "/api/line-bar/table", request)
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual([row["x"] for row in payload["rows"]], ["1000"])
+        self.assertEqual(payload["summary"]["responses"], [10])
+        self.assertEqual(payload["table"]["match_count"], 1)
+
+    def test_line_bar_table_endpoint_respects_filter_and_search(self) -> None:
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        request = {
+            **self.request("YoungestDriverAge > 40"),
+            "tableSearch": "business",
+            "tablePage": 1,
+            "tablePageSize": 1000,
+        }
+
+        status, _, body = asgi_post_json(app, "/api/line-bar/table", request)
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual([row["x"] for row in payload["rows"]], ["Business"])
+        self.assertEqual(payload["summary"]["volume"], 2)
+        self.assertEqual(payload["table"]["match_count"], 1)
 
     def test_schema_exposes_feature_bases_from_feature_spec(self) -> None:
         self.features_path.write_text(

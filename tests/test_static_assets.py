@@ -2699,44 +2699,32 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertNotIn(".spec-grid .tabulator-row .tabulator-cell.tabulator-range-selected", css)
         self.assertNotIn(".spec-context-menu button", css)
 
-    def test_line_bar_table_summary_row_is_client_computed(self) -> None:
+    def test_line_bar_table_search_is_server_backed(self) -> None:
         js = self.app_js_contract()
         css = self.app_css_contract()
-        script = f"""
-const state = {{ transform: "none" }};
-{self.js_function_source(js, "tableNumber")}
-{self.js_function_source(js, "transformTableSummaryValue")}
-{self.js_function_source(js, "buildTableSummary")}
-const data = {{
-  rows: [
-    {{ volume: 2, resp0_num: 700, resp0_den: 2, resp1_num: 700, resp1_den: 2 }},
-    {{ volume: 1, resp0_num: 200, resp0_den: 1, resp1_num: 210, resp1_den: 1 }},
-  ],
-  responses: [{{}}, {{}}],
-}};
-let summary = buildTableSummary(data);
-if (summary.volume !== 3) throw new Error("volume " + summary.volume);
-if (summary.responses[0] !== 300) throw new Error("actual summary " + summary.responses[0]);
-if (Math.abs(summary.responses[1] - 910 / 3) > 1e-12) throw new Error("expected summary " + summary.responses[1]);
-state.transform = "log";
-summary = buildTableSummary(data);
-if (Math.abs(summary.responses[0] - Math.log(300)) > 1e-12) throw new Error("log summary " + summary.responses[0]);
-state.transform = "zero";
-summary = buildTableSummary(data);
-if (summary.responses[0] !== 0) throw new Error("zero summary " + summary.responses[0]);
-data.transform = {{ values: [250, 260] }};
-summary = buildTableSummary(data);
-if (summary.responses[0] !== 50) throw new Error("base zero summary " + summary.responses[0]);
-if (Math.abs(summary.responses[1] - (910 / 3 - 260)) > 1e-12) throw new Error("base expected summary " + summary.responses[1]);
-summary = buildTableSummary({{ rows: [{{ volume: 0, resp0_num: null, resp0_den: 0 }}], responses: [{{}}] }});
-if (summary.responses[0] !== null) throw new Error("empty denominator summary " + summary.responses[0]);
-"""
-        self.run_node_script(script)
 
-        self.assertIn("function buildTableSummary(data)", js)
-        self.assertIn("const rowNumerator = tableNumber(row[`resp${index}_num`]);", js)
-        self.assertIn("const rowDenominator = tableNumber(row[`resp${index}_den`]);", js)
-        self.assertIn('const footer = `<tfoot><tr class="line-bar-summary-row"><td>Total</td><td>${formatNumber(summary.volume)}</td>${summaryValues}</tr></tfoot>`;', js)
+        self.assertIn("const TABLE_SEARCH_DEBOUNCE_MS = 250;", js)
+        self.assertIn("stableRequestKey = (request) => JSON.stringify(request),", js)
+        self.assertIn("stableRequestKey,", js)
+        self.assertIn("function buildTableRequest()", js)
+        self.assertIn("tableSearch: state.lineBarTableSearch || \"\",", js)
+        self.assertIn("tablePage: state.tablePage || 1,", js)
+        self.assertIn("tablePageSize: TABLE_PAGE_SIZE,", js)
+        self.assertIn('api("/api/line-bar/table", { method: "POST", body: JSON.stringify(request), clientTiming: true })', js)
+        self.assertIn("scheduleLineBarTableRefresh();", js)
+        self.assertIn("refreshLineBarTable({ force: true });", js)
+        self.assertIn("const summaryResponses = Array.isArray(data.summary?.responses) ? data.summary.responses : [];", js)
+        self.assertIn("const pager = `<div class=\"table-pagination\">", js)
+        self.assertNotIn("function filteredLineBarTableRows", js)
+        self.assertNotIn("function buildTableSummary", js)
+        self.assertNotIn("lineBarTableSearch", self.js_function_source(js, "buildChartRequest"))
+        self.assertIn('id="lineBarTableSearch"', js)
+        self.assertIn('id="lineBarTableSearchClear"', js)
+        self.assertIn("No matching rows", js)
+        self.assertIn(".line-bar-table-search-row {", css)
+        self.assertIn(".line-bar-table-content {", css)
+        self.assertIn(".line-bar-table-state {", css)
+        self.assertIn("#tableWrap .line-bar-table-empty-row td {", css)
         self.assertIn("#tableWrap .line-bar-summary-row td {\n        background: var(--panel);\n        border-top: 2px solid var(--line);\n        font-weight: 700;", css)
 
     def test_stop_app_confirmation_uses_custom_favicon_dialog(self) -> None:

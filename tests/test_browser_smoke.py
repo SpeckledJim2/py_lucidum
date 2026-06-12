@@ -346,6 +346,171 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_table_search_filters_server_side(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_table.csv"
+            data_path.write_text(
+                "MAKE,PREMIUM\n"
+                "ALFA ROMEO,100\n"
+                "ALFA ROMEO,200\n"
+                "BMW,300\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "MAKE",
+                    "actual": "PREMIUM",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    chart_requests = 0
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def count_request(request: object) -> None:
+                        nonlocal chart_requests
+                        if request.url.endswith("/api/chart"):
+                            chart_requests += 1
+
+                    page.on("request", count_request)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("line_bar_table.csv").wait_for(timeout=10_000)
+                    page.locator("#lineBarTool").click()
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("2 groups")
+                        """
+                    )
+                    chart_requests_before_search = chart_requests
+                    page.locator("#tableTab").click()
+                    page.locator("#tableWrap:not(.hidden) #lineBarTableSearch").wait_for(timeout=10_000)
+                    page.locator("#lineBarTableSearch").fill("romeo")
+                    page.wait_for_function(
+                        """
+                        () => {
+                            const rows = [...document.querySelectorAll("#tableWrap tbody tr:not(.line-bar-table-empty-row)")];
+                            return rows.length === 1 && rows[0].children[0]?.textContent.trim() === "ALFA ROMEO";
+                        }
+                        """
+                    )
+                    page.wait_for_timeout(100)
+                    self.assertEqual(chart_requests, chart_requests_before_search)
+                    table_search_state = page.evaluate(
+                        """
+                        () => {
+                            const rectFor = (selector) => {
+                              const rect = document.querySelector(selector)?.getBoundingClientRect();
+                              return rect ? { top: rect.top, bottom: rect.bottom } : null;
+                            };
+                            const footerCells = [...document.querySelectorAll("#tableWrap tfoot td")]
+                              .map((cell) => cell.textContent.trim());
+                            const visibleRows = [...document.querySelectorAll("#tableWrap tbody tr:not(.line-bar-table-empty-row)")]
+                              .map((row) => [...row.children].map((cell) => cell.textContent.trim()));
+                            return {
+                              footerCells,
+                              visibleRows,
+                              search: rectFor(".line-bar-table-search-row"),
+                              messages: rectFor(".workspace-messages"),
+                            };
+                        }
+                        """
+                    )
+                    self.assertEqual(table_search_state["visibleRows"][0][0], "ALFA ROMEO")
+                    self.assertEqual(table_search_state["footerCells"][0], "Total")
+                    self.assertEqual(table_search_state["footerCells"][1], table_search_state["visibleRows"][0][1])
+                    self.assertGreaterEqual(table_search_state["search"]["top"], table_search_state["messages"]["bottom"])
+                    page.locator("#lineBarTableSearchClear").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#tableWrap tbody tr:not(.line-bar-table-empty-row)").length === 2
+                          && document.querySelector("#lineBarTableSearch")?.value === ""
+                        """
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_table_search_reaches_beyond_chart_cap(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "many_line_bar_groups.csv"
+            lines = ["Category,Actual"]
+            lines.extend(f"G{index:05d},{index}" for index in range(10005))
+            data_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "Category",
+                    "actual": "Actual",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    chart_requests = 0
+                    table_requests = 0
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def count_request(request: object) -> None:
+                        nonlocal chart_requests, table_requests
+                        if request.url.endswith("/api/chart"):
+                            chart_requests += 1
+                        elif request.url.endswith("/api/line-bar/table"):
+                            table_requests += 1
+
+                    page.on("request", count_request)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("many_line_bar_groups.csv").wait_for(timeout=10_000)
+                    page.locator("#lineBarTool").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("10,005 groups")
+                          && document.querySelector("#chartMessage")?.textContent.includes("Table search covers all groups")
+                        """,
+                        timeout=20_000,
+                    )
+                    chart_requests_before_search = chart_requests
+                    page.locator("#tableTab").click()
+                    page.locator("#tableWrap:not(.hidden) #lineBarTableSearch").wait_for(timeout=10_000)
+                    page.locator("#lineBarTableSearch").fill("g10004")
+                    page.wait_for_function(
+                        """
+                        () => {
+                            const rows = [...document.querySelectorAll("#tableWrap tbody tr:not(.line-bar-table-empty-row)")];
+                            return rows.length === 1
+                              && rows[0].children[0]?.textContent.trim() === "G10004"
+                              && document.querySelector("#tableWrap .table-pagination")?.textContent.includes("1-1 of 1 groups");
+                        }
+                        """,
+                        timeout=20_000,
+                    )
+                    page.wait_for_timeout(100)
+                    self.assertEqual(chart_requests, chart_requests_before_search)
+                    self.assertGreaterEqual(table_requests, 2)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_specs_tool_uses_full_workspace_width(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
