@@ -60,6 +60,81 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_picker_click_preserves_scroll_position(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "many_columns.csv"
+            columns = ["actual", "expected"] + [f"feature_{index:03d}" for index in range(1, 161)]
+            rows = [",".join(columns)]
+            for row_index in range(1, 8):
+                values = [str(100 + row_index), str(90 + row_index)]
+                values.extend(str((row_index * column_index) % 97) for column_index in range(1, 161))
+                rows.append(",".join(values))
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "feature_001",
+                    "actual": "actual",
+                    "expected": "",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("many_columns.csv").wait_for(timeout=10_000)
+                    page.locator("#lineBarTool").click()
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#featureList .line-bar-scroll-region").wait_for(timeout=10_000)
+                    page.locator("#expectedList .line-bar-scroll-region").wait_for(timeout=10_000)
+
+                    def click_scrolled_picker(list_id: str, value: str) -> dict[str, int | str]:
+                        return page.evaluate(
+                            """
+                            ({ listId, value }) => {
+                              const list = document.querySelector(`#${listId}`);
+                              const beforeRegion = list?.querySelector(".line-bar-scroll-region") || list;
+                              const button = [...(beforeRegion?.querySelectorAll("button.feature") || [])]
+                                .find((item) => item.dataset.value === value);
+                              if (!list || !beforeRegion || !button) throw new Error(`Missing ${listId} ${value}`);
+                              button.scrollIntoView({ block: "center" });
+                              const before = beforeRegion.scrollTop;
+                              button.click();
+                              const afterRegion = list.querySelector(".line-bar-scroll-region") || list;
+                              return {
+                                before,
+                                after: afterRegion.scrollTop,
+                                activeValue: list.querySelector(".feature.active")?.dataset.value || "",
+                              };
+                            }
+                            """,
+                            {"listId": list_id, "value": value},
+                        )
+
+                    feature_result = click_scrolled_picker("featureList", "feature_130")
+                    expected_result = click_scrolled_picker("expectedList", "feature_145")
+                    self.assertEqual(feature_result["activeValue"], "feature_130")
+                    self.assertEqual(expected_result["activeValue"], "feature_145")
+                    self.assertGreater(feature_result["before"], 0)
+                    self.assertGreater(expected_result["before"], 0)
+                    self.assertGreater(feature_result["after"], 0)
+                    self.assertGreater(expected_result["after"], 0)
+                    self.assertLessEqual(abs(feature_result["after"] - feature_result["before"]), 2)
+                    self.assertLessEqual(abs(expected_result["after"] - expected_result["before"]), 2)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_specs_tool_uses_full_workspace_width(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

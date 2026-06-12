@@ -363,10 +363,11 @@ export function createLineBarTool({
     syncQuantileControl();
   }
 
-  function renderExpectedNumerators() {
+  function renderExpectedNumerators(options = {}) {
     const query = el("expectedSearch").value.trim().toLowerCase();
     const select = el("expectedNumerator");
     const list = el("expectedList");
+    const scrollPosition = captureLineBarPickerScroll(list, options.preserveScroll);
     const { pinned, scroll } = resetLineBarPickerList(list, true);
 
     function addExpectedButton(target, label, value, kind, sourceId = "", extraClass = "") {
@@ -384,7 +385,7 @@ export function createLineBarTool({
           expectedSource: sourceId,
         });
         if (!sourceChanged) {
-          renderExpectedNumerators();
+          renderExpectedNumerators({ preserveScroll: true });
           updateAxisControls();
         }
         if (changed || sourceChanged) refreshChart({ force: sourceChanged });
@@ -407,16 +408,19 @@ export function createLineBarTool({
       if (query && !col.name.toLowerCase().includes(query)) continue;
       addExpectedButton(scroll, col.name, col.name, col.kind, col.source_id || state.source || "dataset");
     }
+    restoreLineBarPickerScroll(list, scrollPosition);
   }
 
-  function renderFeatures() {
+  function renderFeatures(options = {}) {
     const query = el("featureSearch").value.trim().toLowerCase();
     const list = el("featureList");
+    const scrollPosition = captureLineBarPickerScroll(list, options.preserveScroll);
     syncFeatureImportanceButton();
     ensureFeatureImportance();
     if (state.featureSort === "importance") {
       resetLineBarPickerList(list, false);
       renderFeatureImportanceRows(query, list);
+      restoreLineBarPickerScroll(list, scrollPosition);
       return;
     }
     const columns = [...sourceColumns()];
@@ -435,6 +439,7 @@ export function createLineBarTool({
       if (!featureMatchesQuery(col.name, query)) continue;
       addLineBarFeatureButton(scroll, col);
     }
+    restoreLineBarPickerScroll(list, scrollPosition);
   }
 
   function addLineBarFeatureButton(list, col, extraClass = "") {
@@ -449,7 +454,7 @@ export function createLineBarTool({
       onClick: () => {
         state.x = col.name;
         state.xSource = sourceId;
-        renderFeatures();
+        renderFeatures({ preserveScroll: true });
         updateAxisControls();
         refreshChart();
       },
@@ -559,6 +564,23 @@ export function createLineBarTool({
     return { pinned, scroll };
   }
 
+  function lineBarPickerScrollNode(list) {
+    return list.querySelector(".line-bar-scroll-region") || list;
+  }
+
+  function captureLineBarPickerScroll(list, preserveScroll = false) {
+    if (!preserveScroll) return null;
+    const scrollNode = lineBarPickerScrollNode(list);
+    return { top: scrollNode.scrollTop };
+  }
+
+  function restoreLineBarPickerScroll(list, position) {
+    if (!position) return;
+    const scrollNode = lineBarPickerScrollNode(list);
+    const maxTop = Math.max(0, scrollNode.scrollHeight - scrollNode.clientHeight);
+    scrollNode.scrollTop = Math.min(position.top, maxTop);
+  }
+
   function addFeatureButton(list, { label, detail, sourceId, extraClass = "", active = null, onClick }) {
     const activeSource = state.xSource || state.source || "dataset";
     const isActive = active === null ? label === state.x && activeSource === sourceId : Boolean(active);
@@ -575,7 +597,7 @@ export function createLineBarTool({
     state.source = "dataset";
     state.x = featureName;
     state.xSource = "dataset";
-    renderFeatures();
+    renderFeatures({ preserveScroll: true });
     renderExpectedNumerators();
     updateAxisControls();
     refreshChart({ force: true });
