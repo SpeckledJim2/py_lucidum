@@ -1,3 +1,8 @@
+      body {
+        --histogram-mean-color: #d13f3f;
+        --histogram-median-color: #1f7a8c;
+      }
+
       .visual-area.histogram-mode {
         grid-template-columns: minmax(0, 1fr);
       }
@@ -120,6 +125,14 @@
       .histogram-grid .tabulator-row .tabulator-cell[tabulator-field="value"] {
         justify-content: flex-end;
         text-align: right;
+      }
+
+      .histogram-grid .tabulator-row.histogram-stat-mean-row .tabulator-cell {
+        color: var(--histogram-mean-color, #d13f3f) !important;
+      }
+
+      .histogram-grid .tabulator-row.histogram-stat-median-row .tabulator-cell {
+        color: var(--histogram-median-color, #1f7a8c) !important;
       }
 
       @media (max-width: 900px) {

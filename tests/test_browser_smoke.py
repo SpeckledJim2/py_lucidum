@@ -4364,6 +4364,50 @@ COPY (
                 page.locator("#histogramWrap:not(.hidden)").wait_for(timeout=10_000)
                 page.locator("#histogramChart canvas").wait_for(timeout=10_000)
                 page.locator("#histogramStatsGrid .tabulator-row").first.wait_for(timeout=10_000)
+                histogram_reference_colors = page.evaluate(
+                    """
+                    () => {
+                        const normalizeColor = (color) => {
+                            if (!color) return "";
+                            const probe = document.createElement("span");
+                            probe.style.color = color;
+                            document.body.appendChild(probe);
+                            const normalized = getComputedStyle(probe).color;
+                            probe.remove();
+                            return normalized;
+                        };
+                        const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                        const series = chart?.getOption?.().series || [];
+                        const chartColor = (name) => normalizeColor(
+                            series.find((item) => item.name === name)?.markLine?.lineStyle?.color || ""
+                        );
+                        const rowColors = (name) => {
+                            const rows = Array.from(document.querySelectorAll("#histogramStatsGrid .tabulator-row"));
+                            const row = rows.find((candidate) =>
+                                candidate.querySelector('.tabulator-cell[tabulator-field="statistic"]')?.textContent.trim() === name
+                            );
+                            const statisticCell = row?.querySelector('.tabulator-cell[tabulator-field="statistic"]');
+                            const valueCell = row?.querySelector('.tabulator-cell[tabulator-field="value"]');
+                            return {
+                                statistic: statisticCell ? getComputedStyle(statisticCell).color : "",
+                                value: valueCell ? getComputedStyle(valueCell).color : "",
+                            };
+                        };
+                        return {
+                            meanChart: chartColor("Mean"),
+                            medianChart: chartColor("Median"),
+                            meanRow: rowColors("Mean"),
+                            medianRow: rowColors("Median"),
+                        };
+                    }
+                    """
+                )
+                self.assertEqual(histogram_reference_colors["meanChart"], "rgb(209, 63, 63)")
+                self.assertEqual(histogram_reference_colors["medianChart"], "rgb(31, 122, 140)")
+                self.assertEqual(histogram_reference_colors["meanRow"]["statistic"], histogram_reference_colors["meanChart"])
+                self.assertEqual(histogram_reference_colors["meanRow"]["value"], histogram_reference_colors["meanChart"])
+                self.assertEqual(histogram_reference_colors["medianRow"]["statistic"], histogram_reference_colors["medianChart"])
+                self.assertEqual(histogram_reference_colors["medianRow"]["value"], histogram_reference_colors["medianChart"])
                 page.wait_for_function(
                     """
                     () => {

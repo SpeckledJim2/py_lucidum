@@ -1,6 +1,10 @@
 import { loadTabulator } from "./shared/tabulator.js";
 
 const HISTOGRAM_BINS_REFRESH_DELAY_MS = 250;
+const DEFAULT_HISTOGRAM_MEAN_COLOR = "#d13f3f";
+const DEFAULT_HISTOGRAM_MEDIAN_COLOR = "#1f7a8c";
+const HISTOGRAM_MEAN_ROW_CLASS = "histogram-stat-mean-row";
+const HISTOGRAM_MEDIAN_ROW_CLASS = "histogram-stat-median-row";
 
 export function createHistogramTool({
   api,
@@ -138,6 +142,7 @@ export function createHistogramTool({
       if (token !== statsRenderToken) return;
       const tableRows = rows.map((row) => ({
         statistic: row.statistic,
+        statisticClass: histogramStatisticRowClass(row.statistic),
         value: formatMetricValue(row.value, row.statistic),
       }));
       if (statsTable) {
@@ -152,6 +157,7 @@ export function createHistogramTool({
         height: "100%",
         reactiveData: false,
         selectable: false,
+        rowFormatter: formatHistogramStatRow,
         columns: [
           { title: "Statistic", field: "statistic", headerSort: false, widthGrow: 1.1 },
           { title: "Value", field: "value", headerSort: false, headerHozAlign: "right", hozAlign: "right", widthGrow: 0.9 },
@@ -168,6 +174,19 @@ export function createHistogramTool({
     if (label.includes("count")) return formatNumber(value);
     if (label === "weight sum") return formatWeightValue(value);
     return formatLineValue(value);
+  }
+
+  function histogramStatisticRowClass(statistic) {
+    if (statistic === "Mean") return HISTOGRAM_MEAN_ROW_CLASS;
+    if (statistic === "Median") return HISTOGRAM_MEDIAN_ROW_CLASS;
+    return "";
+  }
+
+  function formatHistogramStatRow(row) {
+    const element = row.getElement();
+    element.classList.remove(HISTOGRAM_MEAN_ROW_CLASS, HISTOGRAM_MEDIAN_ROW_CLASS);
+    const statisticClass = row.getData()?.statisticClass;
+    if (statisticClass) element.classList.add(statisticClass);
   }
 
   function renderChart(data) {
@@ -306,9 +325,11 @@ export function createHistogramTool({
     const stats = data.stats || [];
     const mean = stats.find((row) => row.statistic === "Mean")?.value;
     const median = stats.find((row) => row.statistic === "Median")?.value;
+    const meanColor = getCss("--histogram-mean-color") || DEFAULT_HISTOGRAM_MEAN_COLOR;
+    const medianColor = getCss("--histogram-median-color") || DEFAULT_HISTOGRAM_MEDIAN_COLOR;
     return [
-      referenceLine("Mean", mean, "#d13f3f", xLog),
-      referenceLine("Median", median, "#1f7a8c", xLog),
+      referenceLine("Mean", mean, meanColor, xLog),
+      referenceLine("Median", median, medianColor, xLog),
     ].filter(Boolean);
   }
 
