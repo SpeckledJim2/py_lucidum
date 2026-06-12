@@ -94,6 +94,133 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.locator("#featureList .line-bar-scroll-region").wait_for(timeout=10_000)
                     page.locator("#expectedList .line-bar-scroll-region").wait_for(timeout=10_000)
 
+                    initial_split_state = page.evaluate(
+                        """
+                        () => {
+                          const controls = document.querySelector("#chartSideControls");
+                          const feature = document.querySelector(".feature-section");
+                          const expected = document.querySelector("#expectedSideSection");
+                          return {
+                            controlsHeight: controls?.getBoundingClientRect().height || 0,
+                            featureHeight: feature?.getBoundingClientRect().height || 0,
+                            expectedHeight: expected?.getBoundingClientRect().height || 0,
+                            expectedHidden: expected?.hidden || false,
+                          };
+                        }
+                        """
+                    )
+                    self.assertGreater(initial_split_state["controlsHeight"], 300)
+                    self.assertGreater(initial_split_state["featureHeight"], 96)
+                    self.assertGreater(initial_split_state["expectedHeight"], 96)
+                    self.assertFalse(initial_split_state["expectedHidden"])
+
+                    resizer = page.locator("#chartControlHeightResizer")
+                    resizer_box = resizer.bounding_box()
+                    controls_box = page.locator("#chartSideControls").bounding_box()
+                    self.assertIsNotNone(resizer_box)
+                    self.assertIsNotNone(controls_box)
+                    assert resizer_box is not None
+                    assert controls_box is not None
+                    resizer_center_x = resizer_box["x"] + resizer_box["width"] / 2
+                    page.mouse.move(resizer_center_x, resizer_box["y"] + resizer_box["height"] / 2)
+                    page.mouse.down()
+                    page.mouse.move(resizer_center_x, controls_box["y"] + controls_box["height"] + 80)
+                    page.mouse.up()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#chartSideControls")?.classList.contains("chart-expected-collapsed")
+                        """,
+                        timeout=10_000,
+                    )
+                    collapsed_split_state = page.evaluate(
+                        """
+                        () => {
+                          const controls = document.querySelector("#chartSideControls");
+                          const feature = document.querySelector(".feature-section");
+                          const expected = document.querySelector("#expectedSideSection");
+                          const resizer = document.querySelector("#chartControlHeightResizer");
+                          const controlsRect = controls?.getBoundingClientRect();
+                          const resizerRect = resizer?.getBoundingClientRect();
+                          return {
+                            collapsed: controls?.classList.contains("chart-expected-collapsed") || false,
+                            controlsHeight: controlsRect?.height || 0,
+                            featureHeight: feature?.getBoundingClientRect().height || 0,
+                            expectedHeight: expected?.getBoundingClientRect().height || 0,
+                            expectedHidden: expected?.hidden || false,
+                            expectedInert: expected?.hasAttribute("inert") || false,
+                            expectedAriaHidden: expected?.getAttribute("aria-hidden") || "",
+                            savedHeight: localStorage.getItem("py_lucidum_chart_feature_controls_height") || "",
+                            resizerBottomDelta: controlsRect && resizerRect
+                              ? Math.abs(controlsRect.bottom - resizerRect.bottom)
+                              : 999,
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(collapsed_split_state["collapsed"])
+                    self.assertTrue(collapsed_split_state["expectedHidden"])
+                    self.assertTrue(collapsed_split_state["expectedInert"])
+                    self.assertEqual(collapsed_split_state["expectedAriaHidden"], "true")
+                    self.assertEqual(collapsed_split_state["savedHeight"], "collapsed")
+                    self.assertLessEqual(collapsed_split_state["expectedHeight"], 1)
+                    self.assertLessEqual(collapsed_split_state["resizerBottomDelta"], 1)
+                    self.assertGreater(
+                        collapsed_split_state["featureHeight"],
+                        initial_split_state["featureHeight"] + 80,
+                    )
+                    self.assertGreaterEqual(
+                        collapsed_split_state["featureHeight"],
+                        collapsed_split_state["controlsHeight"] - 16,
+                    )
+
+                    resizer_box = resizer.bounding_box()
+                    controls_box = page.locator("#chartSideControls").bounding_box()
+                    self.assertIsNotNone(resizer_box)
+                    self.assertIsNotNone(controls_box)
+                    assert resizer_box is not None
+                    assert controls_box is not None
+                    resizer_center_x = resizer_box["x"] + resizer_box["width"] / 2
+                    page.mouse.move(resizer_center_x, resizer_box["y"] + resizer_box["height"] / 2)
+                    page.mouse.down()
+                    page.mouse.move(resizer_center_x, controls_box["y"] + controls_box["height"] * 0.55)
+                    page.mouse.up()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const controls = document.querySelector("#chartSideControls");
+                          const expected = document.querySelector("#expectedSideSection");
+                          return controls
+                            && expected
+                            && !controls.classList.contains("chart-expected-collapsed")
+                            && !expected.hidden
+                            && !expected.hasAttribute("inert");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    restored_split_state = page.evaluate(
+                        """
+                        () => {
+                          const controls = document.querySelector("#chartSideControls");
+                          const expected = document.querySelector("#expectedSideSection");
+                          return {
+                            collapsed: controls?.classList.contains("chart-expected-collapsed") || false,
+                            expectedHeight: expected?.getBoundingClientRect().height || 0,
+                            expectedHidden: expected?.hidden || false,
+                            expectedInert: expected?.hasAttribute("inert") || false,
+                            expectedAriaHidden: expected?.getAttribute("aria-hidden") || "",
+                            savedHeight: localStorage.getItem("py_lucidum_chart_feature_controls_height") || "",
+                          };
+                        }
+                        """
+                    )
+                    self.assertFalse(restored_split_state["collapsed"])
+                    self.assertFalse(restored_split_state["expectedHidden"])
+                    self.assertFalse(restored_split_state["expectedInert"])
+                    self.assertEqual(restored_split_state["expectedAriaHidden"], "")
+                    self.assertNotEqual(restored_split_state["savedHeight"], "collapsed")
+                    self.assertGreater(restored_split_state["expectedHeight"], 96)
+
                     page.locator('#featureList .feature.active[data-value="feature_001"]').wait_for(timeout=10_000)
                     page.locator("#featureSearch").focus()
                     page.keyboard.press("ArrowDown")

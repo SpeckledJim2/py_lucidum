@@ -44,6 +44,8 @@
         gbm: "GBM render",
         specs: "Specs render",
       };
+      const CHART_FEATURE_CONTROLS_HEIGHT_KEY = "py_lucidum_chart_feature_controls_height";
+      const CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED = "collapsed";
       const state = {
         schema: null,
         x: null,
@@ -1059,7 +1061,10 @@
           el("mapLegend").classList.add("hidden");
           lineBarTool.setView(state.view);
           lineBarTool.updateAxisControls();
-          requestAnimationFrame(() => lineBarTool.resize());
+          requestAnimationFrame(() => {
+            restoreSavedChartFeatureControlsHeight();
+            lineBarTool.resize();
+          });
         } else if (tool === "histogram") {
           el("profileWrap").classList.add("hidden");
           el("modelToolWrap").classList.add("hidden");
@@ -2168,10 +2173,7 @@
         const controls = document.querySelector(".chart-side-controls");
         const firstPanel = controls?.querySelector(".chart-side-section");
         const resizer = el("chartControlHeightResizer");
-        const savedHeight = Number(localStorage.getItem("py_lucidum_chart_feature_controls_height"));
-        if (Number.isFinite(savedHeight) && savedHeight > 0) {
-          setChartFeatureControlsHeight(savedHeight);
-        }
+        restoreSavedChartFeatureControlsHeight();
 
         let dragging = false;
         let startY = 0;
@@ -2197,9 +2199,13 @@
           resizer.classList.remove("dragging");
           document.body.classList.remove("resizing-chart-control-heights");
           window.getSelection()?.removeAllRanges();
-          const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-feature-controls-height"));
-          if (Number.isFinite(height)) {
-            localStorage.setItem("py_lucidum_chart_feature_controls_height", String(Math.round(height)));
+          if (controls?.classList.contains("chart-expected-collapsed")) {
+            localStorage.setItem(CHART_FEATURE_CONTROLS_HEIGHT_KEY, CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
+          } else {
+            const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-feature-controls-height"));
+            if (Number.isFinite(height)) {
+              localStorage.setItem(CHART_FEATURE_CONTROLS_HEIGHT_KEY, String(Math.round(height)));
+            }
           }
           if (event.pointerId !== undefined) {
             try {
@@ -2212,13 +2218,67 @@
         resizer.addEventListener("pointercancel", finishDrag);
       }
 
-      function setChartFeatureControlsHeight(rawHeight) {
+      function restoreSavedChartFeatureControlsHeight() {
+        const savedHeight = localStorage.getItem(CHART_FEATURE_CONTROLS_HEIGHT_KEY);
+        if (savedHeight === CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED) {
+          setChartFeatureControlsHeight(CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
+          return;
+        }
+        const numericHeight = Number(savedHeight);
+        if (Number.isFinite(numericHeight) && numericHeight > 0) {
+          setChartFeatureControlsHeight(numericHeight, { allowCollapse: false });
+        }
+      }
+
+      function setExpectedSideCollapsed(collapsed) {
+        const controls = document.querySelector(".chart-side-controls");
+        const expectedSection = el("expectedSideSection");
+        controls?.classList.toggle("chart-expected-collapsed", collapsed);
+        if (!expectedSection) return;
+        if (collapsed && expectedSection.contains(document.activeElement)) {
+          document.activeElement?.blur?.();
+        }
+        expectedSection.hidden = collapsed;
+        expectedSection.toggleAttribute("inert", collapsed);
+        if (collapsed) {
+          expectedSection.setAttribute("aria-hidden", "true");
+        } else {
+          expectedSection.removeAttribute("aria-hidden");
+        }
+      }
+
+      function setChartFeatureControlsHeight(rawHeight, options = {}) {
         const controls = document.querySelector(".chart-side-controls");
         const availableHeight = controls?.getBoundingClientRect().height || window.innerHeight;
-        const splitterSpace = 22;
-        const minPanelHeight = 96;
-        const maxHeight = Math.max(minPanelHeight, availableHeight - splitterSpace - minPanelHeight);
-        const height = Math.min(Math.max(rawHeight, minPanelHeight), maxHeight);
+        const resizerHeight = 6;
+        const gridGap = 8;
+        const expandedSplitterSpace = resizerHeight + gridGap * 2;
+        const collapsedSplitterSpace = resizerHeight + gridGap;
+        const minFeaturePanelHeight = 96;
+        const minExpectedPanelHeight = 0;
+        const numericHeight = Number(rawHeight);
+        const maxExpandedHeight = Math.max(
+          minFeaturePanelHeight,
+          availableHeight - expandedSplitterSpace - minExpectedPanelHeight,
+        );
+        const collapseThreshold = maxExpandedHeight;
+        const shouldCollapse = rawHeight === CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED
+          || (
+            options.allowCollapse !== false
+            && Number.isFinite(numericHeight)
+            && numericHeight >= collapseThreshold
+          );
+        if (shouldCollapse) {
+          const height = Math.max(minFeaturePanelHeight, availableHeight - collapsedSplitterSpace);
+          setExpectedSideCollapsed(true);
+          document.documentElement.style.setProperty("--chart-feature-controls-height", `${Math.round(height)}px`);
+          return;
+        }
+        setExpectedSideCollapsed(false);
+        const height = Math.min(
+          Math.max(Number.isFinite(numericHeight) ? numericHeight : minFeaturePanelHeight, minFeaturePanelHeight),
+          maxExpandedHeight,
+        );
         document.documentElement.style.setProperty("--chart-feature-controls-height", `${Math.round(height)}px`);
       }
 
@@ -2342,7 +2402,11 @@
             const controls = document.querySelector(".chart-side-controls");
             if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
             const firstPanel = controls?.querySelector(".chart-side-section");
-            if (firstPanel) setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height);
+            if (controls?.classList.contains("chart-expected-collapsed")) {
+              setChartFeatureControlsHeight(CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
+            } else if (firstPanel) {
+              setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height, { allowCollapse: false });
+            }
             lineBarTool.resize();
           } else if (state.tool === "histogram") {
             histogramTool.resize();

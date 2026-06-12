@@ -35,6 +35,14 @@
         min-height: 0;
       }
 
+      .chart-side-controls.chart-expected-collapsed {
+        grid-template-rows: var(--chart-feature-controls-height, minmax(0, 1fr)) 6px;
+      }
+
+      .chart-side-controls.chart-expected-collapsed #expectedSideSection {
+        display: none;
+      }
+
       .chart-control-height-resizer {
         cursor: row-resize;
         min-height: 6px;
