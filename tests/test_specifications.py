@@ -274,6 +274,31 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertEqual(app.state.kpis[0]["name"], "Premium")
         self.assertEqual((self.root / "specs" / "kpi_spec.csv").read_text(encoding="utf-8").splitlines()[0], "group,name,actual,denominator,decimals,format")
 
+    def test_invalid_kpi_spec_save_returns_400_without_replacing_file(self) -> None:
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            self.write_default_specs()
+            kpis_path = self.root / "specs" / "kpi_spec.csv"
+            original_text = kpis_path.read_text(encoding="utf-8")
+            app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_features=False)
+            status, _, body = asgi_post_json(
+                app,
+                "/api/specs/kpi/save",
+                {
+                    "columns": ["group", "name", "actual", "denominator", "decimals", "format"],
+                    "rows": [{"group": "Pricing", "name": "", "actual": "", "denominator": "N", "decimals": "", "format": ""}],
+                },
+            )
+        finally:
+            os.chdir(previous_cwd)
+
+        payload = json.loads(body)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["detail"], "kpi_spec.csv row 2 is missing: name, actual, decimals, format")
+        self.assertEqual(kpis_path.read_text(encoding="utf-8"), original_text)
+        self.assertEqual(app.state.kpis[0]["name"], "Premium")
+
     def test_disabled_spec_save_writes_without_loading_schema_metadata(self) -> None:
         save_payloads = {
             "feature": {

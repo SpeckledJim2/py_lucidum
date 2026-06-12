@@ -195,6 +195,7 @@ export function createSpecificationsTool({
       rows,
       placeholders: payload.placeholders && typeof payload.placeholders === "object" ? payload.placeholders : {},
       rowIssues: normaliseRowIssues(payload.row_issues),
+      validationPending: false,
       dirty: Boolean(dirty),
     };
     specs.set(kind, spec);
@@ -483,13 +484,22 @@ export function createSpecificationsTool({
     const canSave = specCanSave(spec);
     const button = el("specSaveBtn");
     button.disabled = loading || !canSave;
+    button.title = specSaveButtonTitle(spec, canSave);
     button.classList.toggle("dirty", dirty);
     button.classList.toggle("pending", !dirty && canSave);
   }
 
   function specCanSave(spec) {
     if (!spec) return false;
+    if (spec.validationPending || spec.validationResult?.valid === false) return false;
     return Boolean(spec.dirty || (spec.generated && !spec.exists));
+  }
+
+  function specSaveButtonTitle(spec, canSave) {
+    if (loading) return "Saving specification";
+    if (spec?.validationPending) return "Checking specification before saving";
+    if (spec?.validationResult?.valid === false) return "Fix validation errors before saving";
+    return canSave ? "Save specification" : "";
   }
 
   function showNotice(result, isError = false) {
@@ -577,7 +587,8 @@ export function createSpecificationsTool({
       showNotice(result);
       showClipboardToast(`${result.message}: ${result.path || spec.path}`);
     } catch (error) {
-      showNotice({ valid: false, errors: [error.message], warnings: [], message: error.message }, true);
+      const message = `Save failed; file was not written: ${error.message}`;
+      showNotice({ valid: false, errors: [message], warnings: [], message }, true);
     } finally {
       loading = false;
       syncButtons();
@@ -588,8 +599,8 @@ export function createSpecificationsTool({
     if (suppressDirty) return;
     const spec = specs.get(activeKind);
     if (spec) spec.dirty = true;
-    syncButtons();
     scheduleValidationForActiveSpec();
+    syncButtons();
   }
 
   function normaliseRowIssues(rowIssues) {
@@ -612,6 +623,8 @@ export function createSpecificationsTool({
     if (!spec) return;
     if (spec.kind === activeKind) saveActiveDraft();
     const requestId = ++validationRequestId;
+    spec.validationPending = true;
+    if (spec.kind === activeKind) syncButtons();
     try {
       const result = await api(`/api/specs/${spec.kind}/validate`, {
         method: "POST",
@@ -631,6 +644,8 @@ export function createSpecificationsTool({
     const spec = specs.get(activeKind);
     if (!spec) return;
     validationRequestId += 1;
+    spec.validationPending = true;
+    syncButtons();
     validationTimer = window.setTimeout(() => {
       validationTimer = null;
       void validateSpecDraft(spec);
@@ -653,10 +668,14 @@ export function createSpecificationsTool({
 
   function storeValidationResult(spec, result) {
     if (!spec || !result) return;
+    spec.validationPending = false;
     spec.validationResult = result;
     spec.autoValidated = true;
     applyValidationResultRowIssues(result, spec);
-    if (spec.kind === activeKind) showValidationNotice(result);
+    if (spec.kind === activeKind) {
+      showValidationNotice(result);
+      syncButtons();
+    }
   }
 
   function applyValidationResultRowIssues(result, spec = specs.get(activeKind)) {
@@ -673,12 +692,14 @@ export function createSpecificationsTool({
   function clearValidationRowIssuesForSpec(spec) {
     if (!spec) return;
     const hadValidationState = Boolean(spec.validationResult || spec.autoValidated || (Array.isArray(spec.rowIssues) && spec.rowIssues.length));
-    if (!hadValidationState) return;
+    if (!hadValidationState && !spec.validationPending) return;
+    spec.validationPending = false;
     if (["kpi", "filter"].includes(spec.kind)) spec.rowIssues = [];
     spec.validationResult = null;
     spec.autoValidated = false;
     if (spec.kind === activeKind) showNotice(null);
     applyValidationRowIssueClasses();
+    if (spec.kind === activeKind) syncButtons();
   }
 
   function specToolVisible() {

@@ -3530,12 +3530,45 @@ COPY (
                 page.keyboard.press("Enter")
                 page.locator("#specNotice.error", has_text="kpi_spec.csv row 2 actual column does not exist: MissingActual").wait_for(timeout=10_000)
                 assert_validation_row_highlight(0, "2")
+                self.assertTrue(page.locator("#specSaveBtn").evaluate("node => node.disabled"))
+                self.assertEqual(page.locator("#specSaveBtn").get_attribute("title"), "Fix validation errors before saving")
                 assert_notice_right_aligned()
                 assert_global_status_clear()
                 spec_cell("actual", 0).dblclick()
                 page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("price")
                 page.keyboard.press("Enter")
+                page.locator("#specNotice", has_text="Valid KPI spec").wait_for(timeout=10_000)
                 assert_no_validation_row_highlight(0)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const button = document.querySelector("#specSaveBtn");
+                      return button && !button.disabled && button.classList.contains("dirty") && button.title === "Save specification";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
+                def reject_kpi_save(route: Any) -> None:
+                    route.fulfill(
+                        status=400,
+                        content_type="application/json",
+                        body=json.dumps({"detail": "simulated save rejection"}),
+                    )
+
+                page.route("**/api/specs/kpi/save", reject_kpi_save)
+                page.locator("#specSaveBtn").click()
+                page.locator("#specNotice.error", has_text="Save failed; file was not written: simulated save rejection").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const button = document.querySelector("#specSaveBtn");
+                      return button && !button.disabled && button.classList.contains("dirty");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.unroute("**/api/specs/kpi/save", reject_kpi_save)
 
                 page.locator('[data-spec-kind="filter"]').click()
                 page.locator('[data-spec-kind="filter"][aria-selected="true"]').wait_for(timeout=10_000)
