@@ -184,16 +184,6 @@
 
         <main>
           <div id="lineBarToolbar" class="toolbar hidden">
-            <div id="sortControl" class="control">
-              <h3>x-axis sort order</h3>
-              <div class="segmented" data-control="sort">
-                <button data-value="alpha" class="active">A-Z</button>
-                <button data-value="volume">Weight</button>
-                <button data-value="actual">Actual</button>
-                <button id="expectedSortButton" data-value="expected" class="hidden">Expected</button>
-                <button id="shapSortButton" data-value="shap" class="hidden">SHAP</button>
-              </div>
-            </div>
             <div class="control">
               <h3>Group low weights</h3>
               <div class="segmented" data-control="lowGroup">
@@ -222,36 +212,6 @@
                 <button data-value="both">Both</button>
               </div>
             </div>
-            <div id="bandControl" class="control">
-              <h3><span id="bandLabel">Banding</span> <span id="bandValue"></span></h3>
-              <div class="segmented" data-control="bandWidth">
-                <button data-action="band-down">&lt;</button>
-                <button data-value="0" class="active">-</button>
-                <button data-value="0.1">0.1</button>
-                <button data-value="1">1</button>
-                <button data-value="5">5</button>
-                <button data-value="10">10</button>
-                <button data-action="band-up">&gt;</button>
-              </div>
-            </div>
-            <div id="quantileControl" class="control">
-              <h3>Quantile</h3>
-              <div class="segmented" data-control="quantileMode">
-                <button data-value="off" class="active">-</button>
-                <button data-value="quantile">Use quantiles</button>
-              </div>
-            </div>
-            <div id="dateControl" class="control">
-              <h3>Date bucket</h3>
-              <div class="segmented" data-control="dateBucket">
-                <button data-value="none" class="active">-</button>
-                <button data-value="hour">Hour</button>
-                <button data-value="day">Day</button>
-                <button data-value="week">Week</button>
-                <button data-value="month">Month</button>
-                <button data-value="year">Year</button>
-              </div>
-            </div>
             <div class="control">
               <h3>Response transform</h3>
               <div class="segmented" data-control="transform">
@@ -270,6 +230,46 @@
                 <button data-value="1">1</button>
                 <button data-value="2">2</button>
                 <button data-value="5">5</button>
+              </div>
+            </div>
+            <div id="sortControl" class="control">
+              <h3>x-axis sort order</h3>
+              <div class="segmented" data-control="sort">
+                <button data-value="alpha" class="active">A-Z</button>
+                <button data-value="volume">Weight</button>
+                <button data-value="actual">Actual</button>
+                <button id="expectedSortButton" data-value="expected" class="hidden">Expected</button>
+                <button id="shapSortButton" data-value="shap" class="hidden">SHAP</button>
+              </div>
+            </div>
+            <div id="dateControl" class="control">
+              <h3>Date bucket</h3>
+              <div class="segmented" data-control="dateBucket">
+                <button data-value="none" class="active">-</button>
+                <button data-value="hour">Hour</button>
+                <button data-value="day">Day</button>
+                <button data-value="week">Week</button>
+                <button data-value="month">Month</button>
+                <button data-value="year">Year</button>
+              </div>
+            </div>
+            <div id="bandControl" class="control">
+              <h3><span id="bandLabel">Banding</span> <span id="bandValue"></span></h3>
+              <div class="segmented" data-control="bandWidth">
+                <button data-action="band-down">&lt;</button>
+                <button data-value="0" class="active">-</button>
+                <button data-value="0.1">0.1</button>
+                <button data-value="1">1</button>
+                <button data-value="5">5</button>
+                <button data-value="10">10</button>
+                <button data-action="band-up">&gt;</button>
+              </div>
+            </div>
+            <div id="quantileControl" class="control">
+              <h3>Quantile</h3>
+              <div class="segmented" data-control="quantileMode">
+                <button data-value="off" class="active">-</button>
+                <button data-value="quantile">Use quantiles</button>
               </div>
             </div>
           </div>

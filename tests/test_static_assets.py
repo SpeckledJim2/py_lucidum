@@ -3337,6 +3337,32 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn('state.bandWidth = "10";', js)
         self.assertIn('function normalizeBandWidthForQuantiles()', js)
 
+    def test_line_bar_toolbar_shared_controls_precede_type_specific_controls(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        html = html_body.decode("utf-8")
+        shared_controls = [
+            "<h3>Group low weights</h3>",
+            "<h3>Labels</h3>",
+            "<h3>Partial dependancies</h3>",
+            "<h3>Response transform</h3>",
+            "<h3>Sigma bars</h3>",
+        ]
+        type_specific_controls = [
+            'id="sortControl"',
+            'id="dateControl"',
+            'id="bandControl"',
+            'id="quantileControl"',
+        ]
+
+        for before, after in zip(shared_controls, shared_controls[1:]):
+            self.assertLess(html.index(before), html.index(after))
+        for shared_control in shared_controls:
+            for type_specific_control in type_specific_controls:
+                self.assertLess(html.index(shared_control), html.index(type_specific_control))
+        self.assertLess(html.index('id="sortControl"'), html.index('id="dateControl"'))
+        self.assertLess(html.index('id="dateControl"'), html.index('id="bandControl"'))
+        self.assertLess(html.index('id="bandControl"'), html.index('id="quantileControl"'))
+
     def test_line_bar_partial_dependence_shap_contract(self) -> None:
         _, html_body = self.assert_no_store("/")
         html = html_body.decode("utf-8")
