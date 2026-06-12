@@ -377,7 +377,7 @@ export function createLineBarTool({
       if (sourceId) button.dataset.sourceId = sourceId;
       button.dataset.value = value;
       button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
-      button.addEventListener("click", () => {
+      button.addEventListener("click", (event) => {
         const changed = select.value !== value;
         select.value = value;
         const sourceChanged = syncExpectedSourceFromSelection({
@@ -389,6 +389,9 @@ export function createLineBarTool({
           updateAxisControls();
         }
         if (changed || sourceChanged) refreshChart({ force: sourceChanged });
+        if (event.isTrusted) {
+          focusLineBarPickerButton(list, { value, sourceId, index: 0 });
+        }
       });
       target.append(button);
     }
@@ -581,6 +584,71 @@ export function createLineBarTool({
     scrollNode.scrollTop = Math.min(position.top, maxTop);
   }
 
+  function lineBarPickerButtons(list) {
+    return Array.from(list.querySelectorAll("button.feature"))
+      .filter((button) => !button.disabled && button.offsetParent !== null);
+  }
+
+  function currentLineBarPickerButton(list, buttons) {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLButtonElement && list.contains(focused) && focused.matches("button.feature")) {
+      return focused;
+    }
+    return buttons.find((button) => button.classList.contains("active")) || null;
+  }
+
+  function focusLineBarPickerButton(list, targetState) {
+    requestAnimationFrame(() => {
+      const buttons = lineBarPickerButtons(list);
+      if (!buttons.length) return;
+      const target = buttons.find((button) => (
+        (button.dataset.value || "") === targetState.value
+        && (button.dataset.sourceId || "") === targetState.sourceId
+      )) || buttons.find((button) => button.classList.contains("active")) || buttons[Math.min(targetState.index, buttons.length - 1)];
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function handleLineBarPickerKeydown(event, searchInputId, listId) {
+    if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    const list = el(listId);
+    const buttons = lineBarPickerButtons(list);
+    if (!buttons.length) return;
+    const currentButton = currentLineBarPickerButton(list, buttons);
+    const currentIndex = currentButton ? buttons.indexOf(currentButton) : -1;
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex = currentIndex < 0
+      ? (direction > 0 ? 0 : buttons.length - 1)
+      : Math.min(Math.max(currentIndex + direction, 0), buttons.length - 1);
+    event.preventDefault();
+    if (nextIndex === currentIndex) return;
+    const target = buttons[nextIndex];
+    const targetState = {
+      value: target.dataset.value || "",
+      sourceId: target.dataset.sourceId || "",
+      index: nextIndex,
+    };
+    const startedFromButton = event.target instanceof HTMLButtonElement && list.contains(event.target);
+    list.classList.add("line-bar-keyboard-navigation");
+    target.click();
+    if (startedFromButton) {
+      focusLineBarPickerButton(list, targetState);
+    } else {
+      requestAnimationFrame(() => el(searchInputId).focus({ preventScroll: true }));
+    }
+  }
+
+  function bindLineBarPickerKeyboard(searchInputId, listId) {
+    const handler = (event) => handleLineBarPickerKeydown(event, searchInputId, listId);
+    el(searchInputId).addEventListener("keydown", handler);
+    const list = el(listId);
+    list.addEventListener("keydown", handler);
+    list.addEventListener("pointermove", () => {
+      list.classList.remove("line-bar-keyboard-navigation");
+    });
+  }
+
   function addFeatureButton(list, { label, detail, sourceId, extraClass = "", active = null, onClick }) {
     const activeSource = state.xSource || state.source || "dataset";
     const isActive = active === null ? label === state.x && activeSource === sourceId : Boolean(active);
@@ -589,7 +657,13 @@ export function createLineBarTool({
     button.dataset.sourceId = sourceId;
     button.dataset.value = label;
     button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(detail)}</span>`;
-    button.addEventListener("click", onClick);
+    button.addEventListener("click", (event) => {
+      const pickerList = list.closest("#featureList") || list;
+      onClick();
+      if (event.isTrusted) {
+        focusLineBarPickerButton(pickerList, { value: label, sourceId, index: 0 });
+      }
+    });
     list.append(button);
   }
 
@@ -1614,6 +1688,8 @@ export function createLineBarTool({
     });
     el("expectedSearch").addEventListener("input", renderExpectedNumerators);
     el("featureSearch").addEventListener("input", renderFeatures);
+    bindLineBarPickerKeyboard("expectedSearch", "expectedList");
+    bindLineBarPickerKeyboard("featureSearch", "featureList");
     el("expectedSearchClear").addEventListener("click", () => clearSearchInput("expectedSearch", renderExpectedNumerators));
     el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));
     el("chartTab").addEventListener("click", () => setView("chart"));

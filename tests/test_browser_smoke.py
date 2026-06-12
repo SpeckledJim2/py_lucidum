@@ -94,6 +94,217 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.locator("#featureList .line-bar-scroll-region").wait_for(timeout=10_000)
                     page.locator("#expectedList .line-bar-scroll-region").wait_for(timeout=10_000)
 
+                    page.locator('#featureList .feature.active[data-value="feature_001"]').wait_for(timeout=10_000)
+                    page.locator("#featureSearch").focus()
+                    page.keyboard.press("ArrowDown")
+                    page.locator('#featureList .feature.active[data-value="feature_002"]').wait_for(timeout=10_000)
+                    feature_arrow_down_state = page.evaluate(
+                        """
+                        () => ({
+                          activeValue: document.querySelector("#featureList .feature.active")?.dataset.value || "",
+                          focusedId: document.activeElement?.id || "",
+                        })
+                        """
+                    )
+                    self.assertEqual(feature_arrow_down_state["activeValue"], "feature_002")
+                    self.assertEqual(feature_arrow_down_state["focusedId"], "featureSearch")
+                    page.keyboard.press("ArrowUp")
+                    page.locator('#featureList .feature.active[data-value="feature_001"]').wait_for(timeout=10_000)
+                    feature_arrow_up_state = page.evaluate(
+                        """
+                        () => ({
+                          activeValue: document.querySelector("#featureList .feature.active")?.dataset.value || "",
+                          focusedId: document.activeElement?.id || "",
+                        })
+                        """
+                    )
+                    self.assertEqual(feature_arrow_up_state["activeValue"], "feature_001")
+                    self.assertEqual(feature_arrow_up_state["focusedId"], "featureSearch")
+
+                    page.locator("#expectedList .feature.active.expected-none-option").focus()
+                    page.keyboard.press("ArrowDown")
+                    page.locator('#expectedList .feature.active[data-value="actual"]').wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.activeElement?.closest?.("#expectedList")
+                          && document.activeElement?.dataset?.value === "actual"
+                        """,
+                        timeout=10_000,
+                    )
+                    expected_arrow_down_state = page.evaluate(
+                        """
+                        () => {
+                          const active = document.querySelector("#expectedList .feature.active");
+                          const focused = document.activeElement;
+                          return {
+                            activeValue: active?.dataset.value || "",
+                            focusedValue: focused?.dataset?.value || "",
+                            focusedInExpected: Boolean(focused?.closest?.("#expectedList")),
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(expected_arrow_down_state["activeValue"], "actual")
+                    self.assertEqual(expected_arrow_down_state["focusedValue"], "actual")
+                    self.assertTrue(expected_arrow_down_state["focusedInExpected"])
+                    page.keyboard.press("ArrowUp")
+                    page.locator("#expectedList .feature.active.expected-none-option").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.activeElement?.closest?.("#expectedList")
+                          && document.activeElement?.classList?.contains("expected-none-option")
+                        """,
+                        timeout=10_000,
+                    )
+                    expected_arrow_up_state = page.evaluate(
+                        """
+                        () => {
+                          const active = document.querySelector("#expectedList .feature.active");
+                          const focused = document.activeElement;
+                          return {
+                            activeValue: active?.dataset.value || "",
+                            focusedValue: focused?.dataset?.value || "",
+                            focusedInExpected: Boolean(focused?.closest?.("#expectedList")),
+                            focusedNone: focused?.classList?.contains("expected-none-option") || false,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(expected_arrow_up_state["activeValue"], "")
+                    self.assertEqual(expected_arrow_up_state["focusedValue"], "")
+                    self.assertTrue(expected_arrow_up_state["focusedInExpected"])
+                    self.assertTrue(expected_arrow_up_state["focusedNone"])
+
+                    page.locator('#featureList .feature[data-value="feature_003"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.activeElement?.closest?.("#featureList")
+                          && document.activeElement?.dataset?.value === "feature_003"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.keyboard.press("ArrowDown")
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#featureList .feature.active")?.dataset.value === "feature_004"
+                          && document.activeElement?.closest?.("#featureList")
+                          && document.activeElement?.dataset?.value === "feature_004"
+                        """,
+                        timeout=10_000,
+                    )
+                    feature_click_arrow_state = page.evaluate(
+                        """
+                        () => {
+                          const previous = document.querySelector('#featureList .feature[data-value="feature_003"]');
+                          const active = document.querySelector("#featureList .feature.active");
+                          return {
+                            activeValue: active?.dataset.value || "",
+                            activeCount: document.querySelectorAll("#featureList .feature.active").length,
+                            focusedValue: document.activeElement?.dataset?.value || "",
+                            focusedInFeature: Boolean(document.activeElement?.closest?.("#featureList")),
+                            keyboardNavigation: document.querySelector("#featureList")?.classList?.contains("line-bar-keyboard-navigation") || false,
+                            previousActive: previous?.classList?.contains("active") || false,
+                            previousHovered: previous?.matches(":hover") || false,
+                            previousBackground: previous ? getComputedStyle(previous).backgroundColor : "",
+                            activeBackground: active ? getComputedStyle(active).backgroundColor : "",
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(feature_click_arrow_state["activeValue"], "feature_004")
+                    self.assertEqual(feature_click_arrow_state["activeCount"], 1)
+                    self.assertEqual(feature_click_arrow_state["focusedValue"], "feature_004")
+                    self.assertTrue(feature_click_arrow_state["focusedInFeature"])
+                    self.assertTrue(feature_click_arrow_state["keyboardNavigation"])
+                    self.assertFalse(feature_click_arrow_state["previousActive"])
+                    self.assertTrue(feature_click_arrow_state["previousHovered"])
+                    self.assertEqual(feature_click_arrow_state["previousBackground"], "rgba(0, 0, 0, 0)")
+                    self.assertNotEqual(
+                        feature_click_arrow_state["previousBackground"],
+                        feature_click_arrow_state["activeBackground"],
+                    )
+
+                    page.evaluate(
+                        """
+                        () => document.querySelector("#featureList .feature")?.focus({ preventScroll: true })
+                        """
+                    )
+                    page.keyboard.press("ArrowUp")
+                    top_boundary_focus_state = page.evaluate(
+                        """
+                        () => {
+                          const focused = document.activeElement;
+                          const style = focused ? getComputedStyle(focused) : null;
+                          return {
+                            focusedInFeature: Boolean(focused?.closest?.("#featureList")),
+                            outlineStyle: style?.outlineStyle || "",
+                            outlineWidth: style?.outlineWidth || "",
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(top_boundary_focus_state["focusedInFeature"])
+                    self.assertEqual(top_boundary_focus_state["outlineStyle"], "none")
+                    self.assertEqual(top_boundary_focus_state["outlineWidth"], "0px")
+
+                    page.evaluate(
+                        """
+                        () => {
+                          const buttons = [...document.querySelectorAll("#featureList .feature")];
+                          buttons[buttons.length - 1]?.focus({ preventScroll: true });
+                        }
+                        """
+                    )
+                    page.keyboard.press("ArrowDown")
+                    bottom_boundary_focus_state = page.evaluate(
+                        """
+                        () => {
+                          const focused = document.activeElement;
+                          const style = focused ? getComputedStyle(focused) : null;
+                          return {
+                            focusedInFeature: Boolean(focused?.closest?.("#featureList")),
+                            outlineStyle: style?.outlineStyle || "",
+                            outlineWidth: style?.outlineWidth || "",
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(bottom_boundary_focus_state["focusedInFeature"])
+                    self.assertEqual(bottom_boundary_focus_state["outlineStyle"], "none")
+                    self.assertEqual(bottom_boundary_focus_state["outlineWidth"], "0px")
+
+                    page.locator('#expectedList .feature[data-value="actual"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.activeElement?.closest?.("#expectedList")
+                          && document.activeElement?.dataset?.value === "actual"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.keyboard.press("ArrowUp")
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#expectedList .feature.active")?.classList?.contains("expected-none-option")
+                          && document.activeElement?.closest?.("#expectedList")
+                          && document.activeElement?.classList?.contains("expected-none-option")
+                        """,
+                        timeout=10_000,
+                    )
+                    expected_click_arrow_state = page.evaluate(
+                        """
+                        () => ({
+                          activeValue: document.querySelector("#expectedList .feature.active")?.dataset.value || "",
+                          focusedValue: document.activeElement?.dataset?.value || "",
+                          focusedInExpected: Boolean(document.activeElement?.closest?.("#expectedList")),
+                          focusedNone: document.activeElement?.classList?.contains("expected-none-option") || false,
+                        })
+                        """
+                    )
+                    self.assertEqual(expected_click_arrow_state["activeValue"], "")
+                    self.assertEqual(expected_click_arrow_state["focusedValue"], "")
+                    self.assertTrue(expected_click_arrow_state["focusedInExpected"])
+                    self.assertTrue(expected_click_arrow_state["focusedNone"])
+
                     def click_scrolled_picker(list_id: str, value: str) -> dict[str, int | str]:
                         return page.evaluate(
                             """

@@ -64,6 +64,27 @@
         min-height: 0;
       }
 
+      #featureList .feature:hover:not(.active),
+      #expectedList .feature:hover:not(.active) {
+        background: color-mix(in srgb, var(--accent) 7%, transparent);
+      }
+
+      #featureList .feature.active,
+      #expectedList .feature.active {
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+
+      #featureList .feature:focus,
+      #expectedList .feature:focus {
+        outline: none;
+        outline-width: 0;
+      }
+
+      #featureList.line-bar-keyboard-navigation .feature:hover:not(.active),
+      #expectedList.line-bar-keyboard-navigation .feature:hover:not(.active) {
+        background: transparent;
+      }
+
       #featureList.line-bar-split-list,
       #expectedList.line-bar-split-list {
         display: flex;
