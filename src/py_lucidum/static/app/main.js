@@ -918,6 +918,18 @@
         return refreshTool("uk_map", options);
       }
 
+      function toolUsesMetricControls(tool = state.tool) {
+        return ["line_bar", "histogram", "uk_map", "glm", "gbm"].includes(tool);
+      }
+
+      function toolRendersMetricSummaries(tool = state.tool) {
+        return ["line_bar", "histogram", "uk_map"].includes(tool);
+      }
+
+      function refreshActiveToolForMetricChange() {
+        if (toolUsesMetricControls()) refreshActiveTool();
+      }
+
       function chooseDefaultTool() {
         const requested = locationParams.get("tool");
         if (requested && toolEnabled(requested)) return requested;
@@ -1114,7 +1126,10 @@
         el("glmTool").classList.toggle("active", tool === "glm");
         el("gbmTool").classList.toggle("active", tool === "gbm");
         el("specsTool").classList.toggle("active", tool === "specs");
-        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "dataset_viewer" || tool === "column_profile" || tool === "specs");
+        if (!toolRendersMetricSummaries(tool)) {
+          renderMetricTitle(el("actualMetricTitle"), "Actual");
+          renderMetricTitle(el("weightMetricTitle"), "Weight", null, formatWeightValue);
+        }
         glmTool.syncSidebarFromSchema();
         gbmTool.syncSidebarFromSchema();
         syncSidebarAccordion();
@@ -1351,7 +1366,7 @@
         if (includeNone) {
           select.append(new Option("None", ""));
         }
-        for (const col of numericColumns()) {
+        for (const col of sortedMetricColumns(numericColumns())) {
           select.append(new Option(col.name, col.name));
         }
       }
@@ -1404,7 +1419,7 @@
           option.disabled = true;
           group.append(option);
         } else {
-          for (const column of columns) {
+          for (const column of sortedMetricColumns(columns)) {
             const option = new Option(metricColumnLabel(column), column.name);
             option.dataset.sourceId = column.source_id || sourceId;
             option.dataset.metricKind = kind;
@@ -1478,6 +1493,21 @@
         return String(column?.label || column?.name || "");
       }
 
+      function compareMetricColumns(a, b) {
+        const compareOptions = { sensitivity: "base", numeric: true };
+        return metricColumnLabel(a).localeCompare(metricColumnLabel(b), undefined, compareOptions)
+          || String(a?.name || "").localeCompare(String(b?.name || ""), undefined, compareOptions)
+          || String(a?.source_id || "").localeCompare(String(b?.source_id || ""), undefined, compareOptions);
+      }
+
+      function sortedMetricColumns(columns = []) {
+        return [...columns].sort(compareMetricColumns);
+      }
+
+      function sortedDenominatorColumns() {
+        return sortedMetricColumns(numericColumns().map((column) => ({ ...column, label: column.name })));
+      }
+
       function setActualSelection(value, sourceId = "") {
         const select = el("actualNumerator");
         const name = String(value || "");
@@ -1522,7 +1552,7 @@
       function fillDenominatorSelect(select) {
         select.innerHTML = "";
         select.append(new Option("Average row value", "__none__"));
-        for (const col of numericColumns()) {
+        for (const col of sortedDenominatorColumns()) {
           select.append(new Option(col.name, col.name));
         }
       }
@@ -1843,7 +1873,7 @@
         setActiveKpiState(kpi);
         renderKpis();
         if (changed) {
-          refreshActiveTool();
+          refreshActiveToolForMetricChange();
         }
       }
 
@@ -2456,11 +2486,11 @@
             syncControlsForSourceChange({ actualValue, actualSource });
           }
           syncKpiSelectionFromMetrics();
-          refreshActiveTool();
+          refreshActiveToolForMetricChange();
         });
         el("denominator").addEventListener("change", () => {
           syncKpiSelectionFromMetrics();
-          refreshActiveTool();
+          refreshActiveToolForMetricChange();
         });
         el("filterApplyBtn").addEventListener("click", applyFilter);
         el("filterClearBtn").addEventListener("click", clearFilter);

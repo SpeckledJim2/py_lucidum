@@ -2083,7 +2083,9 @@ COPY (
                 page.locator("#profileTool.active").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#gbmSidebarPanel").wait_for(timeout=10_000)
-                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 assert_sidebar_headers_visible()
                 wait_accordion_state(None)
 
@@ -3399,6 +3401,16 @@ COPY (
                     """
                 )
                 self.assertEqual([group["label"] for group in actual_state["groups"]], ["Dataset features", "Model predictions", "SHAP values"])
+                for group in actual_state["groups"]:
+                    option_texts = [option["text"] for option in group["options"] if not option["disabled"]]
+                    self.assertEqual(option_texts, sorted(option_texts, key=str.casefold))
+                weight_options = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll("#denominator option")].map((option) => option.textContent || "")
+                    """
+                )
+                self.assertEqual(weight_options[0], "Average row value")
+                self.assertEqual(weight_options[1:], sorted(weight_options[1:], key=str.casefold))
                 self.assertEqual(actual_state["value"], "SHAP__Age")
                 self.assertEqual(actual_state["selectedSource"], "gbm:browser-smoke-model-2:shap_long")
                 shap_options = next(group for group in actual_state["groups"] if group["label"] == "SHAP values")["options"]
@@ -3889,6 +3901,9 @@ COPY (
                 page.locator("#specsTool:not(.hidden)").click()
                 page.locator("#specificationsWrap:not(.hidden) .spec-tool").wait_for(timeout=10_000)
                 page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertTrue(page.locator("#visualArea").evaluate("node => node.classList.contains('specs-mode')"))
                 self.assertFalse(page.locator("#chartSideControls").is_visible())
                 self.assertFalse(page.locator("#chartControlsResizer").is_visible())
@@ -4603,6 +4618,9 @@ COPY (
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.wait_for_function('() => Boolean(document.querySelector("#datasetViewerStylesheet"))', timeout=10_000)
                 self.assertGreaterEqual(dataset_viewer_requests, 1)
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertFalse(page.locator("#datasetViewerFilter").is_visible())
                 page.wait_for_function(
                     """
