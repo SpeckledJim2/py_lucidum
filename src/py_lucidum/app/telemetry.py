@@ -15,6 +15,7 @@ APP_ACTIONS = {
     ("GET", "/"): "Open app",
     ("GET", "/api/schema"): "Load schema",
     ("POST", "/api/banding/suggestion"): "Band suggestion",
+    ("POST", "/api/filter/row-count"): "Filter row count",
     ("POST", "/api/reload"): "Reload dataset",
     ("POST", "/api/shutdown"): "Stop app",
     ("POST", "/api/lucidum-servers/stop"): "Stop Lucidum server",

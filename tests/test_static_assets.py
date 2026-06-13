@@ -2943,8 +2943,18 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("function syncSidebarAccordion()", js)
         self.assertIn('button.setAttribute("aria-expanded", String(open));', js)
         self.assertIn('el("filterCollapseBtn").addEventListener("click", () => toggleSidebarSection("filter"));', js)
-        self.assertIn("setFilterRowMeta(state.schema.row_count);", js)
+        self.assertIn('api("/api/filter/row-count"', js)
+        self.assertIn("filterRowCountRequestSeq: 0", js)
+        self.assertIn("async function refreshFilterRowCountMeta()", js)
+        self.assertIn('setFilterRowMetaText("updating...");', js)
+        self.assertIn("resetFilterRowMetaToSchema();", js)
         self.assertIn("setFilterRowMeta(data.row_count, data.filtered_row_count);", js)
+        self.assertNotIn("setFilterRowMeta(state.schema.row_count);", js)
+        static_app = Path(__file__).parents[1] / "src" / "py_lucidum" / "static" / "app"
+        for module_name in ("column-profile-tool.js", "line-bar-tool.js", "histogram-tool.js", "uk-map-tool.js"):
+            with self.subTest(module=module_name):
+                module_js = (static_app / module_name).read_text(encoding="utf-8")
+                self.assertNotIn("setFilterRowMeta", module_js)
         self.assertNotIn("filterCollapsed", js)
         self.assertNotIn("function setFilterCollapsed", js)
         self.assertNotIn("filter-collapsed", html + css)

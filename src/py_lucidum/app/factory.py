@@ -200,6 +200,32 @@ def create_app(
         check_token(request)
         return schema_payload()
 
+    @app.post("/api/filter/row-count")
+    async def filter_row_count(request: Request) -> dict[str, Any]:
+        check_token(request)
+        payload = await request.json()
+        dataset = app.state.dataset
+        try:
+            started = time.perf_counter_ns()
+            with dataset.lock:
+                filter_sql = dataset.normalise_filter(payload.get("filter"))
+                row_count = dataset.row_count()
+                filtered_row_count = dataset.filtered_row_count(filter_sql)
+            elapsed_ns = time.perf_counter_ns() - started
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except duckdb.Error as exc:
+            raise HTTPException(status_code=400, detail=duckdb_error_message(exc)) from exc
+        return {
+            "row_count": row_count,
+            "filtered_row_count": filtered_row_count,
+            "filter": filter_sql,
+            "timings": {
+                "duckdb_ns": elapsed_ns,
+                "duckdb_ms": round(elapsed_ns / 1_000_000),
+            },
+        }
+
     @app.post("/api/banding/suggestion")
     def banding_suggestion(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
         check_token(request)

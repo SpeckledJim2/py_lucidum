@@ -4411,6 +4411,12 @@ COPY (
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 self.assertGreaterEqual(dataset_viewer_requests, 1)
                 self.assertFalse(page.locator("#datasetViewerFilter").is_visible())
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "4 rows"
+                    """,
+                    timeout=10_000,
+                )
                 dataset_requests_before_filter = dataset_viewer_requests
                 page.evaluate(
                     """
@@ -4426,12 +4432,70 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "2 / 4 rows"
+                    """,
+                    timeout=10_000,
+                )
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_filter)
+                dataset_requests_before_second_filter = dataset_viewer_requests
+                page.evaluate(
+                    """
+                    () => {
+                        document.querySelector("#filterInput").value = "vehicle_age >= 2";
+                        document.querySelector("#filterApplyBtn").click();
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerCount")?.textContent.includes("3 shown")
+                    """,
+                    timeout=10_000,
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "3 / 4 rows"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertGreater(dataset_viewer_requests, dataset_requests_before_second_filter)
+                page.locator("#lineBarTool").click()
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "3 / 4 rows"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#ukMapTool").click()
+                page.wait_for_function(
+                    """
+                    () => (document.querySelector("#mapGroupMeta")?.textContent || "").includes("matched")
+                      || (document.querySelector("#mapGroupMeta")?.textContent || "").includes("plotted")
+                    """,
+                    timeout=10_000,
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "3 / 4 rows"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTool").click()
+                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 dataset_requests_before_clear = dataset_viewer_requests
                 page.evaluate('() => document.querySelector("#filterClearBtn").click()')
                 page.wait_for_function(
                     """
                     () => document.querySelector("#datasetViewerCount")?.textContent.includes("4 shown")
+                    """,
+                    timeout=10_000,
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "4 rows"
                     """,
                     timeout=10_000,
                 )
@@ -4907,9 +4971,9 @@ COPY (
                 self.assertEqual(page_errors, [])
                 self.assertEqual(profile_requests, 2)
                 self.assertEqual(profile_detail_requests, 3)
-                self.assertEqual(chart_requests, 1)
+                self.assertEqual(chart_requests, 2)
                 self.assertEqual(histogram_requests, 5)
-                self.assertEqual(map_requests, 8)
+                self.assertEqual(map_requests, 9)
             finally:
                 browser.close()
 

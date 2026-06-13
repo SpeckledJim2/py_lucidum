@@ -23,7 +23,6 @@ export function createLineBarTool({
   syncClientTimingFromData,
   setStatus,
   setChartMessage,
-  setFilterRowMeta,
   setGroupMeta,
   applyToolPresentation,
   saveToolPresentation,
@@ -838,7 +837,6 @@ export function createLineBarTool({
     const groupMeta = `${groupCount.toLocaleString()} groups · ${rowMeta}`;
     const warnings = [...(data.warnings || [])].filter(Boolean).join(" ");
     const chartMessage = [warnings, labelMessage].filter(Boolean).join(" ");
-    setFilterRowMeta(data.row_count, data.filtered_row_count);
     setGroupMeta("line_bar", groupMeta);
     setStatus("");
     setChartMessage(chartMessage);

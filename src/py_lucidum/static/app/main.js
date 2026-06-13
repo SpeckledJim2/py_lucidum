@@ -140,6 +140,7 @@
         histogramRequestSeq: 0,
         mapRequestSeq: 0,
         datasetViewerRequestSeq: 0,
+        filterRowCountRequestSeq: 0,
         glmRequestSeq: 0,
         gbmRequestSeq: 0,
       };
@@ -213,7 +214,6 @@
         syncClientTimingFromData,
         setStatus,
         setChartMessage,
-        setFilterRowMeta,
         setGroupMeta,
         saveToolPresentation,
         stableRequestKey,
@@ -244,7 +244,6 @@
         syncClientTimingFromData,
         setStatus,
         setChartMessage,
-        setFilterRowMeta,
         setGroupMeta,
         applyToolPresentation,
         saveToolPresentation,
@@ -281,7 +280,6 @@
         syncClientTimingFromData,
         setStatus,
         setChartMessage,
-        setFilterRowMeta,
         setGroupMeta,
         applyToolPresentation,
         saveToolPresentation,
@@ -308,7 +306,6 @@
         syncClientTimingFromData,
         setStatus,
         setChartMessage,
-        setFilterRowMeta,
         setGroupMeta,
         applyToolPresentation,
         saveToolPresentation,
@@ -578,6 +575,41 @@
       function setFilterRowMeta(rowCount, filteredRowCount = rowCount) {
         const meta = formatRowMeta(rowCount, filteredRowCount);
         if (meta) el("filterRowMeta").textContent = meta;
+      }
+
+      function setFilterRowMetaText(message) {
+        el("filterRowMeta").textContent = message || "";
+      }
+
+      function cancelFilterRowCountRequests() {
+        state.filterRowCountRequestSeq = (state.filterRowCountRequestSeq || 0) + 1;
+      }
+
+      function resetFilterRowMetaToSchema() {
+        cancelFilterRowCountRequests();
+        setFilterRowMeta(state.schema?.row_count || 0);
+      }
+
+      async function refreshFilterRowCountMeta() {
+        const filter = state.activeFilter || "";
+        if (!filter) {
+          resetFilterRowMetaToSchema();
+          return;
+        }
+        const requestSeq = (state.filterRowCountRequestSeq || 0) + 1;
+        state.filterRowCountRequestSeq = requestSeq;
+        setFilterRowMetaText("updating...");
+        try {
+          const data = await api("/api/filter/row-count", {
+            method: "POST",
+            body: JSON.stringify({ filter }),
+          });
+          if (requestSeq !== state.filterRowCountRequestSeq || filter !== (state.activeFilter || "")) return;
+          setFilterRowMeta(data.row_count, data.filtered_row_count);
+        } catch (_) {
+          if (requestSeq !== state.filterRowCountRequestSeq || filter !== (state.activeFilter || "")) return;
+          setFilterRowMetaText("count unavailable");
+        }
       }
 
       function makeBandSteps() {
@@ -1604,7 +1636,7 @@
         const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
         clearToolCaches({ preserve: ["specs"] });
         renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
-        setFilterRowMeta(state.schema.row_count);
+        resetFilterRowMetaToSchema();
         state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
         state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
         state.collapsedKpiGroups = previousCollapsedKpiGroups;
@@ -2009,6 +2041,7 @@
         if (nextFilter === state.activeFilter) {
           syncActiveFilterLabels();
           refreshActiveTool();
+          refreshFilterRowCountMeta();
           return;
         }
         state.activeFilter = nextFilter;
@@ -2016,6 +2049,7 @@
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshActiveTool();
+        refreshFilterRowCountMeta();
       }
 
       function clearFilter() {
@@ -2027,6 +2061,7 @@
         if (state.activeFilter === "") {
           syncActiveFilterLabels();
           refreshActiveTool();
+          refreshFilterRowCountMeta();
           return;
         }
         state.activeFilter = "";
@@ -2034,6 +2069,7 @@
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshActiveTool();
+        refreshFilterRowCountMeta();
       }
 
       function confirmStopApp() {
@@ -2438,7 +2474,7 @@
           renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
           refreshDatasetGlmCount();
           refreshDatasetGbmCount();
-          setFilterRowMeta(state.schema.row_count);
+          resetFilterRowMetaToSchema();
           if (filtersUnchanged) {
             state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
             state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
@@ -2506,7 +2542,7 @@
           const path = state.schema.path.split(/[\\/]/).pop();
           const fileMeta = schemaFileMeta();
           document.title = path ? `lucidum · ${path}` : "lucidum";
-          setFilterRowMeta(state.schema.row_count);
+          resetFilterRowMetaToSchema();
           setStartupProgress("Rendering controls");
           chooseDefaults();
           renderKpis();

@@ -63,6 +63,11 @@ class DatasetViewerToolTests(unittest.TestCase):
         self.assertEqual(status, 200, body.decode("utf-8"))
         return json.loads(body)
 
+    def post_filter_row_count(self, app: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        status, _, body = asgi_post_json(app, "/api/filter/row-count", payload)
+        self.assertEqual(status, 200, body.decode("utf-8"))
+        return json.loads(body)
+
     def test_dataset_viewer_is_first_default_tool(self) -> None:
         self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"])
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
@@ -70,6 +75,7 @@ class DatasetViewerToolTests(unittest.TestCase):
 
         self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"])
         self.assertIn("/api/dataset-viewer/table", paths)
+        self.assertIn("/api/filter/row-count", paths)
 
     def test_table_respects_filter_and_preserves_preview_order(self) -> None:
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
@@ -118,6 +124,30 @@ class DatasetViewerToolTests(unittest.TestCase):
     def test_invalid_filter_returns_bad_request(self) -> None:
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
         status, _, body = asgi_post_json(app, "/api/dataset-viewer/table", {"filter": "MissingColumn > 1", "limit": 1000})
+
+        self.assertEqual(status, 400)
+        self.assertIn("Invalid filter", body.decode("utf-8"))
+
+    def test_filter_row_count_returns_exact_counts_and_timings(self) -> None:
+        app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
+
+        unfiltered = self.post_filter_row_count(app, {"filter": ""})
+        self.assertEqual(unfiltered["row_count"], 4)
+        self.assertEqual(unfiltered["filtered_row_count"], 4)
+        self.assertEqual(unfiltered["filter"], "")
+        self.assertIsInstance(unfiltered["timings"]["duckdb_ns"], int)
+        self.assertGreaterEqual(unfiltered["timings"]["duckdb_ns"], 0)
+        self.assertIsInstance(unfiltered["timings"]["duckdb_ms"], int)
+        self.assertGreaterEqual(unfiltered["timings"]["duckdb_ms"], 0)
+
+        filtered = self.post_filter_row_count(app, {"filter": "Age >= 3"})
+        self.assertEqual(filtered["row_count"], 4)
+        self.assertEqual(filtered["filtered_row_count"], 2)
+        self.assertEqual(filtered["filter"], "Age >= 3")
+
+    def test_filter_row_count_invalid_filter_returns_bad_request(self) -> None:
+        app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
+        status, _, body = asgi_post_json(app, "/api/filter/row-count", {"filter": "MissingColumn > 1"})
 
         self.assertEqual(status, 400)
         self.assertIn("Invalid filter", body.decode("utf-8"))

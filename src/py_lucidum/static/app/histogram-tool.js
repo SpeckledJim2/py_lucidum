@@ -23,7 +23,6 @@ export function createHistogramTool({
   syncClientTimingFromData,
   setStatus,
   setChartMessage,
-  setFilterRowMeta,
   setGroupMeta,
   applyToolPresentation,
   saveToolPresentation,
@@ -103,7 +102,6 @@ export function createHistogramTool({
       : "";
     const groupMeta = `${formatNumber(data.bins)} bins - ${valid} valid${sampled} - ${rowMeta}`;
     const warnings = [...(data.warnings || [])].filter(Boolean).join(" ");
-    setFilterRowMeta(data.row_count, data.filtered_row_count);
     setGroupMeta("histogram", groupMeta);
     setStatus("");
     setChartMessage(warnings);

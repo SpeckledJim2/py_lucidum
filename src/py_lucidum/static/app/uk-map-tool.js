@@ -129,7 +129,6 @@ export function createUkMapTool({
   syncClientTimingFromData,
   setStatus,
   setChartMessage,
-  setFilterRowMeta,
   setGroupMeta,
   applyToolPresentation,
   saveToolPresentation,
@@ -1177,7 +1176,6 @@ export function createUkMapTool({
     renderMapLegend(scale, data.response?.label || "Actual");
     const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
     const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`;
-    setFilterRowMeta(data.row_count, data.filtered_row_count);
     setGroupMeta("uk_map", groupMeta);
     const warnings = [...(data.warnings || [])];
     if (searchWarning) {
@@ -1221,7 +1219,6 @@ export function createUkMapTool({
     const summaryCount = Number(pointSummary.summary_count ?? unitPointCount(data));
     const plottedCount = Number(pointSummary.plotted_count ?? unitPointCount(data));
     const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted · ${rowMeta}`;
-    setFilterRowMeta(data.row_count, data.filtered_row_count);
     setGroupMeta("uk_map", groupMeta);
     const warnings = [...(data.warnings || [])];
     const missingValueCount = Number(pointSummary.missing_value_count || 0);

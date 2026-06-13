@@ -12,7 +12,6 @@ export function createColumnProfileTool({
   syncClientTimingFromData,
   setStatus,
   setChartMessage,
-  setFilterRowMeta,
   setGroupMeta,
   saveToolPresentation,
   stableRequestKey,
@@ -110,7 +109,6 @@ export function createColumnProfileTool({
       : `${columns.length.toLocaleString()} columns`;
     const groupMeta = [columnMeta, skippedMeta, rowMeta].filter(Boolean).join(" · ");
     const chartMessage = "";
-    setFilterRowMeta(data.row_count, data.filtered_row_count);
     setProfileGroupMeta(data, groupMeta);
     setProfileFilterMeta(data, calculationMeta);
     setStatus("");
