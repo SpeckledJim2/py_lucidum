@@ -1005,9 +1005,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
     def test_initial_tool_buttons_match_enabled_tools(self) -> None:
         cases = [
             (None, {"dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"}),
-            (["line-bar"], {"dataset_viewer", "column_profile", "line_bar"}),
-            (["gbm"], {"dataset_viewer", "column_profile", "glm", "gbm"}),
-            (["specs"], {"dataset_viewer", "column_profile", "specs"}),
+            (["line-bar"], {"column_profile", "line_bar"}),
+            (["gbm"], {"column_profile", "glm", "gbm"}),
+            (["specs"], {"column_profile", "specs"}),
+            (["dataset-viewer", "line-bar"], {"dataset_viewer", "column_profile", "line_bar"}),
         ]
         for tools, expected_visible_tools in cases:
             with self.subTest(tools=tools):
@@ -1062,6 +1063,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/vendor/ace/theme-monokai.js")
         app_css = self.assert_no_store("/static/app.css")[1].decode("utf-8")
         for path in self.CSS_MODULE_PATHS:
+            if path == "/static/styles/dataset-viewer.css":
+                continue
             import_path = f'.{path.removeprefix("/static")}'
             self.assertIn(f'@import url("{import_path}");', app_css)
         for path in self.CSS_MODULE_PATHS:
@@ -3620,11 +3623,16 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
     def test_dataset_viewer_tool_static_assets_are_registered(self) -> None:
         _, html_body = self.assert_no_store("/")
         css = self.app_css_contract()
+        app_css = self.assert_no_store("/static/app.css")[1].decode("utf-8")
         html = html_body.decode("utf-8")
         js = self.app_js_contract()
+        main_js = self.assert_no_store("/static/app/main.js")[1].decode("utf-8")
         dataset_js = self.assert_no_store("/static/app/dataset-viewer-tool.js")[1].decode("utf-8")
 
-        self.assertIn('import { createDatasetViewerTool } from "./dataset-viewer-tool.js";', js)
+        self.assertNotIn('import { createDatasetViewerTool } from "./dataset-viewer-tool.js";', main_js)
+        self.assertIn('import("./dataset-viewer-tool.js")', main_js)
+        self.assertNotIn('styles/dataset-viewer.css', app_css)
+        self.assertIn('link.href = "/static/styles/dataset-viewer.css";', dataset_js)
         self.assertIn("export function createDatasetViewerTool", js)
         self.assertIn('dataset_viewer: "Dataset render"', js)
         self.assertIn('tool: "dataset_viewer"', js)

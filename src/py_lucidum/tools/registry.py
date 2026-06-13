@@ -20,7 +20,7 @@ TOOL_MODULES = (
     "py_lucidum.tools.gbm",
     "py_lucidum.tools.specifications",
 )
-MANDATORY_TOOL_IDS = ("dataset_viewer", "column_profile")
+MANDATORY_TOOL_IDS = ("column_profile",)
 MANDATORY_TOOL_ID = MANDATORY_TOOL_IDS[0]
 TOOL_GROUP_ALIASES = {
     "model": ("glm", "gbm"),
@@ -86,6 +86,7 @@ def tool_aliases() -> dict[str, str]:
 
 def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
     aliases = tool_aliases()
+    definitions = tool_definitions()
     if tools is None:
         requested = default_tool_ids()
     elif isinstance(tools, str):
@@ -95,13 +96,12 @@ def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
     if not requested:
         requested = default_tool_ids()
 
-    enabled: list[str] = list(MANDATORY_TOOL_IDS)
+    enabled: set[str] = set(MANDATORY_TOOL_IDS)
 
     def add_tool(tool_id: str) -> None:
         for implied in TOOL_IMPLIED_IDS.get(tool_id, ()):
             add_tool(implied)
-        if tool_id not in enabled:
-            enabled.append(tool_id)
+        enabled.add(tool_id)
 
     for name in requested:
         key = name.lower()
@@ -115,7 +115,11 @@ def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
             supported = ", ".join(sorted([*aliases, *TOOL_GROUP_ALIASES]))
             raise ValueError(f"Unknown tool '{name}'. Supported tools: {supported}")
         add_tool(canonical)
-    return enabled
+    return [
+        definition.id
+        for definition in definitions.values()
+        if definition.id in enabled
+    ]
 
 
 def tool_payload(enabled_tools: Sequence[str]) -> list[dict[str, Any]]:

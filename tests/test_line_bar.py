@@ -375,7 +375,8 @@ COPY (
         self.assertIn("/api/schema", paths)
         self.assertIn("/api/shutdown", paths)
         self.assertIn("/static", paths)
-        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar"])
+        self.assertEqual(app.state.enabled_tools, ["column_profile", "line_bar"])
+        self.assertNotIn("/api/dataset-viewer/table", paths)
         self.assertEqual(app.state.defaults["denominator"], "Weight")
         self.assertEqual(
             app.state.saved_filters,

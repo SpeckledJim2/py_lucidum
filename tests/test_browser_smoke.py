@@ -60,6 +60,24 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_dataset_viewer_is_not_loaded_when_tool_is_disabled(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long\n"
+                "AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1\n"
+                "AL,AL1 1,3,300,30,AL1 1AA,51.8,-0.3\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path, tools=["line-bar"])
+            try:
+                self.exercise_dataset_viewer_disabled(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_picker_click_preserves_scroll_position(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "many_columns.csv"
@@ -2043,7 +2061,8 @@ COPY (
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator("#profileTool.active").wait_for(timeout=10_000)
+                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#gbmSidebarPanel").wait_for(timeout=10_000)
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 assert_sidebar_headers_visible()
@@ -2152,8 +2171,7 @@ COPY (
 
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
-                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
-                page.locator("#profileTool").click()
+                page.locator("#profileTool.active").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(state="attached", timeout=10_000)
@@ -4321,6 +4339,56 @@ COPY (
             finally:
                 browser.close()
 
+    def exercise_dataset_viewer_disabled(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            dataset_viewer_module_requests = 0
+            dataset_viewer_css_requests = 0
+            dataset_viewer_table_requests = 0
+
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+            def count_request(request: object) -> None:
+                nonlocal dataset_viewer_module_requests, dataset_viewer_css_requests, dataset_viewer_table_requests
+                url = request.url
+                if url.endswith("/static/app/dataset-viewer-tool.js"):
+                    dataset_viewer_module_requests += 1
+                elif url.endswith("/static/styles/dataset-viewer.css"):
+                    dataset_viewer_css_requests += 1
+                elif url.endswith("/api/dataset-viewer/table"):
+                    dataset_viewer_table_requests += 1
+
+            page.on("request", count_request)
+
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#profileTool.active").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerTool")?.classList.contains("hidden")
+                    """,
+                    timeout=10_000,
+                )
+                self.assertFalse(page.locator("#datasetViewerTool").is_visible())
+                self.assertEqual(dataset_viewer_module_requests, 0)
+                self.assertEqual(dataset_viewer_css_requests, 0)
+                self.assertEqual(dataset_viewer_table_requests, 0)
+
+                page.locator("#lineBarTool").click()
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.wait_for_timeout(250)
+
+                self.assertEqual(dataset_viewer_module_requests, 0)
+                self.assertEqual(dataset_viewer_css_requests, 0)
+                self.assertEqual(dataset_viewer_table_requests, 0)
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
+
     def exercise_browser(self, base_url: str) -> None:
         assert sync_playwright is not None
         with sync_playwright() as playwright:
@@ -4658,7 +4726,16 @@ COPY (
                 )
                 vehicle_age_row.click(button="right")
                 page.locator("#profileColumnContextMenu:not([hidden])").get_by_text("Copy feature to clipboard").wait_for(timeout=10_000)
-                page.locator("#profileColumnContextMenu [role='menuitem']").click()
+                self.assertTrue(page.evaluate(
+                    """
+                    () => {
+                      const item = document.querySelector("#profileColumnContextMenu:not([hidden]) [role=menuitem]");
+                      if (!item) return false;
+                      item.click();
+                      return true;
+                    }
+                    """
+                ))
                 page.wait_for_function("() => window.__lucidumCopiedText === 'vehicle_age'")
                 page.wait_for_function('() => document.querySelector("#profileColumnContextMenu")?.hidden === true')
                 page.locator("#clipboardToast").get_by_text("Copied vehicle_age to clipboard").wait_for(timeout=10_000)

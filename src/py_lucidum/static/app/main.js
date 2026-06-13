@@ -1,4 +1,3 @@
-      import { createDatasetViewerTool } from "./dataset-viewer-tool.js";
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import { createLineBarTool } from "./line-bar-tool.js";
       import { createHistogramTool } from "./histogram-tool.js";
@@ -182,24 +181,43 @@
         el,
         renderLabels: ACTION_RENDER_LABELS,
       });
-      const datasetViewerTool = createDatasetViewerTool({
-        api,
-        copyTextToClipboard,
-        el,
-        escapeHtml,
-        measureToolRender,
-        saveToolPresentation,
-        setChartMessage,
-        setStatus,
-        setToolTimingFailed,
-        showClipboardToast,
-        stableRequestKey,
-        startToolTiming,
-        state,
-        syncClientTimingFromData,
-        syncDuckDbTimingFromData,
-        toolCache,
-      });
+      let datasetViewerTool = null;
+      let datasetViewerToolPromise = null;
+
+      async function ensureDatasetViewerTool() {
+        if (!toolEnabled("dataset_viewer")) return null;
+        if (datasetViewerTool) return datasetViewerTool;
+        if (!datasetViewerToolPromise) {
+          datasetViewerToolPromise = import("./dataset-viewer-tool.js")
+            .then(({ createDatasetViewerTool }) => {
+              datasetViewerTool = createDatasetViewerTool({
+                api,
+                copyTextToClipboard,
+                el,
+                escapeHtml,
+                measureToolRender,
+                saveToolPresentation,
+                setChartMessage,
+                setStatus,
+                setToolTimingFailed,
+                showClipboardToast,
+                stableRequestKey,
+                startToolTiming,
+                state,
+                syncClientTimingFromData,
+                syncDuckDbTimingFromData,
+                toolCache,
+              });
+              return datasetViewerTool;
+            })
+            .catch((error) => {
+              datasetViewerToolPromise = null;
+              throw error;
+            });
+        }
+        return datasetViewerToolPromise;
+      }
+
       const columnProfileTool = createColumnProfileTool({
         api,
         el,
@@ -810,12 +828,14 @@
         setChartMessage(presentation.chartMessage);
       }
 
-      function toolHandler(tool) {
+      async function toolHandler(tool) {
         if (tool === "dataset_viewer") {
+          const loadedDatasetViewerTool = await ensureDatasetViewerTool();
+          if (!loadedDatasetViewerTool) return null;
           return {
-            buildRequest: () => datasetViewerTool.buildRequest(),
-            fetch: (request, requestKey) => datasetViewerTool.fetchData(request, requestKey),
-            useCached: (cache) => datasetViewerTool.useCached(cache),
+            buildRequest: () => loadedDatasetViewerTool.buildRequest(),
+            fetch: (request, requestKey) => loadedDatasetViewerTool.fetchData(request, requestKey),
+            useCached: (cache) => loadedDatasetViewerTool.useCached(cache),
           };
         }
         if (tool === "column_profile") {
@@ -869,7 +889,8 @@
       }
 
       async function refreshTool(tool, options = {}) {
-        const handler = toolHandler(tool);
+        const handler = await toolHandler(tool);
+        if (!handler) return null;
         const request = handler.buildRequest();
         if (!request) {
           handler.handleMissingRequest?.();
@@ -1138,7 +1159,9 @@
           el("modelToolWrap").classList.add("hidden");
           el("specificationsWrap").classList.add("hidden");
           el("datasetViewerWrap").classList.remove("hidden");
-          requestAnimationFrame(() => datasetViewerTool.resize());
+          ensureDatasetViewerTool().then((loadedDatasetViewerTool) => {
+            requestAnimationFrame(() => loadedDatasetViewerTool?.resize());
+          });
         } else if (tool === "line_bar") {
           el("datasetViewerWrap").classList.add("hidden");
           el("profileWrap").classList.add("hidden");
@@ -1205,7 +1228,11 @@
 
       function resizeActiveTool() {
         if (state.tool === "dataset_viewer") {
-          datasetViewerTool.resize();
+          if (datasetViewerTool) {
+            datasetViewerTool.resize();
+          } else {
+            ensureDatasetViewerTool().then((loadedDatasetViewerTool) => loadedDatasetViewerTool?.resize());
+          }
         } else if (state.tool === "uk_map") {
           ukMapTool.syncViewport({ mode: "preserve" });
         } else if (state.tool === "histogram") {
@@ -2449,7 +2476,7 @@
           document.body.classList.toggle("dark");
           syncThemeButton();
           if (state.tool === "line_bar") lineBarTool.refreshTheme();
-          if (state.tool === "dataset_viewer") datasetViewerTool.refreshTheme();
+          if (state.tool === "dataset_viewer") ensureDatasetViewerTool().then((loadedDatasetViewerTool) => loadedDatasetViewerTool?.refreshTheme());
           if (state.tool === "histogram") histogramTool.refreshTheme();
           if (state.tool === "uk_map") ukMapTool.refreshTheme();
           if (state.tool === "glm") measureToolRender("glm", () => glmTool.refreshTheme());

@@ -2,6 +2,16 @@ import { loadTabulator } from "./shared/tabulator.js";
 
 const TOOL_ID = "dataset_viewer";
 const MAX_ROWS = 1000;
+const STYLESHEET_ID = "datasetViewerStylesheet";
+
+function ensureDatasetViewerStyles() {
+  if (document.getElementById(STYLESHEET_ID)) return;
+  const link = document.createElement("link");
+  link.id = STYLESHEET_ID;
+  link.rel = "stylesheet";
+  link.href = "/static/styles/dataset-viewer.css";
+  document.head.appendChild(link);
+}
 
 export function createDatasetViewerTool({
   api,
@@ -21,6 +31,8 @@ export function createDatasetViewerTool({
   syncDuckDbTimingFromData,
   toolCache,
 }) {
+  ensureDatasetViewerStyles();
+
   let datasetTable = null;
   let renderToken = 0;
   let currentRows = [];

@@ -114,7 +114,7 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
 - `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When `--tools specs` is also enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save; the path line shows the save target and marks new files or suppressed existing files.
-- `--tools` selects enabled tools in addition to Dataset Viewer and Column Profile, which are always enabled. Dataset Viewer opens first. The default user-facing tools are `dataset-viewer`, `column-profile`, `line-bar`, `histogram`, and `uk-map`. Add `glm` after installing the `glm` extra to train GLMs. Add `models` after installing the `glm` and `gbm` extras to enable both modelling tools; requesting `gbm` also enables `glm` so model comparison and tabulation workflows remain available. Add `specs` to edit feature, KPI, and filter spec CSV files from the browser.
+- Without `--tools`, the default user-facing tools are `dataset-viewer`, `column-profile`, `line-bar`, `histogram`, and `uk-map`, with Dataset Viewer opening first. When `--tools` is provided, Column Profile is always included and Dataset Viewer is included only if you request `dataset-viewer`. Add `glm` after installing the `glm` extra to train GLMs. Add `models` after installing the `glm` and `gbm` extras to enable both modelling tools; requesting `gbm` also enables `glm` so model comparison and tabulation workflows remain available. Add `specs` to edit feature, KPI, and filter spec CSV files from the browser.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
 
@@ -224,7 +224,7 @@ When the Specifications tool opens a missing Feature spec, it starts with one ro
 
 ## GLM Models
 
-The GLM tool is opt-in. Dataset Viewer and Column Profile remain enabled, with Dataset Viewer opening first:
+The GLM tool is opt-in. Column Profile remains enabled; include `dataset-viewer` in `--tools` if you also want the raw-row preview:
 
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm
@@ -244,7 +244,7 @@ GLM model manifests include build timing diagnostics for dependency setup, data 
 
 ## GBM Models
 
-The GBM tool is opt-in. Dataset Viewer and Column Profile remain enabled, with Dataset Viewer opening first. Requesting `gbm` also enables the GLM tool so the shared tabulation/comparison workflow is available:
+The GBM tool is opt-in. Column Profile remains enabled, and requesting `gbm` also enables the GLM tool so the shared tabulation/comparison workflow is available. Include `dataset-viewer` in `--tools` if you also want the raw-row preview:
 
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,models
