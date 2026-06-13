@@ -387,6 +387,7 @@
         state,
         canNavigateToLineBarFeature: (featureName) => lineBarTool.canNavigateToFeature(featureName),
         navigateToLineBarFeature: (featureName) => lineBarTool.navigateToFeature(featureName),
+        selectExpectedPredictionForModelKind: (modelKind) => setExpectedPredictionSelectionForModelKind(modelKind),
         syncClientTimingFromData,
         syncDuckDbTimingFromData,
         toolCache,

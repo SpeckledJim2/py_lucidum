@@ -1816,9 +1816,15 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn('divider.className = "gbm-feature-context-menu-divider";', js)
         self.assertIn("canNavigateToLineBarFeature,", js)
         self.assertIn("navigateToLineBarFeature,", js)
+        self.assertIn("selectExpectedPredictionForModelKind = () => false", gbm_js)
+        self.assertGreaterEqual(
+            js.count("selectExpectedPredictionForModelKind: (modelKind) => setExpectedPredictionSelectionForModelKind(modelKind)"),
+            2,
+        )
         self.assertIn("function canNavigateToLineBarFeature(featureName)", js)
         self.assertIn("function navigateToLineBarFeature(featureName)", js)
         self.assertIn("state.bandFeature = null;", js)
+        self.assertIn('selectExpectedPredictionForModelKind("gbm");', js)
         self.assertIn('label: "Go to Line and Bar"', js)
         self.assertIn('label: "Go to SHAP"', js)
         self.assertIn('label: "Go to Stacked SHAP"', js)

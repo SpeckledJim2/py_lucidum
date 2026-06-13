@@ -113,6 +113,7 @@ export function createGbmTool({
   state,
   canNavigateToLineBarFeature,
   navigateToLineBarFeature,
+  selectExpectedPredictionForModelKind = () => false,
   syncClientTimingFromData,
   syncDuckDbTimingFromData,
   toolCache,
@@ -2525,8 +2526,15 @@ export function createGbmTool({
   }
 
   function goToLineBarFeature(name) {
-    if (typeof navigateToLineBarFeature === "function" && navigateToLineBarFeature(name)) return;
-    setGbmNotice(`Feature ${name} is not available in Line and Bar`);
+    const featureName = String(name || "").trim();
+    if (!featureName) return;
+    selectExpectedPredictionForModelKind("gbm");
+    if (typeof navigateToLineBarFeature === "function" && navigateToLineBarFeature(featureName)) {
+      renderExpectedNumerators();
+      updateAxisControls();
+      return;
+    }
+    setGbmNotice(`Feature ${featureName} is not available in Line and Bar`);
   }
 
   function goToGbmShap(names) {

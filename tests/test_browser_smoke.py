@@ -1122,6 +1122,18 @@ COPY (
 ) TO {sql_literal(str(model_dir / "shap_summary.parquet"))} (FORMAT PARQUET)
 """
                     )
+                    if model_id == "browser-smoke-model":
+                        con.execute(
+                            f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 0.11 AS gbm_prediction
+  UNION ALL
+  SELECT 2, 0.21
+  UNION ALL
+  SELECT 3, 0.31
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+                        )
                 finally:
                     con.close()
             store.activate_model("browser-smoke-model")
@@ -5467,9 +5479,14 @@ COPY (
                 self.assertEqual(monotonicity_context_labels, ["Clear all monotonicities"])
                 page.keyboard.press("Escape")
                 page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
-                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to Line and Bar").click()
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_context_chart_info:
+                    page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to Line and Bar").click()
+                gbm_context_chart_body = json.loads(gbm_context_chart_info.value.post_data or "{}")
                 page.locator("#lineBarTool.active").wait_for(timeout=10_000)
                 page.locator("#featureList .feature.active", has_text="Age").wait_for(timeout=10_000)
+                self.assertEqual(gbm_context_chart_body["x"], "Age")
+                self.assertEqual(gbm_context_chart_body["responses"][1]["numerator"], "gbm_prediction")
+                self.assertEqual(gbm_context_chart_body["responses"][1]["source"], "gbm:browser-smoke-model:predictions")
                 page.locator("#gbmTool").click()
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
                 page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
