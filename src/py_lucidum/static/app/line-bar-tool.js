@@ -1,6 +1,13 @@
 import { loadTabulator } from "./shared/tabulator.js";
 
-const LINE_BAR_SPECIAL_COLUMN_NAMES = ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"];
+const LINE_BAR_SPECIAL_COLUMN_NAMES = [
+  "glm_prediction",
+  "gbm_prediction",
+  "glm_prediction_rate",
+  "gbm_prediction_rate",
+  "glm_tabulated_prediction",
+  "gbm_tabulated_prediction",
+];
 
 export function createLineBarTool({
   api,

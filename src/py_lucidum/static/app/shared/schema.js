@@ -32,7 +32,7 @@ export function isModelTool(tool) {
 }
 
 export function isModelPredictionColumn(column) {
-  return ["gbm_prediction", "gbm_prediction_rate", "glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"].includes(String(column?.name || ""));
+  return ["gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction", "glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"].includes(String(column?.name || ""));
 }
 
 export function preferredStartupSource(availableSources, requestedSource) {

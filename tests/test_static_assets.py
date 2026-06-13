@@ -224,7 +224,7 @@ const schema = {{
   tools: [{{ id: "line_bar" }}],
   data_sources: [
     {{ id: "dataset", columns: [{{ name: "Actual", kind: "numeric" }}] }},
-    {{ id: "gbm:one:predictions", kind: "gbm_predictions", active: true, columns: [{{ name: "gbm_prediction", kind: "numeric" }}, {{ name: "gbm_prediction_rate", kind: "numeric" }}] }},
+    {{ id: "gbm:one:predictions", kind: "gbm_predictions", active: true, columns: [{{ name: "gbm_prediction", kind: "numeric" }}, {{ name: "gbm_prediction_rate", kind: "numeric" }}, {{ name: "gbm_tabulated_prediction", kind: "numeric" }}] }},
     {{ id: "glm:one:predictions", kind: "glm_predictions", active: true, columns: [{{ name: "glm_prediction", kind: "numeric" }}, {{ name: "glm_prediction_rate", kind: "numeric" }}, {{ name: "glm_tabulated_prediction", kind: "numeric" }}] }},
   ],
 }};
@@ -233,7 +233,7 @@ if (!dataSourceHasColumn(schema, "gbm:one:predictions", "gbm_prediction")) throw
 if (sourceColumns(schema, "dataset").length !== 1) throw new Error("sourceColumns failed");
 if (!toolEnabled(schema, "line_bar")) throw new Error("toolEnabled failed");
 if (!isModelTool("gbm") || !isModelTool("glm") || isModelTool("line_bar")) throw new Error("isModelTool failed");
-if (!isModelPredictionColumn({{ name: "gbm_prediction" }}) || !isModelPredictionColumn({{ name: "gbm_prediction_rate" }}) || !isModelPredictionColumn({{ name: "glm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction_rate" }}) || !isModelPredictionColumn({{ name: "glm_tabulated_prediction" }})) throw new Error("isModelPredictionColumn failed");
+if (!isModelPredictionColumn({{ name: "gbm_prediction" }}) || !isModelPredictionColumn({{ name: "gbm_prediction_rate" }}) || !isModelPredictionColumn({{ name: "gbm_tabulated_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction_rate" }}) || !isModelPredictionColumn({{ name: "glm_tabulated_prediction" }})) throw new Error("isModelPredictionColumn failed");
 if (preferredStartupSource(schema.data_sources, "missing") !== "gbm:one:predictions") throw new Error("preferredStartupSource failed");
 schema.data_sources[1].active = false;
 if (preferredStartupSource(schema.data_sources, "missing") !== "glm:one:predictions") throw new Error("preferredStartupSource GLM fallback failed");
@@ -2250,7 +2250,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("training_mode: source.training_mode", js)
         self.assertIn("function sourceColumns()", js)
         self.assertIn("function isModelPredictionColumn(column)", js)
-        self.assertIn('return ["gbm_prediction", "gbm_prediction_rate", "glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"].includes(String(column?.name || ""));', js)
+        self.assertIn('return ["gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction", "glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"].includes(String(column?.name || ""));', js)
         self.assertIn("function expectedColumns()", js)
         self.assertIn("function expectedPredictionColumns()", js)
         self.assertIn("option.dataset.sourceId = col.source_id || state.source || \"dataset\";", js)
@@ -2270,7 +2270,9 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("return sortedMetricColumns(numericColumns().map((column) => ({ ...column, label: column.name })));", js)
         self.assertIn("for (const col of sortedDenominatorColumns())", js)
         self.assertIn('select.append(new Option("Average row value", "__none__"));', js)
-        self.assertIn('const LINE_BAR_SPECIAL_COLUMN_NAMES = ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"];', js)
+        self.assertIn('const LINE_BAR_SPECIAL_COLUMN_NAMES = [', js)
+        self.assertIn('"glm_tabulated_prediction",', js)
+        self.assertIn('"gbm_tabulated_prediction",', js)
         self.assertIn("function isLineBarSpecialColumn(column)", js)
         self.assertIn("function orderedLineBarSpecialColumns(columns)", js)
         self.assertIn("function lineBarSpecialColumnOrder(column)", js)

@@ -19,7 +19,7 @@ import duckdb
 import uvicorn
 
 from py_lucidum.app import create_app
-from py_lucidum.core import Dataset, sql_literal
+from py_lucidum.core import Dataset, quote_ident, sql_literal
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import build_tabulations
@@ -1185,6 +1185,11 @@ COPY (
                 [0.41, 0.51, 0.61],
             )
             self.write_gbm_tabulation_artifacts(store, "browser-smoke-model-2", offset=0.4, blocked=True)
+            self.write_tabulated_prediction_sidecar(
+                store.artifact_path("browser-smoke-model-2", "tabulated_predictions"),
+                "gbm_tabulated_prediction",
+                [0.42, 0.52, 0.62],
+            )
             store.activate_model("browser-smoke-model")
             glm_store = GlmModelStore(data_path)
             self.write_glm_prediction_model(
@@ -1200,6 +1205,11 @@ COPY (
                 regularization={"mode": "none"},
             )
             self.write_glm_tabulation_artifacts(glm_store, "browser-smoke-glm", include_segment=True, offset=0.0)
+            self.write_tabulated_prediction_sidecar(
+                glm_store.artifact_path("browser-smoke-glm", "tabulated_predictions"),
+                "glm_tabulated_prediction",
+                [0.16, 0.26, 0.36],
+            )
             self.write_glm_prediction_model(
                 glm_store,
                 "browser-smoke-glm-2",
@@ -1486,6 +1496,24 @@ COPY (
             thread.join(timeout=5)
             raise RuntimeError("Uvicorn did not start for browser smoke test")
         return f"http://127.0.0.1:{port}", server, thread
+
+    @staticmethod
+    def write_tabulated_prediction_sidecar(path: Path, column_name: str, values: list[float]) -> None:
+        rows = "\n  UNION ALL\n  ".join(
+            f"SELECT {index + 1} AS __lucidum_row_id, {float(value)} AS {quote_ident(column_name)}"
+            for index, value in enumerate(values)
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  {rows}
+) TO {sql_literal(str(path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
 
     @staticmethod
     def write_gbm_prediction_model(
@@ -2547,14 +2575,15 @@ COPY (
                     """
                 )
                 self.assertEqual(
-                    [row["value"] for row in expected_pinned_state["pinned"][:5]],
-                    ["", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"],
+                    [row["value"] for row in expected_pinned_state["pinned"][:7]],
+                    ["", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"],
                 )
                 self.assertEqual(expected_pinned_state["pinned"][0]["text"], "No expected lineoff")
                 self.assertEqual(expected_pinned_state["noneFontWeight"], "400")
                 self.assertEqual(expected_pinned_state["noneKindFontWeight"], "400")
                 self.assertEqual(expected_pinned_state["noneTextTransform"], "none")
-                self.assertNotIn("glm_tabulated_prediction", [row["value"] for row in expected_pinned_state["pinned"]])
+                self.assertIn("glm_tabulated_prediction", [row["value"] for row in expected_pinned_state["pinned"]])
+                self.assertIn("gbm_tabulated_prediction", [row["value"] for row in expected_pinned_state["pinned"]])
                 self.assertTrue(expected_pinned_state["specialBackground"])
                 page.locator('.segmented[data-control="expectedSort"] button[data-value="alpha"]').click()
                 expected_alpha_state = page.evaluate(
@@ -2568,8 +2597,8 @@ COPY (
                     """
                 )
                 self.assertEqual(
-                    expected_alpha_state["pinned"][:5],
-                    ["", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"],
+                    expected_alpha_state["pinned"][:7],
+                    ["", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"],
                 )
                 self.assertEqual(expected_alpha_state["scroll"], sorted(expected_alpha_state["scroll"], key=str.casefold))
                 page.locator('.segmented[data-control="expectedSort"] button[data-value="original"]').click()
@@ -2629,9 +2658,10 @@ COPY (
                 )
                 self.assertEqual(
                     feature_pinned_state["pinned"],
-                    ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"],
+                    ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"],
                 )
-                self.assertNotIn("glm_tabulated_prediction", feature_pinned_state["pinned"])
+                self.assertIn("glm_tabulated_prediction", feature_pinned_state["pinned"])
+                self.assertIn("gbm_tabulated_prediction", feature_pinned_state["pinned"])
                 self.assertGreater(feature_pinned_state["scrollTop"], 0)
                 self.assertEqual(feature_pinned_state["pinnedTopBefore"], feature_pinned_state["pinnedTopAfter"])
                 self.assertEqual(feature_pinned_state["rootScrollTop"], 0)
@@ -2662,7 +2692,7 @@ COPY (
                       split: document.querySelector("#featureList")?.classList.contains("line-bar-split-list"),
                       specialValues: [...document.querySelectorAll("#featureList .feature")]
                         .map((button) => button.dataset.value || "")
-                        .filter((value) => ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate"].includes(value)),
+                        .filter((value) => ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"].includes(value)),
                     })
                     """
                 )
