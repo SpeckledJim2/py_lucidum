@@ -120,7 +120,6 @@ export function createUkMapTool({
   escapeHtml,
   formatNumber,
   formatLineValue,
-  formatWeightValue,
   formatRowMeta,
   measureToolRender,
   startToolTiming,
@@ -134,7 +133,6 @@ export function createUkMapTool({
   saveToolPresentation,
   toolCache,
   syncActiveFilterLabels,
-  renderMetricTitle,
   columnExists,
   numericColumnExists,
   refreshUkMap,
@@ -250,7 +248,6 @@ export function createUkMapTool({
       cache.data = data;
       syncDuckDbTimingFromData("uk_map", data);
       syncClientTimingFromData("uk_map", data);
-      updateMapMetricTitles(data);
       renderMap(data, geoJson);
       return data;
     } catch (error) {
@@ -264,7 +261,6 @@ export function createUkMapTool({
 
   async function useCachedMapData(cache) {
     state.lastMapData = cache.data;
-    updateMapMetricTitles(cache.data);
     syncFloatingMapControl();
     applyToolPresentation("uk_map");
     const geoJson = state.mapGeoJsonCache[cache.data.level];
@@ -1249,11 +1245,6 @@ export function createUkMapTool({
     setChartMessage(chartMessage);
     saveToolPresentation("uk_map", { groupMeta, chartMessage });
     scheduleMapViewportSync({ mode: "preserve" });
-  }
-
-  function updateMapMetricTitles(data) {
-    renderMetricTitle(el("actualMetricTitle"), "Actual", data.response?.value);
-    renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
   }
 
   function mapLabelFontSize(value = state.mapLabelSize) {

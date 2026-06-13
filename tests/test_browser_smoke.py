@@ -7945,8 +7945,24 @@ COPY (
                     rate_heading.click()
                 rate_row.click()
                 page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
+                page.locator("#weightMetricTitle").get_by_text("3").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#actualNumerator").input_value(), "rate")
                 self.assertEqual(rate_row.get_attribute("aria-selected"), "true")
+
+                page.locator("#profileTool").click()
+                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
+                page.locator("#weightMetricTitle").get_by_text("3").wait_for(timeout=10_000)
+
+                page.locator("#datasetViewerTool").click()
+                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
+                page.locator("#weightMetricTitle").get_by_text("3").wait_for(timeout=10_000)
+
+                page.locator("#specsTool").click()
+                page.locator("#specificationsWrap:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
+                page.locator("#weightMetricTitle").get_by_text("3").wait_for(timeout=10_000)
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)

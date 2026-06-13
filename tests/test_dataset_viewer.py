@@ -68,6 +68,11 @@ class DatasetViewerToolTests(unittest.TestCase):
         self.assertEqual(status, 200, body.decode("utf-8"))
         return json.loads(body)
 
+    def post_metric_summary(self, app: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        status, _, body = asgi_post_json(app, "/api/metrics/summary", payload)
+        self.assertEqual(status, 200, body.decode("utf-8"))
+        return json.loads(body)
+
     def test_dataset_viewer_is_first_default_tool(self) -> None:
         self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
         self.assertEqual(normalise_tools("line-bar"), ["line_bar"])
@@ -79,6 +84,7 @@ class DatasetViewerToolTests(unittest.TestCase):
         self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
         self.assertIn("/api/dataset-viewer/table", paths)
         self.assertIn("/api/filter/row-count", paths)
+        self.assertIn("/api/metrics/summary", paths)
 
     def test_dataset_viewer_route_is_not_registered_when_tool_is_disabled(self) -> None:
         app = create_app(self.data_path, token="", tools=["line-bar"], use_saved_filters=False, use_kpis=False)
@@ -87,8 +93,56 @@ class DatasetViewerToolTests(unittest.TestCase):
         self.assertEqual(app.state.enabled_tools, ["line_bar"])
         self.assertNotIn("/api/dataset-viewer/table", paths)
         self.assertIn("/api/filter/row-count", paths)
+        self.assertIn("/api/metrics/summary", paths)
         status, _, _ = asgi_post_json(app, "/api/dataset-viewer/table", {"filter": "", "limit": 1000})
         self.assertEqual(status, 404)
+
+    def test_metric_summary_route_returns_filtered_values(self) -> None:
+        app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
+
+        data = self.post_metric_summary(app, {"actual": "Score", "denominator": "__none__", "filter": "Age >= 3"})
+
+        self.assertEqual(data["source"], "dataset")
+        self.assertEqual(data["row_count"], 4)
+        self.assertEqual(data["filtered_row_count"], 2)
+        self.assertAlmostEqual(data["response_summaries"][0]["value"], 35.125)
+        self.assertAlmostEqual(data["response_summaries"][0]["numerator"], 70.25)
+        self.assertEqual(data["response_summaries"][0]["denominator"], 2)
+        self.assertEqual(data["denominator"]["column"], None)
+        self.assertEqual(data["denominator"]["value"], 2)
+
+    def test_metric_summary_route_uses_selected_weight(self) -> None:
+        app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
+
+        data = self.post_metric_summary(app, {"actual": "Score", "denominator": "Age", "filter": "Age >= 3"})
+
+        self.assertEqual(data["denominator"]["column"], "Age")
+        self.assertEqual(data["denominator"]["value"], 7)
+        self.assertAlmostEqual(data["response_summaries"][0]["value"], 70.25 / 7)
+        self.assertEqual(data["warnings"], [])
+
+    def test_metric_summary_route_validates_inputs(self) -> None:
+        app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/metrics/summary", {"actual": "Segment", "denominator": "__none__"})
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["detail"], "Choose a valid numeric Actual column")
+
+        status, _, body = asgi_post_json(app, "/api/metrics/summary", {"actual": "Score", "denominator": "Segment"})
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["detail"], "Choose a valid numeric Weight column")
+
+        status, _, _ = asgi_post_json(app, "/api/metrics/summary", {"actual": "Score", "denominator": "__none__", "filter": "Missing > 1"})
+        self.assertEqual(status, 400)
+
+    def test_metric_summary_route_is_registered_without_chart_tools(self) -> None:
+        app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False, use_features=False)
+        paths = {route.path for route in app.routes}
+
+        self.assertIn("/api/metrics/summary", paths)
+        self.assertNotIn("/api/chart", paths)
+        data = self.post_metric_summary(app, {"actual": "Score", "denominator": "__none__", "filter": ""})
+        self.assertAlmostEqual(data["response_summaries"][0]["value"], (10.5 + 30.25 + 40) / 3)
 
     def test_table_respects_filter_and_preserves_preview_order(self) -> None:
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)

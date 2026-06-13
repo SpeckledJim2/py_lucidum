@@ -57,6 +57,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `GET /api/schema`
   - `POST /api/dataset-viewer/table`
   - `POST /api/banding/suggestion`
+  - `POST /api/metrics/summary`
   - `GET /api/health`
   - `GET /api/lucidum-servers`
   - `POST /api/reload`
@@ -127,7 +128,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - KPI specs load from an explicit `--kpis` path, otherwise `./kpi_spec.csv`, otherwise `./specs/kpi_spec.csv`.
 - KPI spec CSV files must have exactly `group,name,actual,denominator,decimals,format` columns. `denominator` aliases `N`, `Average row value`, empty, and `__none__` all mean average row value; `format` is `number`, `currency`, or `percent`. Percent formatting displays proportions as percentages, so `0.1` displays as `10%`.
 - KPI rows are a single-selection convenience layer over Actual and Weight. Manual Actual/Weight changes keep the KPI row active only when both selects exactly match a spec row.
-- The sidebar Actual and Weight controls remain visible for every active tool while the sidebar is expanded. Only tools that compute metric summaries should add summary values to their control titles; other tools should show the plain labels.
+- The sidebar Actual and Weight controls remain visible for every active tool while the sidebar is expanded. Their summary values are owned by the shared app shell, update from the selected source/Actual/Weight and active filter, and must not depend on which tool is active.
 - KPI decimals and format apply to Actual and Expected response values in metric titles, line/bar labels and response axes, table response cells, map labels/tooltips/popups, and map legend values. Weight and row-count formatting is unchanged.
 - Feature specs load from an explicit `--features` path, otherwise `./feature_spec.csv`, otherwise `./specs/feature_spec.csv`.
 - Feature spec CSV files must start with `Feature,Grouping`. Reserved metadata columns immediately after `Grouping` are `Base`, `min`, `max`, and `banding`; scenario columns start after the contiguous reserved metadata block. Older specs without these metadata columns remain valid and treat every column after `Grouping` as an ordered GBM scenario name. Scenario cells include the feature when they contain the word `feature`, case-insensitive.

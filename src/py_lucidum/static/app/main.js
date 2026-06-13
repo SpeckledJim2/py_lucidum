@@ -140,6 +140,9 @@
         mapRequestSeq: 0,
         datasetViewerRequestSeq: 0,
         filterRowCountRequestSeq: 0,
+        metricSummaryRequestSeq: 0,
+        metricSummaryRequestKey: null,
+        metricSummaryData: null,
         glmRequestSeq: 0,
         gbmRequestSeq: 0,
       };
@@ -252,7 +255,6 @@
         formatChartLabel,
         formatLineLabel,
         formatLineValue,
-        formatWeightValue,
         formatXLabel,
         formatRowMeta,
         measureToolRender,
@@ -302,7 +304,6 @@
         applyToolPresentation,
         saveToolPresentation,
         toolCache,
-        renderMetricTitle,
         getCss,
         refreshActiveTool,
       });
@@ -315,7 +316,6 @@
         escapeHtml,
         formatNumber,
         formatLineValue,
-        formatWeightValue,
         formatRowMeta,
         measureToolRender,
         startToolTiming,
@@ -329,7 +329,6 @@
         saveToolPresentation,
         toolCache,
         syncActiveFilterLabels,
-        renderMetricTitle,
         columnExists,
         numericColumnExists,
         refreshUkMap,
@@ -824,6 +823,67 @@
         return JSON.stringify(normaliseForRequestKey(request));
       }
 
+      function metricSummaryRequest() {
+        const actual = el("actualNumerator")?.value || "";
+        if (!state.schema || !actual) return null;
+        return {
+          source: state.source || "dataset",
+          actual,
+          denominator: el("denominator")?.value || "__none__",
+          filter: state.activeFilter || "",
+        };
+      }
+
+      function resetMetricSummaryTitles() {
+        renderMetricTitle(el("actualMetricTitle"), "Actual");
+        renderMetricTitle(el("weightMetricTitle"), "Weight", null, formatWeightValue);
+      }
+
+      function renderMetricSummary(data) {
+        const summaries = Array.isArray(data?.response_summaries) ? data.response_summaries : [];
+        renderMetricTitle(el("actualMetricTitle"), "Actual", summaries[0]?.value);
+        renderMetricTitle(el("weightMetricTitle"), "Weight", data?.denominator?.value, formatWeightValue);
+      }
+
+      async function refreshMetricSummary(options = {}) {
+        const request = metricSummaryRequest();
+        if (!request) {
+          state.metricSummaryRequestSeq = (state.metricSummaryRequestSeq || 0) + 1;
+          state.metricSummaryRequestKey = null;
+          state.metricSummaryData = null;
+          resetMetricSummaryTitles();
+          return null;
+        }
+        const requestKey = stableRequestKey(request);
+        if (!options.force && state.metricSummaryData && state.metricSummaryRequestKey === requestKey) {
+          renderMetricSummary(state.metricSummaryData);
+          return state.metricSummaryData;
+        }
+        const requestSeq = (state.metricSummaryRequestSeq || 0) + 1;
+        state.metricSummaryRequestSeq = requestSeq;
+        try {
+          const data = await api("/api/metrics/summary", {
+            method: "POST",
+            body: JSON.stringify(request),
+          });
+          const latestRequest = metricSummaryRequest();
+          const latestRequestKey = latestRequest ? stableRequestKey(latestRequest) : null;
+          if (requestSeq !== state.metricSummaryRequestSeq || latestRequestKey !== requestKey) return null;
+          state.metricSummaryRequestKey = requestKey;
+          state.metricSummaryData = data;
+          renderMetricSummary(data);
+          return data;
+        } catch (_) {
+          const latestRequest = metricSummaryRequest();
+          const latestRequestKey = latestRequest ? stableRequestKey(latestRequest) : null;
+          if (requestSeq !== state.metricSummaryRequestSeq || latestRequestKey !== requestKey) return null;
+          state.metricSummaryRequestKey = null;
+          state.metricSummaryData = null;
+          resetMetricSummaryTitles();
+          return null;
+        }
+      }
+
       function saveToolPresentation(tool, presentation) {
         toolCache(tool).presentation = {
           groupMeta: presentation.groupMeta || "",
@@ -933,10 +993,6 @@
 
       function toolUsesMetricControls(tool = state.tool) {
         return ["line_bar", "histogram", "uk_map", "glm", "gbm"].includes(tool);
-      }
-
-      function toolRendersMetricSummaries(tool = state.tool) {
-        return ["line_bar", "histogram", "uk_map"].includes(tool);
       }
 
       function refreshActiveToolForMetricChange() {
@@ -1139,10 +1195,6 @@
         el("glmTool").classList.toggle("active", tool === "glm");
         el("gbmTool").classList.toggle("active", tool === "gbm");
         el("specsTool").classList.toggle("active", tool === "specs");
-        if (!toolRendersMetricSummaries(tool)) {
-          renderMetricTitle(el("actualMetricTitle"), "Actual");
-          renderMetricTitle(el("weightMetricTitle"), "Weight", null, formatWeightValue);
-        }
         glmTool.syncSidebarFromSchema();
         gbmTool.syncSidebarFromSchema();
         syncSidebarAccordion();
@@ -1639,6 +1691,7 @@
           expectedSource: targetSource,
           expectedIsPrediction: true,
         });
+        refreshMetricSummary();
         return true;
       }
 
@@ -1707,6 +1760,7 @@
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
+        await refreshMetricSummary({ force: true });
       }
 
       async function reloadSchemaAfterSpecsSave() {
@@ -1734,6 +1788,7 @@
         lineBarTool.updateAxisControls();
         glmTool.syncSidebarFromSchema();
         gbmTool.syncSidebarFromSchema();
+        await refreshMetricSummary({ force: true });
       }
 
       function requestedDefault(name) {
@@ -1885,6 +1940,7 @@
         denominator.value = nextDenominator;
         setActiveKpiState(kpi);
         renderKpis();
+        refreshMetricSummary();
         if (changed) {
           refreshActiveToolForMetricChange();
         }
@@ -2124,6 +2180,7 @@
         const nextFilter = el("filterInput").value.trim();
         if (nextFilter === state.activeFilter) {
           syncActiveFilterLabels();
+          refreshMetricSummary();
           refreshActiveTool();
           refreshFilterRowCountMeta();
           return;
@@ -2132,6 +2189,7 @@
         columnProfileTool.resetSummaryMode();
         clearProfileDetailCache();
         syncActiveFilterLabels();
+        refreshMetricSummary();
         refreshActiveTool();
         refreshFilterRowCountMeta();
       }
@@ -2144,6 +2202,7 @@
         });
         if (state.activeFilter === "") {
           syncActiveFilterLabels();
+          refreshMetricSummary();
           refreshActiveTool();
           refreshFilterRowCountMeta();
           return;
@@ -2152,6 +2211,7 @@
         columnProfileTool.resetSummaryMode();
         clearProfileDetailCache();
         syncActiveFilterLabels();
+        refreshMetricSummary();
         refreshActiveTool();
         refreshFilterRowCountMeta();
       }
@@ -2499,10 +2559,12 @@
             syncControlsForSourceChange({ actualValue, actualSource });
           }
           syncKpiSelectionFromMetrics();
+          refreshMetricSummary();
           refreshActiveToolForMetricChange();
         });
         el("denominator").addEventListener("change", () => {
           syncKpiSelectionFromMetrics();
+          refreshMetricSummary();
           refreshActiveToolForMetricChange();
         });
         el("filterApplyBtn").addEventListener("click", applyFilter);
@@ -2579,6 +2641,7 @@
           lineBarTool.updateAxisControls();
           setTool(state.tool, false);
           setSidebarVisible(previousSidebarVisible);
+          await refreshMetricSummary({ force: true });
           refreshActiveTool({ force: true });
         });
         window.addEventListener("resize", () => {
@@ -2641,6 +2704,7 @@
           lineBarTool.updateAxisControls();
           setTool(state.tool, false);
           setStartupProgress("Loading initial dataset");
+          await refreshMetricSummary({ force: true });
           await refreshActiveTool({ force: true });
           setStartupProgress("Ready", "ready");
           startServerHeartbeat();

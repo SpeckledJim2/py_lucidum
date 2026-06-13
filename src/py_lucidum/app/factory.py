@@ -15,13 +15,19 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from py_lucidum.core import (
     Dataset,
+    denominator_warnings,
     duckdb_error_message,
+    is_numeric_kind,
+    json_number,
     load_features,
     load_kpis,
     load_saved_filters,
+    normalise_denominator,
+    response_summary,
     resolve_features_path,
     resolve_filters_path,
     resolve_kpis_path,
+    summarize_denominator,
 )
 from py_lucidum.tools.registry import normalise_tools, register_tools, tool_payload
 
@@ -220,6 +226,55 @@ def create_app(
             "row_count": row_count,
             "filtered_row_count": filtered_row_count,
             "filter": filter_sql,
+            "timings": {
+                "duckdb_ns": elapsed_ns,
+                "duckdb_ms": round(elapsed_ns / 1_000_000),
+            },
+        }
+
+    @app.post("/api/metrics/summary")
+    async def metric_summary(request: Request) -> dict[str, Any]:
+        check_token(request)
+        payload = await request.json()
+        dataset = app.state.dataset
+        try:
+            started = time.perf_counter_ns()
+            with dataset.lock:
+                source_id = dataset.normalise_source(payload.get("source"))
+                columns = dataset.column_map_for_source(source_id)
+                actual = str(payload.get("actual") or "").strip()
+                if actual not in columns or not is_numeric_kind(columns[actual].kind):
+                    raise ValueError("Choose a valid numeric Actual column")
+                denominator = normalise_denominator(payload.get("denominator", payload.get("weight")), columns)
+                filter_sql = dataset.normalise_filter(payload.get("filter"), source_id=source_id)
+                responses = [{"label": actual, "numerator": actual}]
+                row_count = dataset.row_count_for_source(source_id)
+                filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
+                denominator_summary = summarize_denominator(dataset, responses, denominator, filter_sql, source_id=source_id)
+                response_summaries = response_summary(dataset, responses, denominator, filter_sql, source_id=source_id)
+            elapsed_ns = time.perf_counter_ns() - started
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except duckdb.Error as exc:
+            raise HTTPException(status_code=400, detail=duckdb_error_message(exc)) from exc
+        return {
+            "source": source_id,
+            "actual": {"column": actual, "label": actual},
+            "denominator": {
+                "column": denominator["column"],
+                "label": denominator["label"],
+                "bar_label": denominator["bar_label"],
+                "value": json_number(denominator_summary.get("value")),
+                "missing_response_rows": json_number(denominator_summary.get("missing_response_rows")),
+                "missing_weight_rows": json_number(denominator_summary.get("missing_weight_rows")),
+                "zero_weight_rows": json_number(denominator_summary.get("zero_weight_rows")),
+                "negative_weight_rows": json_number(denominator_summary.get("negative_weight_rows")),
+            },
+            "response_summaries": response_summaries,
+            "row_count": row_count,
+            "filtered_row_count": filtered_row_count,
+            "filter": filter_sql,
+            "warnings": denominator_warnings(denominator, denominator_summary),
             "timings": {
                 "duckdb_ns": elapsed_ns,
                 "duckdb_ms": round(elapsed_ns / 1_000_000),

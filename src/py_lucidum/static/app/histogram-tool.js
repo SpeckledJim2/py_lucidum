@@ -27,7 +27,6 @@ export function createHistogramTool({
   applyToolPresentation,
   saveToolPresentation,
   toolCache,
-  renderMetricTitle,
   getCss,
   refreshActiveTool,
 }) {
@@ -92,7 +91,6 @@ export function createHistogramTool({
 
   function renderHistogramData(data) {
     state.lastHistogramData = data;
-    updateMetricTitles(data);
     renderChart(data);
     renderStatsTable(data);
     const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
@@ -115,19 +113,12 @@ export function createHistogramTool({
       return;
     }
     measureToolRender("histogram", () => {
-      updateMetricTitles(cache.data);
       applyToolPresentation("histogram");
       requestAnimationFrame(() => {
         chart.resize();
         statsTable?.redraw?.(true);
       });
     });
-  }
-
-  function updateMetricTitles(data) {
-    const meanRow = (data.stats || []).find((row) => row.statistic === "Mean");
-    renderMetricTitle(el("actualMetricTitle"), "Actual", meanRow?.value);
-    renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
   }
 
   function renderStatsTable(data) {

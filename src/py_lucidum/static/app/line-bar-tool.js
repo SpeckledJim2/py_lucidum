@@ -20,7 +20,6 @@ export function createLineBarTool({
   formatChartLabel,
   formatLineLabel,
   formatLineValue,
-  formatWeightValue,
   formatXLabel,
   formatRowMeta,
   measureToolRender,
@@ -1218,9 +1217,7 @@ export function createLineBarTool({
 
   function updateMetricTitles(data) {
     const summaries = data.response_summaries || [];
-    renderMetricTitle(el("actualMetricTitle"), "Actual", summaries[0]?.value);
     renderMetricTitle(el("expectedMetricTitle"), "Expected", summaries[1]?.value);
-    renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
   }
 
   function formatResponseLabel(params) {
