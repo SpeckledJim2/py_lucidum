@@ -4584,6 +4584,24 @@ COPY (
                     timeout=10_000,
                 )
 
+            def unit_point_alpha_pixels() -> int:
+                return page.evaluate(
+                    """
+                    () => {
+                        const canvas = document.querySelector("#ukMap .leaflet-unit-point-layer");
+                        if (!canvas || canvas.width <= 0 || canvas.height <= 0) return 0;
+                        const context = canvas.getContext("2d");
+                        if (!context) return 0;
+                        const imageData = context.getImageData(0, 0, canvas.width, canvas.height).data;
+                        let pixels = 0;
+                        for (let index = 3; index < imageData.length; index += 4) {
+                            if (imageData[index] > 0) pixels += 1;
+                        }
+                        return pixels;
+                    }
+                    """
+                )
+
             def assert_dataset_viewer_hidden() -> None:
                 page.wait_for_function(
                     """
@@ -4972,8 +4990,87 @@ COPY (
                 page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')")
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="area"]').is_checked())
+                self.assertEqual(page.locator("#mapLineWeightLabel").text_content().strip(), "Line width")
+                self.assertEqual(page.locator("#mapHotspots").get_attribute("min"), "-9")
+                self.assertEqual(page.locator("#mapHotspots").get_attribute("max"), "9")
+                self.assertEqual(page.locator("#mapHotspots").get_attribute("step"), "1")
+                self.assertEqual(page.locator("#mapHotspotsValue").text_content().strip(), "All")
+                page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapHotspots");
+                        input.value = "-1";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function('() => document.querySelector("#mapHotspotsValue")?.textContent === "B90"')
+                page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapHotspots");
+                        input.value = "1";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function('() => document.querySelector("#mapHotspotsValue")?.textContent === "T90"')
+                self.assertNotIn("100", page.locator("#mapHotspotsValue").text_content())
+                page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapHotspots");
+                        input.value = "0";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function('() => document.querySelector("#mapHotspotsValue")?.textContent === "All"')
                 self.assertFalse(page.locator("#mapLabelControl").is_hidden())
                 self.assertFalse(page.locator("#mapLabelSize").is_disabled())
+                self.assertEqual(page.locator("#mapLabelSize").get_attribute("max"), "10")
+                label_states = page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapLabelSize");
+                        let labelText = "";
+                        const states = [];
+                        for (let size = 1; size <= 10; size += 1) {
+                            input.value = String(size);
+                            input.dispatchEvent(new Event("input", { bubbles: true }));
+                            const labels = [...document.querySelectorAll("#ukMap .map-label")];
+                            const label = labelText
+                                ? labels.find((node) => node.textContent === labelText)
+                                : labels[0];
+                            if (!label) return null;
+                            labelText = label.textContent;
+                            const rect = label.getBoundingClientRect();
+                            states.push({
+                                size,
+                                fontSize: getComputedStyle(label).fontSize,
+                                centerX: rect.left + rect.width / 2,
+                                centerY: rect.top + rect.height / 2,
+                                width: rect.width,
+                                height: rect.height,
+                            });
+                        }
+                        input.value = "0";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                        return { states, hiddenCount: document.querySelectorAll("#ukMap .map-label").length };
+                    }
+                    """
+                )
+                self.assertIsNotNone(label_states)
+                self.assertEqual(len(label_states["states"]), 10)
+                self.assertEqual(label_states["states"][0]["fontSize"], "6px")
+                self.assertEqual(label_states["states"][-1]["fontSize"], "20px")
+                self.assertEqual(label_states["hiddenCount"], 0)
+                first_label_state = label_states["states"][0]
+                for label_state in label_states["states"][1:]:
+                    self.assertLessEqual(abs(label_state["centerX"] - first_label_state["centerX"]), 1)
+                    self.assertLessEqual(abs(label_state["centerY"] - first_label_state["centerY"]), 1)
+                self.assertGreater(label_states["states"][-1]["width"], first_label_state["width"])
+                self.assertGreater(label_states["states"][-1]["height"], first_label_state["height"])
                 page.locator(".dataset-meta-column-link").click()
                 page.locator("#profileTool.active").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden)").wait_for(timeout=10_000)
@@ -5191,6 +5288,7 @@ COPY (
                     page.locator('.dataset-meta-uk-map-link[data-map-level="sector"]').click()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').is_checked())
+                self.assertEqual(page.locator("#mapLineWeightLabel").text_content().strip(), "Line width")
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
@@ -5214,12 +5312,38 @@ COPY (
                     page.locator('.dataset-meta-uk-map-link[data-map-level="unit"]').click()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")')
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').is_checked())
+                self.assertEqual(page.locator("#mapLineWeightLabel").text_content().strip(), "Dot size")
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
                 self.assertTrue(page.locator("#mapLabelSize").is_disabled())
                 self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
                 self.assertTrue(page.locator("#mapSmoothing").is_disabled())
+                page.locator("#ukMap .leaflet-unit-point-layer").wait_for(timeout=10_000)
+                page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapLineWeight");
+                        input.value = "0";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function('() => document.querySelector("#mapLineWeightValue")?.textContent === "0"')
+                small_dot_pixels = unit_point_alpha_pixels()
+                self.assertGreater(small_dot_pixels, 0)
+                page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapLineWeight");
+                        input.value = "5";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function('() => document.querySelector("#mapLineWeightValue")?.textContent === "5"')
+                large_dot_pixels = unit_point_alpha_pixels()
+                self.assertGreater(large_dot_pixels, small_dot_pixels)
                 wait_for_map_view(stable_map_view)
 
                 self.assertEqual(page_errors, [])

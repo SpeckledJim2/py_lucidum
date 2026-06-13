@@ -152,6 +152,8 @@ export function createUkMapTool({
   const MAP_POINT_GRID_SIZE = 18;
   const MAP_FIT_PADDING = [8, 8];
   const MAP_UNIT_FIT_PADDING = [18, 18];
+  const MAP_LABEL_MIN_FONT_SIZE = 6;
+  const MAP_LABEL_MAX_FONT_SIZE = 20;
   const MAP_INITIAL_FIT_OPTIONS = { animate: false };
   const MAP_CONTROL_POSITION_VERSION = "3";
   const MAP_CONTROL_POSITION_KEYS = {
@@ -706,27 +708,25 @@ export function createUkMapTool({
     return thresholds;
   }
 
+  function normaliseMapHotspotNotch(value = state.mapHotspots) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    return Math.max(-9, Math.min(9, Math.round(number)));
+  }
+
   function mapHotspotSelection(value = state.mapHotspots) {
-    const raw = Number(value);
-    if (!Number.isFinite(raw)) return null;
-    const sliderValue = Math.round(raw * 10) / 10;
-    if (sliderValue === 0) return null;
-    const magnitude = Math.min(1, Math.max(0.1, Math.abs(sliderValue)));
-    const fraction = Math.min(1, Math.max(0.1, Math.round((1.1 - magnitude) * 10) / 10));
-    if (fraction >= 1) return null;
+    const notch = normaliseMapHotspotNotch(value);
+    if (notch === 0) return null;
     return {
-      direction: sliderValue > 0 ? -1 : 1,
-      fraction,
+      direction: notch > 0 ? -1 : 1,
+      fraction: mapHotspotPercent(notch) / 100,
     };
   }
 
   function mapHotspotPercent(value = state.mapHotspots) {
-    const raw = Number(value);
-    if (!Number.isFinite(raw)) return 0;
-    const sliderValue = Math.round(raw * 10) / 10;
-    if (sliderValue === 0) return 0;
-    const magnitude = Math.min(1, Math.max(0.1, Math.abs(sliderValue)));
-    return Math.round(Math.min(1, Math.max(0.1, Math.round((1.1 - magnitude) * 10) / 10)) * 100);
+    const notch = normaliseMapHotspotNotch(value);
+    if (notch === 0) return 0;
+    return 100 - (Math.abs(notch) * 10);
   }
 
   function mapHotspotKeys(rows) {
@@ -744,17 +744,22 @@ export function createUkMapTool({
     return new Set(validRows.slice(0, count).map(({ row }) => String(row.key)));
   }
 
+  function sectorLineWeightScaleForZoom(zoom) {
+    const value = Number(zoom);
+    if (!Number.isFinite(value)) return 1;
+    if (value <= 6) return 0.15;
+    if (value <= 7) return 0.25;
+    if (value <= 8) return 0.4;
+    if (value <= 9) return 0.65;
+    if (value <= 10) return 0.85;
+    return 1;
+  }
+
   function mapLineWeightForLevel(level) {
     const baseWeight = Number(state.mapLineWeight);
     if (!Number.isFinite(baseWeight) || baseWeight <= 0) return 0;
     if (level !== "sector" || !ukMap) return baseWeight;
-    const zoom = ukMap.getZoom();
-    if (zoom <= 6) return Math.min(baseWeight, 0.15);
-    if (zoom <= 7) return Math.min(baseWeight, 0.25);
-    if (zoom <= 8) return Math.min(baseWeight, 0.4);
-    if (zoom <= 9) return Math.min(baseWeight, 0.65);
-    if (zoom <= 10) return Math.min(baseWeight, 0.85);
-    return baseWeight;
+    return baseWeight * sectorLineWeightScaleForZoom(ukMap.getZoom());
   }
 
   function mapFeatureStyle(row, scale, hotspotKeys, level = state.mapLevel) {
@@ -864,6 +869,17 @@ export function createUkMapTool({
     if (value <= 8) return 2.5;
     if (value <= 10) return 3.25;
     return 4;
+  }
+
+  function unitPointRadiusScale(value = state.mapLineWeight) {
+    const sliderValue = Math.max(0, Math.min(5, Number(value)));
+    if (!Number.isFinite(sliderValue)) return 1;
+    if (sliderValue <= 1) return 0.5 + (sliderValue * 0.5);
+    return 1 + ((sliderValue - 1) / 4);
+  }
+
+  function unitPointRadiusForCurrentStyle(zoom) {
+    return unitPointRadiusForZoom(zoom) * unitPointRadiusScale(state.mapLineWeight);
   }
 
   function unitPointHitRadius(radius) {
@@ -1019,7 +1035,7 @@ export function createUkMapTool({
         context.setTransform(ratio, 0, 0, ratio, 0, 0);
         context.clearRect(0, 0, size.x, size.y);
         this.hitGrid = new Map();
-        const pointRadius = unitPointRadiusForZoom(this.map.getZoom());
+        const pointRadius = unitPointRadiusForCurrentStyle(this.map.getZoom());
         const hitRadius = unitPointHitRadius(pointRadius);
         this.hitRadius = hitRadius;
         for (const entry of this.rows) {
@@ -1054,7 +1070,7 @@ export function createUkMapTool({
       },
       findNearest(containerPoint) {
         if (!this.map || !this.hitGrid) return null;
-        const hitRadius = this.hitRadius || unitPointHitRadius(unitPointRadiusForZoom(this.map.getZoom()));
+        const hitRadius = this.hitRadius || unitPointHitRadius(unitPointRadiusForCurrentStyle(this.map.getZoom()));
         const radiusSquared = hitRadius * hitRadius;
         let nearest = null;
         let nearestDistance = radiusSquared;
@@ -1240,8 +1256,16 @@ export function createUkMapTool({
     renderMetricTitle(el("weightMetricTitle"), "Weight", data.denominator?.value, formatWeightValue);
   }
 
+  function mapLabelFontSize(value = state.mapLabelSize) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    const sliderValue = Math.max(0, Math.min(10, Math.round(number)));
+    if (sliderValue <= 0) return 0;
+    return MAP_LABEL_MIN_FONT_SIZE + (((sliderValue - 1) / 9) * (MAP_LABEL_MAX_FONT_SIZE - MAP_LABEL_MIN_FONT_SIZE));
+  }
+
   function renderMapLabels(data, summaries, hotspotKeys) {
-    const fontSize = Number(state.mapLabelSize);
+    const fontSize = mapLabelFontSize(state.mapLabelSize);
     if (data.level !== "area" || !Number.isFinite(fontSize) || fontSize <= 0 || !ukMapLayer) return;
     ukMapLabelLayer = L.layerGroup().addTo(ukMap);
     ukMapLayer.eachLayer((layer) => {
@@ -1256,7 +1280,7 @@ export function createUkMapTool({
       L.marker(bounds.getCenter(), {
         interactive: false,
         icon: L.divIcon({
-          className: "",
+          className: "map-label-icon",
           html,
           iconSize: [0, 0],
           iconAnchor: [0, 0],
@@ -1316,6 +1340,7 @@ export function createUkMapTool({
     document.querySelectorAll(".map-palette-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.palette === state.mapPalette);
     });
+    el("mapLineWeightLabel").textContent = state.mapLevel === "unit" ? "Dot size" : "Line width";
     el("mapLineWeight").value = String(state.mapLineWeight);
     el("mapOpacity").value = String(state.mapOpacity);
     el("mapHotspots").value = String(state.mapHotspots);
@@ -1345,11 +1370,9 @@ export function createUkMapTool({
   }
 
   function formatHotspotSliderValue(value) {
-    const raw = Number(value);
-    if (!Number.isFinite(raw)) return "";
-    const sliderValue = Math.round(raw * 10) / 10;
-    if (sliderValue === 0) return "All";
-    return `${sliderValue < 0 ? "B" : "T"}${mapHotspotPercent(sliderValue)}`;
+    const notch = normaliseMapHotspotNotch(value);
+    if (notch === 0) return "All";
+    return `${notch < 0 ? "B" : "T"}${mapHotspotPercent(notch)}`;
   }
 
   function formatSmoothingLevel(value) {
