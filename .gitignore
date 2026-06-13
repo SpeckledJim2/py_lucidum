@@ -13,6 +13,7 @@ __pycache__/
 .ruff_cache/
 .venv
 .venv/
+.venv-linux
 .venv-linux/
 dist/
 build/
