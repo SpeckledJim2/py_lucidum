@@ -758,7 +758,7 @@ class BrowserSmokeTests(unittest.TestCase):
             )
             base_url, server, thread = self.start_app(
                 data_path,
-                tools=["specs", "histogram"],
+                tools=["line_bar", "histogram", "glm", "gbm", "specs"],
                 filters_path=filters_path,
                 use_saved_filters=True,
                 kpis_path=kpis_path,
@@ -3488,6 +3488,36 @@ COPY (
             page_errors: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
+            def tab_rect(selector: str) -> dict[str, float]:
+                locator = page.locator(selector).first
+                locator.wait_for(timeout=10_000)
+                return locator.evaluate(
+                    """
+                    node => {
+                      const rect = node.getBoundingClientRect();
+                      return {left: rect.left, top: rect.top};
+                    }
+                    """
+                )
+
+            def assert_specs_first_tab_aligns_with_model_tabs() -> None:
+                page.locator("#glmTool:not(.hidden)").click()
+                page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
+                glm = tab_rect('[data-glm-tab="builder"]')
+
+                page.locator("#gbmTool:not(.hidden)").click()
+                page.locator("#modelToolWrap:not(.hidden) .gbm-tool").wait_for(timeout=10_000)
+                gbm = tab_rect('[data-gbm-tab="features"]')
+
+                page.locator("#specsTool:not(.hidden)").click()
+                page.locator("#specificationsWrap:not(.hidden) .spec-tool").wait_for(timeout=10_000)
+                page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
+                specs = tab_rect('[data-spec-kind="feature"]')
+
+                for model in (glm, gbm):
+                    self.assertLessEqual(abs(specs["left"] - model["left"]), 0.5)
+                    self.assertLessEqual(abs(specs["top"] - model["top"]), 0.5)
+
             def assert_specs_full_width() -> None:
                 layout = page.evaluate(
                     """
@@ -3531,6 +3561,29 @@ COPY (
                     """
                 )
                 self.assertEqual(style, {"alignItems": "center", "display": "inline-flex", "fontSize": "11px"})
+                self.assertEqual(
+                    page.locator(".spec-tool").evaluate(
+                        """
+                        node => {
+                          const style = getComputedStyle(node);
+                          return {
+                            borderTopWidth: style.borderTopWidth,
+                            borderTopLeftRadius: style.borderTopLeftRadius,
+                            boxShadow: style.boxShadow,
+                            paddingLeft: style.paddingLeft,
+                            paddingTop: style.paddingTop,
+                          };
+                        }
+                        """
+                    ),
+                    {
+                        "borderTopWidth": "0px",
+                        "borderTopLeftRadius": "0px",
+                        "boxShadow": "none",
+                        "paddingLeft": "0px",
+                        "paddingTop": "0px",
+                    },
+                )
                 self.assertEqual(page.locator("#specGrid").evaluate("node => getComputedStyle(node).borderTopLeftRadius"), "6px")
                 self.assertEqual(page.locator(".spec-kind-tabs .tab").first.evaluate("node => getComputedStyle(node).fontWeight"), "700")
                 topbar_layout = page.evaluate(
@@ -3940,9 +3993,7 @@ COPY (
                     """
                 )
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#specsTool:not(.hidden)").click()
-                page.locator("#specificationsWrap:not(.hidden) .spec-tool").wait_for(timeout=10_000)
-                page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
+                assert_specs_first_tab_aligns_with_model_tabs()
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
