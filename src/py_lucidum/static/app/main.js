@@ -1,3 +1,4 @@
+      import { createDatasetViewerTool } from "./dataset-viewer-tool.js";
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import { createLineBarTool } from "./line-bar-tool.js";
       import { createHistogramTool } from "./histogram-tool.js";
@@ -36,6 +37,7 @@
       const locationParams = paramsFromLocation();
       const token = locationParams.get("token") || "";
       const ACTION_RENDER_LABELS = {
+        dataset_viewer: "Dataset render",
         column_profile: "Profile render",
         line_bar: "Chart render",
         histogram: "Histogram render",
@@ -65,7 +67,7 @@
         histogramLogScale: "none",
         histogramSampleMode: "100k",
         source: locationParams.get("source") || "dataset",
-        tool: "column_profile",
+        tool: "dataset_viewer",
         view: "chart",
         mapLevel: "area",
         baseMap: "blank",
@@ -92,18 +94,22 @@
         collapsedSavedFilterThemes: new Set(),
         savedFilterThemesInitialised: false,
         activeFilter: "",
+        datasetViewerSearch: "",
+        datasetViewerTranspose: false,
         profileSort: { key: "", direction: "asc" },
         profileColumnSearch: "",
         lineBarTableSearch: "",
         profileDetailSort: { key: "count", direction: "desc" },
         profileSummaryMode: "auto",
         selectedProfileColumn: "",
+        lastDatasetViewerData: null,
         lastProfileData: null,
         lastProfileDetailData: null,
         lastData: null,
         lastHistogramData: null,
         lastMapData: null,
         toolCache: {
+          dataset_viewer: { requestKey: null, data: null, presentation: null },
           column_profile: freshProfileCache(),
           line_bar: { requestKey: null, data: null, presentation: null },
           histogram: { requestKey: null, data: null, presentation: null },
@@ -133,6 +139,7 @@
         chartRequestSeq: 0,
         histogramRequestSeq: 0,
         mapRequestSeq: 0,
+        datasetViewerRequestSeq: 0,
         glmRequestSeq: 0,
         gbmRequestSeq: 0,
       };
@@ -173,6 +180,24 @@
         state,
         el,
         renderLabels: ACTION_RENDER_LABELS,
+      });
+      const datasetViewerTool = createDatasetViewerTool({
+        api,
+        copyTextToClipboard,
+        el,
+        escapeHtml,
+        measureToolRender,
+        saveToolPresentation,
+        setChartMessage,
+        setStatus,
+        setToolTimingFailed,
+        showClipboardToast,
+        stableRequestKey,
+        startToolTiming,
+        state,
+        syncClientTimingFromData,
+        syncDuckDbTimingFromData,
+        toolCache,
       });
       const columnProfileTool = createColumnProfileTool({
         api,
@@ -530,9 +555,10 @@
       }
 
       function setGroupMeta(tool, message) {
+        if (tool === "dataset_viewer") return;
         const id = tool === "uk_map"
-          ? "mapGroupMeta"
-          : (tool === "column_profile" ? "profileGroupMeta" : (tool === "histogram" ? "histogramGroupMeta" : (isModelTool(tool) ? "modelToolGroupMeta" : "lineBarGroupMeta")));
+            ? "mapGroupMeta"
+            : (tool === "column_profile" ? "profileGroupMeta" : (tool === "histogram" ? "histogramGroupMeta" : (isModelTool(tool) ? "modelToolGroupMeta" : "lineBarGroupMeta")));
         el(id).textContent = message || "";
       }
 
@@ -668,6 +694,7 @@
 
       function freshToolCache() {
         return {
+          dataset_viewer: { requestKey: null, data: null, presentation: null },
           column_profile: freshProfileCache(),
           line_bar: { requestKey: null, data: null, presentation: null },
           histogram: { requestKey: null, data: null, presentation: null },
@@ -693,6 +720,7 @@
           state.lastProfileData = null;
           clearProfileDetailCache();
         }
+        state.lastDatasetViewerData = null;
         state.lastData = null;
         state.lastHistogramData = null;
         ukMapTool.resetRenderState();
@@ -751,6 +779,13 @@
       }
 
       function toolHandler(tool) {
+        if (tool === "dataset_viewer") {
+          return {
+            buildRequest: () => datasetViewerTool.buildRequest(),
+            fetch: (request, requestKey) => datasetViewerTool.fetchData(request, requestKey),
+            useCached: (cache) => datasetViewerTool.useCached(cache),
+          };
+        }
         if (tool === "column_profile") {
           return {
             buildRequest: () => columnProfileTool.buildRequest(),
@@ -833,6 +868,7 @@
       function chooseDefaultTool() {
         const requested = locationParams.get("tool");
         if (requested && toolEnabled(requested)) return requested;
+        if (toolEnabled("dataset_viewer")) return "dataset_viewer";
         if (toolEnabled("column_profile")) return "column_profile";
         if (toolEnabled("line_bar")) return "line_bar";
         if (toolEnabled("histogram")) return "histogram";
@@ -844,6 +880,7 @@
       }
 
       function renderToolSelector() {
+        const datasetViewerEnabled = toolEnabled("dataset_viewer");
         const profileEnabled = toolEnabled("column_profile");
         const lineBarEnabled = toolEnabled("line_bar");
         const histogramEnabled = toolEnabled("histogram");
@@ -851,6 +888,7 @@
         const glmEnabled = toolEnabled("glm");
         const gbmEnabled = toolEnabled("gbm");
         const specsEnabled = toolEnabled("specs");
+        el("datasetViewerTool").disabled = !datasetViewerEnabled;
         el("profileTool").disabled = !profileEnabled;
         el("lineBarTool").disabled = !lineBarEnabled;
         el("histogramTool").disabled = !histogramEnabled;
@@ -858,6 +896,7 @@
         el("glmTool").disabled = !glmEnabled;
         el("gbmTool").disabled = !gbmEnabled;
         el("specsTool").disabled = !specsEnabled;
+        el("datasetViewerTool").classList.toggle("hidden", !datasetViewerEnabled);
         el("profileTool").classList.toggle("hidden", !profileEnabled);
         el("lineBarTool").classList.toggle("hidden", !lineBarEnabled);
         el("histogramTool").classList.toggle("hidden", !histogramEnabled);
@@ -865,7 +904,7 @@
         el("glmTool").classList.toggle("hidden", !glmEnabled);
         el("gbmTool").classList.toggle("hidden", !gbmEnabled);
         el("specsTool").classList.toggle("hidden", !specsEnabled);
-        el("toolSelectorSection").classList.toggle("hidden", !(profileEnabled || lineBarEnabled || histogramEnabled || ukMapEnabled || glmEnabled || gbmEnabled || specsEnabled));
+        el("toolSelectorSection").classList.toggle("hidden", !(datasetViewerEnabled || profileEnabled || lineBarEnabled || histogramEnabled || ukMapEnabled || glmEnabled || gbmEnabled || specsEnabled));
       }
 
       function schemaFileMeta() {
@@ -1014,6 +1053,7 @@
         if (previousTool === "column_profile" && tool !== "column_profile") columnProfileTool.closeMenus();
         if (previousTool === "specs" && tool !== "specs") specificationsTool.closeMenus();
         state.tool = tool;
+        el("datasetViewerTool").classList.toggle("active", tool === "dataset_viewer");
         el("profileTool").classList.toggle("active", tool === "column_profile");
         el("lineBarTool").classList.toggle("active", tool === "line_bar");
         el("histogramTool").classList.toggle("active", tool === "histogram");
@@ -1021,13 +1061,14 @@
         el("glmTool").classList.toggle("active", tool === "glm");
         el("gbmTool").classList.toggle("active", tool === "gbm");
         el("specsTool").classList.toggle("active", tool === "specs");
-        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "column_profile" || tool === "specs");
+        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "dataset_viewer" || tool === "column_profile" || tool === "specs");
         glmTool.syncSidebarFromSchema();
         gbmTool.syncSidebarFromSchema();
         syncSidebarAccordion();
         el("lineBarToolbar").classList.toggle("hidden", tool !== "line_bar");
         el("histogramToolbar").classList.toggle("hidden", tool !== "histogram");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
+        el("visualArea").classList.toggle("dataset-viewer-mode", tool === "dataset_viewer");
         el("visualArea").classList.toggle("profile-mode", tool === "column_profile");
         el("visualArea").classList.toggle("histogram-mode", tool === "histogram");
         el("visualArea").classList.toggle("specs-mode", tool === "specs");
@@ -1035,6 +1076,8 @@
         el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
         el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
+        el("datasetViewerGroupMeta").classList.add("hidden");
+        el("datasetViewerFilter").classList.add("hidden");
         el("profileGroupMeta").classList.toggle("hidden", tool !== "column_profile");
         el("profileFilter").classList.toggle("hidden", tool !== "column_profile");
         el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
@@ -1045,6 +1088,7 @@
         el("modelToolFilter").classList.add("hidden");
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
+        el("datasetViewerWrap").classList.toggle("hidden", tool !== "dataset_viewer");
         el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
         el("modelToolWrap").classList.toggle("hidden", !isModelTool(tool));
         el("specificationsWrap").classList.toggle("hidden", tool !== "specs");
@@ -1052,7 +1096,19 @@
         syncActionTimingMonitor(tool);
         setStatus("");
         setChartMessage("");
-        if (tool === "line_bar") {
+        if (tool === "dataset_viewer") {
+          el("chart").classList.add("hidden");
+          el("tableWrap").classList.add("hidden");
+          el("histogramWrap").classList.add("hidden");
+          el("ukMap").classList.add("hidden");
+          el("mapLegend").classList.add("hidden");
+          el("profileWrap").classList.add("hidden");
+          el("modelToolWrap").classList.add("hidden");
+          el("specificationsWrap").classList.add("hidden");
+          el("datasetViewerWrap").classList.remove("hidden");
+          requestAnimationFrame(() => datasetViewerTool.resize());
+        } else if (tool === "line_bar") {
+          el("datasetViewerWrap").classList.add("hidden");
           el("profileWrap").classList.add("hidden");
           el("modelToolWrap").classList.add("hidden");
           el("specificationsWrap").classList.add("hidden");
@@ -1066,6 +1122,7 @@
             lineBarTool.resize();
           });
         } else if (tool === "histogram") {
+          el("datasetViewerWrap").classList.add("hidden");
           el("profileWrap").classList.add("hidden");
           el("modelToolWrap").classList.add("hidden");
           el("specificationsWrap").classList.add("hidden");
@@ -1076,6 +1133,7 @@
           el("histogramWrap").classList.remove("hidden");
           histogramTool.activate();
         } else if (tool === "uk_map") {
+          el("datasetViewerWrap").classList.add("hidden");
           el("profileWrap").classList.add("hidden");
           el("modelToolWrap").classList.add("hidden");
           el("specificationsWrap").classList.add("hidden");
@@ -1085,6 +1143,7 @@
           el("ukMap").classList.remove("hidden");
           ukMapTool.activate();
         } else if (tool === "specs") {
+          el("datasetViewerWrap").classList.add("hidden");
           el("chart").classList.add("hidden");
           el("tableWrap").classList.add("hidden");
           el("histogramWrap").classList.add("hidden");
@@ -1094,6 +1153,7 @@
           el("modelToolWrap").classList.add("hidden");
           el("specificationsWrap").classList.remove("hidden");
         } else {
+          el("datasetViewerWrap").classList.add("hidden");
           el("chart").classList.add("hidden");
           el("tableWrap").classList.add("hidden");
           el("histogramWrap").classList.add("hidden");
@@ -1112,7 +1172,9 @@
       }
 
       function resizeActiveTool() {
-        if (state.tool === "uk_map") {
+        if (state.tool === "dataset_viewer") {
+          datasetViewerTool.resize();
+        } else if (state.tool === "uk_map") {
           ukMapTool.syncViewport({ mode: "preserve" });
         } else if (state.tool === "histogram") {
           histogramTool.resize();
@@ -2331,6 +2393,7 @@
             applyFilter();
           }
         });
+        el("datasetViewerTool").addEventListener("click", () => handleToolClick("dataset_viewer"));
         el("profileTool").addEventListener("click", () => handleToolClick("column_profile"));
         el("lineBarTool").addEventListener("click", () => handleToolClick("line_bar"));
         el("histogramTool").addEventListener("click", () => handleToolClick("histogram"));
@@ -2350,6 +2413,7 @@
           document.body.classList.toggle("dark");
           syncThemeButton();
           if (state.tool === "line_bar") lineBarTool.refreshTheme();
+          if (state.tool === "dataset_viewer") datasetViewerTool.refreshTheme();
           if (state.tool === "histogram") histogramTool.refreshTheme();
           if (state.tool === "uk_map") ukMapTool.refreshTheme();
           if (state.tool === "glm") measureToolRender("glm", () => glmTool.refreshTheme());
@@ -2456,7 +2520,7 @@
           lineBarTool.renderFeatures();
           lineBarTool.updateAxisControls();
           setTool(state.tool, false);
-          setStartupProgress("Loading initial profile");
+          setStartupProgress("Loading initial dataset");
           await refreshActiveTool({ force: true });
           setStartupProgress("Ready", "ready");
           startServerHeartbeat();

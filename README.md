@@ -6,6 +6,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
 ## Current Tools
 
+- **Dataset Viewer**: inspect a fast filtered preview of dataset rows in a sortable Tabulator grid, capped at 1,000 displayed rows, with client-side whole-table search, persistent multi-row highlighting, transpose mode, reset-sort, and copy-selected rows as CSV.
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
 - **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, server-backed searchable/paginated tables, Base-aware transforms, sigma bars, optional active-GBM SHAP ribbons, active-GLM overlay lines, and x-axis feature ordering by saved GBM/GLM feature importance.
 - **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution with configurable bins, cumulative/probability modes, log axes, mean/median reference lines, and a compact metrics table.
@@ -113,7 +114,7 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
 - `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When `--tools specs` is also enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save; the path line shows the save target and marks new files or suppressed existing files.
-- `--tools` selects enabled tools in addition to Column Profile, which is always enabled and opens first. The default user-facing tools are `column-profile`, `line-bar`, `histogram`, and `uk-map`. Add `glm` after installing the `glm` extra to train GLMs. Add `models` after installing the `glm` and `gbm` extras to enable both modelling tools; requesting `gbm` also enables `glm` so model comparison and tabulation workflows remain available. Add `specs` to edit feature, KPI, and filter spec CSV files from the browser.
+- `--tools` selects enabled tools in addition to Dataset Viewer and Column Profile, which are always enabled. Dataset Viewer opens first. The default user-facing tools are `dataset-viewer`, `column-profile`, `line-bar`, `histogram`, and `uk-map`. Add `glm` after installing the `glm` extra to train GLMs. Add `models` after installing the `glm` and `gbm` extras to enable both modelling tools; requesting `gbm` also enables `glm` so model comparison and tabulation workflows remain available. Add `specs` to edit feature, KPI, and filter spec CSV files from the browser.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
 
@@ -159,7 +160,7 @@ app = create_app(
     filters_path="specs/filter_spec.csv",
     kpis_path="specs/kpi_spec.csv",
     features_path="specs/feature_spec.csv",
-    tools=["column_profile", "line_bar", "histogram", "uk_map"],
+    tools=["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"],
 )
 
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
@@ -223,7 +224,7 @@ When the Specifications tool opens a missing Feature spec, it starts with one ro
 
 ## GLM Models
 
-The GLM tool is opt-in. Column Profile remains enabled and opens first:
+The GLM tool is opt-in. Dataset Viewer and Column Profile remain enabled, with Dataset Viewer opening first:
 
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm
@@ -243,7 +244,7 @@ GLM model manifests include build timing diagnostics for dependency setup, data 
 
 ## GBM Models
 
-The GBM tool is opt-in. Column Profile remains enabled and opens first. Requesting `gbm` also enables the GLM tool so the shared tabulation/comparison workflow is available:
+The GBM tool is opt-in. Dataset Viewer and Column Profile remain enabled, with Dataset Viewer opening first. Requesting `gbm` also enables the GLM tool so the shared tabulation/comparison workflow is available:
 
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,models

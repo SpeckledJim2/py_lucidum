@@ -1385,6 +1385,23 @@ COPY (
                 thread.join(timeout=5)
                 stop_persistent_glm_fit_worker()
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_dataset_viewer_preview_transpose_keeps_stop_app_responsive(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "preview.csv"
+            rows = ["PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long"]
+            for index in range(1, 1001):
+                rows.append(f"AB,AB10 1,{index % 99},{100 + index},{10 + index},AB10 1AA,57.1,-2.1")
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(data_path)
+            try:
+                self.exercise_dataset_viewer_large_transpose(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
     @staticmethod
     def start_app(
         data_path: Path,
@@ -2026,7 +2043,7 @@ COPY (
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#gbmSidebarPanel").wait_for(timeout=10_000)
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 assert_sidebar_headers_visible()
@@ -2084,6 +2101,7 @@ COPY (
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
+            dataset_viewer_requests = 0
             profile_requests = 0
             profile_detail_requests = 0
             chart_requests = 0
@@ -2134,6 +2152,8 @@ COPY (
 
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.locator("#profileTool").click()
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(state="attached", timeout=10_000)
@@ -4272,12 +4292,42 @@ COPY (
             finally:
                 browser.close()
 
+    def exercise_dataset_viewer_large_transpose(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerCount")?.textContent.includes("1,000 shown")
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").check(timeout=5_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr:first-child td:first-child')?.textContent.trim() === 'PostcodeArea'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#stopAppBtn").click(timeout=5_000)
+                page.locator(".stop-confirm-cancel").click(timeout=5_000)
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
+
     def exercise_browser(self, base_url: str) -> None:
         assert sync_playwright is not None
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
+            dataset_viewer_requests = 0
             profile_requests = 0
             profile_detail_requests = 0
             chart_requests = 0
@@ -4287,9 +4337,11 @@ COPY (
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
             def count_request(request: object) -> None:
-                nonlocal profile_requests, profile_detail_requests, chart_requests, histogram_requests, map_requests
+                nonlocal dataset_viewer_requests, profile_requests, profile_detail_requests, chart_requests, histogram_requests, map_requests
                 url = request.url
-                if url.endswith("/api/column-profile/summary"):
+                if url.endswith("/api/dataset-viewer/table"):
+                    dataset_viewer_requests += 1
+                elif url.endswith("/api/column-profile/summary"):
                     profile_requests += 1
                 elif url.endswith("/api/column-profile/detail"):
                     profile_detail_requests += 1
@@ -4355,6 +4407,156 @@ COPY (
                 self.assertEqual(page.locator(".dataset-meta-uk-map-icon").count(), 0)
                 self.assertTrue(page.locator("#ukMapTool img").is_visible())
                 self.assertTrue(page.locator("#ukMapTool img").evaluate("node => node.complete && node.naturalWidth > 0"))
+                page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
+                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                self.assertGreaterEqual(dataset_viewer_requests, 1)
+                self.assertFalse(page.locator("#datasetViewerFilter").is_visible())
+                dataset_requests_before_filter = dataset_viewer_requests
+                page.evaluate(
+                    """
+                    () => {
+                        document.querySelector("#filterInput").value = "vehicle_age >= 3";
+                        document.querySelector("#filterApplyBtn").click();
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerCount")?.textContent.includes("2 shown")
+                    """,
+                    timeout=10_000,
+                )
+                self.assertGreater(dataset_viewer_requests, dataset_requests_before_filter)
+                dataset_requests_before_clear = dataset_viewer_requests
+                page.evaluate('() => document.querySelector("#filterClearBtn").click()')
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerCount")?.textContent.includes("4 shown")
+                    """,
+                    timeout=10_000,
+                )
+                self.assertGreater(dataset_viewer_requests, dataset_requests_before_clear)
+                page.evaluate(
+                    """
+                    () => {
+                        window.__lucidumCopiedText = null;
+                        Object.defineProperty(navigator, "clipboard", {
+                            configurable: true,
+                            value: {
+                                writeText: async (text) => {
+                                    window.__lucidumCopiedText = text;
+                                },
+                            },
+                        });
+                    }
+                    """
+                )
+                page.locator("#datasetViewerGrid .tabulator-row").nth(0).click()
+                page.locator("#datasetViewerGrid .tabulator-row").nth(1).click()
+                page.locator("#datasetViewerCopySelected").get_by_text("Copy selected (2)").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCopySelected").click()
+                page.wait_for_function("() => (window.__lucidumCopiedText || '').includes('PostcodeArea')")
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]').click()
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AL'
+                    """
+                )
+                page.locator("#datasetViewerResetSort").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
+                    """
+                )
+                page.locator("#datasetViewerSearch").fill("AL1 2AA")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll('#datasetViewerGrid .tabulator-row')].filter((row) => row.offsetParent !== null);
+                      return rows.length === 1 && rows[0].textContent.includes('AL1 2AA');
+                    }
+                    """
+                )
+                page.locator("#datasetViewerSearchClear").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const search = document.querySelector('#datasetViewerSearch');
+                      const rows = [...document.querySelectorAll('#datasetViewerGrid .tabulator-row')].filter((row) => row.offsetParent !== null);
+                      return search?.value === '' && rows.length >= 4;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").check()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr:first-child td:first-child')?.textContent.trim() === 'PostcodeArea'
+                    """
+                )
+                page.locator("#datasetViewerGrid .dataset-viewer-transposed-table tbody tr").nth(0).hover()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const hover = document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-hover');
+                      return hover && !hover.hidden && hover.style.height && hover.style.transform;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                first_hover_transform = page.locator("#datasetViewerGrid .dataset-viewer-transposed-hover").evaluate("node => node.style.transform")
+                page.locator("#datasetViewerGrid .dataset-viewer-transposed-table tbody tr").nth(1).hover()
+                page.wait_for_function(
+                    """
+                    previous => {
+                      const hover = document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-hover');
+                      return hover && !hover.hidden && hover.style.transform && hover.style.transform !== previous;
+                    }
+                    """,
+                    arg=first_hover_transform,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerSearch").fill("AL1 2AA")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const table = document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table');
+                      if (!table) return false;
+                      const headers = [...table.querySelectorAll('thead th')].map((cell) => cell.textContent.trim());
+                      const rows = [...table.querySelectorAll('tbody tr')];
+                      const unitRow = rows.find((row) => row.cells[0]?.textContent.trim() === 'PostcodeUnit');
+                      return headers.length === 2
+                        && headers[0] === 'Column'
+                        && headers[1] === 'Row 1'
+                        && rows.length >= 8
+                        && unitRow?.cells[1]?.textContent.trim() === 'AL1 2AA';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerSearchClear").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .dataset-viewer-transposed-table thead th').length >= 5
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").uncheck()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                        const text = document.querySelector("#actionTimingMonitor")?.textContent || "";
+                        return /^DuckDB: \\d+(?:ns|us|ms), JSON: \\d+ms, Dataset render: \\d+(?:ns|us|ms), Total: \\d+ms$/.test(text);
+                    }
+                    """
+                )
+                page.locator("#profileTool").click()
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
@@ -4424,6 +4626,7 @@ COPY (
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
                 self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))
                 self.assertTrue(page.locator("#profileTool").is_visible())
+                self.assertTrue(page.locator("#datasetViewerTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
                 self.assertTrue(page.locator("#histogramTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
@@ -4434,6 +4637,7 @@ COPY (
 
                 page.locator("#reloadBtn").click()
                 page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"')
+                self.assertTrue(page.locator("#datasetViewerTool").is_visible())
                 self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
                 self.assertTrue(page.locator("#histogramTool").is_visible())

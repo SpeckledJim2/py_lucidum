@@ -51,6 +51,7 @@ class StaticAssetTests(unittest.TestCase):
         "/static/styles/foundations.css",
         "/static/styles/shell.css",
         "/static/styles/controls.css",
+        "/static/styles/dataset-viewer.css",
         "/static/styles/line-bar.css",
         "/static/styles/histogram.css",
         "/static/styles/uk-map.css",
@@ -84,7 +85,7 @@ class StaticAssetTests(unittest.TestCase):
         return body.decode("utf-8")
 
     def assert_tool_button_visibility(self, html: str, expected_visible_tools: set[str]) -> None:
-        all_tools = {"column_profile", "line_bar", "histogram", "uk_map", "glm", "gbm", "specs"}
+        all_tools = {"dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "glm", "gbm", "specs"}
         for tool_id in all_tools:
             with self.subTest(tool=tool_id):
                 match = re.search(rf'<button\b[^>]*\bdata-tool="{re.escape(tool_id)}"[^>]*>', html)
@@ -105,6 +106,7 @@ class StaticAssetTests(unittest.TestCase):
         module_paths = [
             "/static/app.js",
             "/static/app/main.js",
+            "/static/app/dataset-viewer-tool.js",
             "/static/app/column-profile-tool.js",
             "/static/app/line-bar-tool.js",
             "/static/app/histogram-tool.js",
@@ -920,7 +922,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('aria-controls="appSidebar"', html)
         self.assertIn('aria-label="Collapse sidebar"', html)
         self.assertIn('<aside id="appSidebar">', html)
-        self.assertIn('id="profileTool" class="tool-option active" type="button" data-tool="column_profile" aria-label="Column profile"', html)
+        self.assertIn('id="datasetViewerTool" class="tool-option active" type="button" data-tool="dataset_viewer" aria-label="Dataset viewer"', html)
+        self.assertIn('class="tool-label">Dataset viewer</span>', html)
+        self.assertIn('id="profileTool" class="tool-option" type="button" data-tool="column_profile" aria-label="Column profile"', html)
         self.assertIn('class="tool-label">Column profile</span>', html)
         self.assertIn('id="lineBarTool" class="tool-option" type="button" data-tool="line_bar" aria-label="Line and bar"', html)
         self.assertIn('class="tool-label">Line and bar</span>', html)
@@ -934,7 +938,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('id="lineBarToolbar" class="toolbar hidden"', html)
         self.assertIn('id="histogramToolbar" class="toolbar hidden"', html)
         self.assertIn('id="status" class="status main-status hidden"', html)
-        self.assertIn('id="visualArea" class="visual-area profile-mode"', html)
+        self.assertIn('id="visualArea" class="visual-area dataset-viewer-mode"', html)
         self.assertIn('id="chartSideControls" class="chart-side-controls hidden"', html)
         self.assertIn('id="chartControlHeightResizer" class="chart-control-height-resizer app-resizer app-resizer--horizontal"', html)
         self.assertIn('id="expectedSideSection" class="chart-side-section"', html)
@@ -947,13 +951,16 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('expectedSection.toggleAttribute("inert", collapsed);', js)
         self.assertIn("setChartFeatureControlsHeight(numericHeight, { allowCollapse: false });", js)
         self.assertIn('id="lineBarTabs" class="tabs workspace-tabs hidden"', html)
+        self.assertIn('id="datasetViewerGroupMeta" class="workspace-meta hidden"', html)
+        self.assertIn('id="datasetViewerFilter" class="hidden">no filter</div>', html)
         self.assertIn('id="lineBarGroupMeta" class="workspace-meta hidden"', html)
         self.assertIn('id="lineBarFilter" class="hidden">no filter</div>', html)
         self.assertIn('id="histogramGroupMeta" class="workspace-meta hidden"', html)
         self.assertIn('id="histogramFilter" class="hidden">no filter</div>', html)
         self.assertIn('id="chart" class="hidden"', html)
         self.assertIn('id="histogramWrap" class="histogram-wrap hidden"', html)
-        self.assertIn('id="profileWrap" class="profile-wrap"></div>', html)
+        self.assertIn('id="datasetViewerWrap" class="dataset-viewer-wrap"></div>', html)
+        self.assertIn('id="profileWrap" class="profile-wrap hidden"></div>', html)
         self.assertIn('id="themeBtn"', html)
         self.assertIn('aria-label="Switch to dark mode"', html)
         self.assertIn("theme-icon-moon", html)
@@ -997,10 +1004,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_initial_tool_buttons_match_enabled_tools(self) -> None:
         cases = [
-            (None, {"column_profile", "line_bar", "histogram", "uk_map"}),
-            (["line-bar"], {"column_profile", "line_bar"}),
-            (["gbm"], {"column_profile", "glm", "gbm"}),
-            (["specs"], {"column_profile", "specs"}),
+            (None, {"dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"}),
+            (["line-bar"], {"dataset_viewer", "column_profile", "line_bar"}),
+            (["gbm"], {"dataset_viewer", "column_profile", "glm", "gbm"}),
+            (["specs"], {"dataset_viewer", "column_profile", "specs"}),
         ]
         for tools, expected_visible_tools in cases:
             with self.subTest(tools=tools):
@@ -1010,6 +1017,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
     def test_static_app_assets_disable_cache(self) -> None:
         self.assert_no_store("/static/app.js")
         self.assert_no_store("/static/app/main.js")
+        self.assert_no_store("/static/app/dataset-viewer-tool.js")
         self.assert_no_store("/static/app/column-profile-tool.js")
         self.assert_no_store("/static/app/line-bar-tool.js")
         self.assert_no_store("/static/app/histogram-tool.js")
@@ -2126,7 +2134,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertNotIn(".gbm-model-activate-button", css)
         self.assertIn(".gbm-parameter-select", css)
         self.assertIn(".gbm-fallback-table select", css)
-        self.assertIn('document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "column_profile" || tool === "specs");', js)
+        self.assertIn('document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", tool === "dataset_viewer" || tool === "column_profile" || tool === "specs");', js)
         self.assertIn("syncSidebarAccordion();", js)
         self.assertNotIn('document.querySelector(".sidebar-kpi-section")?.classList.toggle("hidden", tool === "column_profile");', js)
         self.assertNotIn('document.querySelector(".sidebar-filter-section")?.classList.toggle("hidden", isModelTool(tool));', js)
@@ -3059,7 +3067,7 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertGreater(html.index('id="filterInput"'), html.index('id="filterFooter"'))
         self.assertLess(html.index('id="filterInput"'), html.index('id="actionTimingMonitor"'))
         self.assertIn('id="actionTimingMonitor" class="action-timing-monitor" aria-live="polite"', html)
-        self.assertIn("DuckDB: --, JSON: --, Profile render: --, Total: --", html)
+        self.assertIn("DuckDB: --, JSON: --, Dataset render: --, Total: --", html)
         self.assertIn('<div class="filter-controls-row">', html)
         self.assertIn('<div class="filter-controls-primary">', html)
         self.assertLess(html.index('data-control="filterSelectionMode"'), html.index('data-control="filterOperator"'))
@@ -3585,6 +3593,7 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("glmTool.resize();", js)
         self.assertIn("requestAnimationFrame(resizeActiveTool);", js)
         self.assertIn('el("profileTool").addEventListener("click", () => handleToolClick("column_profile"));', js)
+        self.assertIn('el("datasetViewerTool").addEventListener("click", () => handleToolClick("dataset_viewer"));', js)
         self.assertIn('el("lineBarTool").addEventListener("click", () => handleToolClick("line_bar"));', js)
         self.assertIn('el("histogramTool").addEventListener("click", () => handleToolClick("histogram"));', js)
         self.assertIn('el("ukMapTool").addEventListener("click", () => handleToolClick("uk_map"));', js)
@@ -3598,16 +3607,64 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
 
         self.assertIn(".tool-selector-section {\n        margin-bottom: 14px;\n        padding-top: 2px;", css)
 
+    def test_dataset_viewer_tool_static_assets_are_registered(self) -> None:
+        _, html_body = self.assert_no_store("/")
+        css = self.app_css_contract()
+        html = html_body.decode("utf-8")
+        js = self.app_js_contract()
+        dataset_js = self.assert_no_store("/static/app/dataset-viewer-tool.js")[1].decode("utf-8")
+
+        self.assertIn('import { createDatasetViewerTool } from "./dataset-viewer-tool.js";', js)
+        self.assertIn("export function createDatasetViewerTool", js)
+        self.assertIn('dataset_viewer: "Dataset render"', js)
+        self.assertIn('tool: "dataset_viewer"', js)
+        self.assertIn('api("/api/dataset-viewer/table"', js)
+        self.assertIn('id="datasetViewerWrap" class="dataset-viewer-wrap"', html)
+        self.assertIn('id="datasetViewerSearch"', js)
+        self.assertIn('id="datasetViewerTranspose"', js)
+        self.assertIn('id="datasetViewerResetSort"', js)
+        self.assertIn('id="datasetViewerCopySelected"', js)
+        self.assertIn("selectableRows: true", js)
+        self.assertIn('renderHorizontal: "virtual"', dataset_js)
+        self.assertIn("function renderTransposedGrid()", dataset_js)
+        self.assertIn("dataset-viewer-transposed-table", dataset_js)
+        self.assertIn("dataset-viewer-transposed-hover", dataset_js)
+        self.assertIn("function wireTransposedHover(target)", dataset_js)
+        self.assertIn('scroll.addEventListener("pointerover"', dataset_js)
+        self.assertIn("row.offsetTop", dataset_js)
+        self.assertIn("scroll.scrollWidth", dataset_js)
+        self.assertIn("transposedSelectedIds", dataset_js)
+        self.assertIn("function filteredSourceRows(data, sourceColumns)", dataset_js)
+        self.assertIn("function rowMatchesSearch(row, sourceColumns, query)", dataset_js)
+        self.assertIn("function cacheIsRendered(cache)", dataset_js)
+        self.assertIn("requestAnimationFrame(() => resize());", dataset_js)
+        self.assertIn("datasetViewerSearch: \"\"", js)
+        self.assertIn("datasetViewerTranspose: false", js)
+        self.assertIn("loadedRows > MAX_ROWS", dataset_js)
+        self.assertIn("has_more", dataset_js)
+        self.assertIn("more available", dataset_js)
+        self.assertIn("shown", dataset_js)
+        self.assertNotIn("setGroupMeta", dataset_js)
+        self.assertNotIn("setFilterRowMeta", dataset_js)
+        self.assertIn('if (tool === "dataset_viewer") return;', js)
+        self.assertIn(".visual-area.dataset-viewer-mode .workspace {\n        background: transparent;\n        border: 0;", css)
+        self.assertIn(".visual-area.dataset-viewer-mode .workspace-messages {\n        display: none;", css)
+        self.assertIn(".dataset-viewer-grid .tabulator-row.tabulator-selected", css)
+        self.assertIn(".dataset-viewer-transposed-table", css)
+        self.assertIn(".dataset-viewer-transposed-hover", css)
+        self.assertNotIn(".dataset-viewer-transposed-table tbody tr:hover,\n      .dataset-viewer-transposed-table tbody tr:hover td", css)
+
     def test_column_profile_tool_static_assets_are_registered(self) -> None:
         _, html_body = self.assert_no_store("/")
         css = self.app_css_contract()
         html = html_body.decode("utf-8")
         js = self.app_js_contract()
 
+        self.assertLess(html.index('id="datasetViewerTool"'), html.index('id="profileTool"'))
         self.assertLess(html.index('id="profileTool"'), html.index('id="lineBarTool"'))
         self.assertIn('import { createColumnProfileTool } from "./column-profile-tool.js";', js)
         self.assertIn("export function createColumnProfileTool", js)
-        self.assertIn('tool: "column_profile"', js)
+        self.assertIn("column_profile: freshProfileCache()", js)
         self.assertIn('column_profile: "Profile render"', js)
         self.assertIn('if (tool === "column_profile")', js)
         self.assertIn('api("/api/column-profile/summary"', js)
@@ -3713,6 +3770,7 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("closeProfileColumnContextMenu();", js)
         self.assertIn("ensureSelectedProfileColumn(columns);", js)
         self.assertIn('aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}"', js)
+        self.assertIn('if (toolEnabled("dataset_viewer")) return "dataset_viewer";', js)
         self.assertIn('if (toolEnabled("column_profile")) return "column_profile";', js)
         self.assertIn("const skippedColumns = Array.isArray(data.skipped_columns) ? data.skipped_columns : [];", js)
         self.assertIn("const totalColumnCount = columns.length + skippedCount;", js)
@@ -3725,6 +3783,7 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("setProfileFilterMeta(data, calculationMeta);", js)
         self.assertIn('saveToolPresentation("column_profile", { groupMeta, chartMessage });', js)
         self.assertIn("#profileFilter,\n      #histogramFilter,\n      #lineBarFilter {\n        color: var(--muted);\n        font-size: 10px;", css)
+        self.assertNotIn("#datasetViewerFilter,\n      #profileFilter", css)
         self.assertIn("grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);", css)
         self.assertIn(".profile-summary-pane,", css)
         self.assertIn(".profile-detail-pane {", css)

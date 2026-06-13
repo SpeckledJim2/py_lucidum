@@ -21,6 +21,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.core` owns DuckDB connection management, file relation SQL, schema inference, row counts, band suggestions, filter validation, saved-filter loading, shared data-source metadata, and shared metric/weight SQL helpers.
 - `py_lucidum.app` owns the FastAPI factory, shared app context, token checks, static asset serving, favicon serving, schema/reload/health/shutdown endpoints, and tool registration.
 - `py_lucidum.tools.registry` is the backend source of truth for tool IDs, labels, aliases, default enablement, and registration order.
+- `py_lucidum.tools.dataset_viewer` implements the filtered raw-row dataset viewer and routes.
 - `py_lucidum.cli` owns the `lucidum` command, free-port selection, token URL construction, background server handling for notebook-style runtimes, and browser opening.
 - `py_lucidum.demo` resolves the bundled synthetic demo dataset from either the source tree or installed package resources.
 - `py_lucidum.tools.column_profile` implements filtered column summary/detail profiling and routes.
@@ -30,7 +31,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 - `py_lucidum.tools.glm` implements the opt-in `glum` GLM tool. GLM validation, training jobs, persistence, coefficient/model-detail routes, and model-output data sources live in separate backend modules.
 - `py_lucidum.tools.gbm` implements the opt-in LightGBM tool. GBM active config payloads, training, validation, persistence, tree summary/detail, and model-output data sources live in separate backend modules; the frontend only edits settings, starts jobs, polls status, and renders returned diagnostics.
 - `py_lucidum.tools.specifications` implements the opt-in `specs` tool for editing feature, KPI, and filter specification CSV files. It reads and writes raw CSV rows, continuously validates against the durable spec loaders, generates unsaved starter drafts for missing/disabled specs, and refreshes enabled app metadata after successful saves.
-- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/histogram-tool.js` owns the Histogram frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/glm-tool.js` owns GLM high-level orchestration, API mutation, and model build/detail flow, `src/py_lucidum/static/app/glm-formula-builder.js`, `src/py_lucidum/static/app/glm-model-navigator.js`, and `src/py_lucidum/static/app/glm-tabulations.js` own focused GLM frontend submodules, `src/py_lucidum/static/app/gbm-tool.js` owns GBM high-level orchestration, API mutation, and cross-tool invalidation, `src/py_lucidum/static/app/gbm-feature-parameter-controls.js`, `src/py_lucidum/static/app/gbm-evaluation-chart.js`, `src/py_lucidum/static/app/gbm-model-navigator.js`, and `src/py_lucidum/static/app/gbm-tab-orchestration.js` own focused GBM frontend submodules, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-stacked-shap-tool.js` and `src/py_lucidum/static/app/gbm-stacked-shap-chart.js` own the Stacked SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
+- `src/py_lucidum/static/app.js` is a native ES-module bootstrap. `src/py_lucidum/static/app/main.js` owns the app shell/coordinator, shared sidebar/filter/KPI controls, tool selection, and cross-tool invalidation. `src/py_lucidum/static/app/dataset-viewer-tool.js` owns the Dataset Viewer frontend, `src/py_lucidum/static/app/column-profile-tool.js` owns the Column Profile frontend, `src/py_lucidum/static/app/line-bar-tool.js` owns the Line/Bar frontend, `src/py_lucidum/static/app/histogram-tool.js` owns the Histogram frontend, `src/py_lucidum/static/app/uk-map-tool.js` owns the UK Mapping frontend, `src/py_lucidum/static/app/glm-tool.js` owns GLM high-level orchestration, API mutation, and model build/detail flow, `src/py_lucidum/static/app/glm-formula-builder.js`, `src/py_lucidum/static/app/glm-model-navigator.js`, and `src/py_lucidum/static/app/glm-tabulations.js` own focused GLM frontend submodules, `src/py_lucidum/static/app/gbm-tool.js` owns GBM high-level orchestration, API mutation, and cross-tool invalidation, `src/py_lucidum/static/app/gbm-feature-parameter-controls.js`, `src/py_lucidum/static/app/gbm-evaluation-chart.js`, `src/py_lucidum/static/app/gbm-model-navigator.js`, and `src/py_lucidum/static/app/gbm-tab-orchestration.js` own focused GBM frontend submodules, `src/py_lucidum/static/app/gbm-shap-tool.js` and `src/py_lucidum/static/app/gbm-shap-chart.js` own the GBM SHAP UI/chart split, `src/py_lucidum/static/app/gbm-stacked-shap-tool.js` and `src/py_lucidum/static/app/gbm-stacked-shap-chart.js` own the Stacked SHAP UI/chart split, `src/py_lucidum/static/app/gbm-tree-viewer.js` owns the D3 tree viewer, and `src/py_lucidum/static/app/shared/` owns import-safe shared browser helpers.
 - `src/py_lucidum/static/app.css` is the stable linked CSS entrypoint and import manifest. Split styles live under `src/py_lucidum/static/styles/`; `foundations.css` and `controls.css` own shared primitives, while shell/tool files own boundary-specific selectors.
 - Third-party browser libraries are vendored under `src/py_lucidum/static/vendor/`. Core ECharts and Leaflet are loaded locally from `index.html` because the default app tools need them at startup. Histogram lazy-loads Tabulator for the metrics grid. GLM lazy-loads Ace for formula editing. GBM lazy-loads Tabulator for editable grids, D3 for tree diagrams, and ECharts GL only for SHAP 3D surface plots.
 
@@ -54,6 +55,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `py_lucidum.app.create_app(...)`
 - HTTP:
   - `GET /api/schema`
+  - `POST /api/dataset-viewer/table`
   - `POST /api/banding/suggestion`
   - `GET /api/health`
   - `GET /api/lucidum-servers`
@@ -136,10 +138,17 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - The opt-in Specifications tool is enabled with `--tools specs`. It exposes Feature, KPI, and Filter spec screens backed by `/api/specs/*`, edits raw CSV fields rather than normalized schema metadata, continuously validates the same file contracts used at startup/reload, and atomically saves the selected spec file. Missing or disabled specs return generated starter drafts only: Feature specs get one row per valid dataset column with only `Feature` populated, while KPI and filter specs get one blank row with visual-only placeholder hints. Generated drafts are not written until Save; the file-path line labels the save target as a new file or as an existing file suppressed by `--no-*` when applicable. Saving a disabled spec writes the CSV for editing but leaves the running app metadata disabled until restart/recreate without the corresponding `--no-*` option.
 - Filters are DuckDB `WHERE` expressions and apply before column profiling, chart aggregation, histogram binning/statistics, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 
+**Dataset Viewer**
+
+- Dataset Viewer is mandatory, registered first, and opens on startup.
+- Requests return readable raw dataset columns and up to 1,000 filtered preview rows, plus `has_more` when another row exists beyond the cap. They deliberately do not compute exact total or filtered row counts.
+- The active footer/saved-filter expression is applied server-side before the display cap.
+- Whole-table search, column sorting, row selection, transpose, reset-sort, and copy-selected rows are client-side over the loaded display rows only.
+- Unreadable dataset columns are omitted from the grid and returned as payload warnings without rendering a table overlay.
+
 **Column profile**
 
-- Column profile is the first startup tool.
-- Column profile is mandatory: `--tools` and `create_app(..., tools=...)` cannot remove it, and the backend always reports/registers it first so startup lands on the profile view.
+- Column profile is mandatory: `--tools` and `create_app(..., tools=...)` cannot remove it, and the backend always reports/registers it immediately after Dataset Viewer.
 - Summary requests return every readable dataset column with inferred kind, DuckDB type, filtered missing count, distinct count, and min/max for numeric/date-like columns. Auto-mode summaries are exact when `filtered rows * readable columns <= 10,000,000`; larger summaries use the first 100,000 filtered readable rows and include `calculation` metadata plus a UI action to recalculate all rows exactly. Passing `mode: "full"` to `/api/column-profile/summary` forces exact all-row summary stats.
 - Unreadable columns are omitted from profile summaries and returned through `skipped_columns` with sanitized errors.
 - Detail requests return value counts for categorical columns and histogram/stat tables for numeric/date-like columns.
@@ -186,7 +195,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **GLM and GBM**
 
-- GLM and GBM are opt-in tools (`--tools glm,gbm` or `--tools models`) and are not part of the default user-facing tool set. Column Profile is still enabled alongside them. Requesting `gbm` also enables `glm`, because GBM workflows use the GLM tool for cross-model tabulation and comparison.
+- GLM and GBM are opt-in tools (`--tools glm,gbm` or `--tools models`) and are not part of the default user-facing tool set. Dataset Viewer and Column Profile are still enabled alongside them. Requesting `gbm` also enables `glm`, because GBM workflows use the GLM tool for cross-model tabulation and comparison.
 - GLM and GBM artifacts are scoped to the exact dataset version under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/{glm,gbm}/`. The slug is derived from the dataset filename. The signature is derived from file size, modification time, row count, and schema fingerprint. Startup scans only the current signature workspace; root-level `.lucidum/models/` folders and other dataset-version workspaces are ignored and must never break raw dataset startup.
 - GLM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
 - GLM training imports `glum`, pandas, and numpy lazily through the `glm` optional extra. These packages must not become base install dependencies. Build routes should report missing GLM dependencies as an actionable install-extra error, not a server 500.
@@ -239,7 +248,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Timing values can use `ns`, `us`, or `ms` depending on duration.
 - `DuckDB` is measured on the Python server for the active tool API request. UK maps use a route-local DuckDB execute/fetch timer so the footer can show whether the database query is the bottleneck.
 - This does not include browser-to-server network latency, JSON transfer or parsing, profile table rendering, chart drawing, map drawing, GeoJSON loading, or map tile loading.
-- `Profile render`, `Chart render`, `Histogram render`, and `Map render` are measured in the browser after data arrives. All tools also show `JSON` and `Total`; `Total = DuckDB + JSON + render` using the rounded millisecond values shown in the footer.
+- `Dataset render`, `Profile render`, `Chart render`, `Histogram render`, and `Map render` are measured in the browser after data arrives. All tools also show `JSON` and `Total`; `Total = DuckDB + JSON + render` using the rounded millisecond values shown in the footer.
 - Cached UI rerenders can update render timing without running a new DuckDB query, so DuckDB may show the last cached query time. Collapsing the filter footer hides the timing monitor with the filter input.
 
 **Local server behavior**
@@ -286,6 +295,7 @@ find src/py_lucidum/static -path '*/vendor/*' -prune -o -name '*.js' -print0 | x
 .venv/bin/python -m unittest \
   tests/test_cli.py \
   tests/test_column_profile.py \
+  tests/test_dataset_viewer.py \
   tests/test_demo_dataset.py \
   tests/test_features.py \
   tests/test_histogram.py \
@@ -330,6 +340,7 @@ Standard checks before committing:
 .venv/bin/python -m compileall src tests
 node --check src/py_lucidum/static/app.js
 node --check src/py_lucidum/static/app/main.js
+node --check src/py_lucidum/static/app/dataset-viewer-tool.js
 node --check src/py_lucidum/static/app/column-profile-tool.js
 node --check src/py_lucidum/static/app/line-bar-tool.js
 node --check src/py_lucidum/static/app/histogram-tool.js

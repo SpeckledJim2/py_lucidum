@@ -15,6 +15,7 @@ export function freshActionTiming() {
 
 export function freshActionTimings() {
   return {
+    dataset_viewer: freshActionTiming(),
     column_profile: freshActionTiming(),
     line_bar: freshActionTiming(),
     histogram: freshActionTiming(),

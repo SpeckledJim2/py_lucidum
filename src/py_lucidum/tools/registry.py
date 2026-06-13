@@ -11,6 +11,7 @@ from py_lucidum.app.context import AppContext
 
 
 TOOL_MODULES = (
+    "py_lucidum.tools.dataset_viewer",
     "py_lucidum.tools.column_profile",
     "py_lucidum.tools.line_bar",
     "py_lucidum.tools.histogram",
@@ -19,7 +20,8 @@ TOOL_MODULES = (
     "py_lucidum.tools.gbm",
     "py_lucidum.tools.specifications",
 )
-MANDATORY_TOOL_ID = "column_profile"
+MANDATORY_TOOL_IDS = ("dataset_viewer", "column_profile")
+MANDATORY_TOOL_ID = MANDATORY_TOOL_IDS[0]
 TOOL_GROUP_ALIASES = {
     "model": ("glm", "gbm"),
     "models": ("glm", "gbm"),
@@ -93,7 +95,7 @@ def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
     if not requested:
         requested = default_tool_ids()
 
-    enabled: list[str] = [MANDATORY_TOOL_ID]
+    enabled: list[str] = list(MANDATORY_TOOL_IDS)
 
     def add_tool(tool_id: str) -> None:
         for implied in TOOL_IMPLIED_IDS.get(tool_id, ()):
@@ -135,6 +137,7 @@ def register_tools(app: FastAPI, context: AppContext, enabled_tools: Sequence[st
 
 __all__ = [
     "MANDATORY_TOOL_ID",
+    "MANDATORY_TOOL_IDS",
     "ToolDefinition",
     "default_tool_ids",
     "normalise_tools",

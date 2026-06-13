@@ -109,8 +109,8 @@ class SpecificationsToolTests(unittest.TestCase):
         app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False, use_features=False)
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(normalise_tools("specs"), ["column_profile", "specs"])
-        self.assertEqual(app.state.enabled_tools, ["column_profile", "specs"])
+        self.assertEqual(normalise_tools("specs"), ["dataset_viewer", "column_profile", "specs"])
+        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "specs"])
         self.assertIn("/api/specs/{kind}", paths)
         self.assertIn("/api/specs/{kind}/validate", paths)
         self.assertIn("/api/specs/{kind}/save", paths)

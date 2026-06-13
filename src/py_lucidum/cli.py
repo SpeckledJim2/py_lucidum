@@ -442,7 +442,7 @@ def main() -> int:
     parser.add_argument(
         "--tools",
         default=None,
-        help="Comma-separated tools to enable alongside mandatory Column Profile. Supports column-profile, line-bar, uk-map, glm, gbm, specs, and models. Requesting gbm also enables glm.",
+        help="Comma-separated tools to enable alongside mandatory Dataset Viewer and Column Profile. Supports dataset-viewer, column-profile, line-bar, uk-map, glm, gbm, specs, and models. Requesting gbm also enables glm.",
     )
     args = parser.parse_args()
     if args.demo and args.path:
