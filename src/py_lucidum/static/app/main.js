@@ -591,13 +591,25 @@
         el("mapControlFilter").textContent = label;
       }
 
+      function filterIsApplied() {
+        return Boolean(String(state.activeFilter || "").trim());
+      }
+
+      function syncActiveFilterIndicator() {
+        const applied = filterIsApplied();
+        el("filterRowMeta").classList.toggle("filter-row-meta--applied", applied);
+        el("collapsedFilterIndicator").hidden = !applied;
+      }
+
       function setFilterRowMeta(rowCount, filteredRowCount = rowCount) {
         const meta = formatRowMeta(rowCount, filteredRowCount);
         if (meta) el("filterRowMeta").textContent = meta;
+        syncActiveFilterIndicator();
       }
 
       function setFilterRowMetaText(message) {
         el("filterRowMeta").textContent = message || "";
+        syncActiveFilterIndicator();
       }
 
       function cancelFilterRowCountRequests() {
@@ -1708,7 +1720,7 @@
         const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
         clearToolCaches({ preserve: ["specs"] });
         renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
-        resetFilterRowMetaToSchema();
+        await refreshFilterRowCountMeta();
         state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
         state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
         state.collapsedKpiGroups = previousCollapsedKpiGroups;
@@ -2546,7 +2558,7 @@
           renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
           refreshDatasetGlmCount();
           refreshDatasetGbmCount();
-          resetFilterRowMetaToSchema();
+          await refreshFilterRowCountMeta();
           if (filtersUnchanged) {
             state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
             state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;

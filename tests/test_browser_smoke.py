@@ -4739,6 +4739,9 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
+                self.assertTrue(page.locator("#collapsedFilterIndicator").evaluate("node => node.hidden"))
+                self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
                 dataset_requests_before_filter = dataset_viewer_requests
                 page.evaluate(
                     """
@@ -4757,6 +4760,48 @@ COPY (
                 page.wait_for_function(
                     """
                     () => document.querySelector("#filterRowMeta")?.textContent.trim() === "2 / 4 rows"
+                    """,
+                    timeout=10_000,
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector("#filterRowMeta");
+                      if (!meta?.classList.contains("filter-row-meta--applied")) return false;
+                      const probe = document.createElement("span");
+                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--danger").trim();
+                      document.body.append(probe);
+                      const danger = getComputedStyle(probe).color;
+                      probe.remove();
+                      return getComputedStyle(meta).color === danger;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      if (document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") !== "false") return false;
+                      const marker = document.querySelector("#collapsedFilterIndicator");
+                      const markerText = [...marker?.querySelectorAll("span") || []].map((node) => node.textContent.trim()).join(" ");
+                      if (!marker || marker.hidden || markerText !== "FILTER ACTIVE" || marker.offsetParent === null) return false;
+                      const probe = document.createElement("span");
+                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--danger").trim();
+                      document.body.append(probe);
+                      const danger = getComputedStyle(probe).color;
+                      probe.remove();
+                      return getComputedStyle(marker).color === danger;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                      && document.querySelector("#collapsedFilterIndicator")?.offsetParent === null
                     """,
                     timeout=10_000,
                 )
@@ -4823,6 +4868,9 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
+                self.assertTrue(page.locator("#collapsedFilterIndicator").evaluate("node => node.hidden"))
+                self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_clear)
                 page.evaluate(
                     """

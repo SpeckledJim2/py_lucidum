@@ -264,6 +264,25 @@
         min-height: 0;
       }
 
+      .collapsed-filter-indicator {
+        display: none;
+        margin-top: auto;
+        color: var(--danger);
+        font-size: 8px;
+        font-weight: 700;
+        line-height: 1;
+        text-align: center;
+        letter-spacing: 0;
+      }
+
+      body.sidebar-collapsed .collapsed-filter-indicator:not([hidden]) {
+        display: block;
+      }
+
+      .collapsed-filter-indicator span {
+        display: block;
+      }
+
       .sidebar-resizer {
         background: linear-gradient(to right, var(--line), transparent);
         cursor: col-resize;

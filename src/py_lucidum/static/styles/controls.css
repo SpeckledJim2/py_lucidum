@@ -232,6 +232,10 @@
         margin-left: auto;
       }
 
+      .filter-row-meta.filter-row-meta--applied {
+        color: var(--danger);
+      }
+
       #kpiSelect {
         flex: 1 1 auto;
         width: 100%;
