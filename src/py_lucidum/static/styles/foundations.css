@@ -67,6 +67,10 @@
         color: var(--text);
       }
 
+      .hidden {
+        display: none !important;
+      }
+
       body.resizing-sidebar,
       body.resizing-sidebar *,
       body.resizing-chart-controls,

@@ -4450,6 +4450,41 @@ COPY (
                     timeout=10_000,
                 )
 
+            def assert_dataset_viewer_hidden() -> None:
+                page.wait_for_function(
+                    """
+                    () => {
+                      const wrap = document.querySelector("#datasetViewerWrap");
+                      const visualArea = document.querySelector("#visualArea");
+                      return Boolean(
+                        wrap
+                        && wrap.classList.contains("hidden")
+                        && getComputedStyle(wrap).display === "none"
+                        && visualArea
+                        && !visualArea.classList.contains("dataset-viewer-mode")
+                      );
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
+            def assert_profile_table_unoccluded() -> None:
+                page.wait_for_function(
+                    """
+                    () => {
+                      const profile = document.querySelector("#profileWrap");
+                      const table = profile?.querySelector(".profile-table");
+                      if (!profile || !table || profile.classList.contains("hidden") || getComputedStyle(profile).display === "none") return false;
+                      const rect = table.getBoundingClientRect();
+                      if (rect.width <= 0 || rect.height <= 0) return false;
+                      const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                      const datasetViewer = document.querySelector("#datasetViewerWrap");
+                      return Boolean(top && profile.contains(top) && !datasetViewer?.contains(top));
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
@@ -4477,6 +4512,7 @@ COPY (
                 self.assertTrue(page.locator("#ukMapTool img").evaluate("node => node.complete && node.naturalWidth > 0"))
                 page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.wait_for_function('() => Boolean(document.querySelector("#datasetViewerStylesheet"))', timeout=10_000)
                 self.assertGreaterEqual(dataset_viewer_requests, 1)
                 self.assertFalse(page.locator("#datasetViewerFilter").is_visible())
                 page.wait_for_function(
@@ -4531,6 +4567,7 @@ COPY (
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_second_filter)
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                assert_dataset_viewer_hidden()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#filterRowMeta")?.textContent.trim() === "3 / 4 rows"
@@ -4545,6 +4582,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                assert_dataset_viewer_hidden()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#filterRowMeta")?.textContent.trim() === "3 / 4 rows"
@@ -4690,6 +4728,8 @@ COPY (
                 )
                 page.locator("#profileTool").click()
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                assert_dataset_viewer_hidden()
+                assert_profile_table_unoccluded()
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")

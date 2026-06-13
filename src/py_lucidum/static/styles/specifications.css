@@ -131,8 +131,7 @@
         color: var(--danger);
       }
 
-      .spec-notice.hidden {
-        display: block;
+      .spec-notice-empty {
         visibility: hidden;
       }
 

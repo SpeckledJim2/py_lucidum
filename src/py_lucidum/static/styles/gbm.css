@@ -1726,11 +1726,6 @@
         padding: 3px 6px;
       }
 
-
-      .hidden {
-        display: none;
-      }
-
       @media (max-width: 1180px) {
         .shell {
           grid-template-columns: var(--sidebar-width, 280px) 6px 1fr;

@@ -71,7 +71,7 @@ export function createSpecificationsTool({
             </div>
           </div>
           <span id="specFilePath" class="spec-file-path"></span>
-          <div id="specNotice" class="spec-notice hidden" role="status" aria-live="polite"></div>
+          <div id="specNotice" class="spec-notice spec-notice-empty" role="status" aria-live="polite"></div>
         </div>
         <div id="specGrid" class="spec-grid" tabindex="0"></div>
         <div id="specContextMenu" class="spec-context-menu" role="menu" hidden>
@@ -508,7 +508,7 @@ export function createSpecificationsTool({
     if (!result) {
       notice.textContent = "";
       notice.title = "";
-      notice.classList.add("hidden");
+      notice.classList.add("spec-notice-empty");
       notice.classList.remove("error", "warning");
       return;
     }
@@ -517,7 +517,7 @@ export function createSpecificationsTool({
     const items = [...errors, ...warnings].slice(0, 8);
     notice.classList.toggle("error", isError || errors.length > 0 || result.valid === false);
     notice.classList.remove("warning");
-    notice.classList.remove("hidden");
+    notice.classList.remove("spec-notice-empty");
     const messageParts = [];
     [result.message || "", ...items].forEach((item) => {
       if (item && !messageParts.includes(item)) messageParts.push(item);
