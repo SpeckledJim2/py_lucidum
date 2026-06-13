@@ -666,6 +666,23 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertIn("lucidum: error: Unknown tool 'not-a-tool'", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
+    def test_main_reports_missing_modelling_line_bar_dependency_without_traceback(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", ["lucidum", "missing.parquet", "--tools", "gbm"]),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            main()
+
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("lucidum: error: Tool 'gbm' requires 'line-bar'. Use --tools gbm,line-bar", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_main_reports_missing_filter_spec_without_traceback_or_startup_output(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -676,7 +693,7 @@ class CliRuntimeTests(unittest.TestCase):
             stderr = io.StringIO()
 
             with (
-                patch("sys.argv", ["lucidum", str(data_path), "--filters", str(missing_filters_path)]),
+                patch("sys.argv", ["lucidum", str(data_path), "--tools", "line-bar", "--filters", str(missing_filters_path)]),
                 redirect_stdout(stdout),
                 redirect_stderr(stderr),
                 self.assertRaises(SystemExit) as exit_context,
@@ -698,7 +715,7 @@ class CliRuntimeTests(unittest.TestCase):
             stderr = io.StringIO()
 
             with (
-                patch("sys.argv", ["lucidum", str(data_path), "--kpis", str(missing_kpis_path)]),
+                patch("sys.argv", ["lucidum", str(data_path), "--tools", "line-bar", "--kpis", str(missing_kpis_path)]),
                 redirect_stdout(stdout),
                 redirect_stderr(stderr),
                 self.assertRaises(SystemExit) as exit_context,
@@ -720,7 +737,7 @@ class CliRuntimeTests(unittest.TestCase):
             stderr = io.StringIO()
 
             with (
-                patch("sys.argv", ["lucidum", str(data_path), "--features", str(missing_features_path)]),
+                patch("sys.argv", ["lucidum", str(data_path), "--tools", "line-bar", "--features", str(missing_features_path)]),
                 redirect_stdout(stdout),
                 redirect_stderr(stderr),
                 self.assertRaises(SystemExit) as exit_context,

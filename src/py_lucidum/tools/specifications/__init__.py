@@ -3,7 +3,7 @@ from __future__ import annotations
 TOOL_ID = "specs"
 TOOL_LABEL = "Specifications"
 TOOL_ALIASES = ("specs", "specifications", "specification")
-DEFAULT_ENABLED = False
+DEFAULT_ENABLED = True
 
 
 def register(app, context) -> None:

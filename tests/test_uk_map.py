@@ -93,12 +93,12 @@ class UkMapToolTests(unittest.TestCase):
         return request
 
     def test_default_tools_include_uk_map(self) -> None:
-        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"])
+        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
 
         app = create_app(self.data_path, token="dev-token")
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"])
+        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
         self.assertIn("/api/dataset-viewer/table", paths)
         self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/histogram/chart", paths)

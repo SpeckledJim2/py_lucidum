@@ -1250,7 +1250,7 @@ COPY (
                 [0.19, 0.29, 0.39],
             )
             glm_store.activate_model("browser-smoke-glm")
-            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "glm", "gbm"], features_path=features_path)
+            base_url, server, thread = self.start_app(data_path, tools=["column_profile", "line_bar", "glm", "gbm"], features_path=features_path)
             try:
                 self.exercise_gbm_profile_cache_and_model_chart_refresh(base_url)
             finally:
@@ -1279,7 +1279,7 @@ COPY (
                 [0.12, 0.23, 0.34, 0.45],
             )
             store.activate_model("sidebar-accordion-model")
-            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "uk_map", "glm", "gbm"])
+            base_url, server, thread = self.start_app(data_path, tools=["column_profile", "line_bar", "uk_map", "glm", "gbm"])
             try:
                 self.exercise_sidebar_accordion(base_url)
             finally:
@@ -1433,7 +1433,7 @@ COPY (
             )
             base_url, server, thread = self.start_app(
                 data_path,
-                tools=["glm"],
+                tools=["column_profile", "glm", "line_bar"],
                 features_path=features_path,
                 defaults={"x": "Age", "actual": "actualNumerator", "denominator": "__none__"},
             )
@@ -4512,7 +4512,8 @@ COPY (
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#profileTool.active").wait_for(timeout=10_000)
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#profileTool").wait_for(state="hidden", timeout=10_000)
                 page.wait_for_function(
                     """
                     () => document.querySelector("#datasetViewerTool")?.classList.contains("hidden")
@@ -4524,7 +4525,6 @@ COPY (
                 self.assertEqual(dataset_viewer_css_requests, 0)
                 self.assertEqual(dataset_viewer_table_requests, 0)
 
-                page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                 page.wait_for_timeout(250)
 

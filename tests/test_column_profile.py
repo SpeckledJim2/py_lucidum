@@ -96,17 +96,23 @@ class ColumnProfileToolTests(unittest.TestCase):
         return next(column for column in payload["columns"] if column["name"] == name)
 
     def test_default_tools_include_dataset_viewer_and_column_profile_first(self) -> None:
-        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"])
+        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
+        self.assertEqual(normalise_tools("all"), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "glm", "gbm", "specs"])
         self.assertEqual(normalise_tools("profile,line-bar"), ["column_profile", "line_bar"])
-        self.assertEqual(normalise_tools("glm,gbm"), ["column_profile", "glm", "gbm"])
-        self.assertEqual(normalise_tools("gbm,line-bar,map"), ["column_profile", "line_bar", "uk_map", "glm", "gbm"])
-        self.assertEqual(normalise_tools("models,line-bar,map"), ["column_profile", "line_bar", "uk_map", "glm", "gbm"])
-        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["dataset_viewer", "column_profile", "line_bar"])
+        self.assertEqual(normalise_tools("glm,line-bar"), ["line_bar", "glm"])
+        self.assertEqual(normalise_tools("gbm,line-bar,map"), ["line_bar", "uk_map", "gbm"])
+        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["dataset_viewer", "line_bar"])
+        with self.assertRaisesRegex(ValueError, "Tool 'glm' requires 'line-bar'"):
+            normalise_tools("glm")
+        with self.assertRaisesRegex(ValueError, "Tool 'gbm' requires 'line-bar'"):
+            normalise_tools("gbm")
+        with self.assertRaisesRegex(ValueError, "Unknown tool 'models'"):
+            normalise_tools("models")
 
         app = create_app(self.data_path, token="dev-token")
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"])
+        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
         self.assertIn("/api/dataset-viewer/table", paths)
         self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/column-profile/detail", paths)
@@ -117,20 +123,19 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertNotIn("/api/gbm/summary", paths)
 
     def test_model_tools_can_be_enabled_without_model_dependencies(self) -> None:
-        app = create_app(self.data_path, token="", tools=["glm", "gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["line_bar", "glm", "gbm"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["column_profile", "glm", "gbm"])
+        self.assertEqual(app.state.enabled_tools, ["line_bar", "glm", "gbm"])
         self.assertNotIn("/api/dataset-viewer/table", paths)
-        self.assertIn("/api/column-profile/summary", paths)
-        self.assertIn("/api/column-profile/detail", paths)
+        self.assertNotIn("/api/column-profile/summary", paths)
+        self.assertIn("/api/chart", paths)
         self.assertIn("/api/glm/summary", paths)
         self.assertIn("/api/glm/config", paths)
         self.assertIn("/api/glm/models", paths)
         self.assertIn("/api/glm/validate", paths)
         self.assertIn("/api/glm/build", paths)
         self.assertIn("/api/gbm/summary", paths)
-        self.assertNotIn("/api/chart", paths)
 
         status, _, body = asgi_get(app, "/api/glm/summary")
         payload = json.loads(body)
@@ -141,12 +146,13 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(payload["response"], "response_column")
         self.assertEqual(payload["denominator"], "denominator_column")
 
-    def test_gbm_tool_selection_also_registers_glm(self) -> None:
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+    def test_gbm_tool_selection_requires_line_bar_but_not_glm(self) -> None:
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["column_profile", "glm", "gbm"])
-        self.assertIn("/api/glm/summary", paths)
+        self.assertEqual(app.state.enabled_tools, ["line_bar", "gbm"])
+        self.assertIn("/api/chart", paths)
+        self.assertNotIn("/api/glm/summary", paths)
         self.assertIn("/api/gbm/summary", paths)
 
     def test_column_profile_can_be_enabled_without_dataset_viewer(self) -> None:

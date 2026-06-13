@@ -14,7 +14,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 - **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, and SHAP plotting when SHAP rows are saved during training.
 - **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios/interaction constraints.
-- **Specifications**: optional `--tools specs` editor for feature, KPI, and filter specification CSV files, with continuous validation and save actions against the app's current metadata contracts.
+- **Specifications**: default editor tab for feature, KPI, and filter specification CSV files, with continuous validation and save actions against the app's current metadata contracts.
 
 Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skipped by the shared schema used by normal selectors. Column Profile reports them as skipped, and the GBM feature chooser shows them as disabled invalid rows.
 
@@ -102,8 +102,8 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 .venv/bin/lucidum --demo --features specs/feature_spec.csv
 .venv/bin/lucidum --demo --no-features
 .venv/bin/lucidum --demo --tools line-bar
-.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,models
-.venv/bin/lucidum path/to/my_data.parquet --tools specs
+.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm,gbm
+.venv/bin/lucidum path/to/my_data.parquet --tools all
 ```
 
 - `--open` opens the generated URL with Python's configured browser handler.
@@ -113,8 +113,8 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
-- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When `--tools specs` is also enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save; the path line shows the save target and marks new files or suppressed existing files.
-- Without `--tools`, the default user-facing tools are `dataset-viewer`, `column-profile`, `line-bar`, `histogram`, and `uk-map`, with Dataset Viewer opening first. When `--tools` is provided, Column Profile is always included and Dataset Viewer is included only if you request `dataset-viewer`. Add `glm` after installing the `glm` extra to train GLMs. Add `models` after installing the `glm` and `gbm` extras to enable both modelling tools; requesting `gbm` also enables `glm` so model comparison and tabulation workflows remain available. Add `specs` to edit feature, KPI, and filter spec CSV files from the browser.
+- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When the Specifications tab is enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save; the path line shows the save target and marks new files or suppressed existing files.
+- Without `--tools`, the default user-facing tools are `dataset-viewer`, `column-profile`, `line-bar`, `histogram`, `uk-map`, and `specs`, with Dataset Viewer opening first. Use `--tools all` to load every tool, including GLM and GBM. When `--tools` is provided with a comma-separated list, only those app tabs are loaded. Add `glm` after installing the `glm` extra to train GLMs, and add `gbm` after installing the `gbm` extra to train GBMs; either modelling tool must be requested with `line-bar` because model context-menu actions open Line/Bar charts.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
 
@@ -160,7 +160,7 @@ app = create_app(
     filters_path="specs/filter_spec.csv",
     kpis_path="specs/kpi_spec.csv",
     features_path="specs/feature_spec.csv",
-    tools=["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"],
+    tools=["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"],
 )
 
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
@@ -224,7 +224,7 @@ When the Specifications tool opens a missing Feature spec, it starts with one ro
 
 ## GLM Models
 
-The GLM tool is opt-in. Column Profile remains enabled; include `dataset-viewer` in `--tools` if you also want the raw-row preview:
+The GLM tool is opt-in and must be requested with `line-bar`:
 
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm
@@ -244,11 +244,11 @@ GLM model manifests include build timing diagnostics for dependency setup, data 
 
 ## GBM Models
 
-The GBM tool is opt-in. Column Profile remains enabled, and requesting `gbm` also enables the GLM tool so the shared tabulation/comparison workflow is available. Include `dataset-viewer` in `--tools` if you also want the raw-row preview:
+The GBM tool is opt-in and must be requested with `line-bar`. Request `glm` separately when you also want GLM comparison and tabulation workflows:
 
 ```bash
-.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,models
-.venv/bin/lucidum path/to/my_data.parquet --tools gbm --features specs/feature_spec.csv
+.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm,gbm
+.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,gbm --features specs/feature_spec.csv
 ```
 
 ### Feature setup

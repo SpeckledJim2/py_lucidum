@@ -20,16 +20,10 @@ TOOL_MODULES = (
     "py_lucidum.tools.gbm",
     "py_lucidum.tools.specifications",
 )
-MANDATORY_TOOL_IDS = ("column_profile",)
-MANDATORY_TOOL_ID = MANDATORY_TOOL_IDS[0]
-TOOL_GROUP_ALIASES = {
-    "model": ("glm", "gbm"),
-    "models": ("glm", "gbm"),
-    "modelling": ("glm", "gbm"),
-    "modeling": ("glm", "gbm"),
-}
-TOOL_IMPLIED_IDS = {
-    "gbm": ("glm",),
+SPECIAL_TOOL_ALIASES = {"all"}
+TOOL_REQUIRED_IDS = {
+    "glm": ("line_bar",),
+    "gbm": ("line_bar",),
 }
 
 
@@ -96,25 +90,25 @@ def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
     if not requested:
         requested = default_tool_ids()
 
-    enabled: set[str] = set(MANDATORY_TOOL_IDS)
+    requested_keys = [name.lower() for name in requested]
+    if requested_keys == ["all"]:
+        enabled = set(definitions)
+    else:
+        enabled: set[str] = set()
+        for name, key in zip(requested, requested_keys, strict=True):
+            canonical = aliases.get(key)
+            if not canonical:
+                supported = ", ".join(sorted([*aliases, *SPECIAL_TOOL_ALIASES]))
+                raise ValueError(f"Unknown tool '{name}'. Supported tools: {supported}")
+            enabled.add(canonical)
 
-    def add_tool(tool_id: str) -> None:
-        for implied in TOOL_IMPLIED_IDS.get(tool_id, ()):
-            add_tool(implied)
-        enabled.add(tool_id)
-
-    for name in requested:
-        key = name.lower()
-        group = TOOL_GROUP_ALIASES.get(key)
-        if group:
-            for canonical in group:
-                add_tool(canonical)
-            continue
-        canonical = aliases.get(key)
-        if not canonical:
-            supported = ", ".join(sorted([*aliases, *TOOL_GROUP_ALIASES]))
-            raise ValueError(f"Unknown tool '{name}'. Supported tools: {supported}")
-        add_tool(canonical)
+    for tool_id, required_ids in TOOL_REQUIRED_IDS.items():
+        if tool_id in enabled:
+            for required_id in required_ids:
+                if required_id not in enabled:
+                    requirement = definitions[required_id].aliases[0]
+                    requested_name = aliases.get(tool_id, tool_id)
+                    raise ValueError(f"Tool '{requested_name}' requires '{requirement}'. Use --tools {requested_name},{requirement}")
     return [
         definition.id
         for definition in definitions.values()
@@ -140,8 +134,6 @@ def register_tools(app: FastAPI, context: AppContext, enabled_tools: Sequence[st
 
 
 __all__ = [
-    "MANDATORY_TOOL_ID",
-    "MANDATORY_TOOL_IDS",
     "ToolDefinition",
     "default_tool_ids",
     "normalise_tools",

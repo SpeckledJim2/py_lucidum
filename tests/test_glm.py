@@ -463,7 +463,7 @@ if result.get("iteration") != 10:
             )
 
     def test_glm_config_routes_work_without_optional_dependency_imports(self) -> None:
-        app = create_app(self.data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
         self.assertIn("/api/glm/config", paths)
@@ -499,7 +499,7 @@ if result.get("iteration") != 10:
         self.assertEqual(payload["regularization"]["auto_l1_ratio"], [0.0, 0.5, 1.0])
 
     def test_glm_build_reports_actionable_missing_dependency(self) -> None:
-        app = create_app(self.data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         with patch("py_lucidum.tools.glm.routes.glm_dependencies", side_effect=MissingGlmDependency("glum")):
             status, body = asgi_post_json(
@@ -1437,7 +1437,7 @@ COPY (
         store.activate_model("replace-glm")
         original_root = store.root
 
-        before_app = create_app(data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        before_app = create_app(data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
         before_status, before_body = asgi_get(before_app, "/api/schema")
         before_source_ids = [source["id"] for source in json.loads(before_body)["data_sources"]]
 
@@ -1449,7 +1449,7 @@ COPY (
             encoding="utf-8",
         )
         replacement_store = GlmModelStore(data_path)
-        after_app = create_app(data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        after_app = create_app(data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
         after_status, after_body = asgi_get(after_app, "/api/schema")
         after_source_ids = [source["id"] for source in json.loads(after_body)["data_sources"]]
 
@@ -2114,11 +2114,11 @@ COPY (
             con.close()
         store.activate_model("other-glm")
 
-        current_app = create_app(self.data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        current_app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
         current_status, current_body = asgi_get(current_app, "/api/schema")
         current_source_ids = [source["id"] for source in json.loads(current_body)["data_sources"]]
 
-        other_app = create_app(other_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        other_app = create_app(other_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
         other_status, other_body = asgi_get(other_app, "/api/schema")
         other_source_ids = [source["id"] for source in json.loads(other_body)["data_sources"]]
 
@@ -2129,7 +2129,7 @@ COPY (
 
     def test_glm_api_build_job_and_model_mutations(self) -> None:
         self.require_glm_dependencies()
-        app = create_app(self.data_path, token="", tools=["glm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_post_json(
             app,

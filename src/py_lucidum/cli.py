@@ -442,7 +442,7 @@ def main() -> int:
     parser.add_argument(
         "--tools",
         default=None,
-        help="Comma-separated tools to enable. Column Profile is always included; Dataset Viewer is default-enabled only when --tools is omitted unless requested. Supports dataset-viewer, column-profile, line-bar, uk-map, glm, gbm, specs, and models. Requesting gbm also enables glm.",
+        help="Comma-separated app tabs to load exactly as specified, or 'all' for every tab. Omit to load normal tabs except GLM/GBM. GLM and GBM require line-bar.",
     )
     args = parser.parse_args()
     if args.demo and args.path:

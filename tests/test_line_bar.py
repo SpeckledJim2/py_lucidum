@@ -371,11 +371,11 @@ COPY (
         self.assertIn("/api/chart", paths)
         self.assertIn("/api/line-bar/chart", paths)
         self.assertIn("/api/line-bar/table", paths)
-        self.assertIn("/api/column-profile/summary", paths)
+        self.assertNotIn("/api/column-profile/summary", paths)
         self.assertIn("/api/schema", paths)
         self.assertIn("/api/shutdown", paths)
         self.assertIn("/static", paths)
-        self.assertEqual(app.state.enabled_tools, ["column_profile", "line_bar"])
+        self.assertEqual(app.state.enabled_tools, ["line_bar"])
         self.assertNotIn("/api/dataset-viewer/table", paths)
         self.assertEqual(app.state.defaults["denominator"], "Weight")
         self.assertEqual(
@@ -763,7 +763,7 @@ COPY (
     def test_feature_importance_endpoint_returns_active_gbm_and_glm_feature_rows(self) -> None:
         self.write_active_gbm_importance_model()
         self.write_active_glm_importance_model()
-        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, _, body = asgi_get(app, "/api/line-bar/feature-importance")
         payload = json.loads(body)
@@ -779,7 +779,7 @@ COPY (
         self.assertIn("Gross.Weight", [row["name"] for row in payload["dataset_features"]])
 
     def test_feature_importance_endpoint_reports_missing_active_models(self) -> None:
-        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, _, body = asgi_get(app, "/api/line-bar/feature-importance")
         payload = json.loads(body)

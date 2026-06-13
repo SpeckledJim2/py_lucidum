@@ -1004,11 +1004,11 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_initial_tool_buttons_match_enabled_tools(self) -> None:
         cases = [
-            (None, {"dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"}),
-            (["line-bar"], {"column_profile", "line_bar"}),
-            (["gbm"], {"column_profile", "glm", "gbm"}),
-            (["specs"], {"column_profile", "specs"}),
-            (["dataset-viewer", "line-bar"], {"dataset_viewer", "column_profile", "line_bar"}),
+            (None, {"dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"}),
+            (["line-bar"], {"line_bar"}),
+            (["gbm", "line-bar"], {"line_bar", "gbm"}),
+            (["specs"], {"specs"}),
+            (["dataset-viewer", "line-bar"], {"dataset_viewer", "line_bar"}),
         ]
         for tools, expected_visible_tools in cases:
             with self.subTest(tools=tools):

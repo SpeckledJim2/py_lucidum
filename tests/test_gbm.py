@@ -213,7 +213,7 @@ COPY (
         return store
 
     def test_gbm_config_routes_work_without_lightgbm_imports(self) -> None:
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
         self.assertIn("/api/gbm/config", paths)
@@ -314,7 +314,7 @@ COPY (
             )
         finally:
             con.close()
-        app = create_app(data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
@@ -348,7 +348,7 @@ COPY (
         app = create_app(
             self.data_path,
             token="",
-            tools=["gbm"],
+            tools=["gbm", "line_bar"],
             use_saved_filters=False,
             use_kpis=False,
             features_path=features_path,
@@ -669,7 +669,7 @@ COPY (
 
     def test_shap_routes_work_without_lightgbm_imports(self) -> None:
         self.write_shap_plot_model()
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
             status, body = asgi_get(app, "/api/gbm/models/shap-model/shap/config")
@@ -724,7 +724,7 @@ COPY (
                 app = create_app(
                     self.data_path,
                     token="",
-                    tools=["gbm"],
+                    tools=["gbm", "line_bar"],
                     use_saved_filters=False,
                     use_kpis=False,
                     features_path=features_path,
@@ -738,7 +738,7 @@ COPY (
 
     def test_active_feature_scenario_is_null_for_models_without_recorded_scenario(self) -> None:
         self.write_model_artifacts()
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
@@ -770,7 +770,7 @@ COPY (
         app = create_app(
             self.data_path,
             token="",
-            tools=["gbm"],
+            tools=["gbm", "line_bar"],
             use_saved_filters=False,
             use_kpis=False,
             features_path=features_path,
@@ -814,7 +814,7 @@ COPY (
         app = create_app(
             self.data_path,
             token="",
-            tools=["gbm"],
+            tools=["gbm", "line_bar"],
             use_saved_filters=False,
             use_kpis=False,
             features_path=features_path,
@@ -843,7 +843,7 @@ COPY (
             "features": ["PostcodeArea"],
         }
         store.write_json(store.artifact_path("m1", "manifest"), manifest)
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
@@ -882,7 +882,7 @@ COPY (
         app = create_app(
             self.data_path,
             token="",
-            tools=["gbm"],
+            tools=["gbm", "line_bar"],
             use_saved_filters=False,
             use_kpis=False,
             features_path=features_path,
@@ -1179,7 +1179,7 @@ COPY (
             "50,500,70\n",
             encoding="utf-8",
         )
-        app = create_app(data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
@@ -1196,7 +1196,7 @@ COPY (
         self.assertTrue(payload["config"]["ebm_available"])
 
     def test_train_endpoint_reports_missing_optional_dependencies(self) -> None:
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         request = {
             "features": self.request_features(),
             "parameters": [{"name": "objective", "value": "poisson"}, {"name": "metric", "value": "poisson"}],
@@ -1220,7 +1220,7 @@ COPY (
         app = create_app(
             self.data_path,
             token="",
-            tools=["gbm"],
+            tools=["gbm", "line_bar"],
             use_saved_filters=False,
             use_kpis=False,
             features_path=features_path,
@@ -1505,7 +1505,7 @@ COPY (
         self.assertEqual(snapshot.progress["evaluation"], {"test": {"poisson": [1.2]}})
 
     def test_gbm_job_route_returns_progress(self) -> None:
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         job = GbmJob(
             id="progress-job",
             status="running",
@@ -1774,7 +1774,7 @@ COPY (
             original_probe(dataset, column)
 
         with patch.object(Dataset, "probe_column_readable", fake_probe):
-            app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+            app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
             status, body = asgi_get(app, "/api/gbm/config")
 
         payload = json.loads(body)
@@ -1829,7 +1829,7 @@ COPY (
 
     def test_gbm_config_overlays_shap_importance_from_saved_summary(self) -> None:
         self.write_shap_plot_model()
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
             status, body = asgi_get(app, "/api/gbm/config")
@@ -1845,7 +1845,7 @@ COPY (
 
     def test_gbm_config_omits_shap_importance_without_saved_summary(self) -> None:
         self.write_shap_plot_model("no-shap", with_shap=False)
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
@@ -1866,7 +1866,7 @@ COPY (
                 "custom_penalty": 2.5,
             },
         )
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
@@ -1928,7 +1928,7 @@ COPY (
             store.artifact_path("m2", "training_log"),
             {"evaluation": {"train": {"poisson": [1.4, 1.2, 1.1]}}},
         )
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         models_status, models_body = asgi_get(app, "/api/gbm/models")
         config_status, config_body = asgi_get(app, "/api/gbm/config")
@@ -1989,7 +1989,7 @@ COPY (
                 },
             )
         store.activate_model("m1")
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_post_json(app, "/api/gbm/models/m2/activate", {})
         payload = json.loads(body)
@@ -2059,7 +2059,7 @@ COPY (
     def test_rename_model_rejects_invalid_duplicate_and_missing_models(self) -> None:
         store = self.write_model_artifacts()
         store.create_model_dir("taken")
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         invalid_status, invalid_body = asgi_post_json(app, "/api/gbm/models/m1/rename", {"new_model_id": "bad/name"})
         duplicate_status, duplicate_body = asgi_post_json(app, "/api/gbm/models/m1/rename", {"new_model_id": "taken"})
@@ -2095,7 +2095,7 @@ COPY (
                 },
             )
         store.activate_model("older")
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_delete(app, "/api/gbm/models/older")
         payload = json.loads(body)
@@ -2999,7 +2999,7 @@ COPY (
         finally:
             con.close()
 
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         status, body = asgi_get(app, "/api/schema")
         source_ids = [source["id"] for source in json.loads(body)["data_sources"]]
 
@@ -3018,11 +3018,11 @@ COPY (
         other_store = self.write_minimal_gbm_source(other_path, "credit-model")
         original_other_root = other_store.root
 
-        current_app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        current_app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         current_status, current_body = asgi_get(current_app, "/api/schema")
         current_source_ids = [source["id"] for source in json.loads(current_body)["data_sources"]]
 
-        other_app = create_app(other_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        other_app = create_app(other_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         other_status, other_body = asgi_get(other_app, "/api/schema")
         other_source_ids = [source["id"] for source in json.loads(other_body)["data_sources"]]
 
@@ -3034,7 +3034,7 @@ COPY (
             encoding="utf-8",
         )
         replacement_store = GbmModelStore(other_path)
-        replacement_app = create_app(other_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        replacement_app = create_app(other_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         replacement_status, replacement_body = asgi_get(replacement_app, "/api/schema")
         replacement_source_ids = [source["id"] for source in json.loads(replacement_body)["data_sources"]]
 
@@ -3206,7 +3206,7 @@ COPY (
 
     def test_tree_routes_work_without_lightgbm_imports(self) -> None:
         self.write_model_artifacts()
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
             summary_status, summary_body = asgi_get(app, "/api/gbm/models/m1/trees")
@@ -3492,7 +3492,7 @@ COPY (
             )
         finally:
             con.close()
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
             status, body = asgi_get(app, "/api/gbm/models/ebm-summary/ebm-gain-summary")
@@ -3538,7 +3538,7 @@ COPY (
             )
         finally:
             con.close()
-        app = create_app(self.data_path, token="", tools=["gbm"], use_saved_filters=False, use_kpis=False)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_get(app, "/api/gbm/models/normal-summary/ebm-gain-summary")
 

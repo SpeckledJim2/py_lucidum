@@ -136,12 +136,12 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - The free-form DuckDB filter expression lives in the collapsible footer; hiding the footer does not clear the active filter.
 - Saved-filter rows support `Single`, `Multi`, and `Grouped` modes. `Single` keeps one selected row, `Multi` toggles rows and combines them with the active All/Any/Not all/None operator, and `Grouped` toggles rows while combining rows within a theme with `OR` and selected themes with `AND`.
 - `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for app metadata and prevent the Specifications tool from preloading default-discovered files for those disabled spec kinds.
-- The opt-in Specifications tool is enabled with `--tools specs`. It exposes Feature, KPI, and Filter spec screens backed by `/api/specs/*`, edits raw CSV fields rather than normalized schema metadata, continuously validates the same file contracts used at startup/reload, and atomically saves the selected spec file. Missing or disabled specs return generated starter drafts only: Feature specs get one row per valid dataset column with only `Feature` populated, while KPI and filter specs get one blank row with visual-only placeholder hints. Generated drafts are not written until Save; the file-path line labels the save target as a new file or as an existing file suppressed by `--no-*` when applicable. Saving a disabled spec writes the CSV for editing but leaves the running app metadata disabled until restart/recreate without the corresponding `--no-*` option.
+- The default-enabled Specifications tool exposes Feature, KPI, and Filter spec screens backed by `/api/specs/*`, edits raw CSV fields rather than normalized schema metadata, continuously validates the same file contracts used at startup/reload, and atomically saves the selected spec file. Missing or disabled specs return generated starter drafts only: Feature specs get one row per valid dataset column with only `Feature` populated, while KPI and filter specs get one blank row with visual-only placeholder hints. Generated drafts are not written until Save; the file-path line labels the save target and marks new files or suppressed existing files. Saving a disabled spec writes the CSV for editing but leaves the running app metadata disabled until restart/recreate without the corresponding `--no-*` option.
 - Filters are DuckDB `WHERE` expressions and apply before column profiling, chart aggregation, histogram binning/statistics, map aggregation, table rendering, low-weight grouping, response transforms, and sigma calculations.
 
 **Dataset Viewer**
 
-- Dataset Viewer is default-enabled, registered first when enabled, and opens on startup for ordinary launches. Explicit `--tools` / `create_app(..., tools=...)` selections exclude it unless `dataset-viewer` is requested.
+- Dataset Viewer is default-enabled, registered first when enabled, and opens on startup for ordinary launches. Explicit `--tools` / `create_app(..., tools=...)` selections are exact and include it only when `dataset-viewer` is requested.
 - Requests return readable raw dataset columns and up to 1,000 filtered preview rows, plus `has_more` when another row exists beyond the cap. They deliberately do not compute exact total or filtered row counts.
 - The active footer/saved-filter expression is applied server-side before the display cap.
 - Whole-table search, column sorting, row selection, transpose, reset-sort, and copy-selected rows are client-side over the loaded display rows only.
@@ -149,7 +149,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **Column profile**
 
-- Column profile is mandatory: `--tools` and `create_app(..., tools=...)` cannot remove it, and the backend always reports/registers it. It appears immediately after Dataset Viewer when Dataset Viewer is enabled.
+- Column profile is default-enabled but not mandatory: explicit `--tools` and `create_app(..., tools=...)` selections include it only when requested. It appears immediately after Dataset Viewer when both tools are enabled.
 - Summary requests return every readable dataset column with inferred kind, DuckDB type, filtered missing count, distinct count, and min/max for numeric/date-like columns. Auto-mode summaries are exact when `filtered rows * readable columns <= 10,000,000`; larger summaries use the first 100,000 filtered readable rows and include `calculation` metadata plus a UI action to recalculate all rows exactly. Passing `mode: "full"` to `/api/column-profile/summary` forces exact all-row summary stats.
 - Unreadable columns are omitted from profile summaries and returned through `skipped_columns` with sanitized errors.
 - Detail requests return value counts for categorical columns and histogram/stat tables for numeric/date-like columns.
@@ -196,7 +196,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **GLM and GBM**
 
-- GLM and GBM are opt-in tools (`--tools glm,gbm` or `--tools models`) and are not part of the default user-facing tool set. Column Profile is still enabled alongside them; Dataset Viewer is included only when requested explicitly. Requesting `gbm` also enables `glm`, because GBM workflows use the GLM tool for cross-model tabulation and comparison.
+- GLM and GBM are opt-in tools and are not part of the default user-facing tool set. `--tools all` enables them with every other tool. Explicit modelling selections must also include `line-bar` because GLM/GBM context-menu actions open Line/Bar charts. GLM and GBM do not imply each other; request both when cross-model tabulation or comparison workflows are needed.
 - GLM and GBM artifacts are scoped to the exact dataset version under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/{glm,gbm}/`. The slug is derived from the dataset filename. The signature is derived from file size, modification time, row count, and schema fingerprint. Startup scans only the current signature workspace; root-level `.lucidum/models/` folders and other dataset-version workspaces are ignored and must never break raw dataset startup.
 - GLM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
 - GLM training imports `glum`, pandas, and numpy lazily through the `glm` optional extra. These packages must not become base install dependencies. Build routes should report missing GLM dependencies as an actionable install-extra error, not a server 500.

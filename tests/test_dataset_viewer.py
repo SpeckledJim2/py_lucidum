@@ -69,14 +69,14 @@ class DatasetViewerToolTests(unittest.TestCase):
         return json.loads(body)
 
     def test_dataset_viewer_is_first_default_tool(self) -> None:
-        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"])
-        self.assertEqual(normalise_tools("line-bar"), ["column_profile", "line_bar"])
-        self.assertEqual(normalise_tools("gbm"), ["column_profile", "glm", "gbm"])
-        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["dataset_viewer", "column_profile", "line_bar"])
+        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
+        self.assertEqual(normalise_tools("line-bar"), ["line_bar"])
+        self.assertEqual(normalise_tools("gbm,line-bar"), ["line_bar", "gbm"])
+        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["dataset_viewer", "line_bar"])
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map"])
+        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
         self.assertIn("/api/dataset-viewer/table", paths)
         self.assertIn("/api/filter/row-count", paths)
 
@@ -84,7 +84,7 @@ class DatasetViewerToolTests(unittest.TestCase):
         app = create_app(self.data_path, token="", tools=["line-bar"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["column_profile", "line_bar"])
+        self.assertEqual(app.state.enabled_tools, ["line_bar"])
         self.assertNotIn("/api/dataset-viewer/table", paths)
         self.assertIn("/api/filter/row-count", paths)
         status, _, _ = asgi_post_json(app, "/api/dataset-viewer/table", {"filter": "", "limit": 1000})
