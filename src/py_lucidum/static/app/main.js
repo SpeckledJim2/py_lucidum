@@ -886,7 +886,7 @@
           if (index > 0) {
             const separator = document.createElement("span");
             separator.className = "dataset-meta-uk-map-separator";
-            separator.textContent = "/";
+            separator.textContent = "·";
             group.append(separator);
           }
           const button = document.createElement("button");

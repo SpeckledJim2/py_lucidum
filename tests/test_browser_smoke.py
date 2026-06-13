@@ -4335,7 +4335,7 @@ COPY (
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#datasetMeta")?.textContent.includes("Area/Sector/Unit")
+                    () => document.querySelector("#datasetMeta")?.textContent.includes("Area·Sector·Unit")
                     """
                 )
                 self.assertEqual(page.locator("header").evaluate("node => getComputedStyle(node).height"), "52px")
@@ -4347,6 +4347,10 @@ COPY (
                 self.assertEqual(
                     page.locator(".dataset-meta-uk-map-link").evaluate_all("nodes => nodes.map((node) => node.textContent.trim()).join('/')"),
                     "Area/Sector/Unit",
+                )
+                self.assertEqual(
+                    page.locator(".dataset-meta-uk-map-separator").evaluate_all("nodes => nodes.map((node) => node.textContent).join('')"),
+                    "··",
                 )
                 self.assertEqual(page.locator(".dataset-meta-uk-map-icon").count(), 0)
                 self.assertTrue(page.locator("#ukMapTool img").is_visible())

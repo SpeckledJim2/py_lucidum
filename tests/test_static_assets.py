@@ -905,6 +905,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('columnButton.addEventListener("click", openColumnProfile);', js)
         self.assertIn("function openColumnProfile()", js)
         self.assertIn('button.className = "dataset-meta-uk-map-link";', js)
+        self.assertIn('separator.textContent = "·";', js)
         self.assertIn("ukMapTool.setMapLevel(level", js)
         self.assertIn('const payload = await api("/api/glm/models", { method: "GET" });', js)
         self.assertIn('const payload = await api("/api/gbm/models", { method: "GET" });', js)
