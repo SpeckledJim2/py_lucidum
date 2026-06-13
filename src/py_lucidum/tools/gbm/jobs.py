@@ -19,6 +19,7 @@ class GbmJob:
     status: str = "queued"
     created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     updated_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    started_at: float = field(default_factory=time.perf_counter)
     result: dict[str, Any] | None = None
     error: str | None = None
     progress: dict[str, Any] | None = None
@@ -29,6 +30,7 @@ class GbmJob:
             "status": self.status,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "elapsed_seconds": round(max(0.0, time.perf_counter() - self.started_at), 3),
             "result": self.result,
             "error": self.error,
             "progress": self.progress,

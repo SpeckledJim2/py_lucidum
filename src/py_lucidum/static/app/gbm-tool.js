@@ -2998,13 +2998,13 @@ export function createGbmTool({
 
   function applyJobProgress(job) {
     if (!job?.progress) return;
-    renderLiveProgress(job.progress);
+    renderLiveProgress(job.progress, job);
   }
 
-  function renderLiveProgress(progress) {
+  function renderLiveProgress(progress, job = null) {
     liveProgress = progress;
     setAppReadyStatus(gbmTrainingReadyBadgeLabel(progress));
-    setTrainingStatus(progress.message || "", progress.phase || "", trainingStatusDetail(progress));
+    setTrainingStatus(progress.message || "", progress.phase || "", trainingStatusDetail(progress, job));
     if (progress.message) setGroupMeta(tool, progress.message);
     if (progress.evaluation) {
       renderEvaluationChart({
@@ -3020,8 +3020,10 @@ export function createGbmTool({
     }
   }
 
-  function trainingStatusDetail(progress) {
+  function trainingStatusDetail(progress, job = null) {
     const parts = [];
+    const elapsed = formatGbmElapsedDuration(job?.elapsed_seconds ?? progress?.elapsed_seconds);
+    if (elapsed) parts.push(`elapsed ${elapsed}`);
     const gridMessages = Array.isArray(progress?.grid?.messages) ? progress.grid.messages : [];
     if (gridMessages.length) parts.push(gridMessages.join(" "));
     const parameters = Array.isArray(progress?.grid_parameters) ? progress.grid_parameters : [];
@@ -3030,6 +3032,18 @@ export function createGbmTool({
     }
     if (!parts.length && gridTrainingNotice) parts.push(gridTrainingNotice);
     return parts.join("  ");
+  }
+
+  function formatGbmElapsedDuration(value) {
+    const seconds = Math.max(0, Math.floor(Number(value)));
+    if (!Number.isFinite(seconds)) return "";
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    if (minutes < 60) return `${minutes}m ${String(remainingSeconds).padStart(2, "0")}s`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${String(remainingMinutes).padStart(2, "0")}m`;
   }
 
   async function activateModel(modelId) {

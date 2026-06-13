@@ -1465,6 +1465,8 @@ COPY (
         payload = job.as_payload()
 
         self.assertEqual(payload["progress"], {"phase": "training", "iteration": 3})
+        self.assertIsInstance(payload["elapsed_seconds"], float)
+        self.assertGreaterEqual(payload["elapsed_seconds"], 0.0)
 
     def test_gbm_job_manager_records_and_preserves_progress_on_failure(self) -> None:
         dataset = Dataset(self.data_path)
@@ -2420,6 +2422,11 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         self.assertTrue(any(item.get("phase") == "training" for item in progress))
         self.assertTrue(any(item.get("phase") == "scoring" for item in progress))
         self.assertTrue(any(item.get("phase") == "artifacts" for item in progress))
+        preparing_messages = [str(item.get("message") or "") for item in progress if item.get("phase") == "preparing"]
+        self.assertTrue(any("validating request" in message for message in preparing_messages))
+        self.assertTrue(any("loading selected data from DuckDB" in message for message in preparing_messages))
+        self.assertTrue(any("applying SAMPLE split" in message for message in preparing_messages))
+        self.assertTrue(any("building LightGBM datasets" in message for message in preparing_messages))
         training_progress = next(item for item in progress if item.get("phase") == "training")
         self.assertIn("iteration", training_progress)
         self.assertIn("evaluation", training_progress)

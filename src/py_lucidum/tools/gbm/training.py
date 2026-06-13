@@ -401,13 +401,15 @@ def train_model(
     activate: bool = True,
     grid_search: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    emit_preparing_progress(progress_callback, "Preparing GBM: loading dependencies...", 0)
     lgb, np, pd = gbm_dependencies()
     started = time.perf_counter()
-    emit_progress(progress_callback, {"phase": "preparing", "message": "preparing GBM...", "percent": 0})
+    emit_preparing_progress(progress_callback, "Preparing GBM: validating request...", 0)
     validation = validate_request(dataset, payload, generated_sample_path=store.generated_sample_path)
     if not validation.ok:
         raise ValueError("; ".join(validation.errors))
 
+    emit_preparing_progress(progress_callback, "Preparing GBM: resolving parameters...", 0)
     params = normalise_parameters(payload.get("parameters"))
     selected_init_score = normalise_init_score_value(params.pop("init_score", INIT_SCORE_NONE))
     training_mode = normalise_training_mode(payload.get("training_mode"))
@@ -429,6 +431,7 @@ def train_model(
         params["learning_rate"] = EBM_INITIAL_LEARNING_RATE
 
     with dataset.lock:
+        emit_preparing_progress(progress_callback, "Preparing GBM: resolving selected features...", 0)
         columns = dataset.column_map()
         response_col = selected_response_column(payload, columns)
         offset_col = selected_offset_column(payload, columns)
@@ -440,6 +443,7 @@ def train_model(
         selected_interaction_pairs = normalise_feature_interaction_pairs(payload.get("feature_interaction_pairs"))
         dataset_sample = dataset_sample_column(dataset)
         if not dataset_sample and payload.get("create_sample"):
+            emit_preparing_progress(progress_callback, "Preparing GBM: creating generated SAMPLE split...", 0)
             create_generated_sample(dataset, store.generated_sample_path)
         generated_sample_path = (
             store.generated_sample_path
@@ -458,6 +462,13 @@ def train_model(
             init_score_col=init_score_col,
         )
         where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
+        emit_preparing_progress(
+            progress_callback,
+            f"Preparing GBM: loading selected data from DuckDB ({len(projection_columns):,} columns)...",
+            0,
+            feature_count=len(feature_names),
+            projection_column_count=len(projection_columns),
+        )
         select_sql = training_select_sql(
             dataset.relation_sql(),
             projection_columns,
@@ -469,6 +480,13 @@ def train_model(
     if score_frame.empty:
         raise ValueError("No rows are available for GBM training")
 
+    emit_preparing_progress(
+        progress_callback,
+        f"Preparing GBM: loaded {len(score_frame):,} rows; creating model workspace...",
+        0,
+        scored_rows=len(score_frame),
+        feature_count=len(feature_names),
+    )
     model_label = str(payload.get("label") or "GBM").strip() or "GBM"
     model_id = store.create_model_id(model_label)
     model_dir = store.create_model_dir(model_id)
@@ -541,6 +559,7 @@ def train_model(
     if interaction_constraints:
         params["interaction_constraints"] = interaction_constraints
 
+    emit_preparing_progress(progress_callback, "Preparing GBM: coercing response and denominator columns...", 0, scored_rows=len(score_frame))
     work_frame = score_frame.copy()
     work_frame[response_col] = pd.to_numeric(work_frame[response_col], errors="coerce")
     if offset_col:
@@ -561,11 +580,31 @@ def train_model(
     if not bool(train_mask.any()):
         raise ValueError("No training rows are available after validation")
 
+    emit_preparing_progress(
+        progress_callback,
+        (
+            "Preparing GBM: applying SAMPLE split "
+            f"({int(train_mask.sum()):,} train, {int(test_mask.sum()):,} test, {int(validation_mask.sum()):,} validation)..."
+        ),
+        0,
+        scored_rows=len(score_frame),
+        training_rows=int(train_mask.sum()),
+        test_rows=int(test_mask.sum()),
+        validation_rows=int(validation_mask.sum()),
+    )
     feature_frame = work_frame[feature_names].copy()
+    emit_preparing_progress(
+        progress_callback,
+        f"Preparing GBM: encoding {len(categorical_features):,} categorical features...",
+        0,
+        feature_count=len(feature_names),
+        categorical_feature_count=len(categorical_features),
+    )
     for name in categorical_features:
         feature_frame[name] = feature_frame[name].astype("category")
     categorical_labels = categorical_feature_labels(feature_frame, categorical_features)
 
+    emit_preparing_progress(progress_callback, "Preparing GBM: preparing init scores...", 0, scored_rows=len(score_frame))
     offset_values = work_frame[offset_col].astype("float64") if offset_col else pd.Series([1.0] * len(work_frame), index=work_frame.index)
     log_offset = np.log(offset_values.to_numpy(dtype="float64"))
     use_supplied_init_score = init_score_requested({"init_score": selected_init_score})
@@ -582,6 +621,7 @@ def train_model(
     train_init = active_init_score[train_mask.to_numpy()] if active_init_score is not None else None
     valid_init = active_init_score[test_mask.to_numpy()] if active_init_score is not None and bool(test_mask.any()) else None
 
+    emit_preparing_progress(progress_callback, "Preparing GBM: building LightGBM datasets...", 0, training_rows=int(train_mask.sum()))
     train_set = lgb.Dataset(
         feature_frame.loc[train_mask],
         label=work_frame.loc[train_mask, response_col].astype("float64"),
@@ -632,6 +672,7 @@ def train_model(
         callbacks.append(lgb.early_stopping(early_stopping_rounds, verbose=False))
     callbacks.append(lgb.log_evaluation(period=0))
 
+    emit_preparing_progress(progress_callback, f"Preparing GBM: starting LightGBM training ({num_boost_round:,} trees)...", 0)
     booster = lgb.train(
         params,
         train_set,
@@ -930,6 +971,17 @@ def lightgbm_pair_interaction_constraints(
 def emit_progress(progress_callback: ProgressCallback | None, progress: dict[str, Any]) -> None:
     if progress_callback:
         progress_callback(progress)
+
+
+def emit_preparing_progress(
+    progress_callback: ProgressCallback | None,
+    message: str,
+    percent: float | int | None,
+    **extra: Any,
+) -> None:
+    payload = phase_progress_payload(phase="preparing", message=message, percent=percent)
+    payload.update({key: value for key, value in extra.items() if value is not None})
+    emit_progress(progress_callback, payload)
 
 
 def phase_progress_payload(
