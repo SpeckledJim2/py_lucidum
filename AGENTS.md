@@ -19,7 +19,7 @@ This file gives future coding agents the shortest reliable path into `py_lucidum
 - Tool backends live under `src/py_lucidum/tools/`.
 - Frontend shell and tool modules live under `src/py_lucidum/static/app/`.
 - `src/py_lucidum/static/app/main.js` is the frontend coordinator only: schema/defaults, KPI controls, saved filters, sidebar/footer layout, tool selection, cross-tool invalidation, reload orchestration, and boot flow.
-- Frontend tool ownership is split by file: `column-profile-tool.js`, `line-bar-tool.js`, `histogram-tool.js`, `uk-map-tool.js`, `glm-tool.js`, `glm-formula-builder.js`, `glm-model-navigator.js`, `glm-tabulations.js`, `gbm-tool.js`, `gbm-feature-parameter-controls.js`, `gbm-evaluation-chart.js`, `gbm-model-navigator.js`, `gbm-tab-orchestration.js`, `gbm-shap-tool.js`, `gbm-shap-chart.js`, `gbm-stacked-shap-tool.js`, `gbm-stacked-shap-chart.js`, `gbm-tree-viewer.js`, and `model-tool-shell.js`.
+- Frontend tool ownership is split by file: `dataset-viewer-tool.js`, `column-profile-tool.js`, `line-bar-tool.js`, `histogram-tool.js`, `uk-map-tool.js`, `glm-tool.js`, `glm-formula-builder.js`, `glm-model-navigator.js`, `glm-tabulations.js`, `gbm-tool.js`, `gbm-feature-parameter-controls.js`, `gbm-evaluation-chart.js`, `gbm-model-navigator.js`, `gbm-tab-orchestration.js`, `gbm-shap-tool.js`, `gbm-shap-chart.js`, `gbm-stacked-shap-tool.js`, `gbm-stacked-shap-chart.js`, `gbm-tree-viewer.js`, and `model-tool-shell.js`.
 - Import-safe shared frontend helpers live under `src/py_lucidum/static/app/shared/`: API calls, formatters, schema/source helpers, Tabulator lazy loading, and action timing.
 - `src/py_lucidum/static/app.css` is only the stable linked CSS manifest. Actual app styles live under `src/py_lucidum/static/styles/` by shell/tool boundary.
 - Vendored browser libraries live under `src/py_lucidum/static/vendor/`. ECharts and Leaflet load from `index.html` because default tools need them at startup; Ace, Tabulator, D3, and ECharts GL are lazy-loaded by the tools/views that need them.
@@ -30,6 +30,7 @@ Use this map before opening large files:
 
 - App boot, tool switching, shared sidebar/filter/KPI behavior: read `static/app/main.js`, `static/styles/shell.css`, and `static/styles/controls.css`.
 - Shared API, formatting, schema/source helpers, or timing behavior: read the matching file in `static/app/shared/` first; only read tool modules if call-site behavior matters.
+- Dataset Viewer frontend: read `static/app/dataset-viewer-tool.js` and `static/styles/dataset-viewer.css`; backend behavior is under `tools/dataset_viewer/`.
 - Column Profile frontend: read `static/app/column-profile-tool.js` and `static/styles/column-profile.css`; backend behavior is under `tools/column_profile/`.
 - Line/Bar frontend: read `static/app/line-bar-tool.js` and `static/styles/line-bar.css`; backend behavior is under `tools/line_bar/`.
 - Histogram frontend: read `static/app/histogram-tool.js` and `static/styles/histogram.css`; backend behavior is under `tools/histogram/`.
@@ -57,6 +58,7 @@ Run the standard checks from `DEVELOPMENT.md`. For frontend, app-launch, or GBM 
 .venv/bin/python -m compileall src tests
 node --check src/py_lucidum/static/app.js
 node --check src/py_lucidum/static/app/main.js
+node --check src/py_lucidum/static/app/dataset-viewer-tool.js
 node --check src/py_lucidum/static/app/column-profile-tool.js
 node --check src/py_lucidum/static/app/line-bar-tool.js
 node --check src/py_lucidum/static/app/histogram-tool.js
