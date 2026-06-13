@@ -43,6 +43,8 @@ export function createDatasetViewerTool({
   let renderedSearch = null;
   let renderedTranspose = null;
   let transposedHoverRow = null;
+  let resizeFrame = null;
+  let resizeHard = false;
 
   function buildRequest() {
     return {
@@ -148,6 +150,11 @@ export function createDatasetViewerTool({
 
   function clearTable() {
     hideTransposedHover();
+    if (resizeFrame !== null) {
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = null;
+      resizeHard = false;
+    }
     if (datasetTable) {
       try {
         datasetTable.destroy();
@@ -222,6 +229,7 @@ export function createDatasetViewerTool({
       datasetTable = new Tabulator(target, {
         data: currentRows,
         index: "__row_id",
+        autoResize: false,
         height: "100%",
         layout: "fitDataStretch",
         placeholder: "No matching rows",
@@ -487,11 +495,16 @@ export function createDatasetViewerTool({
     );
   }
 
-  function resize() {
+  function resize({ hard = true } = {}) {
     if (!datasetTable) return;
-    requestAnimationFrame(() => {
+    resizeHard = resizeHard || hard;
+    if (resizeFrame !== null) return;
+    resizeFrame = requestAnimationFrame(() => {
+      const shouldHard = resizeHard;
+      resizeFrame = null;
+      resizeHard = false;
       try {
-        datasetTable.redraw(true);
+        datasetTable.redraw(shouldHard);
       } catch (_) {
         // Ignore stale Tabulator instances.
       }

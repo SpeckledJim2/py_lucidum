@@ -1159,9 +1159,7 @@
           el("modelToolWrap").classList.add("hidden");
           el("specificationsWrap").classList.add("hidden");
           el("datasetViewerWrap").classList.remove("hidden");
-          ensureDatasetViewerTool().then((loadedDatasetViewerTool) => {
-            requestAnimationFrame(() => loadedDatasetViewerTool?.resize());
-          });
+          scheduleActiveToolResize({ hard: true });
         } else if (tool === "line_bar") {
           el("datasetViewerWrap").classList.add("hidden");
           el("profileWrap").classList.add("hidden");
@@ -1226,12 +1224,28 @@
         if (refresh && state.schema) refreshActiveTool();
       }
 
-      function resizeActiveTool() {
+      let activeToolResizeFrame = null;
+      let activeToolResizeHard = false;
+
+      function scheduleActiveToolResize({ hard = true } = {}) {
+        activeToolResizeHard = activeToolResizeHard || hard;
+        if (activeToolResizeFrame !== null) return;
+        activeToolResizeFrame = requestAnimationFrame(() => {
+          const shouldHard = activeToolResizeHard;
+          activeToolResizeFrame = null;
+          activeToolResizeHard = false;
+          resizeActiveTool({ hard: shouldHard });
+        });
+      }
+
+      function resizeActiveTool({ hard = true } = {}) {
+        const resizeOptions = { hard };
         if (state.tool === "dataset_viewer") {
+          if (!hard) return;
           if (datasetViewerTool) {
-            datasetViewerTool.resize();
+            datasetViewerTool.resize(resizeOptions);
           } else {
-            ensureDatasetViewerTool().then((loadedDatasetViewerTool) => loadedDatasetViewerTool?.resize());
+            ensureDatasetViewerTool().then((loadedDatasetViewerTool) => loadedDatasetViewerTool?.resize(resizeOptions));
           }
         } else if (state.tool === "uk_map") {
           ukMapTool.syncViewport({ mode: "preserve" });
@@ -1261,7 +1275,7 @@
         document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible);
         el("appSidebar").removeAttribute("aria-hidden");
         syncSidebarToggleButton();
-        requestAnimationFrame(resizeActiveTool);
+        scheduleActiveToolResize({ hard: true });
       }
 
       function syncSidebarToggleButton() {
@@ -1277,7 +1291,7 @@
         document.body.classList.toggle("filter-footer-collapsed", state.filterFooterCollapsed);
         el("filterFooter").setAttribute("aria-hidden", String(state.filterFooterCollapsed));
         syncFilterFooterToggleButton();
-        requestAnimationFrame(resizeActiveTool);
+        scheduleActiveToolResize({ hard: true });
       }
 
       function syncFilterFooterToggleButton() {
@@ -2208,7 +2222,7 @@
           if (!dragging) return;
           event.preventDefault();
           const bounds = shell.getBoundingClientRect();
-          setSidebarWidth(event.clientX - bounds.left);
+          setSidebarWidth(event.clientX - bounds.left, { hard: false });
         });
         function finishDrag(event) {
           if (!dragging) return;
@@ -2226,17 +2240,17 @@
             } catch (_) {
             }
           }
-          resizeActiveTool();
+          scheduleActiveToolResize({ hard: true });
         }
         resizer.addEventListener("pointerup", finishDrag);
         resizer.addEventListener("pointercancel", finishDrag);
       }
 
-      function setSidebarWidth(rawWidth) {
+      function setSidebarWidth(rawWidth, { hard = true } = {}) {
         const viewportLimit = Math.max(260, window.innerWidth - 520);
         const width = Math.min(Math.max(rawWidth, 220), Math.min(560, viewportLimit));
         document.documentElement.style.setProperty("--sidebar-width", `${Math.round(width)}px`);
-        requestAnimationFrame(resizeActiveTool);
+        scheduleActiveToolResize({ hard });
       }
 
       function setupChartControlsResize() {
@@ -2538,7 +2552,7 @@
           } else if (state.tool === "histogram") {
             histogramTool.resize();
           } else {
-            resizeActiveTool();
+            scheduleActiveToolResize({ hard: true });
           }
         });
       }

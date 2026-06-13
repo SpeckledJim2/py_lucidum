@@ -78,6 +78,25 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_dataset_viewer_sidebar_resize_waits_to_redraw_until_release(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long,feature_001,feature_002,feature_003\n"
+                "AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1,11,12,13\n"
+                "AB,AB10 1,2,200,20,AB10 1AB,57.2,-2.2,21,22,23\n"
+                "AL,AL1 1,3,300,30,AL1 1AA,51.8,-0.3,31,32,33\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path)
+            try:
+                self.exercise_dataset_viewer_sidebar_resize(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_picker_click_preserves_scroll_position(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "many_columns.csv"
@@ -4306,6 +4325,76 @@ COPY (
                     timeout=10_000,
                 )
 
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
+
+    def exercise_dataset_viewer_sidebar_resize(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
+                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => typeof window.Tabulator?.prototype?.redraw === "function"
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    async () => {
+                      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                      const proto = window.Tabulator.prototype;
+                      window.__datasetViewerRedraws = [];
+                      if (!proto.__lucidumOriginalRedraw) {
+                        Object.defineProperty(proto, "__lucidumOriginalRedraw", {
+                          configurable: true,
+                          value: proto.redraw,
+                        });
+                        proto.redraw = function(force) {
+                          (window.__datasetViewerRedraws ||= []).push({
+                            force: force === true,
+                            value: force === undefined ? "undefined" : String(force),
+                          });
+                          return proto.__lucidumOriginalRedraw.apply(this, arguments);
+                        };
+                      }
+                    }
+                    """
+                )
+                resizer_box = page.locator("#sidebarResizer").bounding_box()
+                self.assertIsNotNone(resizer_box)
+                assert resizer_box is not None
+                center_x = resizer_box["x"] + resizer_box["width"] / 2
+                center_y = resizer_box["y"] + resizer_box["height"] / 2
+
+                page.mouse.move(center_x, center_y)
+                page.mouse.down()
+                page.mouse.move(center_x + 48, center_y, steps=3)
+                page.mouse.move(center_x + 96, center_y, steps=3)
+                page.mouse.move(center_x + 144, center_y, steps=3)
+                during_drag_redraws = page.evaluate(
+                    """
+                    async () => {
+                      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                      return window.__datasetViewerRedraws || [];
+                    }
+                    """
+                )
+                self.assertEqual(during_drag_redraws, [])
+                page.mouse.up()
+                page.wait_for_function(
+                    """
+                    () => (window.__datasetViewerRedraws || []).some((entry) => entry.force === true)
+                    """,
+                    timeout=5_000,
+                )
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()
