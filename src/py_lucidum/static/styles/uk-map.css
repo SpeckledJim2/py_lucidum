@@ -197,6 +197,21 @@
         color: var(--text);
       }
 
+      .map-floating-control.collapsed {
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        overflow: visible;
+      }
+
+      body.dark .map-floating-control.collapsed {
+        border-color: transparent;
+        background: transparent;
+      }
+
       .map-floating-header {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 24px;
@@ -275,6 +290,30 @@
         stroke-width: 2;
         stroke-linecap: round;
         stroke-linejoin: round;
+      }
+
+      .map-floating-control.collapsed .map-floating-header {
+        display: block;
+        margin-bottom: 0;
+        cursor: default;
+        touch-action: auto;
+      }
+
+      .map-floating-control.collapsed .map-floating-header strong,
+      .map-floating-control.collapsed .map-floating-header #mapGroupMeta,
+      .map-floating-control.collapsed .map-floating-header #mapControlFilter,
+      .map-floating-control.collapsed .map-floating-row,
+      .map-floating-control.collapsed .map-slider-grid {
+        display: none;
+      }
+
+      .map-floating-control.collapsed .map-control-reset {
+        grid-column: auto;
+        grid-row: auto;
+        align-self: auto;
+        justify-self: auto;
+        width: 24px;
+        height: 24px;
       }
 
       .map-floating-row {

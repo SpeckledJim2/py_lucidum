@@ -161,6 +161,8 @@ export function createUkMapTool({
     top: "py_lucidum_map_control_top",
     version: "py_lucidum_map_control_version",
   };
+  const MAP_CONTROL_EXPANDED_ICON = '<path d="M7 17 17 7"></path><path d="M10 7h7v7"></path>';
+  const MAP_CONTROL_COLLAPSED_ICON = '<path d="M17 7 7 17"></path><path d="M14 17H7v-7"></path>';
   const MAP_BASE_LAYERS = {
     blank: { label: "Blank" },
     esri: {
@@ -1542,7 +1544,7 @@ export function createUkMapTool({
     let startLeft = 0;
     let startTop = 0;
     panel.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || isMapFloatingInteractiveTarget(event.target)) return;
+      if (state.mapControlCollapsed || event.button !== 0 || isMapFloatingInteractiveTarget(event.target)) return;
       event.preventDefault();
       dragging = true;
       if (!state.mapControlMoved) {
@@ -1610,24 +1612,30 @@ export function createUkMapTool({
     localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.version);
   }
 
-  function setMapFloatingPosition(rawLeft, rawTop) {
+  function setMapFloatingPosition(rawLeft, rawTop, { updateState = true } = {}) {
     const panel = el("mapFloatingControl");
-    const workspace = panel.closest(".workspace");
-    const workspaceRect = workspace?.getBoundingClientRect();
-    if (!workspaceRect) return;
+    const frame = mapFloatingPositionFrame();
+    if (!frame) return null;
     const margin = 8;
-    const maxLeft = Math.max(margin, workspaceRect.width - panel.offsetWidth - margin);
-    const maxTop = Math.max(margin, workspaceRect.height - panel.offsetHeight - margin);
+    const topMargin = 4;
+    const maxLeft = Math.max(margin, frame.width - panel.offsetWidth - margin);
+    const maxTop = Math.max(topMargin, frame.height - panel.offsetHeight - margin);
     const left = Math.min(Math.max(rawLeft, margin), maxLeft);
-    const top = Math.min(Math.max(rawTop, margin), maxTop);
-    panel.style.left = `${Math.round(left)}px`;
-    panel.style.top = `${Math.round(top)}px`;
+    const top = Math.min(Math.max(rawTop, topMargin), maxTop);
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
     panel.style.right = "auto";
-    state.mapControlPosition = { left, top };
+    if (updateState) state.mapControlPosition = { left, top };
+    return { left, top };
   }
 
   function clampMapFloatingControl() {
     const panel = el("mapFloatingControl");
+    if (state.mapControlCollapsed) {
+      const position = state.mapControlCollapsedPosition || mapFloatingButtonPosition() || { left: panel.offsetLeft, top: panel.offsetTop };
+      setMapFloatingCollapsedPosition(position.left, position.top);
+      return;
+    }
     if (state.mapControlMoved) {
       if (state.mapControlPosition) {
         setMapFloatingPosition(state.mapControlPosition.left, state.mapControlPosition.top);
@@ -1650,15 +1658,110 @@ export function createUkMapTool({
     state.mapControlPosition = null;
   }
 
-  function resetMapFloatingControlPosition() {
-    clearMapFloatingPosition();
-    state.mapControlPosition = null;
-    state.mapControlMoved = false;
-    positionMapFloatingControlTopRight();
+  function mapFloatingPositionFrame() {
+    const panel = el("mapFloatingControl");
+    const container = panel.offsetParent || panel.closest(".workspace");
+    const rect = container?.getBoundingClientRect();
+    if (!container || !rect) return null;
+    return {
+      left: rect.left + container.clientLeft,
+      top: rect.top + container.clientTop,
+      width: container.clientWidth,
+      height: container.clientHeight,
+    };
+  }
+
+  function mapFloatingButtonPosition() {
+    const frame = mapFloatingPositionFrame();
+    if (!frame) return null;
+    const buttonRect = el("mapControlReset").getBoundingClientRect();
+    return {
+      left: buttonRect.left - frame.left,
+      top: buttonRect.top - frame.top,
+    };
+  }
+
+  function mapFloatingButtonOffset() {
+    const panelRect = el("mapFloatingControl").getBoundingClientRect();
+    const buttonRect = el("mapControlReset").getBoundingClientRect();
+    return {
+      left: buttonRect.left - panelRect.left,
+      top: buttonRect.top - panelRect.top,
+    };
+  }
+
+  function mapFloatingExpandedTopRightPosition() {
+    const panel = el("mapFloatingControl");
+    const frame = mapFloatingPositionFrame();
+    if (!frame) return null;
+    const margin = 8;
+    const topMargin = 4;
+    const buttonOffset = mapFloatingButtonOffset();
+    const panelPosition = {
+      left: Math.max(margin, frame.width - panel.offsetWidth - margin),
+      top: topMargin,
+    };
+    return {
+      panel: panelPosition,
+      button: {
+        left: panelPosition.left + buttonOffset.left,
+        top: panelPosition.top + buttonOffset.top,
+      },
+    };
+  }
+
+  function setMapFloatingCollapsedPosition(rawLeft, rawTop) {
+    const position = setMapFloatingPosition(rawLeft, rawTop, { updateState: false });
+    if (position) state.mapControlCollapsedPosition = position;
+  }
+
+  function syncMapControlCollapseButton() {
+    const button = el("mapControlReset");
+    const collapsed = Boolean(state.mapControlCollapsed);
+    const label = collapsed ? "Expand map controls" : "Collapse map controls";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${collapsed ? MAP_CONTROL_COLLAPSED_ICON : MAP_CONTROL_EXPANDED_ICON}</svg>`;
+  }
+
+  function collapseMapFloatingControl() {
+    const topRight = mapFloatingExpandedTopRightPosition();
+    if (!topRight) return;
+    state.mapControlMoved = true;
+    state.mapControlPosition = topRight.panel;
+    state.mapControlCollapsed = true;
+    el("mapFloatingControl").classList.add("collapsed");
+    syncMapControlCollapseButton();
+    setMapFloatingCollapsedPosition(topRight.button.left, topRight.button.top);
+  }
+
+  function expandMapFloatingControl() {
+    const buttonPosition = mapFloatingButtonPosition();
+    if (!buttonPosition) return;
+    state.mapControlCollapsed = false;
+    state.mapControlCollapsedPosition = null;
+    el("mapFloatingControl").classList.remove("collapsed");
+    syncMapControlCollapseButton();
+    if (!state.mapControlMoved) {
+      positionMapFloatingControlTopRight();
+      return;
+    }
+    const buttonOffset = mapFloatingButtonOffset();
+    setMapFloatingPosition(buttonPosition.left - buttonOffset.left, buttonPosition.top - buttonOffset.top);
+  }
+
+  function toggleMapFloatingControlCollapsed() {
+    if (state.mapControlCollapsed) {
+      expandMapFloatingControl();
+    } else {
+      collapseMapFloatingControl();
+    }
   }
 
   function bindMapFloatingControls() {
-    el("mapControlReset").addEventListener("click", resetMapFloatingControlPosition);
+    syncMapControlCollapseButton();
+    el("mapControlReset").addEventListener("click", toggleMapFloatingControlCollapsed);
     document.querySelectorAll(".map-palette-button").forEach((button) => {
       button.addEventListener("click", () => {
         state.mapPalette = button.dataset.palette || "viridis";

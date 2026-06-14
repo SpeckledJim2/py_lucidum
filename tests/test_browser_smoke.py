@@ -5784,6 +5784,72 @@ COPY (
                 page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-pane')")
                 page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')")
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
+                map_toggle = page.locator("#mapControlReset")
+                self.assertEqual(map_toggle.get_attribute("aria-expanded"), "true")
+                expanded_button_box = map_toggle.bounding_box()
+                self.assertIsNotNone(expanded_button_box)
+                expected_top_right_button_box = page.evaluate(
+                    """
+                    () => {
+                        const panel = document.querySelector("#mapFloatingControl");
+                        const button = document.querySelector("#mapControlReset");
+                        const container = panel.offsetParent || panel.closest(".workspace");
+                        const rect = container.getBoundingClientRect();
+                        const frame = {
+                            left: rect.left + container.clientLeft,
+                            top: rect.top + container.clientTop,
+                            width: container.clientWidth,
+                        };
+                        const panelRect = panel.getBoundingClientRect();
+                        const buttonRect = button.getBoundingClientRect();
+                        const buttonOffset = {
+                            left: buttonRect.left - panelRect.left,
+                            top: buttonRect.top - panelRect.top,
+                        };
+                        const panelLeft = Math.max(8, frame.width - panel.offsetWidth - 8);
+                        return {
+                            x: frame.left + panelLeft + buttonOffset.left,
+                            y: frame.top + 4 + buttonOffset.top,
+                        };
+                    }
+                    """
+                )
+                map_toggle.click()
+                page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
+                self.assertEqual(map_toggle.get_attribute("aria-expanded"), "false")
+                self.assertFalse(page.locator("#mapLineWeight").is_visible())
+                collapsed_button_box = map_toggle.bounding_box()
+                self.assertIsNotNone(collapsed_button_box)
+                self.assertGreater(collapsed_button_box["x"], expanded_button_box["x"])
+                self.assertLess(collapsed_button_box["y"], expanded_button_box["y"])
+                self.assertLessEqual(abs(collapsed_button_box["x"] - expected_top_right_button_box["x"]), 1)
+                self.assertLessEqual(abs(collapsed_button_box["y"] - expected_top_right_button_box["y"]), 1)
+                map_toggle.click()
+                page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
+                self.assertEqual(map_toggle.get_attribute("aria-expanded"), "true")
+                expanded_again_button_box = map_toggle.bounding_box()
+                self.assertIsNotNone(expanded_again_button_box)
+                for axis in ("x", "y"):
+                    self.assertLessEqual(abs(expanded_again_button_box[axis] - expected_top_right_button_box[axis]), 1)
+                header_box = page.locator(".map-floating-header").bounding_box()
+                self.assertIsNotNone(header_box)
+                page.mouse.move(header_box["x"] + 12, header_box["y"] + 10)
+                page.mouse.down()
+                page.mouse.move(header_box["x"] + 12, header_box["y"] + 58, steps=8)
+                page.mouse.up()
+                page.wait_for_timeout(50)
+                dragged_button_box = map_toggle.bounding_box()
+                self.assertIsNotNone(dragged_button_box)
+                self.assertGreater(dragged_button_box["y"], expected_top_right_button_box["y"])
+                for _ in range(5):
+                    map_toggle.click()
+                    page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
+                    map_toggle.click()
+                    page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
+                dragged_after_toggles_box = map_toggle.bounding_box()
+                self.assertIsNotNone(dragged_after_toggles_box)
+                for axis in ("x", "y"):
+                    self.assertLessEqual(abs(dragged_after_toggles_box[axis] - expected_top_right_button_box[axis]), 1)
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="area"]').is_checked())
                 self.assertEqual(page.locator("#mapLineWeightLabel").text_content().strip(), "Line width")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("min"), "-9")

@@ -129,6 +129,8 @@
         pendingMapZoom: null,
         mapControlPosition: null,
         mapControlMoved: false,
+        mapControlCollapsed: false,
+        mapControlCollapsedPosition: null,
         tablePage: 1,
         bandFeature: null,
         bandSuggestionPendingKey: null,
