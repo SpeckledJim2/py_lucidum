@@ -259,12 +259,24 @@ export function createUkMapTool({
     }
   }
 
-  async function useCachedMapData(cache) {
+  async function useCachedMapData(cache, options = {}) {
     state.lastMapData = cache.data;
     syncFloatingMapControl();
     applyToolPresentation("uk_map");
     const geoJson = state.mapGeoJsonCache[cache.data.level];
     const activeLayer = cache.data.level === "unit" ? ukMapPointLayer : ukMapLayer;
+    if (options.renderIfCached) {
+      refreshTheme();
+      if (cache.data.level === "unit") {
+        renderMap(cache.data, null);
+      } else if (geoJson) {
+        renderMap(cache.data, geoJson);
+      } else {
+        const loadedGeoJson = await loadMapGeoJson(cache.data.level);
+        renderMap(cache.data, loadedGeoJson);
+      }
+      return;
+    }
     if (!activeLayer || state.renderedMapLevel !== cache.data.level || state.pendingMapZoom) {
       if (cache.data.level === "unit") {
         renderMap(cache.data, null);

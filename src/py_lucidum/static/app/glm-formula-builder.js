@@ -246,6 +246,10 @@ export function createGlmFormulaBuilder({
     aceEditor.resize();
   }
 
+  function currentAceTheme() {
+    return document.body.classList.contains("dark") ? "ace/theme/monokai" : "ace/theme/textmate";
+  }
+
   async function initEditor() {
     const mount = el("glmFormulaEditor");
     const fallback = el("glmFormulaText");
@@ -257,7 +261,7 @@ export function createGlmFormulaBuilder({
       if (!document.body.contains(mount) || editorInitialisedFor === mount) return;
       aceEditor = ace.edit(mount);
       editorInitialisedFor = mount;
-      aceEditor.setTheme("ace/theme/textmate");
+      aceEditor.setTheme(currentAceTheme());
       aceEditor.session.setMode("ace/mode/r");
       aceEditor.session.setUseWorker(false);
       aceEditor.setOptions({
@@ -474,7 +478,8 @@ export function createGlmFormulaBuilder({
 
   function refreshTheme() {
     if (aceEditor) {
-      aceEditor.setTheme(document.body.classList.contains("dark") ? "ace/theme/monokai" : "ace/theme/textmate");
+      aceEditor.setTheme(currentAceTheme());
+      syncAceGutterWidth();
     }
   }
 

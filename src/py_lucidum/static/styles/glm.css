@@ -349,7 +349,7 @@
       }
 
       .glm-formula-editor {
-        background: #fff;
+        background: var(--panel);
       }
 
       .glm-formula-editor .ace_gutter {
@@ -370,9 +370,9 @@
       }
 
       .glm-formula-text {
-        background: #fff;
+        background: var(--panel);
         border: 0;
-        color: #111827;
+        color: var(--text);
         outline: none;
         padding: 8px;
         resize: none;

@@ -751,19 +751,19 @@
       }
 
       function freshProfileCache() {
-        return { requestKey: null, data: null, presentation: null, details: new Map() };
+        return { requestKey: null, data: null, presentation: null, themeKey: null, details: new Map() };
       }
 
       function freshToolCache() {
         return {
-          dataset_viewer: { requestKey: null, data: null, presentation: null },
+          dataset_viewer: { requestKey: null, data: null, presentation: null, themeKey: null },
           column_profile: freshProfileCache(),
-          line_bar: { requestKey: null, data: null, presentation: null },
-          histogram: { requestKey: null, data: null, presentation: null },
-          uk_map: { requestKey: null, data: null, presentation: null },
-          glm: { requestKey: null, data: null, presentation: null },
-          gbm: { requestKey: null, data: null, presentation: null },
-          specs: { requestKey: null, data: null, presentation: null },
+          line_bar: { requestKey: null, data: null, presentation: null, themeKey: null },
+          histogram: { requestKey: null, data: null, presentation: null, themeKey: null },
+          uk_map: { requestKey: null, data: null, presentation: null, themeKey: null },
+          glm: { requestKey: null, data: null, presentation: null, themeKey: null },
+          gbm: { requestKey: null, data: null, presentation: null, themeKey: null },
+          specs: { requestKey: null, data: null, presentation: null, themeKey: null },
         };
       }
 
@@ -798,7 +798,7 @@
 
       function toolCache(tool) {
         if (!state.toolCache[tool]) {
-          state.toolCache[tool] = tool === "column_profile" ? freshProfileCache() : { requestKey: null, data: null, presentation: null };
+          state.toolCache[tool] = tool === "column_profile" ? freshProfileCache() : { requestKey: null, data: null, presentation: null, themeKey: null };
         }
         if (tool === "column_profile" && !(state.toolCache[tool].details instanceof Map)) {
           state.toolCache[tool].details = new Map();
@@ -821,6 +821,14 @@
 
       function stableRequestKey(request) {
         return JSON.stringify(normaliseForRequestKey(request));
+      }
+
+      function currentThemeKey() {
+        return document.body.classList.contains("dark") ? "dark" : "light";
+      }
+
+      function markToolCacheThemeSynced(tool) {
+        toolCache(tool).themeKey = currentThemeKey();
       }
 
       function metricSummaryRequest() {
@@ -936,7 +944,7 @@
           return {
             buildRequest: () => ukMapTool.buildRequest(),
             fetch: (request, requestKey) => ukMapTool.fetchData(request, requestKey),
-            useCached: (cache) => ukMapTool.useCached(cache),
+            useCached: (cache, options) => ukMapTool.useCached(cache, options),
             handleMissingRequest: () => ukMapTool.showMissingRequest(),
           };
         }
@@ -972,10 +980,14 @@
         const requestKey = stableRequestKey(request);
         const cache = toolCache(tool);
         if (!options.force && cache.data && cache.requestKey === requestKey) {
-          await handler.useCached(cache, options);
+          const themeChanged = cache.themeKey !== currentThemeKey();
+          await handler.useCached(cache, { ...options, renderIfCached: options.renderIfCached || themeChanged });
+          markToolCacheThemeSynced(tool);
           return cache.data;
         }
-        return handler.fetch(request, requestKey);
+        const data = await handler.fetch(request, requestKey);
+        if (data && toolCache(tool).requestKey === requestKey) markToolCacheThemeSynced(tool);
+        return data;
       }
 
       function refreshActiveTool(options = {}) {
@@ -997,6 +1009,45 @@
 
       function refreshActiveToolForMetricChange() {
         if (toolUsesMetricControls()) refreshActiveTool();
+      }
+
+      function syncActiveToolTheme() {
+        const activeTool = state.tool;
+        if (activeTool === "line_bar") {
+          lineBarTool.refreshTheme();
+          markToolCacheThemeSynced(activeTool);
+          return;
+        }
+        if (activeTool === "dataset_viewer") {
+          ensureDatasetViewerTool()
+            .then((loadedDatasetViewerTool) => loadedDatasetViewerTool?.refreshTheme())
+            .finally(() => markToolCacheThemeSynced(activeTool));
+          return;
+        }
+        if (activeTool === "histogram") {
+          histogramTool.refreshTheme();
+          markToolCacheThemeSynced(activeTool);
+          return;
+        }
+        if (activeTool === "uk_map") {
+          ukMapTool.refreshTheme();
+          markToolCacheThemeSynced(activeTool);
+          return;
+        }
+        if (activeTool === "glm") {
+          measureToolRender("glm", () => glmTool.refreshTheme());
+          markToolCacheThemeSynced(activeTool);
+          return;
+        }
+        if (activeTool === "gbm") {
+          measureToolRender("gbm", () => gbmTool.refreshTheme());
+          markToolCacheThemeSynced(activeTool);
+          return;
+        }
+        if (activeTool === "specs") {
+          measureToolRender("specs", () => specificationsTool.refreshTheme());
+          markToolCacheThemeSynced(activeTool);
+        }
       }
 
       function chooseDefaultTool() {
@@ -2594,13 +2645,7 @@
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
           syncThemeButton();
-          if (state.tool === "line_bar") lineBarTool.refreshTheme();
-          if (state.tool === "dataset_viewer") ensureDatasetViewerTool().then((loadedDatasetViewerTool) => loadedDatasetViewerTool?.refreshTheme());
-          if (state.tool === "histogram") histogramTool.refreshTheme();
-          if (state.tool === "uk_map") ukMapTool.refreshTheme();
-          if (state.tool === "glm") measureToolRender("glm", () => glmTool.refreshTheme());
-          if (state.tool === "gbm") measureToolRender("gbm", () => gbmTool.refreshTheme());
-          if (state.tool === "specs") measureToolRender("specs", () => specificationsTool.refreshTheme());
+          syncActiveToolTheme();
         });
         el("reloadBtn").addEventListener("click", async () => {
           setStatus("");

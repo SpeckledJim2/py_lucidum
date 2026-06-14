@@ -60,6 +60,188 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_hidden_cached_visual_tools_refresh_theme_without_api_requests(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long\n"
+                "AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1\n"
+                "AB,AB10 1,2,200,20,AB10 1AB,57.2,-2.2\n"
+                "AL,AL1 1,3,300,30,AL1 1AA,51.8,-0.3\n"
+                "AL,AL1 2,4,400,40,AL1 2AA,51.7,-0.2\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "vehicle_age",
+                    "actual": "price",
+                    "denominator": "value",
+                },
+                tools=["line_bar", "uk_map"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    chart_requests = 0
+                    map_requests = 0
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def count_request(request: object) -> None:
+                        nonlocal chart_requests, map_requests
+                        if request.url.endswith("/api/chart"):
+                            chart_requests += 1
+                        elif request.url.endswith("/api/uk-map/summary"):
+                            map_requests += 1
+
+                    def wait_for_line_bar_text_theme() -> None:
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const chart = window.echarts?.getInstanceByDom(document.querySelector("#chart"));
+                              const option = chart?.getOption?.();
+                              const xAxis = Array.isArray(option?.xAxis) ? option.xAxis[0] : option?.xAxis;
+                              const actual = xAxis?.axisLabel?.color || "";
+                              const expected = getComputedStyle(document.body).getPropertyValue("--text").trim();
+                              return Boolean(actual && expected && actual === expected);
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+
+                    page.on("request", count_request)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                    page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    wait_for_line_bar_text_theme()
+                    self.assertGreaterEqual(chart_requests, 1)
+
+                    page.locator("#ukMapTool").click()
+                    page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')", timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => (document.querySelector("#mapGroupMeta")?.textContent || "").includes("matched")
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertGreaterEqual(map_requests, 1)
+                    chart_requests_after_initial_render = chart_requests
+                    map_requests_after_initial_render = map_requests
+
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function("() => document.body.classList.contains('dark')", timeout=10_000)
+                    page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-dark')", timeout=10_000)
+                    page.locator("#lineBarTool").click()
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    wait_for_line_bar_text_theme()
+                    page.wait_for_timeout(100)
+                    self.assertEqual(chart_requests, chart_requests_after_initial_render)
+                    self.assertEqual(map_requests, map_requests_after_initial_render)
+
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
+                    wait_for_line_bar_text_theme()
+                    page.locator("#ukMapTool").click()
+                    page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')", timeout=10_000)
+                    page.wait_for_timeout(100)
+                    self.assertEqual(chart_requests, chart_requests_after_initial_render)
+                    self.assertEqual(map_requests, map_requests_after_initial_render)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_glm_ace_editor_uses_current_theme_when_opened_from_cache(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "vehicle_age,price,value\n"
+                "1,100,10\n"
+                "2,200,20\n"
+                "3,300,30\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "vehicle_age",
+                    "actual": "price",
+                    "denominator": "value",
+                },
+                tools=["line_bar", "glm"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    glm_config_requests = 0
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def count_request(request: object) -> None:
+                        nonlocal glm_config_requests
+                        if request.url.endswith("/api/glm/config"):
+                            glm_config_requests += 1
+
+                    def wait_for_ace_theme(theme: str, dark_gutter: bool) -> None:
+                        page.wait_for_function(
+                            """
+                            ({ theme, darkGutter }) => {
+                              const editorNode = document.querySelector("#glmFormulaEditor");
+                              const editor = editorNode?.env?.editor || null;
+                              const gutter = editorNode?.querySelector(".ace_gutter");
+                              if (!editor || editor.getTheme() !== theme || !gutter) return false;
+                              const match = getComputedStyle(gutter).backgroundColor.match(/\\d+(?:\\.\\d+)?/g) || [];
+                              const rgb = match.slice(0, 3).map(Number);
+                              if (rgb.length < 3 || rgb.some((value) => !Number.isFinite(value))) return false;
+                              const average = (rgb[0] + rgb[1] + rgb[2]) / 3;
+                              return darkGutter ? average < 90 : average > 150;
+                            }
+                            """,
+                            arg={"theme": theme, "darkGutter": dark_gutter},
+                            timeout=10_000,
+                        )
+
+                    page.on("request", count_request)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                    page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function("() => document.body.classList.contains('dark')", timeout=10_000)
+                    page.locator("#glmTool").click()
+                    page.locator("#modelToolWrap:not(.hidden) #glmFormulaEditor").wait_for(timeout=10_000)
+                    wait_for_ace_theme("ace/theme/monokai", True)
+                    self.assertGreaterEqual(glm_config_requests, 1)
+                    glm_requests_after_first_open = glm_config_requests
+
+                    page.locator("#lineBarTool").click()
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
+                    page.locator("#glmTool").click()
+                    page.locator("#modelToolWrap:not(.hidden) #glmFormulaEditor").wait_for(timeout=10_000)
+                    wait_for_ace_theme("ace/theme/textmate", False)
+                    page.wait_for_timeout(100)
+                    self.assertEqual(glm_config_requests, glm_requests_after_first_open)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_dataset_viewer_is_not_loaded_when_tool_is_disabled(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
