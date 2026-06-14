@@ -155,7 +155,7 @@ export function createUkMapTool({
   const MAP_LABEL_MIN_FONT_SIZE = 6;
   const MAP_LABEL_MAX_FONT_SIZE = 20;
   const MAP_INITIAL_FIT_OPTIONS = { animate: false };
-  const MAP_CONTROL_POSITION_VERSION = "3";
+  const MAP_CONTROL_POSITION_VERSION = "4";
   const MAP_CONTROL_POSITION_KEYS = {
     left: "py_lucidum_map_control_left",
     top: "py_lucidum_map_control_top",
@@ -1632,8 +1632,7 @@ export function createUkMapTool({
   function clampMapFloatingControl() {
     const panel = el("mapFloatingControl");
     if (state.mapControlCollapsed) {
-      const position = state.mapControlCollapsedPosition || mapFloatingButtonPosition() || { left: panel.offsetLeft, top: panel.offsetTop };
-      setMapFloatingCollapsedPosition(position.left, position.top);
+      positionCollapsedMapFloatingControlTopRight();
       return;
     }
     if (state.mapControlMoved) {
@@ -1647,14 +1646,16 @@ export function createUkMapTool({
     positionMapFloatingControlTopRight();
   }
 
+  function positionCollapsedMapFloatingControlTopRight() {
+    const position = mapFloatingTopRightPanelPosition();
+    if (position) setMapFloatingCollapsedPosition(position.left, position.top);
+  }
+
   function positionMapFloatingControlTopRight() {
-    const panel = el("mapFloatingControl");
-    const styles = getComputedStyle(panel);
-    const rightInset = styles.getPropertyValue("--map-floating-right").trim() || "19px";
-    const topInset = styles.getPropertyValue("--map-floating-top").trim() || "16px";
-    panel.style.left = "auto";
-    panel.style.right = rightInset;
-    panel.style.top = topInset;
+    const position = mapFloatingTopRightPanelPosition();
+    if (position) {
+      setMapFloatingPosition(position.left, position.top, { updateState: false });
+    }
     state.mapControlPosition = null;
   }
 
@@ -1690,23 +1691,15 @@ export function createUkMapTool({
     };
   }
 
-  function mapFloatingExpandedTopRightPosition() {
+  function mapFloatingTopRightPanelPosition() {
     const panel = el("mapFloatingControl");
     const frame = mapFloatingPositionFrame();
     if (!frame) return null;
     const margin = 8;
     const topMargin = 4;
-    const buttonOffset = mapFloatingButtonOffset();
-    const panelPosition = {
+    return {
       left: Math.max(margin, frame.width - panel.offsetWidth - margin),
       top: topMargin,
-    };
-    return {
-      panel: panelPosition,
-      button: {
-        left: panelPosition.left + buttonOffset.left,
-        top: panelPosition.top + buttonOffset.top,
-      },
     };
   }
 
@@ -1726,14 +1719,14 @@ export function createUkMapTool({
   }
 
   function collapseMapFloatingControl() {
-    const topRight = mapFloatingExpandedTopRightPosition();
-    if (!topRight) return;
+    const panelPosition = mapFloatingTopRightPanelPosition();
+    if (!panelPosition) return;
     state.mapControlMoved = true;
-    state.mapControlPosition = topRight.panel;
+    state.mapControlPosition = panelPosition;
     state.mapControlCollapsed = true;
     el("mapFloatingControl").classList.add("collapsed");
     syncMapControlCollapseButton();
-    setMapFloatingCollapsedPosition(topRight.button.left, topRight.button.top);
+    positionCollapsedMapFloatingControlTopRight();
   }
 
   function expandMapFloatingControl() {
@@ -1807,6 +1800,7 @@ export function createUkMapTool({
     initMap();
     syncFloatingMapControl();
     syncMapControls();
+    clampMapFloatingControl();
     requestAnimationFrame(() => {
       clampMapFloatingControl();
       scheduleMapViewportSync({ mode: "preserve" });

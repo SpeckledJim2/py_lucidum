@@ -6,6 +6,22 @@
         background: #ffffff;
       }
 
+      main:has(> #visualArea.map-mode) {
+        padding: 0;
+      }
+
+      .visual-area.map-mode .workspace {
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 0;
+      }
+
+      .visual-area.map-mode .uk-map {
+        border-radius: 0;
+      }
+
       .uk-map.map-bg-dark {
         background: #20272d;
       }
@@ -276,6 +292,10 @@
         display: grid;
         place-items: center;
         padding: 0;
+      }
+
+      .map-floating-control:not(.collapsed) .map-control-reset {
+        transform: translate(5px, -5px);
       }
 
       .map-control-reset:hover {

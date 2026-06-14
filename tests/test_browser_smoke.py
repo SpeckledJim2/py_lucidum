@@ -5786,51 +5786,82 @@ COPY (
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
                 map_toggle = page.locator("#mapControlReset")
                 self.assertEqual(map_toggle.get_attribute("aria-expanded"), "true")
+                self.assertEqual(
+                    page.evaluate('() => getComputedStyle(document.querySelector("#mapControlReset")).transform'),
+                    "matrix(1, 0, 0, 1, 5, -5)",
+                )
                 expanded_button_box = map_toggle.bounding_box()
                 self.assertIsNotNone(expanded_button_box)
-                expected_top_right_button_box = page.evaluate(
-                    """
-                    () => {
-                        const panel = document.querySelector("#mapFloatingControl");
-                        const button = document.querySelector("#mapControlReset");
-                        const container = panel.offsetParent || panel.closest(".workspace");
-                        const rect = container.getBoundingClientRect();
-                        const frame = {
-                            left: rect.left + container.clientLeft,
-                            top: rect.top + container.clientTop,
-                            width: container.clientWidth,
-                        };
-                        const panelRect = panel.getBoundingClientRect();
-                        const buttonRect = button.getBoundingClientRect();
-                        const buttonOffset = {
-                            left: buttonRect.left - panelRect.left,
-                            top: buttonRect.top - panelRect.top,
-                        };
-                        const panelLeft = Math.max(8, frame.width - panel.offsetWidth - 8);
-                        return {
-                            x: frame.left + panelLeft + buttonOffset.left,
-                            y: frame.top + 4 + buttonOffset.top,
-                        };
-                    }
-                    """
-                )
+
+                def expected_top_right_button_box() -> dict[str, float]:
+                    return page.evaluate(
+                        """
+                        () => {
+                            const panel = document.querySelector("#mapFloatingControl");
+                            const button = document.querySelector("#mapControlReset");
+                            const container = panel.offsetParent || panel.closest(".workspace");
+                            const rect = container.getBoundingClientRect();
+                            const frame = {
+                                left: rect.left + container.clientLeft,
+                                top: rect.top + container.clientTop,
+                                width: container.clientWidth,
+                            };
+                            const panelRect = panel.getBoundingClientRect();
+                            const buttonRect = button.getBoundingClientRect();
+                            const buttonOffset = {
+                                left: buttonRect.left - panelRect.left,
+                                top: buttonRect.top - panelRect.top,
+                            };
+                            const panelLeft = Math.max(8, frame.width - panel.offsetWidth - 8);
+                            return {
+                                x: frame.left + panelLeft + buttonOffset.left,
+                                y: frame.top + 4 + buttonOffset.top,
+                            };
+                        }
+                        """
+                    )
+
+                def wait_for_map_toggle_top_right() -> dict[str, float]:
+                    page.wait_for_function(
+                        """
+                        () => {
+                            const panel = document.querySelector("#mapFloatingControl");
+                            const button = document.querySelector("#mapControlReset");
+                            if (!panel || !button) return false;
+                            const container = panel.offsetParent || panel.closest(".workspace");
+                            if (!container) return false;
+                            const rect = container.getBoundingClientRect();
+                            const frameLeft = rect.left + container.clientLeft;
+                            const frameTop = rect.top + container.clientTop;
+                            const panelRect = panel.getBoundingClientRect();
+                            const buttonRect = button.getBoundingClientRect();
+                            const panelLeft = Math.max(8, container.clientWidth - panel.offsetWidth - 8);
+                            const expectedX = frameLeft + panelLeft + (buttonRect.left - panelRect.left);
+                            const expectedY = frameTop + 4 + (buttonRect.top - panelRect.top);
+                            return Math.abs(buttonRect.x - expectedX) <= 1
+                                && Math.abs(buttonRect.y - expectedY) <= 1;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    box = map_toggle.bounding_box()
+                    self.assertIsNotNone(box)
+                    return box
+
+                wait_for_map_toggle_top_right()
                 map_toggle.click()
                 page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
                 self.assertEqual(map_toggle.get_attribute("aria-expanded"), "false")
+                self.assertEqual(
+                    page.evaluate('() => getComputedStyle(document.querySelector("#mapControlReset")).transform'),
+                    "none",
+                )
                 self.assertFalse(page.locator("#mapLineWeight").is_visible())
-                collapsed_button_box = map_toggle.bounding_box()
-                self.assertIsNotNone(collapsed_button_box)
-                self.assertGreater(collapsed_button_box["x"], expanded_button_box["x"])
-                self.assertLess(collapsed_button_box["y"], expanded_button_box["y"])
-                self.assertLessEqual(abs(collapsed_button_box["x"] - expected_top_right_button_box["x"]), 1)
-                self.assertLessEqual(abs(collapsed_button_box["y"] - expected_top_right_button_box["y"]), 1)
+                collapsed_button_box = wait_for_map_toggle_top_right()
                 map_toggle.click()
                 page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
                 self.assertEqual(map_toggle.get_attribute("aria-expanded"), "true")
-                expanded_again_button_box = map_toggle.bounding_box()
-                self.assertIsNotNone(expanded_again_button_box)
-                for axis in ("x", "y"):
-                    self.assertLessEqual(abs(expanded_again_button_box[axis] - expected_top_right_button_box[axis]), 1)
+                expanded_again_button_box = wait_for_map_toggle_top_right()
                 header_box = page.locator(".map-floating-header").bounding_box()
                 self.assertIsNotNone(header_box)
                 page.mouse.move(header_box["x"] + 12, header_box["y"] + 10)
@@ -5840,16 +5871,26 @@ COPY (
                 page.wait_for_timeout(50)
                 dragged_button_box = map_toggle.bounding_box()
                 self.assertIsNotNone(dragged_button_box)
-                self.assertGreater(dragged_button_box["y"], expected_top_right_button_box["y"])
-                for _ in range(5):
-                    map_toggle.click()
-                    page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
-                    map_toggle.click()
-                    page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
-                dragged_after_toggles_box = map_toggle.bounding_box()
-                self.assertIsNotNone(dragged_after_toggles_box)
-                for axis in ("x", "y"):
-                    self.assertLessEqual(abs(dragged_after_toggles_box[axis] - expected_top_right_button_box[axis]), 1)
+                self.assertGreater(dragged_button_box["y"], expected_top_right_button_box()["y"])
+                map_toggle.click()
+                page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
+                wait_for_map_toggle_top_right()
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"')
+                wait_for_map_toggle_top_right()
+                sidebar_resizer_box = page.locator("#sidebarResizer").bounding_box()
+                self.assertIsNotNone(sidebar_resizer_box)
+                page.mouse.move(sidebar_resizer_box["x"] + 3, sidebar_resizer_box["y"] + 100)
+                page.mouse.down()
+                page.mouse.move(sidebar_resizer_box["x"] + 83, sidebar_resizer_box["y"] + 100, steps=8)
+                page.mouse.up()
+                wait_for_map_toggle_top_right()
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"')
+                wait_for_map_toggle_top_right()
+                map_toggle.click()
+                page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
+                wait_for_map_toggle_top_right()
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="area"]').is_checked())
                 self.assertEqual(page.locator("#mapLineWeightLabel").text_content().strip(), "Line width")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("min"), "-9")
