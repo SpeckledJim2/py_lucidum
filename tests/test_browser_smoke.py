@@ -1441,6 +1441,77 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_model_navigator_preserves_line_bar_x_feature(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,SAMPLE\n"
+                "10,100,30,A,training\n"
+                "20,200,40,B,test\n"
+                "30,300,50,C,training\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                store,
+                "browser-smoke-model",
+                "Browser smoke model",
+                "2026-05-25T00:00:00Z",
+                [0.11, 0.21, 0.31],
+            )
+            self.write_gbm_prediction_model(
+                store,
+                "browser-smoke-model-2",
+                "Second smoke model",
+                "2026-05-25T00:00:01Z",
+                [0.41, 0.51, 0.61],
+            )
+            store.activate_model("browser-smoke-model")
+            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "gbm"])
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        chart_url = (
+                            f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model%3Apredictions"
+                            "&x=Segment&actual=actualNumerator&denominator=denominator"
+                        )
+                        page.goto(chart_url, wait_until="domcontentloaded")
+                        page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+                        page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
+                        page.locator("#gbmTool").click()
+                        page.get_by_role("button", name="Model navigator").click()
+                        page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
+                        page.locator("#gbmActivateModelBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Second smoke model")
+                              && document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Second smoke model")
+                            """,
+                            timeout=10_000,
+                        )
+                        with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as chart_request_info:
+                            page.locator("#lineBarTool").click()
+                        request_body = json.loads(chart_request_info.value.post_data or "{}")
+                        self.assertEqual(request_body["x"], "Segment")
+                        page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_sidebar_accordion_works_across_tools(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
@@ -3057,7 +3128,7 @@ COPY (
 
                 chart_url = (
                     f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model%3Apredictions"
-                    "&x=Age&actual=gbm_prediction&denominator=denominator"
+                    "&x=Segment&actual=gbm_prediction&denominator=denominator"
                 )
                 page.goto(chart_url, wait_until="domcontentloaded")
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
@@ -3073,12 +3144,14 @@ COPY (
                 page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
                 self.assertGreater(chart_requests, chart_requests_before)
                 self.assertEqual(request_body["source"], "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(request_body["x"], "Segment")
                 self.assertEqual(request_body["responses"][0]["numerator"], "gbm_prediction")
                 self.assertEqual(request_body["denominator"], "denominator")
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 mixed_expected_url = (
                     f"{base_url}/?tool=line_bar&source=glm%3Abrowser-smoke-glm%3Apredictions"
-                    "&x=Age&actual=actualNumerator&expected=glm_prediction&denominator=denominator"
+                    "&x=Segment&actual=actualNumerator&expected=glm_prediction&denominator=denominator"
                 )
                 page.goto(mixed_expected_url, wait_until="domcontentloaded")
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
@@ -3313,6 +3386,13 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as segment_feature_info:
+                    page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Segment").click()
+                segment_feature_body = json.loads(segment_feature_info.value.post_data or "{}")
+                self.assertEqual(segment_feature_body["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(segment_feature_body["x"], "Segment")
+                self.assertEqual(segment_feature_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 open_sidebar_section("#glmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_to_glm_info:
@@ -3320,9 +3400,11 @@ COPY (
                 glm_to_glm_body = json.loads(glm_to_glm_info.value.post_data or "{}")
                 page.locator("#glmModelSelectedMeta", has_text="Second smoke GLM").wait_for(timeout=10_000)
                 self.assertEqual(glm_to_glm_body["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(glm_to_glm_body["x"], "Segment")
                 self.assertEqual(glm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(glm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(glm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 open_sidebar_section("#gbmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_to_gbm_info:
@@ -3330,9 +3412,11 @@ COPY (
                 glm_to_gbm_body = json.loads(glm_to_gbm_info.value.post_data or "{}")
                 page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
                 self.assertEqual(glm_to_gbm_body["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(glm_to_gbm_body["x"], "Segment")
                 self.assertEqual(glm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(glm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
                 self.assertEqual(glm_to_gbm_body["responses"][1]["source"], "gbm:browser-smoke-model:predictions")
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 open_sidebar_section("#gbmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_to_gbm_info:
@@ -3340,9 +3424,11 @@ COPY (
                 gbm_to_gbm_body = json.loads(gbm_to_gbm_info.value.post_data or "{}")
                 page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
                 self.assertEqual(gbm_to_gbm_body["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(gbm_to_gbm_body["x"], "Segment")
                 self.assertEqual(gbm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
                 self.assertEqual(gbm_to_gbm_body["responses"][1]["source"], "gbm:browser-smoke-model-2:predictions")
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 open_sidebar_section("#glmModelCollapseBtn")
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_to_glm_info:
@@ -3350,9 +3436,11 @@ COPY (
                 gbm_to_glm_body = json.loads(gbm_to_glm_info.value.post_data or "{}")
                 page.locator("#glmModelSelectedMeta", has_text="Browser smoke GLM").wait_for(timeout=10_000)
                 self.assertEqual(gbm_to_glm_body["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(gbm_to_glm_body["x"], "Segment")
                 self.assertEqual(gbm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Age").click()
                 page.wait_for_function(
@@ -3534,7 +3622,18 @@ COPY (
                     timeout=10_000,
                 )
 
-                page.goto(f"{base_url}/?tool=glm", wait_until="domcontentloaded")
+                navigator_line_bar_url = (
+                    f"{base_url}/?tool=line_bar&source=glm%3Abrowser-smoke-glm%3Apredictions"
+                    "&x=Segment&actual=actualNumerator&expected=glm_prediction&denominator=denominator"
+                )
+                page.goto(navigator_line_bar_url, wait_until="domcontentloaded")
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    timeout=10_000,
+                )
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
+                page.locator("#glmTool").click()
                 page.locator(".glm-tool").wait_for(timeout=10_000)
                 page.get_by_role("button", name="Model navigator").click()
                 page.locator("#glmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
@@ -3684,6 +3783,35 @@ COPY (
                 self.assertFalse(selected_glm_navigator_state["renameDisabled"])
                 self.assertFalse(selected_glm_navigator_state["activateDisabled"])
                 self.assertFalse(selected_glm_navigator_state["deleteDisabled"])
+
+                page.locator("#glmActivateModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Second smoke GLM")
+                      && document.querySelector("#glmModelGrid .glm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Second smoke GLM")
+                    """,
+                    timeout=10_000,
+                )
+                with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as glm_navigator_chart_info:
+                    page.locator("#lineBarTool").click()
+                glm_navigator_chart_body = json.loads(glm_navigator_chart_info.value.post_data or "{}")
+                self.assertEqual(glm_navigator_chart_body["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(glm_navigator_chart_body["x"], "Segment")
+                self.assertEqual(glm_navigator_chart_body["responses"][1]["numerator"], "glm_prediction")
+                self.assertEqual(glm_navigator_chart_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
+                page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
+                page.locator("#glmTool").click()
+                page.locator(".glm-tool").wait_for(timeout=10_000)
+                page.get_by_role("button", name="Model navigator").click()
+                page.locator("#glmModelGrid .tabulator-row", has_text="Browser smoke GLM").click()
+                page.locator("#glmActivateModelBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Browser smoke GLM")
+                      && document.querySelector("#glmModelGrid .glm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Browser smoke GLM")
+                    """,
+                    timeout=10_000,
+                )
 
                 page.get_by_role("button", name="Tabulations").click()
                 page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)

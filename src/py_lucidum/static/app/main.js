@@ -706,14 +706,25 @@
         const match = columns.find((column) => (
           column.name === columnName && (!preferred || lineBarColumnSourceId(column) === preferred)
         )) || columns.find((column) => column.name === columnName);
-        return lineBarColumnSourceId(match);
+        return match ? lineBarColumnSourceId(match) : "";
       }
 
       function syncLineBarXFallback() {
         if (lineBarColumnExists(state.x, state.xSource)) return;
+        const currentFeature = String(state.x || "");
+        if (currentFeature) {
+          const currentSource = state.source || "dataset";
+          const preservedSource = lineBarFeatureSourceForName(currentFeature, currentSource)
+            || lineBarFeatureSourceForName(currentFeature);
+          if (preservedSource) {
+            state.x = currentFeature;
+            state.xSource = preservedSource;
+            return;
+          }
+        }
         const first = lineBarFeatureColumns()[0] || null;
         state.x = first?.name || null;
-        state.xSource = lineBarColumnSourceId(first);
+        state.xSource = first ? lineBarColumnSourceId(first) : "";
       }
 
       function currentDataSource() {

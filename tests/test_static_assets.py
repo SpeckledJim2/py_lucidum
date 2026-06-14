@@ -211,6 +211,82 @@ if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percen
 """
         self.run_node_script(script)
 
+    def test_line_bar_x_fallback_preserves_feature_name_when_source_changes(self) -> None:
+        js = self.assert_no_store("/static/app/main.js")[1].decode("utf-8")
+        helper = "\n".join(
+            [
+                self.js_function_source(js, "lineBarFeatureSourceForName"),
+                self.js_function_source(js, "syncLineBarXFallback"),
+            ]
+        )
+        script = helper + """
+let columns = [];
+const state = { source: "glm:model-b:predictions", x: "Segment", xSource: "glm:model-a:predictions" };
+
+function lineBarFeatureColumns() {
+  return columns;
+}
+
+function lineBarColumnSourceId(column) {
+  return column?.source_id || state.source || "dataset";
+}
+
+function lineBarColumnExists(name, sourceId = "") {
+  const columnName = String(name || "");
+  if (!columnName) return false;
+  return lineBarFeatureColumns().some((column) => (
+    column.name === columnName && (!sourceId || lineBarColumnSourceId(column) === sourceId)
+  ));
+}
+
+columns = [
+  { name: "Age", source_id: "glm:model-b:predictions" },
+  { name: "Segment", source_id: "glm:model-b:predictions" },
+  { name: "glm_prediction", source_id: "glm:model-b:predictions" },
+];
+syncLineBarXFallback();
+if (state.x !== "Segment" || state.xSource !== "glm:model-b:predictions") {
+  throw new Error(`expected current-source feature preservation, got ${state.x} from ${state.xSource}`);
+}
+
+state.source = "gbm:model-b:predictions";
+state.x = "Segment";
+state.xSource = "gbm:model-a:predictions";
+columns = [
+  { name: "Age", source_id: "gbm:model-b:predictions" },
+  { name: "Segment", source_id: "dataset" },
+  { name: "gbm_prediction", source_id: "gbm:model-b:predictions" },
+];
+syncLineBarXFallback();
+if (state.x !== "Segment" || state.xSource !== "dataset") {
+  throw new Error(`expected any-source feature preservation, got ${state.x} from ${state.xSource}`);
+}
+
+state.source = "dataset";
+state.x = "Missing";
+state.xSource = "old";
+columns = [
+  { name: "Age", source_id: "dataset" },
+  { name: "Segment", source_id: "dataset" },
+];
+if (lineBarFeatureSourceForName("Missing", "dataset") !== "") {
+  throw new Error("missing feature should not resolve to the current source");
+}
+syncLineBarXFallback();
+if (state.x !== "Age" || state.xSource !== "dataset") {
+  throw new Error(`expected first-feature fallback, got ${state.x} from ${state.xSource}`);
+}
+
+state.x = "Missing";
+state.xSource = "old";
+columns = [];
+syncLineBarXFallback();
+if (state.x !== null || state.xSource !== "") {
+  throw new Error(`expected empty fallback, got ${state.x} from ${state.xSource}`);
+}
+"""
+        self.run_node_script(script)
+
     def test_package_version_matches_pyproject(self) -> None:
         pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
