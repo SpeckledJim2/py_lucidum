@@ -112,6 +112,7 @@ class StaticAssetTests(unittest.TestCase):
             "/static/app/histogram-tool.js",
             "/static/app/uk-map-tool.js",
             "/static/app/glm-tool.js",
+            "/static/app/glm-formula-assist.js",
             "/static/app/glm-formula-builder.js",
             "/static/app/glm-model-navigator.js",
             "/static/app/glm-tabulations.js",
@@ -601,6 +602,77 @@ if (!validateRegularizationParameter({ mode: "manual", alpha: "0.1", l1_ratio: 1
 """
         self.run_node_script(script)
 
+    def test_glm_formula_assist_helpers(self) -> None:
+        module = Path("src/py_lucidum/static/app/glm-formula-assist.js").resolve().as_uri()
+        script = f"""
+import {{
+  GLM_FORMULA_SNIPPETS,
+  buildGroupedLevelsFormula,
+  buildIndividualLevelsFormula,
+  buildPiecewiseFormula,
+  buildSnippetFormula,
+  formulaColumnSuggestions,
+  formulaCompletionContext,
+  formatDrawerInsertion,
+  formulaStringLiteral,
+  parseBreakpoints,
+  quoteFormulaName,
+  rankFormulaSuggestions,
+  withFormulaHeader,
+}} from "{module}";
+
+if (quoteFormulaName("Age") !== "Age") throw new Error("simple quote failed");
+if (quoteFormulaName("vehicle age") !== "`vehicle age`") throw new Error("space quote failed");
+if (quoteFormulaName("a`b") !== "`a\\\\`b`") throw new Error("backtick quote failed");
+if (formulaStringLiteral('A"B\\\\C') !== '"A\\\\\\"B\\\\\\\\C"') throw new Error("string literal failed");
+
+const grouped = buildGroupedLevelsFormula("PostcodeArea", ["BA", "BH", "BR"]);
+if (grouped !== 'ifelse(np.isin(PostcodeArea, ["BA", "BH", "BR"]), 1, 0)') throw new Error(grouped);
+
+const piecewise = buildPiecewiseFormula("EngineCC", [10, 20, 30]);
+const expectedPiecewise = [
+  "+ pmin(10, EngineCC)",
+  "+ pmax(10, pmin(20, EngineCC))",
+  "+ pmax(20, pmin(30, EngineCC))",
+  "+ pmax(30, EngineCC)",
+].join("\\n");
+if (piecewise !== expectedPiecewise) throw new Error(piecewise);
+const individual = buildIndividualLevelsFormula("MAKE", ["ALFA ROMEO", "AUDI"]);
+if (individual !== '+ ifelse(MAKE == "ALFA ROMEO", 1, 0)\\n+ ifelse(MAKE == "AUDI", 1, 0)') throw new Error(individual);
+
+if (buildSnippetFormula("bs4", "Age") !== "bs(Age, df=4)") throw new Error("bs snippet failed");
+if (buildSnippetFormula("clamp", "Age") !== "pmax(lower_bound, pmin(upper_bound, Age))") throw new Error("clamp snippet failed");
+if (buildSnippetFormula("positive_offset", "Age", {{ denominator: "Weight" }}) !== "offset(log(pmax(Weight, 1)))") throw new Error("offset snippet failed");
+if (GLM_FORMULA_SNIPPETS.some((item) => item.id === "interaction" || item.id === "factor")) throw new Error("non-numeric snippet listed");
+if (formatDrawerInsertion("Age", "") !== "Age\\n") throw new Error("empty insertion format failed");
+if (formatDrawerInsertion("Age", "actual ~ 1") !== "+ Age\\n") throw new Error("plus insertion format failed");
+if (formatDrawerInsertion("Age", "actual ~ ") !== "Age\\n") throw new Error("tilde insertion format failed");
+if (formatDrawerInsertion("Age", "actual ~ 1 + ") !== "Age\\n") throw new Error("operator insertion format failed");
+if (formatDrawerInsertion("+ Age", "actual ~ 1") !== "+ Age\\n") throw new Error("double plus insertion format failed");
+if (formatDrawerInsertion("# Age\\nAge", "actual ~ 1") !== "# Age\\n+ Age\\n") throw new Error("header insertion format failed");
+if (formatDrawerInsertion("Age", "actual ~ 1", {{ replaceSelection: true }}) !== "Age") throw new Error("selection insertion format failed");
+if (withFormulaHeader("Age", "Driver Age", true) !== "# Driver Age\\nAge") throw new Error("header wrap failed");
+if (withFormulaHeader("Age", "Driver Age", false) !== "Age") throw new Error("header disabled failed");
+
+const parsed = parseBreakpoints("10, 20 30");
+if (parsed.error || parsed.values.join(",") !== "10,20,30") throw new Error("break parse failed");
+if (!parseBreakpoints("10, 10").error) throw new Error("break order failed");
+
+const columns = [
+  {{ name: "Age", kind: "integer" }},
+  {{ name: "PostcodeArea", kind: "categorical" }},
+  {{ name: "Vehicle Value", kind: "numeric" }},
+];
+const ranked = rankFormulaSuggestions(formulaColumnSuggestions(columns), "Po");
+if (ranked[0].caption !== "PostcodeArea" || ranked[0].value !== "PostcodeArea") throw new Error("rank failed");
+const context = formulaCompletionContext("np.isin(PostcodeArea, [B", 0, "np.isin(PostcodeArea, [B".length);
+if (context.type !== "levels" || context.feature !== "PostcodeArea" || context.prefix !== "B") throw new Error(JSON.stringify(context));
+const formulaContext = formulaCompletionContext("Post", 0, 4);
+if (formulaContext.type !== "formula" || formulaContext.prefix !== "Post" || formulaContext.replaceStartColumn !== 0) throw new Error("formula context failed");
+if (formulaCompletionContext("# Post", 0, 6).type !== "none") throw new Error("comment context failed");
+"""
+        self.run_node_script(script)
+
     def test_glm_coefficient_table_pvalue_styling_contract(self) -> None:
         js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
         css = self.assert_no_store("/static/styles/glm.css")[1].decode("utf-8")
@@ -1024,6 +1096,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assert_no_store("/static/app/histogram-tool.js")
         self.assert_no_store("/static/app/uk-map-tool.js")
         self.assert_no_store("/static/app/glm-tool.js")
+        self.assert_no_store("/static/app/glm-formula-assist.js")
         self.assert_no_store("/static/app/glm-formula-builder.js")
         self.assert_no_store("/static/app/glm-model-navigator.js")
         self.assert_no_store("/static/app/glm-tabulations.js")
@@ -1102,11 +1175,13 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('api("/api/glm/tabulations/plot"', js)
         self.assertIn('api("/api/glm/tabulations/rebase"', js)
         self.assertIn('api("/api/glm/tabulations/rebase/reset"', js)
+        self.assertIn('api("/api/glm/formula/levels"', js)
         self.assertIn('`/api/glm/tabulations/jobs/${encodeURIComponent(jobId)}`', js)
         self.assertIn('`/api/glm/jobs/${encodeURIComponent(jobId)}`', js)
         self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}/activate`', js)
         self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}/rename`', js)
         self.assertIn('`/api/glm/models/${encodeURIComponent(modelId)}`', js)
+        self.assertIn('from "./glm-formula-assist.js";', glm_formula_js)
         self.assertIn('import { loadTabulator } from "./shared/tabulator.js";', glm_js)
         self.assertIn('const ACE_BASE_PATH = "/static/vendor/ace";', js)
         self.assertIn('aceEditor.session.setMode("ace/mode/r");', js)
@@ -1116,6 +1191,28 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('<h3 class="glm-panel-title">GLM formula</h3>', js)
         self.assertNotIn("Formula and family", js)
         self.assertIn('id="glmFormulaEditor"', js)
+        self.assertIn('id="glmFormulaAssistBtn"', js)
+        self.assertIn('id="glmFormulaAssistDrawer"', js)
+        self.assertIn('["snippets", "Numeric"]', glm_formula_js)
+        self.assertIn('["piecewise", "Piecewise linear"]', glm_formula_js)
+        self.assertIn('["levels", "Categorical"]', glm_formula_js)
+        self.assertIn(">Insert at cursor</button>", glm_formula_js)
+        self.assertIn("formatDrawerInsertion(output, editorTextBeforeInsertion(), { replaceSelection: editorHasSelection() })", glm_formula_js)
+        self.assertIn('id="glmFormulaAssistIncludeHeader"', glm_formula_js)
+        self.assertIn("include header", glm_formula_js)
+        self.assertIn("data-glm-level-mode=\"group\"", glm_formula_js)
+        self.assertIn("data-glm-level-mode=\"ind\"", glm_formula_js)
+        self.assertIn("buildIndividualLevelsFormula", glm_formula_js)
+        self.assertIn('id="glmFormulaAssistSnippetList"', glm_formula_js)
+        self.assertIn("data-glm-snippet-id", glm_formula_js)
+        self.assertIn("function refreshFormulaAssistSnippetSelection()", glm_formula_js)
+        self.assertNotIn('id="glmFormulaAssistSnippetSelect"', glm_formula_js)
+        self.assertNotIn("positionFormulaAssistDrawer", glm_formula_js)
+        self.assertNotIn("glmFormulaAssistAppendPlus", glm_formula_js)
+        self.assertNotIn("glmFormulaAssistSecondaryFeature", glm_formula_js)
+        self.assertNotIn("append +", glm_formula_js)
+        self.assertNotIn("Other</label>", glm_formula_js)
+        self.assertNotIn("· ${escapeHtml(column.kind", glm_formula_js)
         self.assertIn('id="glmFamilySelect"', js)
         self.assertIn('id="glmFamilyParameter"', js)
         self.assertIn('for="glmFamilySelect">Family</label>', js)
@@ -1158,6 +1255,24 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("selectExpectedPredictionForModelKind = () => false", glm_js)
         self.assertIn("function openGlmCoefficientContextMenuForRow(event)", glm_js)
         self.assertIn("function coefficientContextFeatureNames(row = {})", glm_js)
+        self.assertIn(".glm-formula-assist-drawer", css)
+        drawer_block = css.split(".glm-formula-assist-drawer {", 1)[1].split("}", 1)[0]
+        self.assertIn("border-bottom: 1px solid var(--line);", drawer_block)
+        self.assertIn("border-top: 1px solid var(--line);", drawer_block)
+        self.assertIn("flex: 0 0 429px;", drawer_block)
+        self.assertNotIn("border: 1px solid", drawer_block)
+        self.assertNotIn("box-shadow", drawer_block)
+        self.assertNotIn("position: absolute", drawer_block)
+        self.assertNotIn("height: 429px;", drawer_block)
+        self.assertIn(".glm-formula-assist-drawer:not(.hidden) + .glm-builder-control-row", css)
+        self.assertIn(".glm-formula-assist-snippet-list", css)
+        self.assertIn(".glm-formula-assist-snippet-row.active", css)
+        self.assertIn(".glm-formula-assist-header-toggle", css)
+        self.assertIn(".glm-formula-assist-level-search-row", css)
+        self.assertIn(".glm-formula-assist-level-mode", css)
+        self.assertIn("min-height: 82px;", css)
+        self.assertIn(".glm-formula-assist-feature-select:focus", css)
+        self.assertIn(".glm-formula-autocomplete", css)
         self.assertIn("function goToLineBarCoefficientFeature(featureName)", glm_js)
         self.assertIn('button.textContent = `Go to Line and Bar (${feature})`;', glm_js)
         self.assertIn('row.addEventListener("contextmenu", openGlmCoefficientContextMenuForRow);', glm_js)

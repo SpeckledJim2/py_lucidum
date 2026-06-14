@@ -126,6 +126,10 @@
         overflow: hidden;
       }
 
+      .glm-formula-panel {
+        position: relative;
+      }
+
       .glm-coefficient-panel {
         position: relative;
       }
@@ -326,6 +330,249 @@
         flex: 1 1 auto;
         min-height: 0;
         position: relative;
+      }
+
+      .glm-formula-assist-drawer {
+        background: color-mix(in srgb, var(--panel) 96%, var(--line));
+        border-bottom: 1px solid var(--line);
+        border-top: 1px solid var(--line);
+        display: flex;
+        flex: 0 0 429px;
+        flex-direction: column;
+        gap: 7px;
+        min-height: 0;
+        overflow: hidden;
+        padding: 8px 10px;
+      }
+
+      .glm-formula-assist-drawer:not(.hidden) + .glm-builder-control-row {
+        display: none;
+      }
+
+      .glm-formula-assist-top {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 10px;
+        justify-content: space-between;
+        min-width: 0;
+      }
+
+      .glm-formula-assist-header-toggle {
+        align-items: center;
+        color: var(--muted);
+        display: flex;
+        flex: 0 0 auto;
+        font-size: 11px;
+        gap: 5px;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      .glm-formula-assist-tabs button {
+        min-height: 24px;
+        padding: 2px 8px;
+      }
+
+      .glm-formula-assist-grid {
+        display: grid;
+        flex: 1 1 auto;
+        gap: 10px;
+        grid-template-columns: minmax(170px, 0.9fr) minmax(220px, 1.1fr);
+        min-height: 0;
+      }
+
+      .glm-formula-assist-feature-block,
+      .glm-formula-assist-main {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .glm-formula-assist-label {
+        color: var(--muted);
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.15;
+      }
+
+      .glm-formula-assist-search,
+      .glm-formula-assist-breakpoints {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        flex: 0 0 auto;
+        font-size: 12px;
+        min-height: 24px;
+        padding: 2px 6px;
+      }
+
+      .glm-formula-assist-level-search-row {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .glm-formula-assist-level-search-row .glm-formula-assist-search {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      .glm-formula-assist-level-mode {
+        flex: 0 0 auto;
+      }
+
+      .glm-formula-assist-level-mode button {
+        min-height: 24px;
+        padding: 2px 7px;
+      }
+
+      .glm-formula-assist-feature-select,
+      .glm-formula-assist-snippet-list {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        flex: 1 1 auto;
+        font-size: 12px;
+        min-height: 0;
+        padding: 2px;
+      }
+
+      .glm-formula-assist-feature-select:focus,
+      .glm-formula-assist-snippet-list:focus,
+      .glm-formula-assist-snippet-row:focus {
+        border-color: var(--line);
+        box-shadow: none;
+        outline: 0;
+      }
+
+      .glm-formula-assist-snippet-list {
+        display: flex;
+        flex-direction: column;
+        overflow: auto;
+      }
+
+      .glm-formula-assist-snippet-row {
+        background: transparent;
+        border: 0;
+        border-radius: 2px;
+        color: var(--text);
+        flex: 0 0 auto;
+        font: inherit;
+        font-size: 12px;
+        min-height: 20px;
+        padding: 1px 4px;
+        text-align: left;
+      }
+
+      .glm-formula-assist-snippet-row.active,
+      .glm-formula-assist-snippet-row:hover {
+        background: color-mix(in srgb, var(--accent) 16%, transparent);
+      }
+
+      .glm-formula-assist-preview {
+        background: color-mix(in srgb, var(--panel) 92%, var(--line));
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--text);
+        flex: 1 1 auto;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.35;
+        margin: 0;
+        min-height: 82px;
+        overflow: auto;
+        padding: 6px;
+        white-space: pre-wrap;
+      }
+
+      .glm-formula-assist-level-list {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-height: 0;
+        overflow: auto;
+        padding: 3px;
+      }
+
+      .glm-formula-assist-level-row {
+        align-items: center;
+        color: var(--text);
+        display: grid;
+        font-size: 12px;
+        gap: 6px;
+        grid-template-columns: 16px minmax(0, 1fr) auto;
+        min-height: 22px;
+        padding: 1px 3px;
+      }
+
+      .glm-formula-assist-level-row span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .glm-formula-assist-level-row small,
+      .glm-formula-assist-empty {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .glm-formula-autocomplete {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        box-shadow: var(--shadow);
+        max-height: 220px;
+        min-width: 240px;
+        overflow: auto;
+        padding: 3px;
+        position: absolute;
+        z-index: 8;
+      }
+
+      .glm-formula-autocomplete-row {
+        align-items: center;
+        background: transparent;
+        border: 0;
+        border-radius: 3px;
+        color: var(--text);
+        display: grid;
+        font-family: inherit;
+        font-size: 12px;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr) auto;
+        min-height: 24px;
+        padding: 3px 6px;
+        text-align: left;
+        width: 100%;
+      }
+
+      .glm-formula-autocomplete-row span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .glm-formula-autocomplete-row small {
+        color: var(--muted);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      .glm-formula-autocomplete-row.active,
+      .glm-formula-autocomplete-row:hover {
+        background: color-mix(in srgb, var(--accent) 16%, transparent);
       }
 
       .glm-builder-resizer {

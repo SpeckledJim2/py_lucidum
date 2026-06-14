@@ -513,6 +513,59 @@ if result.get("iteration") != 10:
         self.assertIn("pip install 'py-lucidum[glm]'", payload["detail"])
         self.assertIn("glum", payload["detail"])
 
+    def test_formula_levels_endpoint_returns_sorted_capped_categorical_values(self) -> None:
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, body = asgi_post_json(app, "/api/glm/formula/levels", {"column": "Segment", "limit": 1})
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["column"], "Segment")
+        self.assertEqual(payload["kind"], "categorical")
+        self.assertEqual(payload["distinct_count"], 2)
+        self.assertEqual(payload["values"], [{"value": "A", "label": "A", "count": 3}])
+        self.assertTrue(payload["truncated"])
+
+    def test_formula_levels_endpoint_searches_levels_without_glm_dependencies(self) -> None:
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        with patch("py_lucidum.tools.glm.routes.glm_dependencies", side_effect=AssertionError("unexpected GLM dependency check")):
+            status, body = asgi_post_json(app, "/api/glm/formula/levels", {"column": "Segment", "search": "b", "limit": 500})
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["values"], [{"value": "B", "label": "B", "count": 3}])
+        self.assertFalse(payload["truncated"])
+
+    def test_formula_levels_endpoint_rejects_unknown_numeric_and_unreadable_columns(self) -> None:
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        unknown_status, unknown_body = asgi_post_json(app, "/api/glm/formula/levels", {"column": "Missing"})
+        numeric_status, numeric_body = asgi_post_json(app, "/api/glm/formula/levels", {"column": "Age"})
+
+        self.assertEqual(unknown_status, 400)
+        self.assertIn("valid formula column", json.loads(unknown_body)["detail"])
+        self.assertEqual(numeric_status, 400)
+        self.assertIn("categorical formula column", json.loads(numeric_body)["detail"])
+
+        original_probe = Dataset.probe_column_readable
+
+        def fake_probe(dataset: Dataset, column: Any) -> None:
+            if column.name == "Segment":
+                raise duckdb.InvalidInputException(
+                    'Invalid Input Error: Invalid string encoding found in Parquet file "/tmp/bad.parquet": '
+                    'value "bad" is not valid UTF8!'
+                )
+            original_probe(dataset, column)
+
+        unreadable_app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        with patch.object(Dataset, "probe_column_readable", fake_probe):
+            unreadable_status, unreadable_body = asgi_post_json(unreadable_app, "/api/glm/formula/levels", {"column": "Segment"})
+
+        self.assertEqual(unreadable_status, 400)
+        self.assertIn("valid formula column", json.loads(unreadable_body)["detail"])
+        self.assertNotIn("/tmp/bad.parquet", unreadable_body.decode("utf-8"))
+
     def test_formula_validation_strips_comments_accepts_rhs_and_full_forms_and_rejects_unsafe_text(self) -> None:
         dataset = Dataset(self.data_path)
 

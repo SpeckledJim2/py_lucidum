@@ -1,3 +1,19 @@
+import {
+  GLM_FORMULA_SNIPPETS,
+  buildGroupedLevelsFormula,
+  buildIndividualLevelsFormula,
+  buildPiecewiseFormula,
+  buildSnippetFormula,
+  formulaColumnSuggestions,
+  formulaCompletionContext,
+  formulaFunctionSuggestions,
+  formulaLiteral,
+  formatDrawerInsertion,
+  parseBreakpoints,
+  rankFormulaSuggestions,
+  withFormulaHeader,
+} from "./glm-formula-assist.js";
+
 const ACE_BASE_PATH = "/static/vendor/ace";
 const GLM_BUILDER_SPLIT_STORAGE_KEY = "py_lucidum_glm_formula_panel_width";
 
@@ -37,8 +53,11 @@ async function loadAce() {
 }
 
 export function createGlmFormulaBuilder({
+  api = null,
   el,
   escapeHtml,
+  getColumns = () => [],
+  getDenominator = () => "",
   getFamilies = () => [],
   onBuildModel = () => {},
   onCoefficientSearch = () => {},
@@ -55,6 +74,23 @@ export function createGlmFormulaBuilder({
   let selectedRegularizationAlpha = localStorage.getItem("py_lucidum_glm_regularization_alpha") || "0.01";
   let formulaDraft = localStorage.getItem("py_lucidum_glm_formula")
     || "# GLM formula\n# Enter RHS terms, or response ~ terms\n";
+  let formulaAssistOpen = localStorage.getItem("py_lucidum_glm_formula_assist_open") === "true";
+  let formulaAssistTab = localStorage.getItem("py_lucidum_glm_formula_assist_tab") || "snippets";
+  let formulaAssistFeatureSearch = "";
+  let formulaAssistSelectedFeature = localStorage.getItem("py_lucidum_glm_formula_assist_feature") || "";
+  let formulaAssistSelectedSnippet = localStorage.getItem("py_lucidum_glm_formula_assist_snippet") || "identity";
+  let formulaAssistBreakpoints = localStorage.getItem("py_lucidum_glm_formula_assist_breakpoints") || "";
+  let formulaAssistLevelSearch = "";
+  let formulaAssistSelectedLevelKeys = new Set();
+  let formulaAssistIncludeHeader = localStorage.getItem("py_lucidum_glm_formula_assist_include_header") === "true";
+  let formulaAssistCategoricalMode = localStorage.getItem("py_lucidum_glm_formula_assist_categorical_mode") || "group";
+  if (!["group", "ind"].includes(formulaAssistCategoricalMode)) formulaAssistCategoricalMode = "group";
+  let formulaAssistLevelRequestSeq = 0;
+  const formulaAssistLevelCache = new Map();
+  let autocompletePopup = null;
+  let autocompleteItems = [];
+  let autocompleteContext = null;
+  let autocompleteIndex = 0;
 
   function ensureTrainingScope(data = {}) {
     const sample = data.sample || {};
@@ -138,9 +174,477 @@ export function createGlmFormulaBuilder({
     if (alpha) alpha.disabled = !isManual;
   }
 
+  function formulaColumns() {
+    return (getColumns() || []).filter((column) => column?.name);
+  }
+
+  function numericFormulaColumns() {
+    return formulaColumns().filter((column) => ["integer", "numeric"].includes(String(column.kind || "")));
+  }
+
+  function categoricalFormulaColumns() {
+    return formulaColumns().filter((column) => !["integer", "numeric"].includes(String(column.kind || "")));
+  }
+
+  function ensureFormulaAssistFeature(preferredKind = "") {
+    const columns = preferredKind === "numeric"
+      ? numericFormulaColumns()
+      : (preferredKind === "categorical" ? categoricalFormulaColumns() : formulaColumns());
+    if (columns.some((column) => column.name === formulaAssistSelectedFeature)) return formulaAssistSelectedFeature;
+    formulaAssistSelectedFeature = columns[0]?.name || "";
+    localStorage.setItem("py_lucidum_glm_formula_assist_feature", formulaAssistSelectedFeature);
+    return formulaAssistSelectedFeature;
+  }
+
+  function filteredAssistColumns(columns = formulaColumns()) {
+    const query = formulaAssistFeatureSearch.trim().toLowerCase();
+    if (!query) return columns;
+    return columns.filter((column) => String(column.name || "").toLowerCase().includes(query));
+  }
+
+  function formulaAssistColumnsForTab() {
+    if (formulaAssistTab === "levels") return categoricalFormulaColumns();
+    return numericFormulaColumns();
+  }
+
+  function numericFormulaSnippets() {
+    return GLM_FORMULA_SNIPPETS;
+  }
+
+  function ensureFormulaAssistSnippet() {
+    const snippets = numericFormulaSnippets();
+    if (snippets.some((item) => item.id === formulaAssistSelectedSnippet)) return formulaAssistSelectedSnippet;
+    formulaAssistSelectedSnippet = snippets[0]?.id || "identity";
+    localStorage.setItem("py_lucidum_glm_formula_assist_snippet", formulaAssistSelectedSnippet);
+    return formulaAssistSelectedSnippet;
+  }
+
+  function formulaAssistDrawerHtml() {
+    const hidden = formulaAssistOpen ? "" : "hidden";
+    return `<div id="glmFormulaAssistDrawer" class="glm-formula-assist-drawer ${hidden}">
+      ${formulaAssistContentHtml()}
+    </div>`;
+  }
+
+  function formulaAssistContentHtml() {
+    const tabs = [
+      ["snippets", "Numeric"],
+      ["piecewise", "Piecewise linear"],
+      ["levels", "Categorical"],
+    ];
+    return `
+      <div class="glm-formula-assist-top">
+        <div class="segmented glm-formula-assist-tabs" role="group" aria-label="Formula tools">
+          ${tabs.map(([id, label]) => `<button type="button" data-glm-assist-tab="${id}" class="${formulaAssistTab === id ? "active" : ""}">${escapeHtml(label)}</button>`).join("")}
+        </div>
+        <label class="glm-formula-assist-header-toggle"><input id="glmFormulaAssistIncludeHeader" type="checkbox" ${formulaAssistIncludeHeader ? "checked" : ""} /> include header</label>
+      </div>
+      ${formulaAssistTab === "piecewise" ? formulaAssistPiecewiseHtml() : (formulaAssistTab === "levels" ? formulaAssistLevelsHtml() : formulaAssistSnippetsHtml())}
+    `;
+  }
+
+  function formulaAssistFeaturePickerHtml(columns = formulaColumns(), selected = formulaAssistSelectedFeature) {
+    return `
+      <div class="glm-formula-assist-feature-block">
+        <label class="glm-formula-assist-label" for="glmFormulaAssistFeatureSearch">Feature</label>
+        <input id="glmFormulaAssistFeatureSearch" class="search glm-formula-assist-search" type="search" value="${escapeHtml(formulaAssistFeatureSearch)}" />
+        <select id="glmFormulaAssistFeatureSelect" class="glm-formula-assist-feature-select" size="7">
+          ${formulaAssistFeatureOptionsHtml(columns, selected)}
+        </select>
+      </div>
+    `;
+  }
+
+  function formulaAssistFeatureOptionsHtml(columns = formulaAssistColumnsForTab(), selected = formulaAssistSelectedFeature) {
+    const rows = filteredAssistColumns(columns);
+    const safeSelected = rows.some((column) => column.name === selected) ? selected : (rows[0]?.name || "");
+    return rows.map((column) => `<option value="${escapeHtml(column.name)}" ${column.name === safeSelected ? "selected" : ""}>${escapeHtml(column.name)}</option>`).join("");
+  }
+
+  function formulaAssistSnippetsHtml() {
+    ensureFormulaAssistFeature("numeric");
+    ensureFormulaAssistSnippet();
+    const selected = formulaAssistSelectedFeature;
+    const snippets = numericFormulaSnippets();
+    const snippet = snippets.find((item) => item.id === formulaAssistSelectedSnippet) || snippets[0];
+    const formula = buildSnippetFormula(snippet?.id || "identity", selected, {
+      denominator: denominatorForOffsetSnippet(),
+    });
+    const preview = formulaAssistPreviewDisplayText(formula, selected);
+    return `
+      <div class="glm-formula-assist-grid">
+        ${formulaAssistFeaturePickerHtml(numericFormulaColumns())}
+        <div class="glm-formula-assist-main">
+          <label class="glm-formula-assist-label">Snippet</label>
+          <div id="glmFormulaAssistSnippetList" class="glm-formula-assist-snippet-list" role="listbox" aria-label="Snippet">
+            ${snippets.map((item) => `<button type="button" class="glm-formula-assist-snippet-row ${item.id === formulaAssistSelectedSnippet ? "active" : ""}" data-glm-snippet-id="${escapeHtml(item.id)}" role="option" aria-selected="${item.id === formulaAssistSelectedSnippet ? "true" : "false"}">${escapeHtml(item.label)}</button>`).join("")}
+          </div>
+          <pre id="glmFormulaAssistPreview" class="glm-formula-assist-preview">${escapeHtml(preview)}</pre>
+          <button id="glmFormulaAssistInsertBtn" class="tab glm-inline-action-button" type="button" ${preview ? "" : "disabled"}>Insert at cursor</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function formulaAssistPiecewiseHtml() {
+    ensureFormulaAssistFeature("numeric");
+    const parsed = parseBreakpoints(formulaAssistBreakpoints);
+    const formula = !parsed.error ? buildPiecewiseFormula(formulaAssistSelectedFeature, parsed.values) : "";
+    const preview = formulaAssistPreviewDisplayText(formula, formulaAssistSelectedFeature);
+    return `
+      <div class="glm-formula-assist-grid">
+        ${formulaAssistFeaturePickerHtml(numericFormulaColumns())}
+        <div class="glm-formula-assist-main">
+          <label class="glm-formula-assist-label" for="glmFormulaAssistBreakpoints">Breaks</label>
+          <input id="glmFormulaAssistBreakpoints" class="glm-formula-assist-breakpoints" type="text" inputmode="decimal" value="${escapeHtml(formulaAssistBreakpoints)}" />
+          <pre id="glmFormulaAssistPreview" class="glm-formula-assist-preview">${escapeHtml(preview || parsed.error)}</pre>
+          <button id="glmFormulaAssistInsertPiecewiseBtn" class="tab glm-inline-action-button" type="button" ${preview ? "" : "disabled"}>Insert at cursor</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function formulaAssistLevelsHtml() {
+    ensureFormulaAssistFeature("categorical");
+    const levelRows = levelCacheEntry(formulaAssistSelectedFeature, formulaAssistLevelSearch)?.values || [];
+    const selectedValues = selectedFormulaAssistLevelValues();
+    const formula = selectedValues.length
+      ? (formulaAssistCategoricalMode === "ind"
+        ? buildIndividualLevelsFormula(formulaAssistSelectedFeature, selectedValues)
+        : buildGroupedLevelsFormula(formulaAssistSelectedFeature, selectedValues))
+      : "";
+    const preview = formulaAssistPreviewDisplayText(formula, formulaAssistSelectedFeature);
+    return `
+      <div class="glm-formula-assist-grid">
+        ${formulaAssistFeaturePickerHtml(categoricalFormulaColumns())}
+        <div class="glm-formula-assist-main">
+          <label class="glm-formula-assist-label" for="glmFormulaAssistLevelSearch">Levels</label>
+          <div class="glm-formula-assist-level-search-row">
+            <input id="glmFormulaAssistLevelSearch" class="search glm-formula-assist-search" type="search" value="${escapeHtml(formulaAssistLevelSearch)}" />
+            <div class="segmented glm-formula-assist-level-mode" role="radiogroup" aria-label="Categorical formula mode">
+              <button type="button" data-glm-level-mode="group" role="radio" aria-checked="${formulaAssistCategoricalMode === "group" ? "true" : "false"}" class="${formulaAssistCategoricalMode === "group" ? "active" : ""}">group</button>
+              <button type="button" data-glm-level-mode="ind" role="radio" aria-checked="${formulaAssistCategoricalMode === "ind" ? "true" : "false"}" class="${formulaAssistCategoricalMode === "ind" ? "active" : ""}">ind</button>
+            </div>
+          </div>
+          <div id="glmFormulaAssistLevelList" class="glm-formula-assist-level-list">
+            ${formulaAssistLevelRowsHtml(levelRows)}
+          </div>
+          <pre id="glmFormulaAssistPreview" class="glm-formula-assist-preview">${escapeHtml(preview)}</pre>
+          <button id="glmFormulaAssistInsertLevelsBtn" class="tab glm-inline-action-button" type="button" ${preview ? "" : "disabled"}>Insert at cursor</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function denominatorForOffsetSnippet() {
+    const denominator = String(getDenominator() || "").trim();
+    if (!denominator || denominator === "__none__") return formulaAssistSelectedFeature;
+    return denominator;
+  }
+
+  function renderFormulaAssistDrawer() {
+    const drawer = el("glmFormulaAssistDrawer");
+    if (!drawer) return;
+    drawer.classList.toggle("hidden", !formulaAssistOpen);
+    drawer.innerHTML = formulaAssistContentHtml();
+    bindFormulaAssistDrawerControls();
+    if (formulaAssistOpen && formulaAssistTab === "levels") loadFormulaAssistLevels();
+  }
+
+  function refreshFormulaAssistFeatureOptions() {
+    const select = el("glmFormulaAssistFeatureSelect");
+    if (!select) return;
+    const columns = formulaAssistColumnsForTab();
+    const rows = filteredAssistColumns(columns);
+    if (!rows.some((column) => column.name === formulaAssistSelectedFeature)) {
+      formulaAssistSelectedFeature = rows[0]?.name || "";
+      localStorage.setItem("py_lucidum_glm_formula_assist_feature", formulaAssistSelectedFeature);
+      if (formulaAssistTab === "levels") formulaAssistSelectedLevelKeys = new Set();
+    }
+    select.innerHTML = formulaAssistFeatureOptionsHtml(columns);
+    select.value = formulaAssistSelectedFeature;
+    refreshFormulaAssistPreview();
+    if (formulaAssistTab === "levels" && formulaAssistSelectedFeature) loadFormulaAssistLevels();
+    else if (formulaAssistTab === "levels") refreshFormulaAssistLevelRows([]);
+  }
+
+  function refreshFormulaAssistPreview() {
+    const preview = el("glmFormulaAssistPreview");
+    if (!preview) return;
+    const text = formulaAssistPreviewText();
+    preview.textContent = text;
+    const button = formulaAssistInsertButton();
+    if (button) button.disabled = !text || Boolean(formulaAssistPreviewError());
+  }
+
+  function formulaAssistPreviewText() {
+    const error = formulaAssistPreviewError();
+    if (error) return error;
+    const text = formulaAssistGeneratedFormulaText();
+    return formulaAssistPreviewDisplayText(text, formulaAssistSelectedFeature);
+  }
+
+  function formulaAssistPreviewDisplayText(text, feature) {
+    const value = withFormulaHeader(text, feature, formulaAssistIncludeHeader);
+    return formatDrawerInsertion(value, "__preview__").trimEnd();
+  }
+
+  function formulaAssistGeneratedFormulaText() {
+    if (formulaAssistTab === "piecewise") {
+      const parsed = parseBreakpoints(formulaAssistBreakpoints);
+      if (parsed.error) return parsed.error;
+      return buildPiecewiseFormula(formulaAssistSelectedFeature, parsed.values);
+    }
+    if (formulaAssistTab === "levels") {
+      const values = selectedFormulaAssistLevelValues();
+      if (!values.length) return "";
+      return formulaAssistCategoricalMode === "ind"
+        ? buildIndividualLevelsFormula(formulaAssistSelectedFeature, values)
+        : buildGroupedLevelsFormula(formulaAssistSelectedFeature, values);
+    }
+    return buildSnippetFormula(formulaAssistSelectedSnippet, formulaAssistSelectedFeature, {
+      denominator: denominatorForOffsetSnippet(),
+    });
+  }
+
+  function formulaAssistPreviewError() {
+    if (formulaAssistTab !== "piecewise") return "";
+    return parseBreakpoints(formulaAssistBreakpoints).error;
+  }
+
+  function formulaAssistInsertButton() {
+    if (formulaAssistTab === "piecewise") return el("glmFormulaAssistInsertPiecewiseBtn");
+    if (formulaAssistTab === "levels") return el("glmFormulaAssistInsertLevelsBtn");
+    return el("glmFormulaAssistInsertBtn");
+  }
+
+  function formulaAssistLevelRowsHtml(rows = []) {
+    return rows.length ? rows.map((row) => {
+      const value = String(row.value ?? "");
+      const key = formulaAssistLevelValueKey(row.value);
+      const checked = formulaAssistSelectedLevelKeys.has(key) ? "checked" : "";
+      return `<label class="glm-formula-assist-level-row"><input type="checkbox" data-glm-level-key="${escapeHtml(key)}" data-glm-level-value="${escapeHtml(value)}" ${checked} /> <span>${escapeHtml(row.label || value)}</span><small>${Number(row.count || 0).toLocaleString()}</small></label>`;
+    }).join("") : `<div class="glm-formula-assist-empty">No levels</div>`;
+  }
+
+  function refreshFormulaAssistLevelRows(rows = []) {
+    const list = el("glmFormulaAssistLevelList");
+    if (!list) return;
+    list.innerHTML = formulaAssistLevelRowsHtml(rows);
+    bindFormulaAssistLevelControls();
+    refreshFormulaAssistPreview();
+  }
+
+  function bindFormulaAssistLevelControls() {
+    document.querySelectorAll("[data-glm-level-value]").forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        const key = checkbox.dataset.glmLevelKey || "";
+        if (checkbox.checked) formulaAssistSelectedLevelKeys.add(key);
+        else formulaAssistSelectedLevelKeys.delete(key);
+        refreshFormulaAssistPreview();
+      });
+    });
+  }
+
+  function refreshFormulaAssistSnippetSelection() {
+    document.querySelectorAll("[data-glm-snippet-id]").forEach((button) => {
+      const active = button.dataset.glmSnippetId === formulaAssistSelectedSnippet;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+  }
+
+  function bindFormulaAssistDrawerControls() {
+    document.querySelectorAll("[data-glm-assist-tab]").forEach((button) => {
+      button.addEventListener("click", () => {
+        formulaAssistTab = button.dataset.glmAssistTab || "snippets";
+        localStorage.setItem("py_lucidum_glm_formula_assist_tab", formulaAssistTab);
+        renderFormulaAssistDrawer();
+      });
+    });
+    el("glmFormulaAssistFeatureSearch")?.addEventListener("input", (event) => {
+      formulaAssistFeatureSearch = event.target.value || "";
+      refreshFormulaAssistFeatureOptions();
+    });
+    el("glmFormulaAssistFeatureSelect")?.addEventListener("change", (event) => {
+      formulaAssistSelectedFeature = event.target.value || "";
+      formulaAssistSelectedLevelKeys = new Set();
+      localStorage.setItem("py_lucidum_glm_formula_assist_feature", formulaAssistSelectedFeature);
+      refreshFormulaAssistPreview();
+      if (formulaAssistTab === "levels") loadFormulaAssistLevels();
+    });
+    document.querySelectorAll("[data-glm-snippet-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        formulaAssistSelectedSnippet = button.dataset.glmSnippetId || "identity";
+        localStorage.setItem("py_lucidum_glm_formula_assist_snippet", formulaAssistSelectedSnippet);
+        refreshFormulaAssistSnippetSelection();
+        refreshFormulaAssistPreview();
+      });
+    });
+    el("glmFormulaAssistIncludeHeader")?.addEventListener("change", (event) => {
+      formulaAssistIncludeHeader = Boolean(event.target.checked);
+      localStorage.setItem("py_lucidum_glm_formula_assist_include_header", formulaAssistIncludeHeader ? "true" : "false");
+      refreshFormulaAssistPreview();
+    });
+    el("glmFormulaAssistBreakpoints")?.addEventListener("input", (event) => {
+      formulaAssistBreakpoints = event.target.value || "";
+      localStorage.setItem("py_lucidum_glm_formula_assist_breakpoints", formulaAssistBreakpoints);
+      refreshFormulaAssistPreview();
+    });
+    el("glmFormulaAssistLevelSearch")?.addEventListener("input", (event) => {
+      formulaAssistLevelSearch = event.target.value || "";
+      loadFormulaAssistLevels();
+    });
+    document.querySelectorAll("[data-glm-level-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        formulaAssistCategoricalMode = button.dataset.glmLevelMode === "ind" ? "ind" : "group";
+        localStorage.setItem("py_lucidum_glm_formula_assist_categorical_mode", formulaAssistCategoricalMode);
+        document.querySelectorAll("[data-glm-level-mode]").forEach((item) => {
+          const active = item.dataset.glmLevelMode === formulaAssistCategoricalMode;
+          item.classList.toggle("active", active);
+          item.setAttribute("aria-checked", active ? "true" : "false");
+        });
+        refreshFormulaAssistPreview();
+      });
+    });
+    bindFormulaAssistLevelControls();
+    el("glmFormulaAssistInsertBtn")?.addEventListener("click", insertSelectedSnippet);
+    el("glmFormulaAssistInsertPiecewiseBtn")?.addEventListener("click", insertPiecewiseFormula);
+    el("glmFormulaAssistInsertLevelsBtn")?.addEventListener("click", insertGroupedLevelsFormula);
+  }
+
+  function insertSelectedSnippet() {
+    insertFormulaAtCursor(buildSnippetFormula(formulaAssistSelectedSnippet, formulaAssistSelectedFeature, {
+      denominator: denominatorForOffsetSnippet(),
+    }));
+  }
+
+  function insertPiecewiseFormula() {
+    const parsed = parseBreakpoints(formulaAssistBreakpoints);
+    if (parsed.error) return;
+    insertFormulaAtCursor(buildPiecewiseFormula(formulaAssistSelectedFeature, parsed.values));
+  }
+
+  function insertGroupedLevelsFormula() {
+    const values = selectedFormulaAssistLevelValues();
+    if (!values.length) return;
+    insertFormulaAtCursor(formulaAssistCategoricalMode === "ind"
+      ? buildIndividualLevelsFormula(formulaAssistSelectedFeature, values)
+      : buildGroupedLevelsFormula(formulaAssistSelectedFeature, values));
+  }
+
+  function insertFormulaAtCursor(text) {
+    const value = String(text || "");
+    if (!value) return;
+    const output = withFormulaHeader(value, formulaAssistSelectedFeature, formulaAssistIncludeHeader);
+    insertEditorText(formatDrawerInsertion(output, editorTextBeforeInsertion(), { replaceSelection: editorHasSelection() }));
+  }
+
+  function editorHasSelection() {
+    if (aceEditor) {
+      const range = aceEditor.getSelectionRange?.();
+      if (!range?.start || !range?.end) return false;
+      return range.start.row !== range.end.row || range.start.column !== range.end.column;
+    }
+    const fallback = el("glmFormulaText");
+    if (!fallback) return false;
+    const start = fallback.selectionStart ?? fallback.value.length;
+    const end = fallback.selectionEnd ?? start;
+    return end > start;
+  }
+
+  function editorTextBeforeInsertion() {
+    if (aceEditor) {
+      const range = aceEditor.getSelectionRange?.();
+      const position = range?.start || aceEditor.getCursorPosition();
+      const value = aceEditor.getValue();
+      return textBeforeAcePosition(value, position);
+    }
+    const fallback = el("glmFormulaText");
+    if (!fallback) return "";
+    const start = fallback.selectionStart ?? fallback.value.length;
+    return fallback.value.slice(0, start);
+  }
+
+  function textBeforeAcePosition(text, position = {}) {
+    const row = Math.max(0, Number(position.row || 0));
+    const column = Math.max(0, Number(position.column || 0));
+    const lines = String(text || "").split("\n");
+    return [...lines.slice(0, row), (lines[row] || "").slice(0, column)].join("\n");
+  }
+
+  function insertEditorText(text) {
+    if (aceEditor) {
+      aceEditor.focus();
+      aceEditor.insert(String(text || ""));
+      captureDraft();
+      hideAutocomplete();
+      return;
+    }
+    const fallback = el("glmFormulaText");
+    if (!fallback) return;
+    const start = fallback.selectionStart ?? fallback.value.length;
+    const end = fallback.selectionEnd ?? start;
+    fallback.value = `${fallback.value.slice(0, start)}${text}${fallback.value.slice(end)}`;
+    fallback.selectionStart = fallback.selectionEnd = start + String(text).length;
+    formulaDraft = fallback.value;
+    localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
+  }
+
+  function levelCacheKey(column, search) {
+    return `${column}\u0000${String(search || "").toLowerCase()}`;
+  }
+
+  function levelCacheEntry(column, search) {
+    return formulaAssistLevelCache.get(levelCacheKey(column, search));
+  }
+
+  function formulaAssistLevelValueKey(value) {
+    return JSON.stringify(value ?? "");
+  }
+
+  function selectedFormulaAssistLevelValues() {
+    return [...formulaAssistSelectedLevelKeys].map((key) => {
+      try {
+        return JSON.parse(key);
+      } catch (_) {
+        return key;
+      }
+    });
+  }
+
+  async function loadFormulaAssistLevels({ force = false } = {}) {
+    if (!api || !formulaAssistSelectedFeature) return null;
+    const key = levelCacheKey(formulaAssistSelectedFeature, formulaAssistLevelSearch);
+    if (!force && formulaAssistLevelCache.has(key)) {
+      const payload = formulaAssistLevelCache.get(key);
+      refreshFormulaAssistLevelRows(payload?.values || []);
+      return payload;
+    }
+    const requestSeq = formulaAssistLevelRequestSeq + 1;
+    formulaAssistLevelRequestSeq = requestSeq;
+    try {
+      const payload = await api("/api/glm/formula/levels", {
+        method: "POST",
+        body: JSON.stringify({ column: formulaAssistSelectedFeature, search: formulaAssistLevelSearch, limit: 500 }),
+      });
+      if (requestSeq !== formulaAssistLevelRequestSeq) return null;
+      formulaAssistLevelCache.set(key, payload);
+      refreshFormulaAssistLevelRows(payload.values || []);
+      return payload;
+    } catch (_) {
+      if (requestSeq === formulaAssistLevelRequestSeq) {
+        formulaAssistLevelCache.set(key, { values: [] });
+        refreshFormulaAssistLevelRows([]);
+      }
+      return null;
+    }
+  }
+
   function bindControls() {
     syncFamilyParameterControl();
     syncRegularizationControls();
+    renderFormulaAssistDrawer();
     el("glmFamilySelect")?.addEventListener("change", (event) => {
       selectedFamily = event.target.value;
       localStorage.setItem("py_lucidum_glm_family", selectedFamily);
@@ -171,6 +675,12 @@ export function createGlmFormulaBuilder({
       });
     });
     el("glmClearFormulaBtn")?.addEventListener("click", () => setFormulaText(""));
+    el("glmFormulaAssistBtn")?.addEventListener("click", () => {
+      formulaAssistOpen = !formulaAssistOpen;
+      localStorage.setItem("py_lucidum_glm_formula_assist_open", formulaAssistOpen ? "true" : "false");
+      el("glmFormulaAssistBtn")?.classList.toggle("active", formulaAssistOpen);
+      renderFormulaAssistDrawer();
+    });
     el("glmFontSmallerBtn")?.addEventListener("click", () => adjustFontSize(-1));
     el("glmFontLargerBtn")?.addEventListener("click", () => adjustFontSize(1));
     el("glmBuildBtn")?.addEventListener("click", onBuildModel);
@@ -231,6 +741,168 @@ export function createGlmFormulaBuilder({
     });
   }
 
+  function bindAutocomplete() {
+    if (!aceEditor) return;
+    aceEditor.commands.addCommand({
+      name: "glmFormulaAutocomplete",
+      bindKey: { win: "Ctrl-Space", mac: "Command-Space|Ctrl-Space" },
+      exec: () => showAutocomplete({ manual: true }),
+    });
+    aceEditor.container.addEventListener("keydown", handleAutocompleteKeydown, true);
+    aceEditor.session.on("change", () => window.setTimeout(() => showAutocomplete({ manual: false }), 0));
+    aceEditor.selection.on("changeCursor", () => hideAutocomplete());
+    document.addEventListener("mousedown", handleAutocompleteDocumentMouseDown);
+  }
+
+  function handleAutocompleteDocumentMouseDown(event) {
+    if (autocompletePopup && !autocompletePopup.contains(event.target) && !aceEditor?.container.contains(event.target)) hideAutocomplete();
+  }
+
+  function handleAutocompleteKeydown(event) {
+    if (!autocompletePopup) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      moveAutocompleteSelection(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      moveAutocompleteSelection(-1);
+    } else if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+      insertAutocompleteItem(autocompleteItems[autocompleteIndex]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      hideAutocomplete();
+    }
+  }
+
+  async function showAutocomplete({ manual = false } = {}) {
+    if (!aceEditor) return;
+    const cursor = aceEditor.getCursorPosition();
+    const context = formulaCompletionContext(aceEditor.getValue(), cursor.row, cursor.column);
+    if (context.type === "none") {
+      hideAutocomplete();
+      return;
+    }
+    if (!manual && context.type === "formula" && context.prefix.length < 1) {
+      hideAutocomplete();
+      return;
+    }
+    autocompleteContext = context;
+    let items = [];
+    if (context.type === "levels") {
+      items = await autocompleteLevelItems(context);
+    } else {
+      items = rankFormulaSuggestions([
+        ...formulaColumnSuggestions(formulaColumns()),
+        ...formulaFunctionSuggestions(),
+      ], context.prefix).slice(0, 80);
+    }
+    if (!items.length) {
+      hideAutocomplete();
+      return;
+    }
+    autocompleteItems = items;
+    autocompleteIndex = 0;
+    renderAutocompletePopup();
+  }
+
+  async function autocompleteLevelItems(context) {
+    if (!api || !context.feature) return [];
+    const search = context.prefix || "";
+    const key = levelCacheKey(context.feature, search);
+    let payload = formulaAssistLevelCache.get(key);
+    if (!payload) {
+      try {
+        payload = await api("/api/glm/formula/levels", {
+          method: "POST",
+          body: JSON.stringify({ column: context.feature, search, limit: 80 }),
+        });
+        formulaAssistLevelCache.set(key, payload);
+      } catch (_) {
+        return [];
+      }
+    }
+    return rankFormulaSuggestions((payload.values || []).map((row) => ({
+      type: "level",
+      caption: String(row.label || row.value || ""),
+      value: formulaLiteral(row.value),
+      meta: `${Number(row.count || 0).toLocaleString()} rows`,
+    })), search).slice(0, 80);
+  }
+
+  function renderAutocompletePopup() {
+    const shell = document.querySelector(".glm-editor-shell");
+    if (!shell || !aceEditor) return;
+    if (!autocompletePopup) {
+      autocompletePopup = document.createElement("div");
+      autocompletePopup.className = "glm-formula-autocomplete";
+      shell.append(autocompletePopup);
+    }
+    autocompletePopup.innerHTML = autocompleteItems.map((item, index) => `
+      <button type="button" class="glm-formula-autocomplete-row ${index === autocompleteIndex ? "active" : ""}" data-glm-autocomplete-index="${index}">
+        <span>${escapeHtml(item.caption || item.value || "")}</span>
+        <small>${escapeHtml(item.meta || "")}</small>
+      </button>
+    `).join("");
+    autocompletePopup.querySelectorAll("[data-glm-autocomplete-index]").forEach((button) => {
+      button.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        insertAutocompleteItem(autocompleteItems[Number(button.dataset.glmAutocompleteIndex || 0)]);
+      });
+    });
+    positionAutocompletePopup();
+  }
+
+  function positionAutocompletePopup() {
+    if (!autocompletePopup || !aceEditor) return;
+    const shell = document.querySelector(".glm-editor-shell");
+    if (!shell) return;
+    const cursor = aceEditor.getCursorPosition();
+    const coords = aceEditor.renderer.textToScreenCoordinates(cursor.row, cursor.column);
+    const shellRect = shell.getBoundingClientRect();
+    const left = Math.max(4, Math.min(shellRect.width - 260, coords.pageX - shellRect.left));
+    const top = Math.max(4, Math.min(shellRect.height - 220, coords.pageY - shellRect.top + 18));
+    autocompletePopup.style.left = `${left}px`;
+    autocompletePopup.style.top = `${top}px`;
+  }
+
+  function moveAutocompleteSelection(delta) {
+    if (!autocompleteItems.length) return;
+    autocompleteIndex = (autocompleteIndex + delta + autocompleteItems.length) % autocompleteItems.length;
+    renderAutocompletePopup();
+  }
+
+  function insertAutocompleteItem(item) {
+    if (!item || !aceEditor || !autocompleteContext) return;
+    const ace = window.ace;
+    const cursor = aceEditor.getCursorPosition();
+    const Range = ace?.Range || ace?.require?.("ace/range")?.Range;
+    const startColumn = Math.max(0, Number(autocompleteContext.replaceStartColumn ?? cursor.column));
+    const selectionRange = aceEditor.getSelectionRange?.();
+    if (selectionRange && !selectionRange.isEmpty?.()) {
+      aceEditor.session.replace(selectionRange, item.value || item.caption || "");
+    } else if (Range) {
+      aceEditor.session.replace(new Range(cursor.row, startColumn, cursor.row, cursor.column), item.value || item.caption || "");
+    } else {
+      aceEditor.insert(item.value || item.caption || "");
+    }
+    captureDraft();
+    hideAutocomplete();
+    aceEditor.focus();
+  }
+
+  function hideAutocomplete() {
+    if (autocompletePopup) autocompletePopup.remove();
+    autocompletePopup = null;
+    autocompleteItems = [];
+    autocompleteContext = null;
+    autocompleteIndex = 0;
+  }
+
   function syncAceGutterWidth() {
     if (!aceEditor?.session || !aceEditor?.container) return;
     const lineCount = Math.max(1, aceEditor.session.getLength());
@@ -278,6 +950,7 @@ export function createGlmFormulaBuilder({
         localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
         syncAceGutterWidth();
       });
+      bindAutocomplete();
       fallback.classList.add("hidden");
       mount.classList.remove("fallback");
     } catch (_) {
@@ -294,6 +967,9 @@ export function createGlmFormulaBuilder({
     if (!aceEditor) return;
     formulaDraft = aceEditor.getValue();
     localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
+    hideAutocomplete();
+    aceEditor.container.removeEventListener("keydown", handleAutocompleteKeydown, true);
+    document.removeEventListener("mousedown", handleAutocompleteDocumentMouseDown);
     try {
       aceEditor.destroy();
     } catch (_) {
@@ -496,6 +1172,7 @@ export function createGlmFormulaBuilder({
     disposeEditor,
     ensureTrainingScope,
     familyOptionsHtml,
+    formulaAssistDrawerHtml,
     familyParameterConfig,
     familyParameterDefault,
     getFormulaText,
@@ -513,6 +1190,9 @@ export function createGlmFormulaBuilder({
     validateRegularizationParameter,
     get formulaDraft() {
       return formulaDraft;
+    },
+    get formulaAssistOpen() {
+      return formulaAssistOpen;
     },
     get selectedRegularizationAlpha() {
       return selectedRegularizationAlpha;

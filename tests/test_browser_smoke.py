@@ -2018,7 +2018,7 @@ COPY (
             page.on("pageerror", lambda error: page_errors.append(str(error)))
             try:
                 def right_click_tabulation_cell(script: str, arg: dict[str, object] | None = None) -> None:
-                    point = page.evaluate(
+                    point = page.wait_for_function(
                         """
                         ({ script, arg }) => {
                           const resolve = new Function(`return (${script});`)();
@@ -2032,10 +2032,31 @@ COPY (
                           };
                         }
                         """,
-                        {"script": script, "arg": arg or {}},
-                    )
+                        arg={"script": script, "arg": arg or {}},
+                        timeout=5_000,
+                    ).json_value()
                     self.assertIsNotNone(point)
                     page.mouse.click(point["x"], point["y"], button="right")
+                    page.wait_for_timeout(50)
+                    if page.locator("#glmTabulationContextMenu:not([hidden])").count() == 0:
+                        page.evaluate(
+                            """
+                            ({ script, arg, point }) => {
+                              const resolve = new Function(`return (${script});`)();
+                              const element = resolve(arg || {});
+                              if (!element) return;
+                              element.dispatchEvent(new MouseEvent("contextmenu", {
+                                bubbles: true,
+                                cancelable: true,
+                                button: 2,
+                                buttons: 2,
+                                clientX: point.x,
+                                clientY: point.y,
+                              }));
+                            }
+                            """,
+                            {"script": script, "arg": arg or {}, "point": point},
+                        )
 
                 def click_tabulation_menu_item(name: str) -> None:
                     page.locator("#glmTabulationContextMenu:not([hidden])").wait_for(timeout=5_000)
@@ -2589,6 +2610,346 @@ COPY (
                         "regularizationMixDisabled": True,
                         "regularizationAlphaDisabled": True,
                     },
+                )
+
+                page.evaluate(
+                    """
+                    () => {
+                      const editorNode = document.querySelector("#glmFormulaEditor");
+                      const aceEditor = editorNode?.env?.editor || null;
+                      if (aceEditor) {
+                        aceEditor.setValue("", -1);
+                        aceEditor.focus();
+                      }
+                    }
+                    """
+                )
+                page.keyboard.type("Ag")
+                page.locator(".glm-formula-autocomplete-row", has_text="Age").wait_for(timeout=10_000)
+                page.locator(".glm-formula-autocomplete-row", has_text="Age").first.click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaEditor")?.env?.editor?.getValue() === "Age"
+                    """,
+                    timeout=10_000,
+                )
+
+                closed_editor_top = page.evaluate(
+                    """
+                    () => document.querySelector("#glmFormulaEditor")?.getBoundingClientRect().top || 0
+                    """
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const drawer = document.querySelector("#glmFormulaAssistDrawer");
+                      if (drawer?.classList.contains("hidden")) document.querySelector("#glmFormulaAssistBtn")?.click();
+                    }
+                    """
+                )
+                page.locator("#glmFormulaAssistDrawer:not(.hidden)").wait_for(timeout=10_000)
+                page.locator('[data-glm-assist-tab="snippets"]').click()
+                self.assertEqual(page.locator("#glmFormulaAssistAppendPlus").count(), 0)
+                self.assertEqual(page.locator("#glmFormulaAssistSecondaryFeature").count(), 0)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const drawer = document.querySelector("#glmFormulaAssistDrawer");
+                      const header = document.querySelector(".glm-formula-panel .glm-panel-header");
+                      const actions = document.querySelector(".glm-formula-panel .glm-builder-actions");
+                      const controls = document.querySelector(".glm-formula-panel .glm-builder-control-row");
+                      const family = document.querySelector("#glmFamilySelect");
+                      const editor = document.querySelector("#glmFormulaEditor");
+                      const preview = document.querySelector("#glmFormulaAssistPreview");
+                      if (!drawer || !header || !actions || !controls || !family || !editor || !preview || drawer.classList.contains("hidden")) return false;
+                      const drawerRect = drawer.getBoundingClientRect();
+                      const headerRect = header.getBoundingClientRect();
+                      const actionsRect = actions.getBoundingClientRect();
+                      const editorRect = editor.getBoundingClientRect();
+                      const previewRect = preview.getBoundingClientRect();
+                      const style = getComputedStyle(drawer);
+                      return Math.abs(drawerRect.top - headerRect.bottom) <= 2
+                        && drawerRect.height >= 428
+                        && previewRect.height >= 78
+                        && drawerRect.top >= actionsRect.bottom - 2
+                        && controls.getClientRects().length === 0
+                        && family.getClientRects().length === 0
+                        && editorRect.top >= drawerRect.bottom - 2
+                        && style.borderLeftWidth === "0px"
+                        && style.borderRightWidth === "0px"
+                        && style.borderTopWidth === "1px"
+                        && style.borderBottomWidth === "1px";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertGreater(
+                    page.evaluate("() => document.querySelector('#glmFormulaEditor')?.getBoundingClientRect().top || 0"),
+                    closed_editor_top + 100,
+                )
+                page.locator("#glmFormulaAssistBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaAssistDrawer")?.classList.contains("hidden")
+                    """,
+                    timeout=10_000,
+                )
+                page.wait_for_function(
+                    """
+                    (closedTop) => {
+                      const controls = document.querySelector(".glm-formula-panel .glm-builder-control-row");
+                      const family = document.querySelector("#glmFamilySelect");
+                      const editor = document.querySelector("#glmFormulaEditor");
+                      if (!controls || !family || !editor) return false;
+                      return controls.getClientRects().length > 0
+                        && family.getClientRects().length > 0
+                        && Math.abs(editor.getBoundingClientRect().top - closedTop) <= 2;
+                    }
+                    """,
+                    arg=closed_editor_top,
+                    timeout=10_000,
+                )
+                page.locator("#glmFormulaAssistBtn").click()
+                page.locator("#glmFormulaAssistDrawer:not(.hidden)").wait_for(timeout=10_000)
+                page.locator('[data-glm-assist-tab="snippets"]').click()
+                page.locator("#glmFormulaAssistFeatureSearch").click()
+                page.keyboard.type("Ag")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const search = document.querySelector("#glmFormulaAssistFeatureSearch");
+                      const options = [...document.querySelectorAll("#glmFormulaAssistFeatureSelect option")].map((option) => option.textContent.trim());
+                      return search?.value === "Ag" && options.includes("Age") && options.every((text) => !text.includes("·"));
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#glmFormulaAssistFeatureSelect").select_option("Age")
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaAssistInsertBtn")?.textContent.trim() === "Insert at cursor"
+                    """,
+                    timeout=10_000,
+                )
+                snippet_order = page.locator("#glmFormulaAssistSnippetList [data-glm-snippet-id]").evaluate_all(
+                    "(items) => items.map((item) => item.textContent.trim())"
+                )
+                page.locator('[data-glm-snippet-id="sqrt"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaAssistPreview")?.textContent.trim() === "+ sqrt(Age)"
+                      && document.querySelector('[data-glm-snippet-id="sqrt"]')?.getAttribute("aria-selected") === "true"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(
+                    page.locator("#glmFormulaAssistSnippetList [data-glm-snippet-id]").evaluate_all(
+                        "(items) => items.map((item) => item.textContent.trim())"
+                    ),
+                    snippet_order,
+                )
+                self.assertEqual(
+                    page.locator('[data-glm-snippet-id="sqrt"]').evaluate(
+                        """
+                        (node) => {
+                          const style = getComputedStyle(node);
+                          return `${style.outlineStyle}|${style.outlineWidth}|${style.boxShadow}`;
+                        }
+                        """
+                    ),
+                    "none|0px|none",
+                )
+                page.locator('[data-glm-snippet-id="identity"]').click()
+                page.locator("#glmFormulaAssistIncludeHeader").check()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaAssistPreview")?.textContent.trim() === "# Age\\n+ Age"
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const editorNode = document.querySelector("#glmFormulaEditor");
+                      const aceEditor = editorNode?.env?.editor || null;
+                      if (aceEditor) {
+                        aceEditor.setValue("replace me", -1);
+                        aceEditor.selectAll();
+                        aceEditor.focus();
+                      }
+                    }
+                    """
+                )
+                page.locator("#glmFormulaAssistInsertBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaEditor")?.env?.editor?.getValue() === "# Age\\nAge"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#glmFormulaAssistIncludeHeader").uncheck()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaAssistPreview")?.textContent.trim() === "+ Age"
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const editorNode = document.querySelector("#glmFormulaEditor");
+                      const aceEditor = editorNode?.env?.editor || null;
+                      if (aceEditor) {
+                        aceEditor.setValue("actualNumerator ~ 1 ", 1);
+                        aceEditor.focus();
+                      }
+                    }
+                    """
+                )
+                page.locator("#glmFormulaAssistInsertBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaEditor")?.env?.editor?.getValue()
+                      === "actualNumerator ~ 1 + Age\\n"
+                    """,
+                    timeout=10_000,
+                )
+
+                page.locator('[data-glm-assist-tab="piecewise"]').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const options = [...document.querySelectorAll("#glmFormulaAssistFeatureSelect option")].map((option) => option.textContent.trim());
+                      return options.includes("Age") && options.every((text) => !text.includes("·"));
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#glmFormulaAssistFeatureSelect").select_option("Age")
+                page.locator("#glmFormulaAssistBreakpoints").fill("10,20,30")
+                page.evaluate(
+                    """
+                    () => {
+                      const editorNode = document.querySelector("#glmFormulaEditor");
+                      const aceEditor = editorNode?.env?.editor || null;
+                      if (aceEditor) {
+                        aceEditor.setValue("", -1);
+                        aceEditor.focus();
+                      }
+                    }
+                    """
+                )
+                page.locator("#glmFormulaAssistInsertPiecewiseBtn").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const formula = document.querySelector("#glmFormulaEditor")?.env?.editor?.getValue() || "";
+                      return formula.startsWith("+ pmin(10, Age)")
+                        && formula.includes("+ pmax(10, pmin(20, Age))")
+                        && formula.includes("pmax(20, pmin(30, Age))")
+                        && formula.endsWith("\\n");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
+                page.locator('[data-glm-assist-tab="levels"]').click()
+                page.locator("#glmFormulaAssistFeatureSearch").fill("")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const options = [...document.querySelectorAll("#glmFormulaAssistFeatureSelect option")].map((option) => option.textContent.trim());
+                      return options.includes("Segment") && options.every((text) => !text.includes("·"));
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#glmFormulaAssistFeatureSelect").select_option("Segment")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const search = document.querySelector("#glmFormulaAssistLevelSearch")?.getBoundingClientRect();
+                      const mode = document.querySelector(".glm-formula-assist-level-mode")?.getBoundingClientRect();
+                      return search && mode && Math.abs(search.top - mode.top) <= 2 && search.right <= mode.left;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#glmFormulaAssistLevelList [data-glm-level-value="A"]').wait_for(timeout=10_000)
+                page.locator('#glmFormulaAssistLevelList [data-glm-level-value="A"]').check()
+                page.locator('#glmFormulaAssistLevelList [data-glm-level-value="B"]').check()
+                page.locator('[data-glm-level-mode="group"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaAssistPreview")?.textContent.trim()
+                      === '+ ifelse(np.isin(Segment, ["A", "B"]), 1, 0)'
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const editorNode = document.querySelector("#glmFormulaEditor");
+                      const aceEditor = editorNode?.env?.editor || null;
+                      if (aceEditor) {
+                        aceEditor.setValue("actualNumerator ~ 1 ", 1);
+                        aceEditor.focus();
+                      }
+                    }
+                    """
+                )
+                page.locator("#glmFormulaAssistInsertLevelsBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaEditor")?.env?.editor?.getValue()
+                      === 'actualNumerator ~ 1 + ifelse(np.isin(Segment, ["A", "B"]), 1, 0)\\n'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('[data-glm-level-mode="ind"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaAssistPreview")?.textContent.trim()
+                      === '+ ifelse(Segment == "A", 1, 0)\\n+ ifelse(Segment == "B", 1, 0)'
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const editorNode = document.querySelector("#glmFormulaEditor");
+                      const aceEditor = editorNode?.env?.editor || null;
+                      if (aceEditor) {
+                        aceEditor.setValue("actualNumerator ~ 1 ", 1);
+                        aceEditor.focus();
+                      }
+                    }
+                    """
+                )
+                page.locator("#glmFormulaAssistInsertLevelsBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmFormulaEditor")?.env?.editor?.getValue()
+                      === 'actualNumerator ~ 1 + ifelse(Segment == "A", 1, 0)\\n+ ifelse(Segment == "B", 1, 0)\\n'
+                    """,
+                    timeout=10_000,
+                )
+                set_glm_builder_draft({
+                    "formula": "actualNumerator ~ 1 + Age + Segment",
+                    "family": "tweedie",
+                    "familyParameter": "1.5",
+                    "scope": "all",
+                    "regularizationMode": "none",
+                    "regularizationMix": "0.5",
+                    "regularizationAlpha": "0.01",
+                })
+                page.evaluate(
+                    """
+                    () => {
+                      const drawer = document.querySelector("#glmFormulaAssistDrawer");
+                      if (drawer && !drawer.classList.contains("hidden")) document.querySelector("#glmFormulaAssistBtn")?.click();
+                    }
+                    """
                 )
                 page.locator("#glmCoefficientTable tbody tr", has_text="(Intercept)").click(button="right")
                 page.wait_for_timeout(150)

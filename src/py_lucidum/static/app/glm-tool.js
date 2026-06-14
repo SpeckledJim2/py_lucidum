@@ -151,8 +151,11 @@ export function createGlmTool({
   let isRebasing = false;
   let builderDraftSourceModelId = "";
   const formulaBuilder = createGlmFormulaBuilder({
+    api,
     el,
     escapeHtml,
+    getColumns: schemaDatasetColumns,
+    getDenominator: () => el("denominator")?.value || "__none__",
     getFamilies: () => config?.families || [],
     onBuildModel: buildModel,
     onCoefficientSearch: () => renderCoefficientTable(coefficientRows),
@@ -296,6 +299,7 @@ export function createGlmTool({
                 <h3 class="glm-panel-title">GLM formula</h3>
                 <div class="glm-builder-actions">
                   <button id="glmClearFormulaBtn" class="tab glm-inline-action-button" type="button" title="Clear formula">× clear</button>
+                  <button id="glmFormulaAssistBtn" class="tab glm-icon-action-button ${formulaBuilder.formulaAssistOpen ? "active" : ""}" type="button" aria-label="Formula tools" title="Formula tools">f(x)</button>
                   <button id="glmFontSmallerBtn" class="tab glm-icon-action-button" type="button" aria-label="Decrease formula font size" title="Decrease font size">A-</button>
                   <button id="glmFontLargerBtn" class="tab glm-icon-action-button" type="button" aria-label="Increase formula font size" title="Increase font size">A+</button>
                   <div class="segmented glm-scope-control glm-header-scope-control" role="group" aria-label="Rows to fit">
@@ -305,6 +309,7 @@ export function createGlmTool({
                   <button id="glmBuildBtn" class="tab glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
               </div>
+              ${formulaBuilder.formulaAssistDrawerHtml()}
               <div class="glm-builder-control-row glm-builder-control-stack">
                 <div class="glm-control-line">
                   <div class="glm-family-row">
@@ -2102,9 +2107,12 @@ export function createGlmTool({
   }
 
   function schemaDatasetFeatureNames() {
+    return schemaDatasetColumns().map((column) => String(column?.name || "")).filter(Boolean);
+  }
+
+  function schemaDatasetColumns() {
     const datasetSource = (state.schema?.data_sources || []).find((source) => source?.id === "dataset");
-    const columns = datasetSource?.columns || state.schema?.columns || [];
-    return columns.map((column) => String(column?.name || "")).filter(Boolean);
+    return datasetSource?.columns || state.schema?.columns || [];
   }
 
   function coefficientStoredFeatureNames(row = {}) {

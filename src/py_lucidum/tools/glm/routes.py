@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
 
+from .formula_assist import formula_levels
 from .jobs import GlmJobManager
 from .store import GlmModelNameError, GlmModelStore, GlmSourceProvider
 from .tabulation import rebase_tabulation, reset_tabulation_rebase, tabulation_config, tabulation_plot, tabulation_table
@@ -57,6 +58,15 @@ def register(app: FastAPI, context: AppContext) -> None:
         context.check_token(request)
         payload = dict(await request.json())
         return validate_request(context.dataset, payload)
+
+    @app.post("/api/glm/formula/levels")
+    async def formula_levels_endpoint(request: Request) -> dict[str, Any]:
+        context.check_token(request)
+        payload = dict(await request.json())
+        try:
+            return formula_levels(context.dataset, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/glm/build")
     async def build_endpoint(request: Request) -> dict[str, Any]:
