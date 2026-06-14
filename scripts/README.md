@@ -11,11 +11,14 @@ from a Dropbox CloudStorage checkout:
 
 The helper mirrors the checkout into a local cache directory, sets
 `PY_LUCIDUM_RUN_BROWSER_TESTS=1`, points `PYTHONPATH` at the mirrored `src/`
-tree, and runs pytest with the current virtualenv's Python. Any arguments after
-`--` are forwarded to pytest:
+tree, and runs `tests/test_browser_smoke.py` with the current virtualenv's
+Python. Pytest options after `--` are applied to that default target unless you
+provide another test path:
 
 ```bash
-.venv/bin/python scripts/run_browser_smoke.py -- tests/test_browser_smoke.py -q
+.venv/bin/python scripts/run_browser_smoke.py -- -q
+.venv/bin/python scripts/run_browser_smoke.py -- --durations=20 -q
+.venv/bin/python scripts/run_browser_smoke.py -- tests/test_browser_smoke.py::BrowserSmokeTests::test_gbm_tool_loads_feature_grid -q
 ```
 
 ## UK Sector Adjacency

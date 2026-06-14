@@ -51,7 +51,7 @@ Use this map before opening large files:
 
 ## Before Committing
 
-Run the standard checks from `DEVELOPMENT.md`. For frontend, app-launch, or GBM UI changes, include the browser smoke tests:
+Run the standard checks from `DEVELOPMENT.md`. For frontend, app-launch, or GBM UI changes, include the browser smoke tests. `scripts/run_browser_smoke.py` defaults to `tests/test_browser_smoke.py`; pass explicit pytest arguments after `--` only when you intentionally want another target.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests

@@ -291,7 +291,8 @@ to reduce count.
 find src/py_lucidum/static -path '*/vendor/*' -prune -o -name '*.js' -print0 | xargs -0 -n1 node --check
 ```
 
-- Fast non-model backend tests:
+- Fast non-model backend tests, normally the quickest local feedback loop for
+  non-modelling backend changes:
 
 ```bash
 .venv/bin/python -m unittest \
@@ -306,7 +307,7 @@ find src/py_lucidum/static -path '*/vendor/*' -prune -o -name '*.js' -print0 | x
   tests/test_uk_map.py
 ```
 
-- Model tests:
+- Model tests, which include the slower GLM fit/tabulation coverage:
 
 ```bash
 .venv/bin/python -m unittest tests/test_glm.py tests/test_gbm.py
@@ -323,7 +324,9 @@ practical. Exact asset-string checks are still acceptable for stable contracts
 such as asset registration, cache-control behavior, and intentionally documented
 UI text or selectors.
 
-- Browser smoke tests:
+- Browser smoke tests. The helper mirrors Dropbox CloudStorage checkouts before
+  launching Playwright and defaults to `tests/test_browser_smoke.py` so it does
+  not rerun the full backend suite:
 
 ```bash
 .venv/bin/python scripts/run_browser_smoke.py
@@ -376,6 +379,13 @@ Optional full browser smoke check:
 
 ```bash
 .venv/bin/python scripts/run_browser_smoke.py
+```
+
+To pass custom pytest options or a different target, add them after `--`:
+
+```bash
+.venv/bin/python scripts/run_browser_smoke.py -- --durations=20 -q
+.venv/bin/python scripts/run_browser_smoke.py -- tests/test_browser_smoke.py::BrowserSmokeTests::test_gbm_tool_loads_feature_grid -q
 ```
 
 Optional `pipx` install check:

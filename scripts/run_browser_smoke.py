@@ -54,6 +54,16 @@ def run(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | No
     return int(completed.returncode)
 
 
+def pytest_args_have_target(args: list[str], worktree: Path) -> bool:
+    for arg in args:
+        if arg.startswith("-"):
+            continue
+        path_arg = arg.split("::", 1)[0]
+        if path_arg and (worktree / path_arg).exists():
+            return True
+    return False
+
+
 def local_python() -> str:
     python = local_venv() / "bin" / "python"
     return str(python) if python.exists() else sys.executable
@@ -129,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     pytest_args = list(args.pytest_args)
     if pytest_args and pytest_args[0] == "--":
         pytest_args = pytest_args[1:]
+    if not pytest_args_have_target(pytest_args, worktree):
+        pytest_args = ["tests/test_browser_smoke.py", *pytest_args]
     return run([local_python(), "-m", "pytest", *pytest_args], cwd=worktree, env=env)
 
 

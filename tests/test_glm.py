@@ -1410,7 +1410,7 @@ ORDER BY __lucidum_row_id
         self.assertTrue(store.artifact_path(model_id, "tabulation_manifest").exists())
         self.assertTrue(store.artifact_path(model_id, "tabulated_predictions").exists())
 
-    def test_glm_tabulation_without_feature_spec_keeps_bs_grid_inside_bounds(self) -> None:
+    def test_glm_tabulation_numeric_feature_spec_defaults_and_clipping(self) -> None:
         self.require_glm_dependencies()
         data_path = self.spline_data_path()
         dataset = Dataset(data_path)
@@ -1440,17 +1440,6 @@ ORDER BY __lucidum_row_id
             ).fetchone()
         self.assertEqual(row[0], 50)
 
-    def test_glm_tabulation_estimates_blank_numeric_feature_spec_fields(self) -> None:
-        self.require_glm_dependencies()
-        data_path = self.spline_data_path()
-        dataset = Dataset(data_path)
-        store = GlmModelStore(data_path)
-        result = train_model(
-            dataset,
-            store,
-            {"formula": "1 + bs(x, 3)", "response_column": "y", "family": "normal", "training_scope": "all"},
-        )
-        model_id = result["model_id"]
         feature_spec = {"rows": [{"feature": "x", "grouping": "Test", "base": "", "min": "", "max": "", "banding": ""}]}
 
         build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
@@ -1465,17 +1454,6 @@ ORDER BY __lucidum_row_id
         self.assertIn("Estimated min, max, banding", warnings_text)
         self.assertIn("Estimated base", warnings_text)
 
-    def test_glm_tabulation_clips_out_of_bound_numeric_feature_spec_fields(self) -> None:
-        self.require_glm_dependencies()
-        data_path = self.spline_data_path()
-        dataset = Dataset(data_path)
-        store = GlmModelStore(data_path)
-        result = train_model(
-            dataset,
-            store,
-            {"formula": "1 + bs(x, 3)", "response_column": "y", "family": "normal", "training_scope": "all"},
-        )
-        model_id = result["model_id"]
         feature_spec = {"rows": [{"feature": "x", "grouping": "Test", "base": "0", "min": "0", "max": "100", "banding": "1"}]}
 
         build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
@@ -1694,7 +1672,7 @@ COPY (
             ).fetchone()
         self.assertEqual(rows, (6, 6, 6))
 
-    def test_glm_tabulation_rebase_zeroes_cell_and_recalculates_predictions(self) -> None:
+    def test_glm_tabulation_rebase_adjusts_interaction_and_one_way_tables(self) -> None:
         self.require_glm_dependencies()
         dataset = Dataset(self.data_path)
         store = GlmModelStore(self.data_path)
@@ -1718,6 +1696,9 @@ COPY (
         }
         build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
         interaction_path = store.tabulations_dir(model_id) / "Age_Segment.parquet"
+        segment_path = store.tabulations_dir(model_id) / "Segment.parquet"
+        age_path = store.tabulations_dir(model_id) / "Age.parquet"
+        base_path = store.tabulations_dir(model_id) / "base.parquet"
         interaction_rows = store.read_parquet_records(interaction_path)
         anchor = next(row for row in interaction_rows if row["Segment"] == "B" and abs(float(row["tabulated_linear"])) > 1e-9)
         original_offset = float(anchor["tabulated_linear"])
@@ -1769,7 +1750,6 @@ COPY (
         )
 
         reset_payload = glm_tabulation.reset_tabulation_rebase(dataset, store, {"model_ref": f"glm:{model_id}"})
-
         self.assertEqual(reset_payload["rebasing"], {})
         reset_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
         self.assertNotIn("rebasing", reset_manifest)
@@ -1788,26 +1768,6 @@ COPY (
             )
         )
 
-    def test_glm_tabulation_rebase_one_way_categorical_table_moves_offset_to_base(self) -> None:
-        self.require_glm_dependencies()
-        dataset = Dataset(self.data_path)
-        store = GlmModelStore(self.data_path)
-        result = train_model(
-            dataset,
-            store,
-            {
-                "formula": "C(Segment)",
-                "response_column": "actualNumerator",
-                "family": "normal",
-                "training_scope": "all",
-                "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
-            },
-        )
-        model_id = result["model_id"]
-        feature_spec = {"rows": [{"feature": "Segment", "grouping": "Driver", "base": "A"}]}
-        build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
-        segment_path = store.tabulations_dir(model_id) / "Segment.parquet"
-        base_path = store.tabulations_dir(model_id) / "base.parquet"
         original_rows = store.read_parquet_records(segment_path)
         original_by_segment = {row["Segment"]: row for row in original_rows}
         anchor = next(row for row in original_rows if row["Segment"] == "B" and abs(float(row["tabulated_linear"])) > 1e-9)
@@ -1848,26 +1808,6 @@ COPY (
         self.assertAlmostEqual(float(store.read_parquet_records(base_path)[0]["tabulated_linear"]), original_base)
         self.assert_tabulated_linear_predictions_unchanged(original_predictions, store.read_parquet_records(store.artifact_path(model_id, "tabulated_predictions")))
 
-    def test_glm_tabulation_rebase_one_way_numeric_table_moves_offset_to_base(self) -> None:
-        self.require_glm_dependencies()
-        dataset = Dataset(self.data_path)
-        store = GlmModelStore(self.data_path)
-        result = train_model(
-            dataset,
-            store,
-            {
-                "formula": "Age",
-                "response_column": "actualNumerator",
-                "family": "normal",
-                "training_scope": "all",
-                "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
-            },
-        )
-        model_id = result["model_id"]
-        feature_spec = {"rows": [{"feature": "Age", "grouping": "Driver", "base": "40", "min": "30", "max": "70", "banding": "5"}]}
-        build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
-        age_path = store.tabulations_dir(model_id) / "Age.parquet"
-        base_path = store.tabulations_dir(model_id) / "base.parquet"
         original_rows = store.read_parquet_records(age_path)
         original_by_age = {row["Age"]: row for row in original_rows}
         anchor = next(row for row in original_rows if row["Age"] != 40 and abs(float(row["tabulated_linear"])) > 1e-9)
@@ -1898,6 +1838,34 @@ COPY (
         self.assertAlmostEqual(float(rebased_anchor["tabulated_linear"]), 0.0)
         self.assertAlmostEqual(float(store.read_parquet_records(base_path)[0]["tabulated_linear"]), original_base + offset)
         self.assert_tabulated_linear_predictions_unchanged(original_predictions, store.read_parquet_records(store.artifact_path(model_id, "tabulated_predictions")))
+
+        glm_tabulation.reset_tabulation_rebase(dataset, store, {"model_ref": f"glm:{model_id}"})
+
+        with self.assertRaisesRegex(ValueError, "Only GLM"):
+            glm_tabulation.rebase_tabulation(dataset, store, {"model_ref": "gbm:not-a-glm"})
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            glm_tabulation.rebase_tabulation(dataset, store, {"model_refs": [f"glm:{model_id}", "glm:other"]})
+        with self.assertRaisesRegex(ValueError, "Transfer feature"):
+            glm_tabulation.rebase_tabulation(
+                dataset,
+                store,
+                {
+                    "model_ref": f"glm:{model_id}",
+                    "table_id": "Age|Segment",
+                    "anchor_cell": {"Age": 40, "Segment": "B"},
+                    "transfer_feature": "Missing",
+                },
+            )
+        with self.assertRaisesRegex(ValueError, "non-base"):
+            glm_tabulation.rebase_tabulation(
+                dataset,
+                store,
+                {
+                    "model_ref": f"glm:{model_id}",
+                    "table_id": "base",
+                    "anchor_cell": {},
+                },
+            )
 
     def test_glm_tabulation_rebase_creates_missing_one_way_adjustment_table(self) -> None:
         self.require_glm_dependencies()
@@ -1959,56 +1927,6 @@ COPY (
                 for row in rebased_predictions
             )
         )
-
-    def test_glm_tabulation_rebase_rejects_invalid_requests(self) -> None:
-        self.require_glm_dependencies()
-        dataset = Dataset(self.data_path)
-        store = GlmModelStore(self.data_path)
-        result = train_model(
-            dataset,
-            store,
-            {
-                "formula": "Age * C(Segment)",
-                "response_column": "actualNumerator",
-                "family": "normal",
-                "training_scope": "all",
-                "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
-            },
-        )
-        model_id = result["model_id"]
-        feature_spec = {
-            "rows": [
-                {"feature": "Age", "grouping": "Driver", "base": "40", "min": "30", "max": "70", "banding": "5"},
-                {"feature": "Segment", "grouping": "Driver", "base": "A"},
-            ]
-        }
-        build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
-
-        with self.assertRaisesRegex(ValueError, "Only GLM"):
-            glm_tabulation.rebase_tabulation(dataset, store, {"model_ref": "gbm:not-a-glm"})
-        with self.assertRaisesRegex(ValueError, "exactly one"):
-            glm_tabulation.rebase_tabulation(dataset, store, {"model_refs": [f"glm:{model_id}", "glm:other"]})
-        with self.assertRaisesRegex(ValueError, "Transfer feature"):
-            glm_tabulation.rebase_tabulation(
-                dataset,
-                store,
-                {
-                    "model_ref": f"glm:{model_id}",
-                    "table_id": "Age|Segment",
-                    "anchor_cell": {"Age": 40, "Segment": "B"},
-                    "transfer_feature": "Missing",
-                },
-            )
-        with self.assertRaisesRegex(ValueError, "non-base"):
-            glm_tabulation.rebase_tabulation(
-                dataset,
-                store,
-                {
-                    "model_ref": f"glm:{model_id}",
-                    "table_id": "base",
-                    "anchor_cell": {},
-                },
-            )
 
     def test_glm_tabulation_config_returns_all_model_statuses(self) -> None:
         self.require_glm_dependencies()

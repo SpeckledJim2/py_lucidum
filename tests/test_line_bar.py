@@ -5,6 +5,7 @@ import importlib.util
 import json
 import math
 import os
+import pickle
 import subprocess
 import sys
 import unittest
@@ -39,6 +40,32 @@ class PredictionSidecarProvider:
 
     def prediction_source(self, source_id: str) -> ModelPredictionSource | None:
         return self.sources.get(source_id)
+
+
+class FakeGlmOverlayModelSpec:
+    def __init__(self, term_variables: dict[str, set[str]]):
+        self.terms = list(term_variables)
+        self.term_variables = term_variables
+        self.term_indices = {term: [index] for index, term in enumerate(self.terms)}
+        self.transform_state: dict[str, dict[str, float]] = {}
+
+
+class FakeGlmOverlayEstimator:
+    def __init__(self, term_variables: dict[str, set[str]]):
+        self.X_model_spec_ = FakeGlmOverlayModelSpec(term_variables)
+
+    def predict(self, frame: Any, **_kwargs: Any) -> list[float]:
+        predictions: list[float] = []
+        for _index, row in frame.iterrows():
+            age = float(row.get("YoungestDriverAge") or 0)
+            weight = float(row.get("Weight") or 0)
+            gross_weight = float(row.get("Gross.Weight") or 0)
+            use_of_van = str(row.get("UseofVan") or "")
+            value = 25.0 + age * 0.8 + weight * 0.15 + gross_weight * 0.002
+            if use_of_van == "Business":
+                value += 30.0
+            predictions.append(value)
+        return predictions
 
 
 def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
@@ -249,6 +276,69 @@ COPY (
         model_id = str(result["model_id"])
         dataset.register_data_source_provider(GlmSourceProvider(store))
         return store, model_id
+
+    def write_active_fake_glm_for_overlay(
+        self,
+        dataset: Dataset,
+        *,
+        term_variables: dict[str, set[str]] | None = None,
+        denominator_column: str = "",
+        model_id: str = "overlay-glm-fixture",
+    ) -> tuple[GlmModelStore, str]:
+        self.require_glm_dependencies()
+        store = GlmModelStore(self.data_path)
+        model_dir = store.create_model_dir(model_id)
+        source_columns = ["YoungestDriverAge", "UseofVan", "QuoteDate", "Gross.Weight", "Actual", "Expected", "Weight"]
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": "overlay GLM fixture",
+                "tool": "glm",
+                "created_at": "2026-06-07T00:00:00Z",
+                "family": "normal",
+                "link": "auto",
+                "response_column": "Actual",
+                "denominator_column": denominator_column,
+                "source_columns": source_columns,
+                "offset_terms": [],
+                "formula": {"offset_terms": []},
+                "sources": {"predictions": f"glm:{model_id}:predictions"},
+            },
+        )
+        estimator = FakeGlmOverlayEstimator(
+            term_variables
+            or {
+                "YoungestDriverAge": {"YoungestDriverAge"},
+            }
+        )
+        with (model_dir / "estimator.pkl").open("wb") as handle:
+            pickle.dump(estimator, handle)
+        with dataset.lock:
+            row_count = int(dataset.con.execute(f"SELECT COUNT(*) FROM {dataset.relation_sql()}").fetchone()[0] or 0)
+        prediction_rows = ", ".join(
+            f"({index}, {100.0 + index * 10.0})"
+            for index in range(1, row_count + 1)
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT *
+  FROM (VALUES {prediction_rows}) AS rows(__lucidum_row_id, glm_prediction)
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model(model_id)
+        dataset.register_data_source_provider(GlmSourceProvider(store))
+        return store, model_id
+
+    def chart_with_in_process_glm_overlay(self, dataset: Dataset, request: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        with patch("py_lucidum.tools.glm.overlay.should_isolate_glm_overlay", return_value=False):
+            return chart(dataset, request, **kwargs)
 
     def write_active_gbm_importance_model(self, *, with_shap: bool = True) -> GbmModelStore:
         store = GbmModelStore(self.data_path)
@@ -1187,7 +1277,14 @@ COPY (
 
     def test_chart_glm_overlay_uses_base_profile_without_interactions(self) -> None:
         dataset = Dataset(self.data_path)
-        _store, model_id = self.write_active_glm_for_overlay(dataset, formula="C(UseofVan) + YoungestDriverAge", denominator_column="Weight")
+        _store, model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={
+                "UseofVan": {"UseofVan"},
+                "YoungestDriverAge": {"YoungestDriverAge"},
+            },
+            denominator_column="Weight",
+        )
         request = self.request()
         request.update({"denominator": "Weight", "partialDependence": {"mode": "glm"}, "transform": "zero", "base": "Social"})
         feature_spec = {
@@ -1199,7 +1296,7 @@ COPY (
         }
 
         with patch("py_lucidum.tools.glm.overlay.glm_sample_frame", side_effect=AssertionError("base profile should not sample rows")):
-            result = chart(dataset, request, feature_spec=feature_spec)
+            result = self.chart_with_in_process_glm_overlay(dataset, request, feature_spec=feature_spec)
 
         partial = result["partial_dependence"]
         self.assertEqual(partial["mode"], "glm")
@@ -1219,7 +1316,10 @@ COPY (
 
     def test_chart_glm_overlay_infers_base_profile_values_from_filtered_relation(self) -> None:
         dataset = Dataset(self.data_path)
-        store, model_id = self.write_active_glm_for_overlay(dataset, formula="YoungestDriverAge")
+        store, model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={"YoungestDriverAge": {"YoungestDriverAge"}},
+        )
         from py_lucidum.tools.glm.overlay import glm_base_row_from_relation, glm_overlay_relation_sql
 
         manifest = store.manifest(model_id)
@@ -1255,11 +1355,17 @@ COPY (
             encoding="utf-8",
         )
         dataset = Dataset(self.data_path)
-        self.write_active_glm_for_overlay(dataset, formula="C(UseofVan) + YoungestDriverAge")
+        self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={
+                "UseofVan": {"UseofVan"},
+                "YoungestDriverAge": {"YoungestDriverAge"},
+            },
+        )
         request = self.request()
         request["partialDependence"] = {"mode": "glm"}
 
-        result = chart(dataset, request, feature_spec={"rows": [{"feature": "YoungestDriverAge", "base": "25"}]})
+        result = self.chart_with_in_process_glm_overlay(dataset, request, feature_spec={"rows": [{"feature": "YoungestDriverAge", "base": "25"}]})
 
         partial = result["partial_dependence"]
         self.assertEqual(partial["method"], "base_profile")
@@ -1282,14 +1388,18 @@ COPY (
             encoding="utf-8",
         )
         dataset = Dataset(self.data_path)
-        _store, model_id = self.write_active_glm_for_overlay(
+        _store, model_id = self.write_active_fake_glm_for_overlay(
             dataset,
-            formula="YoungestDriverAge + Weight + YoungestDriverAge:Weight",
+            term_variables={
+                "YoungestDriverAge": {"YoungestDriverAge"},
+                "Weight": {"Weight"},
+                "YoungestDriverAge:Weight": {"YoungestDriverAge", "Weight"},
+            },
         )
         request = self.request()
         request.update({"x": "YoungestDriverAge", "bandWidth": "10", "denominator": "Weight", "partialDependence": {"mode": "glm"}})
 
-        result = chart(dataset, request)
+        result = self.chart_with_in_process_glm_overlay(dataset, request)
 
         partial = result["partial_dependence"]
         self.assertEqual(partial["mode"], "glm")
@@ -1319,15 +1429,19 @@ COPY (
             encoding="utf-8",
         )
         dataset = Dataset(self.data_path)
-        self.write_active_glm_for_overlay(
+        self.write_active_fake_glm_for_overlay(
             dataset,
-            formula="YoungestDriverAge + Weight + `Gross.Weight` + YoungestDriverAge:Weight:`Gross.Weight`",
-            regularization={"mode": "manual", "alpha": 0.01, "l1_ratio": 0},
+            term_variables={
+                "YoungestDriverAge": {"YoungestDriverAge"},
+                "Weight": {"Weight"},
+                "Gross.Weight": {"Gross.Weight"},
+                "YoungestDriverAge:Weight:Gross.Weight": {"YoungestDriverAge", "Weight", "Gross.Weight"},
+            },
         )
         request = self.request()
         request.update({"x": "YoungestDriverAge", "bandWidth": "10", "denominator": "Weight", "partialDependence": {"mode": "glm"}})
 
-        result = chart(dataset, request)
+        result = self.chart_with_in_process_glm_overlay(dataset, request)
 
         partial = result["partial_dependence"]
         self.assertEqual(partial["method"], "sampled_marginal")
@@ -1340,11 +1454,14 @@ COPY (
 
     def test_chart_both_mode_returns_shap_and_glm_overlays(self) -> None:
         dataset = self.dataset_with_gbm_ribbons(objective="regression")
-        _store, _model_id = self.write_active_glm_for_overlay(dataset)
+        _store, _model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={"UseofVan": {"UseofVan"}},
+        )
         request = self.request()
         request["partialDependence"] = {"mode": "both"}
 
-        result = chart(dataset, request)
+        result = self.chart_with_in_process_glm_overlay(dataset, request)
 
         partial = result["partial_dependence"]
         self.assertEqual(partial["mode"], "both")
@@ -1391,11 +1508,14 @@ COPY (
 
     def test_chart_both_mode_keeps_glm_when_shap_unavailable(self) -> None:
         dataset = Dataset(self.data_path)
-        self.write_active_glm_for_overlay(dataset)
+        self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={"UseofVan": {"UseofVan"}},
+        )
         request = self.request()
         request["partialDependence"] = {"mode": "both"}
 
-        result = chart(dataset, request)
+        result = self.chart_with_in_process_glm_overlay(dataset, request)
 
         partial = result["partial_dependence"]
         self.assertEqual(partial["mode"], "both")
