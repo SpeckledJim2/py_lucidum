@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shutil
 import subprocess
+import tomllib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from py_lucidum import __version__
 from py_lucidum.app import create_app
 
 
@@ -207,6 +210,18 @@ state.activeKpiFormat = {{ decimals: 1, format: "percent" }};
 if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percent formatting failed");
 """
         self.run_node_script(script)
+
+    def test_package_version_matches_pyproject(self) -> None:
+        pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+        self.assertEqual(__version__, pyproject["project"]["version"])
+
+    def test_schema_includes_app_version(self) -> None:
+        status, _, body = asgi_get(self.app, "/api/schema")
+        schema = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(schema["app_version"], __version__)
 
     def test_shared_schema_helpers_are_importable(self) -> None:
         module = Path("src/py_lucidum/static/app/shared/schema.js").resolve().as_uri()
@@ -994,6 +1009,12 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('aria-controls="appSidebar"', html)
         self.assertIn('aria-label="Collapse sidebar"', html)
         self.assertIn('<aside id="appSidebar">', html)
+        self.assertIn('id="sidebarVersion" class="sidebar-version" aria-label="Lucidum version" hidden', html)
+        self.assertIn(".sidebar-version {\n        margin-top: auto;\n        color: var(--muted);\n        font-size: 10px;", css)
+        self.assertIn("body.sidebar-collapsed .sidebar-version {\n        display: none;", css)
+        self.assertIn("function renderSidebarVersion()", js)
+        self.assertIn('const version = String(state.schema?.app_version || "").trim();', js)
+        self.assertIn("target.textContent = version ? `lucidum v${version}` : \"\";", js)
         self.assertIn('id="datasetViewerTool" class="tool-option active" type="button" data-tool="dataset_viewer" aria-label="Dataset viewer"', html)
         self.assertIn('class="tool-label">Dataset viewer</span>', html)
         self.assertIn('id="profileTool" class="tool-option" type="button" data-tool="column_profile" aria-label="Column profile"', html)

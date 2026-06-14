@@ -13,6 +13,7 @@ import duckdb
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 
+from py_lucidum._version import __version__
 from py_lucidum.core import (
     Dataset,
     denominator_warnings,
@@ -181,6 +182,7 @@ def create_app(
         payload["feature_bases"] = feature_bases_payload(app.state.feature_spec)
         payload["tools"] = tool_payload(app.state.enabled_tools)
         payload["data_sources"] = app.state.dataset.data_sources()
+        payload["app_version"] = __version__
         return payload
 
     @app.get("/")

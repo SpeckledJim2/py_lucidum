@@ -132,6 +132,10 @@ is also bundled. The `Blank` map background makes no external tile requests;
 other map backgrounds, such as OSM, Esri, Aerial, Light, and Dark, fetch map
 tiles from their listed third-party providers and need network access.
 
+## License
+
+Lucidum is open source under the MIT License. See `LICENSE`.
+
 ## Python Usage
 
 ```python

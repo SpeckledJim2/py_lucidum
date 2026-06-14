@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 
 import uvicorn
 
+from ._version import __version__
 from .app import create_app
 from .app.servers import safe_display_url
 from .demo import demo_dataset_path
@@ -391,6 +392,7 @@ def features_status(app: object) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Launch py_lucidum for a local CSV, Parquet, or bundled demo file.")
+    parser.add_argument("--version", action="version", version=f"lucidum {__version__}")
     parser.add_argument("path", nargs="?", help="Path to a CSV or Parquet file")
     parser.add_argument("--demo", action="store_true", help="Launch the bundled motor_premiums.parquet demo dataset")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host, e.g. 127.0.0.1 or 0.0.0.0")

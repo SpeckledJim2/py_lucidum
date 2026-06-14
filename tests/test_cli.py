@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 import uvicorn
 
+from py_lucidum._version import __version__
 from py_lucidum.cli import (
     LucidumServer,
     _display_url_for_app,
@@ -480,6 +481,22 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(exit_context.exception.code, 2)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("path or --demo", stderr.getvalue())
+
+    def test_main_reports_version_without_dataset_path(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", ["lucidum", "--version"]),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            main()
+
+        self.assertEqual(exit_context.exception.code, 0)
+        self.assertEqual(stdout.getvalue(), f"lucidum {__version__}\n")
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_main_rejects_demo_with_path(self) -> None:
         stdout = io.StringIO()

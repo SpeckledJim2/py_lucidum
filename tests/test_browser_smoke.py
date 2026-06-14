@@ -5612,6 +5612,17 @@ COPY (
                     }
                     """
                 )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const version = document.querySelector("#sidebarVersion");
+                      return version
+                        && version.offsetParent !== null
+                        && /^lucidum v\\d+\\.\\d+\\.\\d+/.test(version.textContent.trim());
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
                 self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))
@@ -5623,6 +5634,7 @@ COPY (
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
+                self.assertFalse(page.locator("#sidebarVersion").is_visible())
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
 
                 page.locator("#reloadBtn").click()
@@ -5635,6 +5647,7 @@ COPY (
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
+                self.assertFalse(page.locator("#sidebarVersion").is_visible())
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
 
                 page.locator('.dataset-meta-uk-map-link[data-map-level="area"]').click()

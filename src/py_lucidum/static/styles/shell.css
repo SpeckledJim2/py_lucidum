@@ -264,6 +264,19 @@
         min-height: 0;
       }
 
+      .sidebar-version {
+        margin-top: auto;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.1;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      body.sidebar-collapsed .sidebar-version {
+        display: none;
+      }
+
       .collapsed-filter-indicator {
         display: none;
         margin-top: auto;

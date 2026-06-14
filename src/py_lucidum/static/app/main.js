@@ -1098,6 +1098,14 @@
         return fileSize ? `${path} · ${fileSize}` : path;
       }
 
+      function renderSidebarVersion() {
+        const target = el("sidebarVersion");
+        if (!target) return;
+        const version = String(state.schema?.app_version || "").trim();
+        target.textContent = version ? `lucidum v${version}` : "";
+        target.hidden = !version;
+      }
+
       function renderDatasetPostcodeMeta(target) {
         if (!toolEnabled("uk_map")) return;
         const availability = ukMapPostcodeAvailability({ schema: state.schema, locationParams });
@@ -1780,6 +1788,7 @@
         const previousExpectedIsPrediction = selectedExpectedIsPrediction();
         const previousDenominator = el("denominator").value;
         state.schema = await api("/api/schema");
+        renderSidebarVersion();
         const modelKind = String(options?.modelKind || "");
         if (preferredSource) state.source = preferredSource;
         state.x = previousX;
@@ -1822,6 +1831,7 @@
         const previousCollapsedKpiGroups = new Set(state.collapsedKpiGroups);
         const previousKpiGroupsInitialised = state.kpiGroupsInitialised;
         state.schema = await api("/api/schema");
+        renderSidebarVersion();
         const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
         clearToolCaches({ preserve: ["specs"] });
         renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
@@ -2657,6 +2667,7 @@
           const previousSidebarVisible = state.sidebarVisible;
           if (state.tool === "uk_map") ukMapTool.captureView("reload");
           state.schema = await api("/api/reload", { method: "POST" });
+          renderSidebarVersion();
           const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
           state.bandFeature = null;
           state.bandSuggestionPendingKey = null;
@@ -2729,6 +2740,7 @@
           setStartupProgress("Requesting schema");
           startStartupTelemetryPolling("Requesting schema");
           state.schema = await api("/api/schema");
+          renderSidebarVersion();
           stopStartupTelemetryPolling();
           setStartupProgress("Schema received");
           const path = state.schema.path.split(/[\\/]/).pop();
