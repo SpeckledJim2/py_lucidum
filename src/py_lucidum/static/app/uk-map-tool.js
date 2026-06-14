@@ -150,6 +150,8 @@ export function createUkMapTool({
   const MAP_POINT_GRID_SIZE = 18;
   const MAP_FIT_PADDING = [8, 8];
   const MAP_UNIT_FIT_PADDING = [18, 18];
+  const MAP_UNIT_POINT_RADIUS_MULTIPLIER = 0.85;
+  const MAP_UNIT_POINT_MIN_RADIUS = 0.5;
   const MAP_LABEL_MIN_FONT_SIZE = 6;
   const MAP_LABEL_MAX_FONT_SIZE = 20;
   const MAP_INITIAL_FIT_OPTIONS = { animate: false };
@@ -881,13 +883,17 @@ export function createUkMapTool({
 
   function unitPointRadiusScale(value = state.mapLineWeight) {
     const sliderValue = Math.max(0, Math.min(5, Number(value)));
-    if (!Number.isFinite(sliderValue)) return 1;
-    if (sliderValue <= 1) return 0.5 + (sliderValue * 0.5);
-    return 1 + ((sliderValue - 1) / 4);
+    if (!Number.isFinite(sliderValue)) return MAP_UNIT_POINT_RADIUS_MULTIPLIER;
+    const scale = sliderValue <= 1
+      ? 0.4 + (sliderValue * 0.6)
+      : 1 + ((sliderValue - 1) / 4);
+    return scale * MAP_UNIT_POINT_RADIUS_MULTIPLIER;
   }
 
   function unitPointRadiusForCurrentStyle(zoom) {
-    return unitPointRadiusForZoom(zoom) * unitPointRadiusScale(state.mapLineWeight);
+    const sliderValue = Number(state.mapLineWeight);
+    if (Number.isFinite(sliderValue) && sliderValue <= 0) return MAP_UNIT_POINT_MIN_RADIUS;
+    return unitPointRadiusForZoom(zoom) * unitPointRadiusScale(sliderValue);
   }
 
   function unitPointHitRadius(radius) {
@@ -898,11 +904,14 @@ export function createUkMapTool({
     const value = finiteNumber(row?.value);
     const selected = value !== null && (!hotspotKeys || hotspotKeys.has(String(row.key)));
     const muted = value !== null && !selected;
-    const strokeOpacity = radius < 2 ? 0 : (radius < 3 ? 0.35 : 0.65);
+    const opacityValue = Number(state.mapOpacity);
+    const mapOpacity = Number.isFinite(opacityValue) ? Math.max(0, Math.min(1, opacityValue)) : 1;
+    const baseStrokeOpacity = radius < 2 ? 0 : (radius < 3 ? 0.35 : 0.65);
+    const strokeOpacity = (muted ? Math.min(baseStrokeOpacity, 0.25) : baseStrokeOpacity) * mapOpacity;
     return {
       fillColor: muted ? MAP_MUTED_COLOR : scale.color(value),
-      fillOpacity: muted ? Math.min(Number(state.mapOpacity), 0.28) : Number(state.mapOpacity),
-      strokeOpacity: muted ? Math.min(strokeOpacity, 0.25) : strokeOpacity,
+      fillOpacity: muted ? Math.min(mapOpacity, 0.28) : mapOpacity,
+      strokeOpacity,
     };
   }
 

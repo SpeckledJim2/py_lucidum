@@ -6119,6 +6119,41 @@ COPY (
                     """
                     () => {
                         const input = document.querySelector("#mapLineWeight");
+                        input.value = "5";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function('() => document.querySelector("#mapLineWeightValue")?.textContent === "5"')
+                large_dot_pixels = unit_point_alpha_pixels()
+                self.assertGreater(large_dot_pixels, 0)
+                page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapOpacity");
+                        input.value = "0";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function('() => document.querySelector("#mapOpacityValue")?.textContent === "0"')
+                self.assertEqual(unit_point_alpha_pixels(), 0)
+                page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapOpacity");
+                        input.value = "1";
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function('() => document.querySelector("#mapOpacityValue")?.textContent === "1"')
+                restored_dot_pixels = unit_point_alpha_pixels()
+                self.assertGreater(restored_dot_pixels, 0)
+                page.evaluate(
+                    """
+                    () => {
+                        const input = document.querySelector("#mapLineWeight");
                         input.value = "0";
                         input.dispatchEvent(new Event("input", { bubbles: true }));
                     }
@@ -6127,18 +6162,7 @@ COPY (
                 page.wait_for_function('() => document.querySelector("#mapLineWeightValue")?.textContent === "0"')
                 small_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(small_dot_pixels, 0)
-                page.evaluate(
-                    """
-                    () => {
-                        const input = document.querySelector("#mapLineWeight");
-                        input.value = "5";
-                        input.dispatchEvent(new Event("input", { bubbles: true }));
-                    }
-                    """
-                )
-                page.wait_for_function('() => document.querySelector("#mapLineWeightValue")?.textContent === "5"')
-                large_dot_pixels = unit_point_alpha_pixels()
-                self.assertGreater(large_dot_pixels, small_dot_pixels)
+                self.assertGreater(restored_dot_pixels, small_dot_pixels)
                 wait_for_map_view(stable_map_view)
 
                 self.assertEqual(page_errors, [])
