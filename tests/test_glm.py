@@ -457,7 +457,7 @@ if result.get("iteration") != 10:
         self.assertFalse(glm_formula_drop_first("auto"))
 
     def test_singular_matrix_errors_are_reported_as_rank_deficient_formula(self) -> None:
-        with self.assertRaisesRegex(ValueError, "rank-deficient design matrix.*ridge/auto regularization"):
+        with self.assertRaisesRegex(ValueError, "Training did not save a model: .*rank-deficient.*ridge/auto regularization"):
             _raise_actionable_singular_matrix_error(
                 RuntimeError("A singular matrix detected: slice(s) [0] are singular.")
             )
@@ -677,6 +677,57 @@ if result.get("iteration") != 10:
             )
             self.assertFalse(result["ok"], formula)
             self.assertIn("predictor term or an intercept", "; ".join(result["errors"]))
+
+    def test_formula_validation_warns_for_unconstrained_natural_spline_with_intercept(self) -> None:
+        dataset = Dataset(self.data_path)
+        warning_cases = ("ns(Age, df=4)", "1 + ns(Age, df=4)")
+        clean_cases = (
+            "0 + ns(Age, df=4)",
+            "-1 + ns(Age, df=4)",
+            'ns(Age, df=4, constraints="center")',
+            "pmax(Age - 1, 0)",
+            "Age + offset(ns(denominator, df=4))",
+        )
+
+        for formula in warning_cases:
+            result = validate_request(
+                dataset,
+                {
+                    "formula": formula,
+                    "response_column": "actualNumerator",
+                    "family": "normal",
+                    "training_scope": "all",
+                },
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["formula"]["fit_intercept"], formula)
+            self.assertIn('constraints="center"', " ".join(result["warnings"]))
+            self.assertIn("0 + ns", " ".join(result["warnings"]))
+
+        for formula in clean_cases:
+            result = validate_request(
+                dataset,
+                {
+                    "formula": formula,
+                    "response_column": "actualNumerator",
+                    "family": "normal",
+                    "training_scope": "all",
+                },
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["warnings"], [], formula)
+
+        invalid_bs = validate_request(
+            dataset,
+            {
+                "formula": 'bs(Age, df=4, constraints="center")',
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        self.assertFalse(invalid_bs["ok"])
+        self.assertIn("does not accept `constraints=`", "; ".join(invalid_bs["errors"]))
 
     def test_regularization_validation_defaults_and_rejects_invalid_manual_values(self) -> None:
         dataset = Dataset(self.data_path)
@@ -918,6 +969,7 @@ FROM {dataset.relation_sql_for_source(source_id)}
 
         self.assertFalse(manifest["formula"]["fit_intercept"])
         self.assertTrue(manifest["formula"]["drop_first"])
+        self.assertEqual(manifest.get("warnings"), [])
         self.assertNotIn("(Intercept)", coefficient_terms)
         self.assertEqual(manifest["offset_terms"], ["log(pmax(ANNUAL_MILEAGE, 1) / 5000)"])
         self.assertEqual(result["scored_rows"], manifest["row_count"])
@@ -931,6 +983,76 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
         self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
         self.assertTrue(store.artifact_path(model_id, "manifest").exists())
+
+    def test_centered_demo_spline_formula_fits_with_intercept_without_warning(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.demo_dataset_copy_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": (
+                    'PREMIUM ~ ns(DRIVER_AGE, df=4, constraints="center")'
+                    " + offset(log(pmax(ANNUAL_MILEAGE, 1) / 5000))"
+                ),
+                "family": "poisson",
+                "training_scope": "all",
+            },
+        )
+        manifest = store.manifest(result["model_id"])
+        coefficient_terms = [row["term"] for row in result["coefficients"]]
+
+        self.assertTrue(manifest["formula"]["fit_intercept"])
+        self.assertEqual(manifest.get("warnings"), [])
+        self.assertIn("(Intercept)", coefficient_terms)
+        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(manifest["diagnostics"]["design_matrix"]["rank"], manifest["diagnostics"]["design_matrix"]["columns"])
+
+    def test_rank_deficient_spline_formula_repeatedly_refuses_to_save_model(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.spline_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        payload = {
+            "formula": "ns(x, df=4)",
+            "response_column": "y",
+            "family": "normal",
+            "training_scope": "all",
+        }
+
+        for _attempt in range(3):
+            with self.assertRaisesRegex(Exception, "Training did not save a model: .*rank-deficient .*rank 4 of 5"):
+                train_model(dataset, store, payload)
+
+        self.assertEqual(store.list_models(), [])
+
+    def test_rank_warning_formula_persists_warning_on_successful_regularized_fit(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "ns(Age, df=3)",
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.01, "l1_ratio": 0},
+            },
+        )
+        manifest = store.manifest(result["model_id"])
+        warnings_text = " ".join(manifest.get("warnings") or [])
+
+        self.assertTrue(manifest["formula"]["fit_intercept"])
+        self.assertIn('constraints="center"', warnings_text)
+        self.assertIn("0 + ns", warnings_text)
+        self.assertIn("rank-deficient", warnings_text)
+        self.assertEqual(manifest.get("warnings"), result.get("warnings"))
 
     def test_intercept_only_demo_formula_fits_and_tabulates_constant_predictions(self) -> None:
         self.require_glm_dependencies()

@@ -32,6 +32,20 @@ _GLUM_FIRST_IMPORT_SAW_LIGHTGBM: bool | None = None
 FEATURE_IMPORTANCE_METRIC = "weighted_mean_abs_centered_linear_predictor_contribution"
 FEATURE_IMPORTANCE_METRIC_LABEL = "GLM eta MAD"
 INTERNAL_INTERCEPT_COLUMN_BASE = "__lucidum_glm_intercept_only"
+GLM_ILL_CONDITIONED_WARNING = (
+    "GLM fit produced an ill-conditioned matrix; coefficient estimates or inference may be unstable. "
+    'Use centered spline constraints such as `ns(feature, df=4, constraints="center")`, explicit no-intercept syntax such as `0 +`, '
+    "or ridge/auto regularization."
+)
+GLM_INFERENCE_WARNING = (
+    "GLM coefficient inference was not fully available because one or more standard errors were non-finite. "
+    "Simplify rank-deficient terms, use centered/no-intercept spline syntax, or use ridge/auto regularization."
+)
+GLM_PENALIZED_RANK_DEFICIENT_WARNING = (
+    "GLM design matrix is rank-deficient; regularization allowed the model to be saved, "
+    "but unpenalized coefficient inference would not be identifiable."
+)
+GLM_DESIGN_CONDITION_LIMIT = 1e12
 
 
 def _elapsed_ms(started: float) -> float:
@@ -119,6 +133,59 @@ def _suppress_tabmat_mixed_dtype_warning() -> Iterator[None]:
             module=r"^tabmat\.split_matrix$",
         )
         yield
+
+
+@contextmanager
+def _capture_glm_warnings() -> Iterator[list[warnings.WarningMessage]]:
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        warnings.filterwarnings(
+            "ignore",
+            message=r"^Matrices do not all have the same dtype\.",
+            category=UserWarning,
+            module=r"^tabmat\.split_matrix$",
+        )
+        yield captured
+
+
+def _dedupe_warnings(values: list[Any]) -> list[str]:
+    warnings_out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        warnings_out.append(text)
+    return warnings_out
+
+
+def _glm_numerical_warning_messages(captured: list[warnings.WarningMessage]) -> list[str]:
+    messages: list[str] = []
+    for warning in captured:
+        text = str(warning.message or "")
+        lower = text.lower()
+        category = getattr(warning.category, "__name__", "").lower()
+        if (
+            "ill-conditioned" in lower
+            or "singular" in lower
+            or "rank deficient" in lower
+            or "rank-deficient" in lower
+            or "linalg" in category
+        ):
+            messages.append(GLM_ILL_CONDITIONED_WARNING)
+        elif "invalid value encountered in sqrt" in lower or "non-finite" in lower:
+            messages.append(GLM_INFERENCE_WARNING)
+    return _dedupe_warnings(messages)
+
+
+def _coefficient_inference_warnings(coefficients: list[dict[str, Any]], *, include_inference: bool) -> list[str]:
+    if not include_inference or not coefficients:
+        return []
+    for row in coefficients:
+        if row.get("std_error") is None:
+            return [GLM_INFERENCE_WARNING]
+    return []
 
 
 class MissingGlmDependency(RuntimeError):
@@ -544,13 +611,36 @@ def _is_singular_matrix_error(exc: Exception) -> bool:
     return ("singular" in message and "matrix" in message) or "rank deficient" in message or "rank-deficient" in message
 
 
+def _rank_deficient_training_error(*, rank: int, columns: int, condition_number: float | None = None) -> ValueError:
+    condition_text = (
+        f" Condition number: {condition_number:.3g}."
+        if condition_number is not None and math.isfinite(condition_number)
+        else ""
+    )
+    return ValueError(
+        "Training did not save a model: the GLM design matrix is rank-deficient "
+        f"(rank {rank} of {columns}).{condition_text} "
+        'For unpenalized fits, use centered spline constraints such as `ns(feature, df=4, constraints="center")`, '
+        "explicit no-intercept syntax such as `0 +` when appropriate, or ridge/auto regularization."
+    )
+
+
+def _ill_conditioned_training_error(*, condition_number: float) -> ValueError:
+    return ValueError(
+        "Training did not save a model: the GLM design matrix is too ill-conditioned for an unpenalized fit "
+        f"(condition number {condition_number:.3g}). "
+        'Use centered spline constraints such as `ns(feature, df=4, constraints="center")`, scale or simplify redundant terms, '
+        "or use ridge/auto regularization."
+    )
+
+
 def _raise_actionable_singular_matrix_error(exc: Exception) -> None:
     if not _is_singular_matrix_error(exc):
         raise exc
     raise ValueError(
-        "GLM formula produced a rank-deficient design matrix. For unpenalized fits, simplify redundant spline, transform, "
-        "or interaction terms, try centered spline constraints or explicit no-intercept syntax such as `0 +` when appropriate, "
-        "or use ridge/auto regularization. Original glum error: "
+        "Training did not save a model: the GLM design matrix is rank-deficient. For unpenalized fits, simplify redundant "
+        "spline, transform, or interaction terms, use centered spline constraints or explicit no-intercept syntax such as "
+        "`0 +` when appropriate, or use ridge/auto regularization. Original glum error: "
         f"{exc}"
     ) from exc
 
@@ -617,6 +707,78 @@ def jsonable(value: Any, np: Any, pd: Any) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     return value
+
+
+def _matrix_to_numpy(matrix: Any, np: Any) -> Any:
+    if hasattr(matrix, "toarray"):
+        return np.asarray(matrix.toarray(), dtype=float)
+    if hasattr(matrix, "to_numpy"):
+        return np.asarray(matrix.to_numpy(), dtype=float)
+    return np.asarray(matrix, dtype=float)
+
+
+def design_matrix_diagnostics(
+    formula: str,
+    fit_frame: Any,
+    context: dict[str, Any],
+    np: Any,
+    *,
+    ensure_full_rank: bool,
+) -> dict[str, Any]:
+    from formulaic import model_matrix as formulaic_model_matrix  # type: ignore[import-not-found]
+
+    matrices = formulaic_model_matrix(formula, fit_frame, context=context, ensure_full_rank=ensure_full_rank)
+    matrix = getattr(matrices, "rhs", matrices)
+    values = _matrix_to_numpy(matrix, np)
+    if values.ndim == 1:
+        values = values.reshape((-1, 1))
+    if values.ndim != 2:
+        raise ValueError("Training did not save a model: the GLM formula did not produce a two-dimensional design matrix.")
+    if values.shape[1] == 0:
+        raise ValueError("Training did not save a model: the GLM formula produced no predictor columns.")
+    if not bool(np.isfinite(values).all()):
+        raise ValueError("Training did not save a model: the GLM formula produced non-finite predictor values.")
+    rank = int(np.linalg.matrix_rank(values))
+    try:
+        condition_number = float(np.linalg.cond(values))
+    except Exception:
+        condition_number = math.inf
+    condition_number_finite = math.isfinite(condition_number)
+    return {
+        "rank": rank,
+        "columns": int(values.shape[1]),
+        "rows": int(values.shape[0]),
+        "condition_number": condition_number if condition_number_finite else None,
+        "condition_number_finite": condition_number_finite,
+    }
+
+
+def check_unpenalized_design_matrix(diagnostics: dict[str, Any]) -> None:
+    rank = int(diagnostics.get("rank") or 0)
+    columns = int(diagnostics.get("columns") or 0)
+    condition_value = diagnostics.get("condition_number")
+    condition_number = float(condition_value) if condition_value is not None else None
+    if columns and rank < columns:
+        raise _rank_deficient_training_error(rank=rank, columns=columns, condition_number=condition_number)
+    if condition_number is None and diagnostics.get("condition_number_finite") is False:
+        raise _ill_conditioned_training_error(condition_number=math.inf)
+    if condition_number is not None and math.isfinite(condition_number) and condition_number > GLM_DESIGN_CONDITION_LIMIT:
+        raise _ill_conditioned_training_error(condition_number=condition_number)
+
+
+def design_matrix_warnings(diagnostics: dict[str, Any], *, penalized: bool) -> list[str]:
+    rank = int(diagnostics.get("rank") or 0)
+    columns = int(diagnostics.get("columns") or 0)
+    condition_value = diagnostics.get("condition_number")
+    condition_number = float(condition_value) if condition_value is not None else None
+    messages: list[str] = []
+    if penalized and columns and rank < columns:
+        messages.append(GLM_PENALIZED_RANK_DEFICIENT_WARNING)
+    if (condition_number is None and diagnostics.get("condition_number_finite") is False) or (
+        condition_number is not None and math.isfinite(condition_number) and condition_number > GLM_DESIGN_CONDITION_LIMIT
+    ):
+        messages.append(GLM_ILL_CONDITIONED_WARNING)
+    return messages
 
 
 def coefficient_rows(
@@ -986,6 +1148,7 @@ def _train_model_impl(
     is_penalized = regularization_mode != "none"
     drop_first = glm_formula_drop_first(regularization_mode)
     formula = validation["formula"]
+    validation_warnings = _dedupe_warnings(list(validation.get("warnings") or []))
     fit_intercept = bool(formula.get("fit_intercept", True))
     has_predictor_terms = bool(formula.get("has_predictor_terms", True))
     intercept_only = bool(formula.get("intercept_only", False))
@@ -1035,6 +1198,16 @@ def _train_model_impl(
     fit_frame[TARGET_COLUMN] = y_fit.to_numpy(dtype=float)
     fit_weight_values = fit_weight.loc[fit_mask].astype(float).to_numpy() if fit_weight is not None else None
     fit_offset_values = offset_values.loc[fit_mask].astype(float).to_numpy() if offset_values is not None else None
+    design_diagnostics = design_matrix_diagnostics(
+        estimator_fitted_formula,
+        fit_frame,
+        context,
+        np,
+        ensure_full_rank=drop_first,
+    )
+    if not is_penalized:
+        check_unpenalized_design_matrix(design_diagnostics)
+    design_warnings = design_matrix_warnings(design_diagnostics, penalized=is_penalized)
 
     progress({"phase": "fitting", "message": "Fitting GLM", "percent": 35, "training_rows": int(fit_mask.sum())})
     estimator_kwargs = {
@@ -1069,8 +1242,9 @@ def _train_model_impl(
         )
     timings["prep_ms"] = _elapsed_ms(prep_started)
     fit_started = time.perf_counter()
+    numerical_warnings: list[str] = []
     try:
-        with _suppress_tabmat_mixed_dtype_warning():
+        with _capture_glm_warnings() as captured_warnings:
             estimator.fit(
                 fit_frame,
                 sample_weight=fit_weight_values,
@@ -1078,6 +1252,7 @@ def _train_model_impl(
                 context=context,
                 offset=fit_offset_values,
             )
+        numerical_warnings.extend(_glm_numerical_warning_messages(captured_warnings))
     except Exception as exc:
         _raise_actionable_singular_matrix_error(exc)
     timings["fit_ms"] = _elapsed_ms(fit_started)
@@ -1085,7 +1260,7 @@ def _train_model_impl(
 
     progress({"phase": "scoring", "message": "Scoring GLM predictions", "percent": 70})
     score_started = time.perf_counter()
-    with _suppress_tabmat_mixed_dtype_warning():
+    with _capture_glm_warnings() as captured_warnings:
         predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pd, offset_values=offset_values)
         coefficients = coefficient_rows(
             estimator,
@@ -1118,6 +1293,15 @@ def _train_model_impl(
             len(coefficients),
             offset_values=fit_offset_values,
         )
+    numerical_warnings.extend(_glm_numerical_warning_messages(captured_warnings))
+    model_warnings = _dedupe_warnings(
+        [
+            *validation_warnings,
+            *design_warnings,
+            *numerical_warnings,
+            *_coefficient_inference_warnings(coefficients, include_inference=not is_penalized),
+        ]
+    )
     timings["score_ms"] = _elapsed_ms(score_started)
     diagnostics.update(
         {
@@ -1127,6 +1311,8 @@ def _train_model_impl(
             "fitted_na_rows": fitted_na_rows,
             "coefficient_count": len(coefficients),
             "nonzero_coefficients": regularization.get("nonzero_coefficients"),
+            "design_matrix": design_diagnostics,
+            "warnings": model_warnings,
         }
     )
 
@@ -1163,6 +1349,7 @@ def _train_model_impl(
             "internal_intercept_column": internal_intercept_column,
         },
         "diagnostics": jsonable(diagnostics, np, pd),
+        "warnings": jsonable(model_warnings, np, pd),
         "feature_importance": jsonable(feature_importance, np, pd),
         "feature_importance_metric": {
             "name": FEATURE_IMPORTANCE_METRIC,

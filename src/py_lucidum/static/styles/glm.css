@@ -60,7 +60,7 @@
         margin-left: auto;
         max-width: min(680px, 52%);
         min-width: 0;
-        overflow: hidden;
+        overflow: visible;
         text-align: right;
       }
 
@@ -80,8 +80,10 @@
 
       .glm-build-status[data-phase="failed"] {
         color: var(--danger);
+        flex: 1 1 auto;
         line-height: 1.25;
-        max-width: min(820px, 70%);
+        margin-left: 0;
+        max-width: none;
         overflow: visible;
       }
 
@@ -660,6 +662,13 @@
 
       .glm-coefficient-meta strong {
         font-weight: 500;
+      }
+
+      .glm-coefficient-meta .glm-coefficient-meta-warning {
+        color: var(--danger);
+        display: block;
+        overflow-wrap: anywhere;
+        white-space: normal;
       }
 
       .glm-coefficient-actions,

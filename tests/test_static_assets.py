@@ -656,6 +656,7 @@ const individual = buildIndividualLevelsFormula("MAKE", ["ALFA ROMEO", "AUDI"]);
 if (individual !== '+ ifelse(MAKE == "ALFA ROMEO", 1, 0)\\n+ ifelse(MAKE == "AUDI", 1, 0)') throw new Error(individual);
 
 if (buildSnippetFormula("bs4", "Age") !== "bs(Age, df=4)") throw new Error("bs snippet failed");
+if (buildSnippetFormula("ns4", "Age") !== 'ns(Age, df=4, constraints="center")') throw new Error("ns snippet failed");
 if (buildSnippetFormula("clamp", "Age") !== "pmax(lower_bound, pmin(upper_bound, Age))") throw new Error("clamp snippet failed");
 if (buildSnippetFormula("positive_offset", "Age", {{ denominator: "Weight" }}) !== "offset(log(pmax(Weight, 1)))") throw new Error("offset snippet failed");
 if (GLM_FORMULA_SNIPPETS.some((item) => item.id === "interaction" || item.id === "factor")) throw new Error("non-numeric snippet listed");
@@ -1189,6 +1190,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('import { createGlmTool } from "./glm-tool.js";', js)
         self.assertIn("export function createGlmTool", js)
         self.assertIn('api("/api/glm/config"', js)
+        self.assertIn('api("/api/glm/validate"', js)
         self.assertIn('api("/api/glm/build"', js)
         self.assertIn('api("/api/glm/tabulations/config"', js)
         self.assertIn('api("/api/glm/tabulations/build"', js)
@@ -1293,6 +1295,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".glm-formula-assist-level-mode", css)
         self.assertIn("min-height: 82px;", css)
         self.assertIn(".glm-formula-assist-feature-select:focus", css)
+        self.assertIn("function modelProblemMessages(diagnostics = {}, model = {}, coefficients = [])", glm_js)
+        self.assertIn("Selected model issue:", glm_js)
+        self.assertIn("glm-coefficient-meta-warning", glm_js)
+        self.assertIn(".glm-coefficient-meta-warning", css)
         self.assertIn(".glm-formula-autocomplete", css)
         self.assertIn("function goToLineBarCoefficientFeature(featureName)", glm_js)
         self.assertIn('button.textContent = `Go to Line and Bar (${feature})`;', glm_js)
@@ -1308,7 +1314,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("function regularizationLabel(regularization = {})", glm_js)
         self.assertIn("regularization: buildRegularizationPayload()", glm_js)
         self.assertIn("function setBuildFailure(message)", glm_js)
-        self.assertIn('setBuildFailure(job.error || progress.message || "GLM build failed");', glm_js)
+        self.assertIn('setBuildFailure(job.error || progress.message || "GLM training did not save a model");', glm_js)
         self.assertIn('setAppReadyStatus("Ready");', glm_js)
         self.assertNotIn('setAppReadyStatus("GLM built")', glm_js)
         self.assertNotIn('setGlmNotice(job.error || "GLM build failed");', glm_js)
@@ -1548,6 +1554,8 @@ if (formatTabulationAxisTick(1.2, "linear") !== "1.2") throw new Error("linear t
         self.assertIn(".glm-panel-title {\n        color: var(--text);\n        flex: 0 0 auto;\n        font-size: 13px;", css)
         self.assertIn(".glm-builder-resizer", css)
         self.assertIn('.glm-build-status[data-phase="failed"] .glm-build-status-main', css)
+        self.assertIn(".glm-build-status[data-phase=\"failed\"] {\n        color: var(--danger);\n        flex: 1 1 auto;", css)
+        self.assertIn("max-width: none;", css)
         self.assertIn("overflow-wrap: anywhere;", css)
         self.assertIn(".glm-coefficient-actions {\n        position: absolute;", css)
         self.assertIn(".glm-coefficient-meta {\n        color: var(--muted);\n        display: flex;\n        flex-direction: column;", css)

@@ -164,7 +164,7 @@ export function buildSnippetFormula(snippetId, feature, options = {}) {
     case "bs4":
       return `bs(${name}, df=4)`;
     case "ns4":
-      return `ns(${name}, df=4)`;
+      return `ns(${name}, df=4, constraints="center")`;
     case "cs4":
       return `cs(${name}, df=4)`;
     case "lower_hinge":

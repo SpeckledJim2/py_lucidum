@@ -49,6 +49,14 @@ UNSAFE_PATTERN = re.compile(
     r"__(?:\w*)|(?:^|[^\w])(import|eval|exec|open|compile|globals|locals|subprocess|socket)(?:[^\w]|$)",
     re.IGNORECASE,
 )
+NATURAL_SPLINE_INTERCEPT_WARNING = (
+    "Natural spline terms with an intercept can be rank-deficient unless the spline basis is centered. "
+    'Use `ns(feature, df=4, constraints="center")` to keep an intercept, or `0 + ns(...)` when a no-intercept spline is intended.'
+)
+BASIS_SPLINE_CONSTRAINTS_ERROR = (
+    '`bs(...)` does not accept `constraints=`. Remove the `constraints` argument, '
+    'or use `ns(..., constraints="center")` for a centered natural spline.'
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,7 @@ class FormulaParts:
     stripped_formula: str
     response_column: str
     rhs_formula: str
+    fitted_rhs_formula: str
     fitted_formula: str
     offset_terms: list[str]
     fit_intercept: bool
@@ -379,6 +388,137 @@ def find_offset_call(text: str, start: int = 0) -> tuple[int, int, int, str] | N
     return None
 
 
+def find_formula_call(text: str, name: str, start: int = 0) -> tuple[int, int, int, str] | None:
+    quote: str | None = None
+    escaped = False
+    index = max(0, start)
+    call_name = str(name or "").strip()
+    if not call_name:
+        return None
+    name_length = len(call_name)
+    while index < len(text):
+        char = text[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote in {"'", '"'}:
+            escaped = True
+            index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            index += 1
+            continue
+        if quote is None and text[index : index + name_length].lower() == call_name.lower():
+            before = text[index - 1] if index > 0 else ""
+            after = text[index + name_length] if index + name_length < len(text) else ""
+            if before and (before.isalnum() or before in {"_", "."}):
+                index += 1
+                continue
+            if after and (after.isalnum() or after in {"_", "."}):
+                index += 1
+                continue
+            cursor = index + name_length
+            while cursor < len(text) and text[cursor].isspace():
+                cursor += 1
+            if cursor >= len(text) or text[cursor] != "(":
+                index += 1
+                continue
+            end = matching_call_end(text, cursor)
+            return index, cursor, end, text[cursor + 1 : end - 1].strip()
+        index += 1
+    return None
+
+
+def formula_call_has_keyword(arguments: str, keyword: str) -> bool:
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    target = str(keyword or "").strip().lower()
+    if not target:
+        return False
+    text = str(arguments or "")
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote in {"'", '"'}:
+            escaped = True
+            index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            index += 1
+            continue
+        if quote is None and char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if quote is None and char in ")]}":
+            depth = max(0, depth - 1)
+            index += 1
+            continue
+        if quote is None and depth == 0 and text[index : index + len(target)].lower() == target:
+            before = text[index - 1] if index > 0 else ""
+            after_index = index + len(target)
+            after = text[after_index] if after_index < len(text) else ""
+            if before and (before.isalnum() or before in {"_", "."}):
+                index += 1
+                continue
+            if after and (after.isalnum() or after == "_"):
+                index += 1
+                continue
+            cursor = after_index
+            while cursor < len(text) and text[cursor].isspace():
+                cursor += 1
+            if cursor < len(text) and text[cursor] == "=":
+                return True
+        index += 1
+    return False
+
+
+def formula_warnings(rhs: str, fit_intercept: bool) -> list[str]:
+    if not fit_intercept:
+        return []
+    warnings: list[str] = []
+    cursor = 0
+    while True:
+        match = find_formula_call(rhs, "ns", cursor)
+        if match is None:
+            break
+        _start, _open, end, arguments = match
+        if not formula_call_has_keyword(arguments, "constraints"):
+            warnings.append(NATURAL_SPLINE_INTERCEPT_WARNING)
+            break
+        cursor = end
+    return warnings
+
+
+def formula_errors(rhs: str) -> list[str]:
+    errors: list[str] = []
+    cursor = 0
+    while True:
+        match = find_formula_call(rhs, "bs", cursor)
+        if match is None:
+            break
+        _start, _open, end, arguments = match
+        if formula_call_has_keyword(arguments, "constraints"):
+            errors.append(BASIS_SPLINE_CONSTRAINTS_ERROR)
+            break
+        cursor = end
+    return errors
+
+
 def remove_offset_span(text: str, start: int, end: int) -> str:
     left = start
     while left > 0 and text[left - 1].isspace():
@@ -520,6 +660,7 @@ def parse_formula(raw_formula: Any, response_column: Any) -> FormulaParts:
         stripped_formula=stripped,
         response_column=response,
         rhs_formula=rhs,
+        fitted_rhs_formula=fitted_rhs,
         fitted_formula=f"{TARGET_COLUMN} ~ {fitted_rhs}",
         offset_terms=offset_terms,
         fit_intercept=fit_intercept,
@@ -643,6 +784,8 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
         "sample": sample,
     }
     if formula:
+        errors.extend(formula_errors(formula.fitted_rhs_formula))
+        warnings.extend(formula_warnings(formula.fitted_rhs_formula, formula.fit_intercept))
         result["formula"] = {
             "raw": formula.raw_formula,
             "stripped": formula.stripped_formula,
@@ -653,6 +796,7 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
             "has_predictor_terms": formula.has_predictor_terms,
             "intercept_only": formula.intercept_only,
         }
+    result["ok"] = not errors
     return result
 
 

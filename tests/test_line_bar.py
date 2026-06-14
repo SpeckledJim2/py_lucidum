@@ -231,21 +231,21 @@ COPY (
         *,
         formula: str = "YoungestDriverAge",
         denominator_column: str = "",
+        regularization: dict[str, Any] | None = None,
     ) -> tuple[GlmModelStore, str]:
         self.require_glm_dependencies()
         store = GlmModelStore(self.data_path)
-        result = train_model(
-            dataset,
-            store,
-            {
-                "label": "overlay glm",
-                "formula": formula,
-                "response_column": "Actual",
-                "denominator_column": denominator_column,
-                "family": "normal",
-                "training_scope": "all",
-            },
-        )
+        payload = {
+            "label": "overlay glm",
+            "formula": formula,
+            "response_column": "Actual",
+            "denominator_column": denominator_column,
+            "family": "normal",
+            "training_scope": "all",
+        }
+        if regularization is not None:
+            payload["regularization"] = regularization
+        result = train_model(dataset, store, payload)
         model_id = str(result["model_id"])
         dataset.register_data_source_provider(GlmSourceProvider(store))
         return store, model_id
@@ -1322,6 +1322,7 @@ COPY (
         self.write_active_glm_for_overlay(
             dataset,
             formula="YoungestDriverAge + Weight + `Gross.Weight` + YoungestDriverAge:Weight:`Gross.Weight`",
+            regularization={"mode": "manual", "alpha": 0.01, "l1_ratio": 0},
         )
         request = self.request()
         request.update({"x": "YoungestDriverAge", "bandWidth": "10", "denominator": "Weight", "partialDependence": {"mode": "glm"}})

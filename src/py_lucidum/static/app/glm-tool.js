@@ -341,7 +341,7 @@ export function createGlmTool({
               <div class="glm-panel-header glm-coefficient-header">
                 <div>
                   <h3 class="glm-panel-title">Coefficients</h3>
-                  <div id="glmCoefficientMeta" class="glm-coefficient-meta">${diagnosticsHtml(diagnostics, activeModel)}</div>
+                  <div id="glmCoefficientMeta" class="glm-coefficient-meta">${diagnosticsHtml(diagnostics, activeModel, coefficientRowsForActiveModel(data.active_model_id))}</div>
                 </div>
                 <div class="glm-coefficient-actions">
                   <button id="glmCopyCoefficientsBtn" class="tab glm-inline-action-button" type="button">Copy</button>
@@ -1892,6 +1892,16 @@ export function createGlmTool({
       setBuildFailure("Choose an Actual metric or enter a full response ~ terms formula");
       return;
     }
+    try {
+      const validation = await api("/api/glm/validate", { method: "POST", body: JSON.stringify(payload) });
+      if (Array.isArray(validation.errors) && validation.errors.length) {
+        setBuildFailure(validation.errors.join("; "));
+        return;
+      }
+    } catch (error) {
+      setBuildFailure(error.message);
+      return;
+    }
     isBuilding = true;
     liveProgress = { phase: "queued", message: "Starting GLM build" };
     renderLiveProgress(liveProgress);
@@ -1910,7 +1920,7 @@ export function createGlmTool({
       pollTimer = null;
     }
     isBuilding = false;
-    liveProgress = { phase: "failed", message: String(message || "GLM build failed") };
+    liveProgress = { phase: "failed", message: String(message || "GLM training did not save a model") };
     renderLiveProgress(liveProgress);
     setGlmNotice("");
   }
@@ -1944,7 +1954,7 @@ export function createGlmTool({
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
         } else {
-          setBuildFailure(job.error || progress.message || "GLM build failed");
+          setBuildFailure(job.error || progress.message || "GLM training did not save a model");
         }
       } catch (error) {
         setBuildFailure(error.message);
@@ -2025,10 +2035,30 @@ export function createGlmTool({
     return total === null ? String(nonzero) : `${nonzero.toLocaleString()} / ${total.toLocaleString()}`;
   }
 
-  function diagnosticsHtml(diagnostics = {}, model = {}) {
+  function modelProblemMessages(diagnostics = {}, model = {}, coefficients = []) {
+    const messages = [
+      ...(Array.isArray(model?.warnings) ? model.warnings : []),
+      ...(Array.isArray(diagnostics?.warnings) ? diagnostics.warnings : []),
+      ...(Array.isArray(diagnostics?.blocking_warnings) ? diagnostics.blocking_warnings : []),
+    ].map((warning) => String(warning || "").trim()).filter(Boolean);
+    const penalized = regularizationMode(model?.regularization) !== "none";
+    const hasInferenceWarning = messages.some((message) => /coefficient inference|standard errors/i.test(message));
+    if (!penalized && !hasInferenceWarning && Array.isArray(coefficients) && coefficients.some((row) => row && row.std_error === null)) {
+      messages.push("GLM coefficient inference was not fully available because one or more standard errors were non-finite. Simplify rank-deficient terms, use centered/no-intercept spline syntax, or use ridge/auto regularization.");
+    }
+    const seen = new Set();
+    return messages.filter((message) => {
+      if (seen.has(message)) return false;
+      seen.add(message);
+      return true;
+    });
+  }
+
+  function diagnosticsHtml(diagnostics = {}, model = {}, coefficients = []) {
     const regularization = model?.regularization || {};
     const penalty = regularizationLabel(regularization);
     const nonzero = nonzeroCoefficientLabel(regularization, diagnostics);
+    const problems = modelProblemMessages(diagnostics, model, coefficients);
     const primary = [
       ["Deviance", diagnostics.deviance],
       ["AIC", diagnostics.aic],
@@ -2044,8 +2074,9 @@ export function createGlmTool({
       return number === null ? String(value) : formatModelMetric(number);
     };
     const itemHtml = ([label, value]) => `<span><strong>${escapeHtml(label)}:</strong> ${escapeHtml(itemValue(value))}</span>`;
-    if (!primary.length && !secondary.length) return "No active model";
+    if (!primary.length && !secondary.length && !problems.length) return "No active model";
     return [
+      problems.length ? `<span class="glm-coefficient-meta-row glm-coefficient-meta-warning"><strong>Selected model issue:</strong> ${escapeHtml(problems.join(" "))}</span>` : "",
       primary.length ? `<span class="glm-coefficient-meta-row">${primary.map(itemHtml).join("")}</span>` : "",
       secondary.length ? `<span class="glm-coefficient-meta-row glm-coefficient-meta-row-secondary">${secondary.map(itemHtml).join("")}</span>` : "",
     ].filter(Boolean).join("");
@@ -2296,8 +2327,9 @@ export function createGlmTool({
       if (syncBuilderDraft) builderDraftSourceModelId = detailModelId;
       const diagnostics = activeDetail?.diagnostics || activeDetail?.manifest?.diagnostics || {};
       const meta = el("glmCoefficientMeta");
-      if (meta) meta.innerHTML = diagnosticsHtml(diagnostics, activeDetail?.manifest || {});
-      renderCoefficientTable(Array.isArray(activeDetail?.coefficients) ? activeDetail.coefficients : []);
+      const coefficients = Array.isArray(activeDetail?.coefficients) ? activeDetail.coefficients : [];
+      if (meta) meta.innerHTML = diagnosticsHtml(diagnostics, activeDetail?.manifest || {}, coefficients);
+      renderCoefficientTable(coefficients);
     } catch (error) {
       activeDetail = null;
       setGlmNotice(error.message);
