@@ -600,6 +600,7 @@
       function syncActiveFilterIndicator() {
         const applied = filterIsApplied();
         el("filterRowMeta").classList.toggle("filter-row-meta--applied", applied);
+        el("profileFilter").classList.toggle("profile-filter--applied", applied);
         el("collapsedFilterIndicator").hidden = !applied;
       }
 

@@ -5690,6 +5690,21 @@ COPY (
                 profile_filter_payload = json.loads(profile_filter_request_info.value.post_data or "{}")
                 self.assertEqual(profile_filter_payload["filter"], "vehicle_age >= 1")
                 self.assertEqual(profile_filter_payload["mode"], "full")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector("#profileFilter");
+                      if (!meta?.classList.contains("profile-filter--applied")) return false;
+                      const probe = document.createElement("span");
+                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--danger").trim();
+                      document.body.append(probe);
+                      const danger = getComputedStyle(probe).color;
+                      probe.remove();
+                      return getComputedStyle(meta).color === danger;
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator('input[name="profileSummaryMode"][value="full"]').wait_for(state="attached", timeout=10_000)
                 self.assertTrue(page.locator('input[name="profileSummaryMode"][value="full"]').is_checked())
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
@@ -5700,6 +5715,23 @@ COPY (
                 page.locator('input[name="profileSummaryMode"][value="auto"]').wait_for(state="attached", timeout=10_000)
                 self.assertTrue(page.locator('input[name="profileSummaryMode"][value="auto"]').is_checked())
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
+                with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_clear_filter_request_info:
+                    with page.expect_response(lambda response: response.url.endswith("/api/column-profile/summary") and response.status == 200, timeout=10_000):
+                        page.evaluate('() => document.querySelector("#filterClearBtn").click()')
+                profile_clear_filter_payload = json.loads(profile_clear_filter_request_info.value.post_data or "{}")
+                self.assertEqual(profile_clear_filter_payload["filter"], "")
+                self.assertEqual(profile_clear_filter_payload["mode"], "auto")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector("#profileFilter");
+                      return meta && !meta.classList.contains("profile-filter--applied") && meta.textContent.includes("no filter");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
+                page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]').wait_for(timeout=10_000)
                 profile_requests_before_search = profile_requests
                 page.locator("#profileColumnSearch").fill("Postcode")
                 page.wait_for_function(
@@ -6303,8 +6335,8 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 self.assertEqual(page_errors, [])
-                self.assertEqual(profile_requests, 5)
-                self.assertEqual(profile_detail_requests, 6)
+                self.assertEqual(profile_requests, 6)
+                self.assertEqual(profile_detail_requests, 7)
                 self.assertEqual(chart_requests, 2)
                 self.assertEqual(histogram_requests, 5)
                 self.assertEqual(map_requests, 9)

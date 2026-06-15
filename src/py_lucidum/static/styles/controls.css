@@ -776,6 +776,10 @@
         white-space: nowrap;
       }
 
+      #profileFilter.profile-filter--applied {
+        color: var(--danger);
+      }
+
       .table-wrap {
         display: flex;
         flex-direction: column;
