@@ -5318,6 +5318,25 @@ COPY (
                     timeout=10_000,
                 )
 
+            def assert_filter_label_color(selector: str, applied_class: str, applied: bool) -> None:
+                page.wait_for_function(
+                    """
+                    ({ selector, appliedClass, applied }) => {
+                      const label = document.querySelector(selector);
+                      if (!label || label.classList.contains(appliedClass) !== applied) return false;
+                      if (!applied) return label.textContent.includes("no filter");
+                      const probe = document.createElement("span");
+                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--danger").trim();
+                      document.body.append(probe);
+                      const danger = getComputedStyle(probe).color;
+                      probe.remove();
+                      return getComputedStyle(label).color === danger;
+                    }
+                    """,
+                    arg={"selector": selector, "appliedClass": applied_class, "applied": applied},
+                    timeout=10_000,
+                )
+
             def unit_point_alpha_pixels() -> int:
                 return page.evaluate(
                     """
@@ -5508,6 +5527,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                assert_filter_label_color("#lineBarFilter", "line-bar-filter--applied", True)
                 page.locator("#ukMapTool").click()
                 page.wait_for_function(
                     """
@@ -5523,6 +5543,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                assert_filter_label_color("#mapControlFilter", "map-filter--applied", True)
                 page.locator("#datasetViewerTool").click()
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 dataset_requests_before_clear = dataset_viewer_requests
@@ -5540,6 +5561,9 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
+                assert_filter_label_color("#lineBarFilter", "line-bar-filter--applied", False)
+                assert_filter_label_color("#histogramFilter", "histogram-filter--applied", False)
+                assert_filter_label_color("#mapControlFilter", "map-filter--applied", False)
                 self.assertTrue(page.locator("#collapsedFilterIndicator").evaluate("node => node.hidden"))
                 self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_clear)
@@ -6175,6 +6199,7 @@ COPY (
                         )
                 histogram_filter_payload = json.loads(histogram_filter_request_info.value.post_data or "{}")
                 self.assertEqual(histogram_filter_payload["filter"], "vehicle_age >= 0")
+                assert_filter_label_color("#histogramFilter", "histogram-filter--applied", True)
 
                 with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_metric_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):

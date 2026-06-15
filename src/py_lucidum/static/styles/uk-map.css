@@ -272,6 +272,11 @@
         color: grey;
       }
 
+      #lineBarFilter.line-bar-filter--applied,
+      #mapControlFilter.map-filter--applied {
+        color: var(--danger);
+      }
+
       #lineBarFilter,
       #mapControlFilter {
         font-size: 10px;

@@ -780,6 +780,14 @@
         color: var(--danger);
       }
 
+      #lineBarFilter.line-bar-filter--applied {
+        color: var(--danger);
+      }
+
+      #histogramFilter.histogram-filter--applied {
+        color: var(--danger);
+      }
+
       .table-wrap {
         display: flex;
         flex-direction: column;

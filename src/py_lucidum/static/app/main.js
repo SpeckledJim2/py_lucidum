@@ -601,6 +601,9 @@
         const applied = filterIsApplied();
         el("filterRowMeta").classList.toggle("filter-row-meta--applied", applied);
         el("profileFilter").classList.toggle("profile-filter--applied", applied);
+        el("lineBarFilter").classList.toggle("line-bar-filter--applied", applied);
+        el("histogramFilter").classList.toggle("histogram-filter--applied", applied);
+        el("mapControlFilter").classList.toggle("map-filter--applied", applied);
         el("collapsedFilterIndicator").hidden = !applied;
       }
 
