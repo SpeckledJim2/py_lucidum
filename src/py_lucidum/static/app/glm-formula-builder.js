@@ -66,7 +66,7 @@ export function createGlmFormulaBuilder({
 }) {
   let aceEditor = null;
   let editorInitialisedFor = null;
-  let editorFontSize = Number(localStorage.getItem("py_lucidum_glm_font_size")) || 14;
+  let editorFontSize = Number(localStorage.getItem("py_lucidum_glm_font_size")) || 11;
   let selectedFamily = localStorage.getItem("py_lucidum_glm_family") || "normal";
   let selectedTrainingScope = localStorage.getItem("py_lucidum_glm_training_scope") || "all";
   let selectedRegularizationMode = localStorage.getItem("py_lucidum_glm_regularization_mode") || "none";
