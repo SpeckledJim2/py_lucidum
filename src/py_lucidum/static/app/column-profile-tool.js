@@ -165,7 +165,7 @@ export function createColumnProfileTool({
   }
 
   function bindProfileTable() {
-    el("profileFullCalcBtn")?.addEventListener("click", calculateFullProfile);
+    bindProfileSummaryModeControl();
     el("profileColumnSearch")?.addEventListener("input", handleProfileColumnSearch);
     el("profileWrap").querySelectorAll("[data-profile-sort]").forEach((button) => {
       button.addEventListener("click", () => setProfileSort(button.dataset.profileSort));
@@ -218,16 +218,51 @@ export function createColumnProfileTool({
     empty.hidden = Boolean(searchedProfileColumns(columns).length);
   }
 
-  async function calculateFullProfile() {
-    const button = el("profileFullCalcBtn");
-    if (button) {
-      button.disabled = true;
-      button.textContent = "Calculating...";
+  function bindProfileSummaryModeControl() {
+    const group = el("profileSummaryMode");
+    if (!group) return;
+    group.querySelectorAll('input[name="profileSummaryMode"]').forEach((input) => {
+      input.addEventListener("change", handleProfileSummaryModeChange);
+    });
+    syncProfileSummaryModeControl(false);
+  }
+
+  async function handleProfileSummaryModeChange(event) {
+    const nextMode = normaliseProfileSummaryMode(event.target?.value);
+    if (nextMode === profileSummaryMode()) {
+      syncProfileSummaryModeControl(false);
+      return;
     }
-    state.profileSummaryMode = "full";
+    state.profileSummaryMode = nextMode;
+    syncProfileSummaryModeControl(true);
     const request = buildProfileRequest();
-    if (!request) return;
+    if (!request) {
+      syncProfileSummaryModeControl(false);
+      return;
+    }
     await fetchProfileData(request, stableRequestKey(request));
+    syncProfileSummaryModeControl(false);
+  }
+
+  function profileSummaryMode() {
+    return normaliseProfileSummaryMode(state.profileSummaryMode);
+  }
+
+  function normaliseProfileSummaryMode(value) {
+    return String(value || "auto").trim().toLowerCase() === "full" ? "full" : "auto";
+  }
+
+  function syncProfileSummaryModeControl(disabled = false) {
+    const group = el("profileSummaryMode");
+    if (!group) return;
+    const selected = profileSummaryMode();
+    group.setAttribute("aria-disabled", String(Boolean(disabled)));
+    group.querySelectorAll('input[name="profileSummaryMode"]').forEach((input) => {
+      const active = normaliseProfileSummaryMode(input.value) === selected;
+      input.checked = active;
+      input.disabled = Boolean(disabled);
+      input.closest(".profile-summary-mode-option")?.classList.toggle("active", active);
+    });
   }
 
   function profileCalculation(data) {
@@ -316,11 +351,19 @@ export function createColumnProfileTool({
   }
 
   function profileSummaryActionsHtml(data) {
-    const calculation = profileCalculation(data);
-    if (!calculation.fullAvailable) return "";
+    const selected = profileSummaryMode();
     return `
       <div class="profile-summary-actions">
-        <button id="profileFullCalcBtn" class="tab profile-full-calc-button" type="button">Calc all rows</button>
+        <div id="profileSummaryMode" class="profile-summary-mode" role="radiogroup" aria-label="Profile calculation rows">
+          <label class="profile-summary-mode-option ${selected === "auto" ? "active" : ""}">
+            <input type="radio" name="profileSummaryMode" value="auto" ${selected === "auto" ? "checked" : ""} />
+            <span>Use 100k</span>
+          </label>
+          <label class="profile-summary-mode-option ${selected === "full" ? "active" : ""}">
+            <input type="radio" name="profileSummaryMode" value="full" ${selected === "full" ? "checked" : ""} />
+            <span>Use all rows</span>
+          </label>
+        </div>
       </div>
     `;
   }
@@ -952,10 +995,6 @@ export function createColumnProfileTool({
     closeProfileColumnContextMenu();
   }
 
-  function resetSummaryMode() {
-    state.profileSummaryMode = "auto";
-  }
-
   return {
     buildRequest: buildProfileRequest,
     fetchData: fetchProfileData,
@@ -963,6 +1002,5 @@ export function createColumnProfileTool({
     render: renderProfileData,
     refreshSelectedDetail: refreshSelectedProfileDetail,
     closeMenus,
-    resetSummaryMode,
   };
 }

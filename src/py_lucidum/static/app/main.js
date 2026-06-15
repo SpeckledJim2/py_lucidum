@@ -792,7 +792,6 @@
           if (previousActionTimings[tool]) state.actionTimings[tool] = previousActionTimings[tool];
         });
         if (!preserve.has("column_profile")) {
-          columnProfileTool.resetSummaryMode();
           state.lastProfileData = null;
           clearProfileDetailCache();
         }
@@ -2261,7 +2260,6 @@
           return;
         }
         state.activeFilter = nextFilter;
-        columnProfileTool.resetSummaryMode();
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshMetricSummary();
@@ -2283,7 +2281,6 @@
           return;
         }
         state.activeFilter = "";
-        columnProfileTool.resetSummaryMode();
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshMetricSummary();

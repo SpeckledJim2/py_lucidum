@@ -5670,6 +5670,36 @@ COPY (
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")
+                self.assertTrue(page.locator('input[name="profileSummaryMode"][value="auto"]').is_checked())
+                with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_full_request_info:
+                    page.locator(".profile-summary-mode-option", has_text="Use all rows").click()
+                profile_full_payload = json.loads(profile_full_request_info.value.post_data or "{}")
+                self.assertEqual(profile_full_payload["mode"], "full")
+                page.locator('input[name="profileSummaryMode"][value="full"]').wait_for(state="attached", timeout=10_000)
+                self.assertTrue(page.locator('input[name="profileSummaryMode"][value="full"]').is_checked())
+                page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
+                with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_filter_request_info:
+                    page.evaluate(
+                        """
+                        () => {
+                            document.querySelector("#filterInput").value = "vehicle_age >= 1";
+                            document.querySelector("#filterApplyBtn").click();
+                        }
+                        """
+                    )
+                profile_filter_payload = json.loads(profile_filter_request_info.value.post_data or "{}")
+                self.assertEqual(profile_filter_payload["filter"], "vehicle_age >= 1")
+                self.assertEqual(profile_filter_payload["mode"], "full")
+                page.locator('input[name="profileSummaryMode"][value="full"]').wait_for(state="attached", timeout=10_000)
+                self.assertTrue(page.locator('input[name="profileSummaryMode"][value="full"]').is_checked())
+                page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
+                with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_auto_request_info:
+                    page.locator(".profile-summary-mode-option", has_text="Use 100k").click()
+                profile_auto_payload = json.loads(profile_auto_request_info.value.post_data or "{}")
+                self.assertEqual(profile_auto_payload["mode"], "auto")
+                page.locator('input[name="profileSummaryMode"][value="auto"]').wait_for(state="attached", timeout=10_000)
+                self.assertTrue(page.locator('input[name="profileSummaryMode"][value="auto"]').is_checked())
+                page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 profile_requests_before_search = profile_requests
                 page.locator("#profileColumnSearch").fill("Postcode")
                 page.wait_for_function(
@@ -6273,8 +6303,8 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 self.assertEqual(page_errors, [])
-                self.assertEqual(profile_requests, 2)
-                self.assertEqual(profile_detail_requests, 3)
+                self.assertEqual(profile_requests, 5)
+                self.assertEqual(profile_detail_requests, 6)
                 self.assertEqual(chart_requests, 2)
                 self.assertEqual(histogram_requests, 5)
                 self.assertEqual(map_requests, 9)

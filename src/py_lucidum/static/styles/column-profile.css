@@ -100,10 +100,51 @@
         font-size: 11px;
       }
 
-      .profile-full-calc-button {
-        min-height: 24px;
-        padding: 2px 8px;
+      .profile-summary-mode {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 3px;
+      }
+
+      .profile-summary-mode-option {
+        align-items: center;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        color: var(--text);
+        cursor: pointer;
+        display: inline-flex;
         font-size: 11px;
+        justify-content: center;
+        line-height: 1.2;
+        min-height: 24px;
+        padding: 2px 7px;
+        position: relative;
+        white-space: nowrap;
+      }
+
+      .profile-summary-mode-option.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+
+      .profile-summary-mode-option:focus-within {
+        outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+        outline-offset: 2px;
+      }
+
+      .profile-summary-mode-option input {
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
+        position: absolute;
+        width: 1px;
+      }
+
+      .profile-summary-mode[aria-disabled="true"] .profile-summary-mode-option {
+        cursor: wait;
+        opacity: 0.7;
       }
 
       .profile-detail-pane {
