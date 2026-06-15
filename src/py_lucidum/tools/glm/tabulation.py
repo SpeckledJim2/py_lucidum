@@ -43,6 +43,7 @@ MAX_TABULATION_CELLS = 100_000
 MODEL_CROSSTAB = "__model__"
 TABULATION_REBASING_VERSION = 1
 TABULATION_REBASE_TOLERANCE = 1e-7
+_NUMBER_PATTERN = r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?"
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,93 @@ def _tabulation_frame_from_dataset(dataset: Dataset, columns: list[str]) -> Any:
         return dataset.con.execute(f"SELECT {', '.join(projection)} FROM {dataset.relation_sql()}").fetchdf()
 
 
+def _combine_numeric_bounds(target: dict[str, float], source: dict[str, float]) -> dict[str, float]:
+    lower = _as_number(source.get("lower_bound"))
+    upper = _as_number(source.get("upper_bound"))
+    if lower is not None:
+        target["lower_bound"] = max(float(lower), float(target.get("lower_bound", lower)))
+    if upper is not None:
+        target["upper_bound"] = min(float(upper), float(target.get("upper_bound", upper)))
+    return target
+
+
+def _direct_raw_transform_expression(expression: str, feature: str) -> bool:
+    escaped = re.escape(feature)
+    return any(re.search(rf"(?<![A-Za-z0-9_]){name}\(\s*{escaped}\s*(?:,|\))", expression) for name in ("ns", "bs", "cs", "poly"))
+
+
+def _simple_cap_expression(expression: str, feature: str, function_name: str) -> float | None:
+    escaped = re.escape(feature)
+    patterns = (
+        rf"(?<![A-Za-z0-9_]){function_name}\(\s*{escaped}\s*,\s*({_NUMBER_PATTERN})\s*\)",
+        rf"(?<![A-Za-z0-9_]){function_name}\(\s*({_NUMBER_PATTERN})\s*,\s*{escaped}\s*\)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, expression)
+        if match:
+            return _as_number(match.group(1))
+    return None
+
+
+def _known_inverse_transform_bounds(expression: str, feature: str, lower: float | None, upper: float | None) -> dict[str, float]:
+    escaped = re.escape(feature)
+    transforms: tuple[tuple[str, Callable[[float], float]], ...] = (
+        ("log1p", math.expm1),
+        ("log", math.exp),
+        ("sqrt", lambda value: value * value),
+    )
+    for name, inverse in transforms:
+        if not re.search(rf"(?<![A-Za-z0-9_]){name}\(\s*{escaped}\s*\)", expression):
+            continue
+        bounds: dict[str, float] = {}
+        for field, value in (("lower_bound", lower), ("upper_bound", upper)):
+            if value is None:
+                continue
+            try:
+                raw_value = float(inverse(float(value)))
+            except (OverflowError, ValueError):
+                continue
+            if math.isfinite(raw_value):
+                bounds[field] = raw_value
+        return bounds
+    return {}
+
+
+def _raw_safe_transform_bounds(expression: str, state: dict[str, Any], feature: str) -> dict[str, float]:
+    lower = _as_number(state.get("lower_bound"))
+    upper = _as_number(state.get("upper_bound"))
+    if lower is None and upper is None:
+        return {}
+
+    pmin_cap = _simple_cap_expression(expression, feature, "pmin")
+    if pmin_cap is not None:
+        bounds: dict[str, float] = {}
+        if lower is not None:
+            bounds["lower_bound"] = float(lower)
+        return bounds
+
+    pmax_floor = _simple_cap_expression(expression, feature, "pmax")
+    if pmax_floor is not None:
+        bounds = {}
+        if upper is not None:
+            bounds["upper_bound"] = float(upper)
+        return bounds
+
+    inverse_bounds = _known_inverse_transform_bounds(expression, feature, lower, upper)
+    if inverse_bounds:
+        return inverse_bounds
+
+    if _direct_raw_transform_expression(expression, feature):
+        bounds = {}
+        if lower is not None:
+            bounds["lower_bound"] = float(lower)
+        if upper is not None:
+            bounds["upper_bound"] = float(upper)
+        return bounds
+
+    return {}
+
+
 def _feature_transform_bounds(estimator: Any, source_columns: list[str]) -> dict[str, dict[str, float]]:
     spec = getattr(estimator, "X_model_spec_", None)
     transform_state = getattr(spec, "transform_state", {}) if spec is not None else {}
@@ -151,16 +239,11 @@ def _feature_transform_bounds(estimator: Any, source_columns: list[str]) -> dict
     for expression, state in transform_state.items():
         if not isinstance(state, dict):
             continue
-        lower = _as_number(state.get("lower_bound"))
-        upper = _as_number(state.get("upper_bound"))
-        if lower is None and upper is None:
-            continue
-        for feature in _column_tokens(str(expression), source_columns):
-            entry = bounds.setdefault(feature, {})
-            if lower is not None:
-                entry["lower_bound"] = max(float(lower), float(entry.get("lower_bound", lower)))
-            if upper is not None:
-                entry["upper_bound"] = min(float(upper), float(entry.get("upper_bound", upper)))
+        expression_text = str(expression)
+        for feature in _column_tokens(expression_text, source_columns):
+            raw_bounds = _raw_safe_transform_bounds(expression_text, state, feature)
+            if raw_bounds:
+                _combine_numeric_bounds(bounds.setdefault(feature, {}), raw_bounds)
     return bounds
 
 
@@ -172,6 +255,69 @@ def _mode_value(series: Any) -> Any:
     if not len(counts):
         return ""
     return _json_value(counts.index[0])
+
+
+def _fitted_category_levels(estimator: Any, source_columns: list[str]) -> dict[str, list[Any]]:
+    spec = getattr(estimator, "X_model_spec_", None)
+    encoder_state = getattr(spec, "encoder_state", {}) if spec is not None else {}
+    if not isinstance(encoder_state, dict):
+        return {}
+    levels_by_feature: dict[str, list[Any]] = {}
+    for expression, state in encoder_state.items():
+        expression_text = str(expression)
+        payload = state[1] if isinstance(state, tuple) and len(state) > 1 else state
+        if not isinstance(payload, dict) or "categories" not in payload:
+            continue
+        for feature in source_columns:
+            escaped = re.escape(feature)
+            if not re.match(rf"^C\(\s*{escaped}\s*(?:,|\))", expression_text):
+                continue
+            levels = [_json_value(value) for value in list(payload.get("categories") or [])]
+            levels_by_feature[feature] = [value for value in levels if value is not None]
+            break
+    return levels_by_feature
+
+
+def _feature_uses_only_categorical_terms(feature: str, term_texts: list[str]) -> bool:
+    saw_feature = False
+    escaped = re.escape(feature)
+    categorical_call = re.compile(rf"(?<![A-Za-z0-9_])C\(\s*{escaped}\s*(?:,[^)]*)?\)")
+    for text in term_texts:
+        if feature not in _column_tokens(text, [feature]):
+            continue
+        saw_feature = True
+        cleaned = categorical_call.sub("", text)
+        if feature in _column_tokens(cleaned, [feature]):
+            return False
+    return saw_feature
+
+
+def _normalise_categorical_key(value: Any, category_levels: list[Any] | None, pd: Any) -> Any:
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    raw = _json_value(value)
+    levels = [_json_value(level) for level in (category_levels or [])]
+    if not levels:
+        return raw
+    level_map = {level: level for level in levels}
+    if raw in level_map:
+        return level_map[raw]
+    text = str(raw)
+    if text in level_map:
+        return level_map[text]
+    number = _as_number(raw)
+    if number is not None:
+        rounded = _round_grid_value(number)
+        candidates = [rounded, str(rounded), str(float(number))]
+        if float(number).is_integer():
+            candidates.append(str(int(number)))
+        for candidate in candidates:
+            if candidate in level_map:
+                return level_map[candidate]
+    return raw
 
 
 def _clip_numeric_bound(
@@ -211,6 +357,7 @@ def _base_value(
     spec_row: dict[str, Any],
     bounds: dict[str, float],
     pd: Any,
+    category_levels: list[Any] | None = None,
 ) -> tuple[Any, dict[str, Any] | None, dict[str, Any] | None]:
     raw = str(spec_row.get("base") or "").strip()
     if is_numeric_kind(kind):
@@ -226,6 +373,20 @@ def _base_value(
         value, clipped = _clip_numeric_bound(feature, "base", inferred, bounds, "inferred")
         return value, {"feature": feature, "field": "base", "value": _json_value(value)}, clipped
     series = fit_frame[feature].dropna() if feature in fit_frame.columns else []
+    levels = [_json_value(value) for value in (category_levels or [])]
+    if levels:
+        seen_values = set(levels)
+        if raw:
+            raw_key = _normalise_categorical_key(raw, levels, pd)
+            if raw_key in seen_values:
+                return raw_key, None, None
+        values = series.map(lambda value: _normalise_categorical_key(value, levels, pd)).dropna() if len(series) else []
+        if len(values):
+            counts = values.value_counts(dropna=True)
+            inferred = _json_value(counts.index[0]) if len(counts) else levels[0]
+        else:
+            inferred = levels[0]
+        return inferred, {"feature": feature, "field": "base", "value": _json_value(inferred)}, None
     seen_values = {_json_value(value) for value in series.unique()} if len(series) else set()
     if raw and raw in seen_values:
         return raw, None, None
@@ -306,7 +467,21 @@ def _numeric_levels(minimum: float, maximum: float, band: float, base_value: Any
     return levels
 
 
-def _categorical_levels(frame: Any, fit_frame: Any, feature: str, base_value: Any, pd: Any) -> tuple[list[Any], set[Any]]:
+def _categorical_levels(frame: Any, fit_frame: Any, feature: str, base_value: Any, pd: Any, category_levels: list[Any] | None = None) -> tuple[list[Any], set[Any]]:
+    if category_levels:
+        fitted = [_json_value(value) for value in category_levels if _json_value(value) is not None]
+        all_values = list(dict.fromkeys(fitted))
+        seen = set(all_values)
+        observed = [
+            _normalise_categorical_key(value, all_values, pd)
+            for value in (frame[feature].dropna().unique() if feature in frame.columns else [])
+        ]
+        unseen_values = sorted({value for value in observed if value is not None and value not in seen}, key=lambda value: str(value))
+        all_values.extend(unseen_values)
+        base_key = _normalise_categorical_key(base_value, all_values, pd)
+        if base_key not in all_values and str(base_key or ""):
+            all_values.append(base_key)
+        return all_values, seen
     all_values = sorted([_json_value(value) for value in frame[feature].dropna().unique()], key=lambda value: str(value))
     seen = {_json_value(value) for value in fit_frame[feature].dropna().unique()}
     if base_value not in all_values and str(base_value or ""):
@@ -324,6 +499,7 @@ def _feature_levels(
     bounds: dict[str, float],
     np: Any,
     pd: Any,
+    category_levels: list[Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     estimated: list[dict[str, Any]] = []
     clipped_bounds: list[dict[str, Any]] = []
@@ -335,7 +511,9 @@ def _feature_levels(
             estimated.append({"feature": feature, "fields": estimated_fields, "min": minimum, "max": maximum, "banding": band})
         meta.update({"min": minimum, "max": maximum, "banding": band})
         return [{"value": value, "status": "ok"} for value in _numeric_levels(minimum, maximum, band, base_value)], meta, estimated, clipped_bounds, unseen
-    levels, seen = _categorical_levels(frame, fit_frame, feature, base_value, pd)
+    if category_levels:
+        meta["category_levels"] = [_json_value(value) for value in category_levels]
+    levels, seen = _categorical_levels(frame, fit_frame, feature, base_value, pd, category_levels=category_levels)
     rows: list[dict[str, Any]] = []
     for value in levels:
         status = "ok" if value in seen else "unseen"
@@ -391,7 +569,8 @@ def _prediction_frame(base: dict[str, Any], variables: list[str], grid: Any, pd:
 
 def _scored_feature_series(series: Any, meta: dict[str, Any], np: Any, pd: Any) -> Any:
     if not is_numeric_kind(str(meta.get("kind") or "")):
-        return series.map(lambda value: None if pd.isna(value) else _json_value(value))
+        category_levels = list(meta.get("category_levels") or [])
+        return series.map(lambda value: _normalise_categorical_key(value, category_levels, pd))
     values = pd.to_numeric(series, errors="coerce")
     minimum = _as_number(meta.get("min"))
     maximum = _as_number(meta.get("max"))
@@ -534,8 +713,9 @@ def _feature_value_mask(table: Any, feature: str, value: Any, feature_meta: dict
             raise ValueError(f"Choose a numeric anchor value for {feature}.")
         numbers = pd.to_numeric(table[feature], errors="coerce")
         return numbers.notna() & ((numbers.astype(float) - float(target)).abs() <= 1e-9)
-    target = _json_value(value)
-    return table[feature].map(_json_value) == target
+    category_levels = list(feature_meta.get("category_levels") or [])
+    target = _normalise_categorical_key(value, category_levels, pd)
+    return table[feature].map(lambda item: _normalise_categorical_key(item, category_levels, pd)) == target
 
 
 def _json_anchor_cell(anchor_cell: dict[str, Any], features: list[str]) -> dict[str, Any]:
@@ -583,6 +763,7 @@ def _rebuild_tabulated_predictions(
     denominator_column = str(model_manifest.get("denominator_column") or "").strip()
     tables = [table for table in manifest.get("tables", []) if not table.get("skipped")]
     feature_meta = dict(manifest.get("feature_meta") or {})
+    table_feature_meta = dict(manifest.get("table_feature_meta") or {})
     all_features = sorted({feature for table in tables for feature in list(table.get("features") or [])})
     required_columns = list(all_features)
     if denominator_column:
@@ -606,7 +787,14 @@ def _rebuild_tabulated_predictions(
             continue
         features = list(table_info.get("features") or [])
         table = _read_table_frame(store, model_id, table_info, pd)
-        component = _component_from_table(frame, table, features, feature_meta, np, pd)
+        component = _component_from_table(
+            frame,
+            table,
+            features,
+            _feature_meta_for_table(table_id, features, feature_meta, table_feature_meta),
+            np,
+            pd,
+        )
         missing = missing | component.isna()
         eta = eta + component.fillna(0.0)
         tabulated[f"tabulated_linear__{_safe_id(table_id)}"] = component
@@ -675,12 +863,14 @@ def _apply_rebase_rule(
     if missing_features:
         raise ValueError(f"Anchor cell is missing: {', '.join(missing_features)}.")
     feature_meta = dict(manifest.get("feature_meta") or {})
+    table_feature_meta = dict(manifest.get("table_feature_meta") or {})
+    source_feature_meta = _feature_meta_for_table(table_id, features, feature_meta, table_feature_meta)
     source_table = _read_table_frame(store, model_id, table_info, pd)
     if source_table.empty:
         raise ValueError(f"{table_id} has no tabulation rows.")
     anchor_mask = pd.Series(True, index=source_table.index)
     for feature in features:
-        anchor_mask = anchor_mask & _feature_value_mask(source_table, feature, anchor_cell.get(feature), feature_meta.get(feature, {}), pd)
+        anchor_mask = anchor_mask & _feature_value_mask(source_table, feature, anchor_cell.get(feature), source_feature_meta.get(feature, {}), pd)
     anchor_rows = source_table.loc[anchor_mask]
     if anchor_rows.empty:
         raise ValueError("Choose a cell that exists in the selected tabulation table.")
@@ -739,11 +929,16 @@ def _apply_rebase_rule(
         }
         manifest.setdefault("tables", []).append(target_info)
         target_table = _new_adjustment_table(source_table, transfer_feature, target_table_id, pd)
+        manifest.setdefault("table_feature_meta", {})[target_table_id] = {
+            transfer_feature: dict(source_feature_meta.get(transfer_feature) or feature_meta.get(transfer_feature) or {})
+        }
     else:
         if list(target_info.get("features") or []) != [transfer_feature]:
             raise ValueError(f"{target_table_id} is not a one-way {transfer_feature} table.")
         target_table = _read_table_frame(store, model_id, target_info, pd)
-    target_mask = _feature_value_mask(target_table, transfer_feature, anchor_cell.get(transfer_feature), feature_meta.get(transfer_feature, {}), pd)
+    table_feature_meta = dict(manifest.get("table_feature_meta") or {})
+    target_feature_meta = _feature_meta_for_table(target_table_id, [transfer_feature], feature_meta, table_feature_meta)
+    target_mask = _feature_value_mask(target_table, transfer_feature, anchor_cell.get(transfer_feature), target_feature_meta.get(transfer_feature, {}), pd)
     if not bool(target_mask.any()):
         raise ValueError(f"{target_table_id} has no row for the selected {transfer_feature} value.")
     target_rows = target_table.loc[target_mask]
@@ -752,7 +947,7 @@ def _apply_rebase_rule(
     target_values = pd.to_numeric(target_table["tabulated_linear"], errors="coerce")
     target_table.loc[target_mask & target_values.notna(), "tabulated_linear"] = target_values.loc[target_mask & target_values.notna()] + float(offset)
 
-    slice_mask = _feature_value_mask(source_table, transfer_feature, anchor_cell.get(transfer_feature), feature_meta.get(transfer_feature, {}), pd)
+    slice_mask = _feature_value_mask(source_table, transfer_feature, anchor_cell.get(transfer_feature), source_feature_meta.get(transfer_feature, {}), pd)
     source_values = pd.to_numeric(source_table["tabulated_linear"], errors="coerce")
     source_table.loc[slice_mask & source_values.notna(), "tabulated_linear"] = source_values.loc[slice_mask & source_values.notna()] - float(offset)
     _write_table_frame(store, model_id, table_info, source_table)
@@ -837,6 +1032,41 @@ def _model_field_label(model_ref: _TabulationModelRef, status: dict[str, Any] | 
     return f"{model_ref.label_kind} · {label}"
 
 
+def _feature_kind_for_terms(
+    feature: str,
+    source_kind: str,
+    fitted_category_levels: dict[str, list[Any]],
+    term_texts: list[str],
+) -> str:
+    if feature in fitted_category_levels and _feature_uses_only_categorical_terms(feature, term_texts):
+        return "categorical"
+    return source_kind
+
+
+def _category_levels_for_kind(feature: str, kind: str, fitted_category_levels: dict[str, list[Any]]) -> list[Any] | None:
+    return fitted_category_levels.get(feature) if not is_numeric_kind(kind) else None
+
+
+def _term_texts_by_feature(groups: dict[tuple[str, ...], dict[str, Any]], features: list[str]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {feature: [] for feature in features}
+    for group_features, info in groups.items():
+        terms = [str(term) for term in (info.get("terms") or [])]
+        for feature in group_features:
+            if feature in result:
+                result[feature].extend(terms)
+    return result
+
+
+def _feature_meta_for_table(
+    table_id: str,
+    features: list[str],
+    feature_meta: dict[str, dict[str, Any]],
+    table_feature_meta: dict[str, dict[str, dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    table_meta = table_feature_meta.get(table_id) or {}
+    return {feature: dict(table_meta.get(feature) or feature_meta.get(feature) or {"feature": feature, "kind": "categorical"}) for feature in features}
+
+
 def _build_model_tabulations(
     dataset: Dataset,
     store: GlmModelStore,
@@ -868,19 +1098,29 @@ def _build_model_tabulations(
     required_columns = _required_tabulation_columns(source_columns, manifest, all_features, offset_terms)
     frame = _tabulation_frame_from_dataset(dataset, required_columns)
     fit_frame = _fit_frame_for_levels(frame, manifest, pd)
-    transform_bounds = _feature_transform_bounds(estimator, source_columns)
+    fitted_category_levels = _fitted_category_levels(estimator, source_columns)
+    term_texts_by_feature = _term_texts_by_feature(non_base_groups, all_features)
+    global_feature_kinds: dict[str, str] = {}
     base = _base_row(frame)
     inferred_bases: list[dict[str, Any]] = []
     clipped_bounds: list[dict[str, Any]] = []
     for feature in all_features:
+        kind = _feature_kind_for_terms(
+            feature,
+            kinds.get(feature, "categorical"),
+            fitted_category_levels,
+            term_texts_by_feature.get(feature, []),
+        )
+        global_feature_kinds[feature] = kind
         value, inferred, clipped = _base_value(
             frame,
             fit_frame,
             feature,
-            kinds.get(feature, "categorical"),
+            kind,
             spec_rows.get(feature, {}),
-            transform_bounds.get(feature, {}),
+            {},
             pd,
+            category_levels=_category_levels_for_kind(feature, kind, fitted_category_levels),
         )
         base[feature] = value
         if inferred:
@@ -893,20 +1133,22 @@ def _build_model_tabulations(
     unseen_levels: list[dict[str, Any]] = []
     tables: list[dict[str, Any]] = []
     feature_meta: dict[str, dict[str, Any]] = {}
-    feature_levels: dict[str, list[dict[str, Any]]] = {}
+    table_feature_meta: dict[str, dict[str, dict[str, Any]]] = {}
     for feature in all_features:
+        kind = global_feature_kinds.get(feature, kinds.get(feature, "categorical"))
         levels, meta, estimated, clipped, unseen = _feature_levels(
             frame,
             fit_frame,
             feature,
-            kinds.get(feature, "categorical"),
+            kind,
             spec_rows.get(feature, {}),
             base.get(feature),
-            transform_bounds.get(feature, {}),
+            {},
             np,
             pd,
+            category_levels=_category_levels_for_kind(feature, kind, fitted_category_levels),
         )
-        feature_levels[feature] = levels
+        del levels
         feature_meta[feature] = meta
         estimated_specs.extend(estimated)
         clipped_bounds.extend(clipped)
@@ -939,9 +1181,34 @@ def _build_model_tabulations(
     for features, info in sorted(non_base_groups.items(), key=lambda item: (len(item[0]), item[0])):
         table_id = "|".join(features)
         table_label = " × ".join(features)
+        group_term_texts = [str(term) for term in (info.get("terms") or [])]
+        table_feature_levels: dict[str, list[dict[str, Any]]] = {}
+        current_table_meta: dict[str, dict[str, Any]] = {}
+        for feature in features:
+            kind = _feature_kind_for_terms(
+                feature,
+                kinds.get(feature, "categorical"),
+                fitted_category_levels,
+                group_term_texts,
+            )
+            levels, meta, _estimated, _clipped, _unseen = _feature_levels(
+                frame,
+                fit_frame,
+                feature,
+                kind,
+                spec_rows.get(feature, {}),
+                base.get(feature),
+                {},
+                np,
+                pd,
+                category_levels=_category_levels_for_kind(feature, kind, fitted_category_levels),
+            )
+            table_feature_levels[feature] = levels
+            current_table_meta[feature] = meta
+        table_feature_meta[table_id] = current_table_meta
         cell_count = 1
         for feature in features:
-            cell_count *= max(1, len(feature_levels.get(feature, [])))
+            cell_count *= max(1, len(table_feature_levels.get(feature, [])))
         progress_callback({"phase": "tabulating", "message": f"Tabulating {table_label}", "model_id": model_id, "table_id": table_id, "cells": cell_count})
         if cell_count > MAX_TABULATION_CELLS:
             warning = f"Skipped {table_label}: {cell_count:,} cells exceeds the 100,000-cell guard."
@@ -951,7 +1218,7 @@ def _build_model_tabulations(
             tables.append(skipped)
             table_index += 1
             continue
-        grid = _cartesian_table({feature: feature_levels[feature] for feature in features}, pd)
+        grid = _cartesian_table({feature: table_feature_levels[feature] for feature in features}, pd)
         table = grid.copy()
         table["tabulated_linear"] = np.nan
         ok_mask = table["__status"].astype(str) == "ok"
@@ -1013,7 +1280,15 @@ def _build_model_tabulations(
         if table_info["table_id"] == "base" or table_info.get("skipped"):
             continue
         features = list(table_info.get("features") or [])
-        component = _component_from_table(frame, table_frames.get(str(table_info["table_id"])), features, feature_meta, np, pd)
+        table_id = str(table_info["table_id"])
+        component = _component_from_table(
+            frame,
+            table_frames.get(table_id),
+            features,
+            _feature_meta_for_table(table_id, features, feature_meta, table_feature_meta),
+            np,
+            pd,
+        )
         missing = missing | component.isna()
         eta = eta + component.fillna(0.0)
         safe_name = _safe_id(str(table_info["table_id"]))
@@ -1076,6 +1351,7 @@ def _build_model_tabulations(
         "max_cells": MAX_TABULATION_CELLS,
         "tables": tables,
         "feature_meta": feature_meta,
+        "table_feature_meta": table_feature_meta,
         "warnings": warnings,
         "diagnostics": diagnostics,
     }

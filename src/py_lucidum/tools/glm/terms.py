@@ -27,11 +27,12 @@ def term_groups(estimator: Any, offset_terms: list[str], source_columns: list[st
             variables = tuple(sorted(str(name) for name in (term_variables.get(term, set()) or set()) if str(name) in source_set))
             if not variables:
                 continue
-            entry = groups.setdefault(variables, {"variables": list(variables), "term_indices": [], "offset_terms": []})
+            entry = groups.setdefault(variables, {"variables": list(variables), "term_indices": [], "offset_terms": [], "terms": []})
             entry["term_indices"].extend(indices)
+            entry["terms"].append(str(term))
     for expression in offset_terms:
         variables = tuple(column_tokens(expression, source_columns))
-        entry = groups.setdefault(variables, {"variables": list(variables), "term_indices": [], "offset_terms": []})
+        entry = groups.setdefault(variables, {"variables": list(variables), "term_indices": [], "offset_terms": [], "terms": []})
         entry["offset_terms"].append(expression)
     return groups
 

@@ -20,6 +20,7 @@ from unittest.mock import patch
 from py_lucidum import demo_dataset_path
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
+from py_lucidum.core.features import load_features
 from py_lucidum.tools.glm import tabulation as glm_tabulation
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.tabulation import build_tabulations, tabulation_config, tabulation_plot, tabulation_table
@@ -281,6 +282,36 @@ class GlmToolTests(unittest.TestCase):
             " + pmax(0, VEHICLE_AGE - 10):pmax(0, YEARS_OWNED_VEHICLE)"
             " + PRIOR_CLAIMS:ifelse(NCD_YEARS == 0, 1, 0)"
             " + offset(log(pmax(ANNUAL_MILEAGE, 1) / 5000))"
+        )
+
+    def complex_demo_glm_formula(self) -> str:
+        return (
+            'PREMIUM ~ 1'
+            ' + ns(POSTCODE_CATEGORY, df=16, constraints="center")'
+            ' + ifelse(NCD_YEARS == 0, 1, 0) + ifelse(NCD_YEARS == 1, 1, 0)'
+            ' + ifelse(NCD_YEARS == 2, 1, 0) + ifelse(NCD_YEARS == 3, 1, 0)'
+            ' + ifelse(NCD_YEARS == 4, 1, 0) + ifelse(NCD_YEARS == 5, 1, 0)'
+            ' + ifelse(NCD_YEARS == 6, 1, 0) + ifelse(NCD_YEARS == 7, 1, 0)'
+            ' + ifelse(NCD_YEARS == 8, 1, 0) + ifelse(NCD_YEARS == 9, 1, 0)'
+            ' + pmax(pmin(NCD_YEARS, 20) - 10, 0)'
+            ' + ns(pmin(YEARS_LICENCE_HELD, 40), df=8, constraints="center")'
+            ' + ns(pmin(DRIVER_AGE, 85), df=10, constraints="center")'
+            ' + ns(VEHICLE_CATEGORY, df=10, constraints="center")'
+            ' + ifelse(YEARS_OWNED_VEHICLE == 1, 1, 0) + ifelse(YEARS_OWNED_VEHICLE == 2, 1, 0)'
+            ' + ifelse(YEARS_OWNED_VEHICLE == 3, 1, 0) + ifelse(YEARS_OWNED_VEHICLE == 4, 1, 0)'
+            ' + ifelse(YEARS_OWNED_VEHICLE == 5, 1, 0) + ifelse(YEARS_OWNED_VEHICLE == 6, 1, 0)'
+            ' + pmax(pmin(YEARS_OWNED_VEHICLE, 12) - 6, 0)'
+            ' + ns(VEHICLE_AGE, df=6, constraints="center")'
+            ' + ns(pmin(ANNUAL_MILEAGE, 25000), df=6, constraints="center")'
+            ' + PRIOR_CLAIMS'
+            ' + C(VEHICLE_USAGE)'
+            ' + C(OVERNIGHT_LOCATION)'
+            ' + C(FUEL_TYPE)'
+            ' + ns(pmin(CAR_VALUE, 60000), df=5, constraints="center")'
+            ' + C(LICENCE_TYPE)'
+            ' + ifelse(LICENCE_TYPE == "Provisional Licence", 1, 0):ns(pmin(DRIVER_AGE, 35), df=4, constraints="center")'
+            ' + pmin(VEHICLE_AGE, 15):pmin(YEARS_OWNED_VEHICLE, 8)'
+            ' + ifelse(LICENCE_TYPE == "Provisional Licence", 1, 0):ns(pmin(YEARS_LICENCE_HELD, 20), df=4, constraints="center")'
         )
 
     def test_glm_dependency_load_order_keeps_threaded_lightgbm_stable(self) -> None:
@@ -1410,7 +1441,7 @@ ORDER BY __lucidum_row_id
         self.assertTrue(store.artifact_path(model_id, "tabulation_manifest").exists())
         self.assertTrue(store.artifact_path(model_id, "tabulated_predictions").exists())
 
-    def test_glm_tabulation_numeric_feature_spec_defaults_and_clipping(self) -> None:
+    def test_glm_tabulation_numeric_feature_spec_defaults_and_raw_domains(self) -> None:
         self.require_glm_dependencies()
         data_path = self.spline_data_path()
         dataset = Dataset(data_path)
@@ -1418,7 +1449,7 @@ ORDER BY __lucidum_row_id
         result = train_model(
             dataset,
             store,
-            {"formula": "1 + bs(x, 3)", "response_column": "y", "family": "normal", "training_scope": "all"},
+            {"formula": "1 + x", "response_column": "y", "family": "normal", "training_scope": "all"},
         )
         model_id = result["model_id"]
 
@@ -1460,17 +1491,221 @@ ORDER BY __lucidum_row_id
         tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
 
         meta = tab_manifest["feature_meta"]["x"]
-        self.assertEqual(meta["base"], 1.0)
-        self.assertEqual(meta["min"], 1.0)
-        self.assertEqual(meta["max"], 50.0)
+        self.assertEqual(meta["base"], 0.0)
+        self.assertEqual(meta["min"], 0.0)
+        self.assertEqual(meta["max"], 100.0)
         warnings_text = "\n".join(tab_manifest["warnings"])
-        self.assertIn("Clipped feature spec min", warnings_text)
-        self.assertIn("Clipped feature spec max", warnings_text)
-        self.assertIn("Clipped feature spec base", warnings_text)
+        self.assertNotIn("Clipped feature spec min", warnings_text)
+        self.assertNotIn("Clipped feature spec max", warnings_text)
+        self.assertNotIn("Clipped feature spec base", warnings_text)
+        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "x.parquet")
+        levels = [row["x"] for row in table_rows if row["status"] == "ok"]
+        self.assertEqual(min(levels), 0)
+        self.assertEqual(max(levels), 100)
+
+    def test_glm_tabulation_log_transform_bounds_stay_on_raw_scale(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.spline_data_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": '1 + ns(log1p(x), df=4, constraints="center")',
+                "response_column": "y",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+
+        build_tabulations(
+            dataset,
+            store,
+            {"model_ids": [model_id]},
+            {"rows": [{"feature": "x", "grouping": "Test", "base": "25", "min": "1", "max": "60", "banding": "1"}]},
+        )
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertEqual(tab_manifest["feature_meta"]["x"]["min"], 1.0)
+        self.assertEqual(tab_manifest["feature_meta"]["x"]["max"], 60.0)
         table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "x.parquet")
         levels = [row["x"] for row in table_rows if row["status"] == "ok"]
         self.assertEqual(min(levels), 1)
+        self.assertEqual(max(levels), 60)
+        self.assertNotIn("Clipped feature spec max", "\n".join(tab_manifest["warnings"]))
+
+    def test_glm_tabulation_spline_training_bounds_do_not_clip_feature_spec_domain(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.demo_dataset_copy_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": '1 + ns(POSTCODE_CATEGORY, df=16, constraints="center")',
+                "response_column": "PREMIUM",
+                "family": "normal",
+                "training_scope": "training",
+                "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, load_features(Path("specs/feature_spec.csv")))
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "POSTCODE_CATEGORY.parquet")
+        levels = [row["POSTCODE_CATEGORY"] for row in table_rows if row["status"] == "ok"]
+
+        self.assertEqual(tab_manifest["feature_meta"]["POSTCODE_CATEGORY"]["max"], 50.0)
+        self.assertEqual(tab_manifest["table_feature_meta"]["POSTCODE_CATEGORY"]["POSTCODE_CATEGORY"]["max"], 50.0)
         self.assertEqual(max(levels), 50)
+        self.assertNotIn("POSTCODE_CATEGORY from 50 to 49", "\n".join(tab_manifest["warnings"]))
+
+    def test_glm_tabulation_keeps_full_domain_for_capped_interactions(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "capped_interaction.csv"
+        rows = ["y,Age,Licence\n"]
+        for index, age in enumerate(range(17, 97)):
+            licence = "P" if index % 3 == 0 else "F"
+            y = 100 + age * 1.5 + (20 if licence == "P" else 0)
+            rows.append(f"{y},{age},{licence}\n")
+        path.write_text("".join(rows), encoding="utf-8")
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": '1 + ns(pmin(Age, 85), df=6, constraints="center") + C(Licence) + ifelse(Licence == "P", 1, 0):ns(pmin(Age, 35), df=4, constraints="center")',
+                "response_column": "y",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+
+        build_tabulations(
+            dataset,
+            store,
+            {"model_ids": [model_id]},
+            {
+                "rows": [
+                    {"feature": "Age", "grouping": "Driver", "base": "40", "min": "17", "max": "96", "banding": "1"},
+                    {"feature": "Licence", "grouping": "Driver", "base": "F"},
+                ]
+            },
+        )
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertEqual(tab_manifest["feature_meta"]["Age"]["base"], 40.0)
+        self.assertEqual(tab_manifest["feature_meta"]["Age"]["max"], 96.0)
+        self.assertEqual(tab_manifest["table_feature_meta"]["Age"]["Age"]["max"], 96.0)
+        self.assertEqual(tab_manifest["table_feature_meta"]["Age|Licence"]["Age"]["max"], 96.0)
+        age_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "Age.parquet")
+        interaction_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "Age_Licence.parquet")
+        self.assertEqual(max(row["Age"] for row in age_rows if row["status"] == "ok"), 96)
+        self.assertEqual(max(row["Age"] for row in interaction_rows if row["status"] == "ok"), 96)
+        age_by_value = {row["Age"]: row for row in age_rows if row["status"] == "ok"}
+        interaction_by_cell = {
+            (row["Age"], row["Licence"]): row
+            for row in interaction_rows
+            if row["status"] == "ok"
+        }
+        self.assertAlmostEqual(float(age_by_value[85]["tabulated_linear"]), float(age_by_value[96]["tabulated_linear"]), places=8)
+        self.assertAlmostEqual(
+            float(interaction_by_cell[(35, "P")]["tabulated_linear"]),
+            float(interaction_by_cell[(96, "P")]["tabulated_linear"]),
+            places=8,
+        )
+        self.assertNotIn("Clipped feature spec", "\n".join(tab_manifest["warnings"]))
+
+    def test_glm_tabulation_numeric_categorical_uses_fitted_levels(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "numeric_category.csv"
+        path.write_text(
+            "y,n\n"
+            "100,0\n"
+            "110,1\n"
+            "120,2\n"
+            "130,3\n"
+            "140,0\n"
+            "150,1\n"
+            "160,2\n"
+            "170,3\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "1 + C(n)",
+                "response_column": "y",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+
+        build_tabulations(
+            dataset,
+            store,
+            {"model_ids": [model_id]},
+            {"rows": [{"feature": "n", "grouping": "Test", "base": "0", "min": "0", "max": "3", "banding": "1"}]},
+        )
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "n.parquet")
+
+        self.assertEqual(tab_manifest["feature_meta"]["n"]["kind"], "categorical")
+        self.assertEqual(tab_manifest["feature_meta"]["n"]["category_levels"], ["0", "1", "2", "3"])
+        self.assertEqual([row["n"] for row in table_rows if row["status"] == "ok"], ["0", "1", "2", "3"])
+        with dataset.lock:
+            row = dataset.con.execute(
+                f"SELECT COUNT(*), COUNT(glm_tabulated_prediction), SUM(CASE WHEN glm_tabulation_missing THEN 1 ELSE 0 END) FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'tabulated_predictions')))})"
+            ).fetchone()
+        self.assertEqual(row, (8, 8, 0))
+
+    def test_glm_tabulation_demo_formula_does_not_globally_apply_interaction_caps(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.demo_dataset_copy_path()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": self.complex_demo_glm_formula(),
+                "response_column": "PREMIUM",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, load_features(Path("specs/feature_spec.csv")))
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertEqual(tab_manifest["feature_meta"]["DRIVER_AGE"]["base"], 40.0)
+        self.assertEqual(tab_manifest["feature_meta"]["DRIVER_AGE"]["max"], 96.0)
+        self.assertEqual(tab_manifest["feature_meta"]["YEARS_LICENCE_HELD"]["max"], 60.0)
+        self.assertEqual(tab_manifest["feature_meta"]["POSTCODE_CATEGORY"]["max"], 50.0)
+        self.assertEqual(tab_manifest["table_feature_meta"]["DRIVER_AGE"]["DRIVER_AGE"]["max"], 96.0)
+        self.assertEqual(tab_manifest["table_feature_meta"]["DRIVER_AGE|LICENCE_TYPE"]["DRIVER_AGE"]["max"], 96.0)
+        self.assertEqual(tab_manifest["table_feature_meta"]["YEARS_LICENCE_HELD"]["YEARS_LICENCE_HELD"]["max"], 60.0)
+        self.assertEqual(tab_manifest["table_feature_meta"]["LICENCE_TYPE|YEARS_LICENCE_HELD"]["YEARS_LICENCE_HELD"]["max"], 60.0)
+        self.assertEqual(tab_manifest["table_feature_meta"]["POSTCODE_CATEGORY"]["POSTCODE_CATEGORY"]["max"], 50.0)
+        postcode_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "POSTCODE_CATEGORY.parquet")
+        self.assertEqual(max(row["POSTCODE_CATEGORY"] for row in postcode_rows if row["status"] == "ok"), 50)
+        warnings_text = "\n".join(tab_manifest["warnings"])
+        self.assertNotIn("Clipped feature spec", warnings_text)
 
     def test_glm_tabulation_defaults_blank_categorical_base_to_modal_level(self) -> None:
         self.require_glm_dependencies()
