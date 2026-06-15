@@ -396,6 +396,7 @@
         refreshActiveTool,
         setDatasetGbmCount,
         reloadSchema: reloadSchemaAfterModelMutation,
+        onExternalModelActivation: (modelKind) => glmTool.handleExternalModelActivation(modelKind),
       });
       const specificationsTool = createSpecificationsTool({
         api,

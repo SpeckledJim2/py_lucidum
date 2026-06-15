@@ -120,6 +120,7 @@ export function createGbmTool({
   updateAxisControls,
   refreshActiveTool,
   reloadSchema,
+  onExternalModelActivation = async () => false,
 }) {
   const tool = "gbm";
   let featureTable = null;
@@ -3059,7 +3060,7 @@ export function createGbmTool({
     if (!modelId) return;
     try {
       const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/activate`, { method: "POST", body: "{}" });
-      await applyModelMutationResult(result);
+      await applyModelMutationResult(result, { activationOnly: true });
     } catch (error) {
       setGbmNotice(error.message);
     }
@@ -3118,7 +3119,7 @@ export function createGbmTool({
     }
   }
 
-  async function applyModelMutationResult(result) {
+  async function applyModelMutationResult(result, options = {}) {
     const nextConfig = result.config || config || {};
     await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "gbm" });
     const preserveProfile = clearCachesAfterGbmModelSourceChange();
@@ -3139,7 +3140,9 @@ export function createGbmTool({
     } else {
       config = nextConfig;
       syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
-      await refreshActiveTool({ force: true });
+      if (!(options?.activationOnly && await onExternalModelActivation("gbm"))) {
+        await refreshActiveTool({ force: true });
+      }
     }
   }
 

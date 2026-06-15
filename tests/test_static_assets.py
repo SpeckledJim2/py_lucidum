@@ -1496,7 +1496,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("let tabulationModelTable = null;", glm_js)
         self.assertIn("let tabulationCommonTable = null;", glm_js)
         self.assertIn("let tabulationOtherTable = null;", glm_js)
-        self.assertIn("function renderTabulationSelectorTables()", glm_js)
+        self.assertIn("function renderTabulationSelectorTables(options = {})", glm_js)
         self.assertIn('layout: "fitColumns"', glm_js)
         self.assertIn("selectableRowsCheck: (row) => !row.getData()?.tabulation_blocked_message", glm_js)
         self.assertIn("rowFormatter: formatTabulationModelSelectorRow", glm_js)
@@ -1825,6 +1825,36 @@ if (button.disabled) throw new Error("cleared button disabled");
 if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${button.textContent}`);
 """
         self.run_node_script(script)
+
+    def test_glm_tabulation_table_selection_uses_targeted_redraws(self) -> None:
+        js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        select_source = self.js_function_source(js, "selectTabulationTable")
+        bind_source = self.js_function_source(js, "bindTabulationControls")
+
+        self.assertNotIn("renderTabulationsPanel", select_source)
+        self.assertIn("if (nextTableId === selectedTabulationTableId) return;", select_source)
+        self.assertIn("syncTabulationTableSelectorSelection();", select_source)
+        self.assertIn("syncTabulationControls();", select_source)
+        self.assertIn("loadTabulationView();", select_source)
+        self.assertNotIn("renderTabulationsPanel", bind_source)
+        self.assertIn("renderTabulationSelectorTables({ forceTables: true });", bind_source)
+        self.assertIn("renderTabulationTable(tabulationPayload);", bind_source)
+        self.assertIn("let tabulationModelSelectorSignature = \"\";", js)
+        self.assertIn("let tabulationTableSelectorSignature = \"\";", js)
+        self.assertIn("function syncTabulationControls()", js)
+
+    def test_model_activation_paths_mark_activation_only(self) -> None:
+        glm_js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        gbm_js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
+        main_js = self.assert_no_store("/static/app/main.js")[1].decode("utf-8")
+
+        self.assertIn("await applyModelMutationResult(result, { activationOnly: true });", self.js_function_source(glm_js, "activateModel"))
+        self.assertIn("async function applyActivationOnlyTabulationUpdate(nextConfig)", glm_js)
+        self.assertIn("handleExternalModelActivation,", glm_js)
+        self.assertIn("onExternalModelActivation = async () => false", gbm_js)
+        self.assertIn("await applyModelMutationResult(result, { activationOnly: true });", self.js_function_source(gbm_js, "activateModel"))
+        self.assertIn('if (!(options?.activationOnly && await onExternalModelActivation("gbm"))) {', gbm_js)
+        self.assertIn("onExternalModelActivation: (modelKind) => glmTool.handleExternalModelActivation(modelKind),", main_js)
 
     def test_gbm_frontend_contains_real_tool_contract(self) -> None:
         js = self.app_js_contract()
