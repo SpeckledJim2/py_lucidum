@@ -37,17 +37,41 @@ To enable GLM or GBM model training, install the relevant optional modelling ext
 .venv/bin/python -m pip install -e ".[gbm]"
 ```
 
-On macOS, LightGBM also needs the OpenMP runtime. If training fails with a
+On macOS, LightGBM also needs the OpenMP runtime. This applies whether you
+install with a virtual environment or `pipx`. If training fails with a
 `libomp.dylib` load error, install it with:
 
 ```bash
 brew install libomp
 ```
 
-For a user-level command available outside this checkout, install with `pipx`:
+For a user-level command, install directly from GitHub with `pipx`. Choose the
+modelling extras you need at install time:
+
+```bash
+pipx install --python python3.13 git+https://github.com/SpeckledJim2/py_lucidum.git
+pipx install --python python3.13 "py-lucidum[glm] @ git+https://github.com/SpeckledJim2/py_lucidum.git"
+pipx install --python python3.13 "py-lucidum[gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git"
+pipx install --python python3.13 "py-lucidum[glm,gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git"
+```
+
+Quote pipx package specs with extras exactly as shown, because shells treat
+spaces as separators and can interpret `[glm,gbm]` as a filename pattern.
+
+When installing from a local checkout instead of GitHub, use the same extra
+names with the local path:
 
 ```bash
 pipx install --python python3.13 /path/to/py_lucidum
+pipx install --python python3.13 "/path/to/py_lucidum[glm,gbm]"
+```
+
+If you already installed Lucidum with `pipx` without modelling extras, reinstall
+it with the extra spec you want:
+
+```bash
+pipx uninstall py-lucidum
+pipx install --python python3.13 "py-lucidum[glm,gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git"
 ```
 
 ## Quick Start
@@ -72,7 +96,12 @@ If installed with `pipx`, use:
 ```bash
 lucidum path/to/my_data.parquet --open
 lucidum path/to/my_data.csv --open
+lucidum path/to/my_data.parquet --tools line-bar,glm --open
+lucidum path/to/my_data.parquet --tools line-bar,glm,gbm --open
 ```
+
+Use `--tools all` after installing the needed modelling extras when you want to
+load every available tool, including GLM and GBM.
 
 Parquet is recommended for normal use because DuckDB can read it efficiently.
 
