@@ -1489,9 +1489,11 @@
 
       .gbm-model-actions {
         align-items: center;
+        align-self: stretch;
         display: flex;
         flex: 0 0 auto;
         gap: 8px;
+        justify-content: flex-end;
       }
 
       .gbm-model-actions button:disabled {

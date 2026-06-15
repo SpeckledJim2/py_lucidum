@@ -1442,7 +1442,8 @@
       }
 
       .glm-model-actions {
-        justify-content: flex-start;
+        align-self: stretch;
+        justify-content: flex-end;
       }
 
       .glm-model-detail {
