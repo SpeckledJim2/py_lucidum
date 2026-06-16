@@ -123,6 +123,7 @@ export function createColumnProfileTool({
   }
 
   function renderProfileTable(data, columns = sortedProfileColumns(data.columns || [])) {
+    const tableScroll = captureProfileTableScroll();
     closeProfileColumnContextMenu();
     ensureSelectedProfileColumn(columns);
     const visibleColumns = searchedProfileColumns(columns);
@@ -162,6 +163,22 @@ export function createColumnProfileTool({
       <aside id="profileDetailPane" class="profile-detail-pane" aria-live="polite">${currentDetail}</aside>
     `;
     bindProfileTable();
+    restoreProfileTableScroll(tableScroll);
+  }
+
+  function captureProfileTableScroll() {
+    const scroll = el("profileWrap")?.querySelector(".profile-table-scroll");
+    return {
+      left: Number(scroll?.scrollLeft || 0),
+      top: Number(scroll?.scrollTop || 0),
+    };
+  }
+
+  function restoreProfileTableScroll(position) {
+    const scroll = el("profileWrap")?.querySelector(".profile-table-scroll");
+    if (!scroll || !position) return;
+    scroll.scrollLeft = Math.max(0, Number(position.left || 0));
+    scroll.scrollTop = Math.max(0, Number(position.top || 0));
   }
 
   function bindProfileTable() {

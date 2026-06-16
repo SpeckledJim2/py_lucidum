@@ -160,6 +160,69 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_column_profile_preserves_table_scroll_on_filter_change(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "many_profile_columns.csv"
+            columns = ["vehicle_age", "price", "value"] + [f"feature_{index:03d}" for index in range(1, 91)]
+            rows = [",".join(columns)]
+            for row_index in range(1, 10):
+                values = [str(row_index), str(100 + row_index), str(10 + row_index)]
+                values.extend(str((row_index * column_index) % 101) for column_index in range(1, 91))
+                rows.append(",".join(values))
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(data_path, tools=["column_profile"])
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.locator("#datasetMeta").get_by_text("many_profile_columns.csv").wait_for(timeout=10_000)
+                        page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                        page.locator('#profileWrap [data-profile-sort="missing"]').click()
+                        page.locator('#profileWrap th[aria-sort="ascending"] [data-profile-sort="missing"]').wait_for(timeout=10_000)
+                        before_scroll = page.evaluate(
+                            """
+                            () => {
+                              const scroll = document.querySelector("#profileWrap .profile-table-scroll");
+                              scroll.scrollTop = 720;
+                              return scroll.scrollTop;
+                            }
+                            """
+                        )
+                        self.assertGreater(before_scroll, 0)
+                        with page.expect_response(lambda response: response.url.endswith("/api/column-profile/summary") and response.status == 200, timeout=10_000):
+                            page.evaluate(
+                                """
+                                () => {
+                                  document.querySelector("#filterInput").value = "vehicle_age >= 3";
+                                  document.querySelector("#filterApplyBtn").click();
+                                }
+                                """
+                            )
+                        page.wait_for_function(
+                            """
+                            expectedScroll => {
+                              const scroll = document.querySelector("#profileWrap .profile-table-scroll");
+                              const activeSort = document.querySelector('#profileWrap th[aria-sort="ascending"] [data-profile-sort="missing"]');
+                              return Boolean(scroll && activeSort && scroll.scrollTop >= Math.max(1, expectedScroll - 2));
+                            }
+                            """,
+                            arg=before_scroll,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_glm_ace_editor_uses_current_theme_when_opened_from_cache(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
