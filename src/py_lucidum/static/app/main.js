@@ -95,6 +95,7 @@
         activeFilter: "",
         datasetViewerSearch: "",
         datasetViewerTranspose: false,
+        datasetViewerAlphabeticalColumns: false,
         profileSort: { key: "", direction: "asc" },
         profileColumnSearch: "",
         lineBarTableSearch: "",

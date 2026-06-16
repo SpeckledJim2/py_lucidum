@@ -42,6 +42,7 @@ export function createDatasetViewerTool({
   let renderedRequestKey = null;
   let renderedSearch = null;
   let renderedTranspose = null;
+  let renderedAlphabeticalColumns = null;
   let transposedHoverRow = null;
   let resizeFrame = null;
   let resizeHard = false;
@@ -104,6 +105,10 @@ export function createDatasetViewerTool({
             <input id="datasetViewerTranspose" type="checkbox" />
             <span>Transpose</span>
           </label>
+          <label class="dataset-viewer-checkbox">
+            <input id="datasetViewerAlphabeticalColumns" type="checkbox" />
+            <span>Alphabetical columns</span>
+          </label>
           <button id="datasetViewerResetSort" class="ghost dataset-viewer-action" type="button">Reset sort</button>
           <button id="datasetViewerCopySelected" class="ghost dataset-viewer-action" type="button" disabled>Copy selected</button>
           <div id="datasetViewerCount" class="dataset-viewer-count"></div>
@@ -121,8 +126,11 @@ export function createDatasetViewerTool({
       });
       el("datasetViewerTranspose").addEventListener("change", () => {
         state.datasetViewerTranspose = el("datasetViewerTranspose").checked;
-        const cache = toolCache(TOOL_ID);
-        if (cache.data) measureToolRender(TOOL_ID, () => renderData(cache.data, cache.requestKey));
+        rerenderCachedData();
+      });
+      el("datasetViewerAlphabeticalColumns").addEventListener("change", () => {
+        state.datasetViewerAlphabeticalColumns = el("datasetViewerAlphabeticalColumns").checked;
+        rerenderCachedData();
       });
       el("datasetViewerResetSort").addEventListener("click", resetSort);
       el("datasetViewerCopySelected").addEventListener("click", copySelectedRows);
@@ -132,6 +140,7 @@ export function createDatasetViewerTool({
       search.value = state.datasetViewerSearch || "";
     }
     el("datasetViewerTranspose").checked = Boolean(state.datasetViewerTranspose);
+    el("datasetViewerAlphabeticalColumns").checked = Boolean(state.datasetViewerAlphabeticalColumns);
     return wrap;
   }
 
@@ -170,6 +179,7 @@ export function createDatasetViewerTool({
     renderedRequestKey = null;
     renderedSearch = null;
     renderedTranspose = null;
+    renderedAlphabeticalColumns = null;
     updateCopyButton();
   }
 
@@ -322,7 +332,7 @@ export function createDatasetViewerTool({
   }
 
   function normalTableData(data) {
-    const sourceColumns = Array.isArray(data?.columns) ? data.columns : [];
+    const sourceColumns = orderedDatasetViewerColumns(data);
     const rows = Array.isArray(data?.rows) ? data.rows : [];
     const columns = sourceColumns.map((column) => ({
       title: escapeHtml(column.name),
@@ -342,7 +352,7 @@ export function createDatasetViewerTool({
   }
 
   function transposedTableData(data) {
-    const sourceColumns = Array.isArray(data?.columns) ? data.columns : [];
+    const sourceColumns = orderedDatasetViewerColumns(data);
     const sourceRows = filteredSourceRows(data, sourceColumns);
     const rows = sourceColumns.map((column, columnIndex) => {
       const row = {
@@ -381,6 +391,24 @@ export function createDatasetViewerTool({
     };
   }
 
+  function orderedDatasetViewerColumns(data) {
+    const sourceColumns = Array.isArray(data?.columns) ? data.columns : [];
+    if (!state.datasetViewerAlphabeticalColumns) return sourceColumns;
+    return sourceColumns
+      .map((column, index) => ({ column, index }))
+      .sort((left, right) => (
+        compareDatasetViewerColumnNames(left.column, right.column) || left.index - right.index
+      ))
+      .map((entry) => entry.column);
+  }
+
+  function compareDatasetViewerColumnNames(left, right) {
+    return String(left?.name || "").localeCompare(String(right?.name || ""), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  }
+
   function applySearch() {
     const query = String(state.datasetViewerSearch || "").trim().toLowerCase();
     if (!datasetTable && state.datasetViewerTranspose) {
@@ -417,8 +445,7 @@ export function createDatasetViewerTool({
   function resetSort() {
     if (!datasetTable) {
       if (state.datasetViewerTranspose) {
-        const cache = toolCache(TOOL_ID);
-        if (cache.data) measureToolRender(TOOL_ID, () => renderData(cache.data, cache.requestKey));
+        rerenderCachedData();
       }
       return;
     }
@@ -480,6 +507,7 @@ export function createDatasetViewerTool({
     renderedRequestKey = requestKey || null;
     renderedSearch = currentSearchKey();
     renderedTranspose = Boolean(state.datasetViewerTranspose);
+    renderedAlphabeticalColumns = Boolean(state.datasetViewerAlphabeticalColumns);
   }
 
   function cacheIsRendered(cache) {
@@ -490,9 +518,15 @@ export function createDatasetViewerTool({
         && renderedRequestKey === cache.requestKey
         && renderedSearch === currentSearchKey()
         && renderedTranspose === Boolean(state.datasetViewerTranspose)
+        && renderedAlphabeticalColumns === Boolean(state.datasetViewerAlphabeticalColumns)
         && grid
         && grid.children.length
     );
+  }
+
+  function rerenderCachedData() {
+    const cache = toolCache(TOOL_ID);
+    if (cache.data) measureToolRender(TOOL_ID, () => renderData(cache.data, cache.requestKey));
   }
 
   function resize({ hard = true } = {}) {

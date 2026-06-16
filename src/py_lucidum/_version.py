@@ -19,10 +19,13 @@ def _source_tree_version() -> str:
 
 
 def package_version() -> str:
+    source_version = _source_tree_version()
+    if source_version != "0.0.0":
+        return source_version
     try:
         return version(PACKAGE_NAME)
     except PackageNotFoundError:
-        return _source_tree_version()
+        return "0.0.0"
 
 
 __version__ = package_version()

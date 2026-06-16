@@ -5620,7 +5620,31 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                self.assertFalse(page.locator("#datasetViewerAlphabeticalColumns").is_checked())
+                page.locator("#datasetViewerAlphabeticalColumns").check()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const row = document.querySelector('#datasetViewerGrid .tabulator-row');
+                      const firstCell = row?.querySelector('.tabulator-cell');
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return firstCell?.getAttribute('tabulator-field') === 'c6'
+                        && firstCell.textContent.trim() === '57.1'
+                        && headers.slice(0, 3).join(',') === 'c6,c7,c0';
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#datasetViewerTranspose").check()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr:first-child td:first-child')?.textContent.trim() === 'lat'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerAlphabeticalColumns").uncheck()
                 page.wait_for_function(
                     """
                     () => document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr:first-child td:first-child')?.textContent.trim() === 'PostcodeArea'
