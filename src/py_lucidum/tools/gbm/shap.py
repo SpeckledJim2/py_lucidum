@@ -356,9 +356,7 @@ def normalise_num_features(value: Any) -> int | None:
 
 
 def model_features(dataset: Dataset, store: GbmModelStore, model_id: str, *, feature_bases: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    raw_features = store.read_json(store.artifact_path(model_id, "feature_config"), [])
-    if not isinstance(raw_features, list):
-        raw_features = []
+    raw_features = store.model_feature_config(model_id)
     base_map = normalise_feature_base_map(feature_bases)
     shap_importance = shap_summary_importance(dataset, store, model_id)
     try:

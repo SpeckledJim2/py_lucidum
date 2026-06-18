@@ -15,7 +15,7 @@ import duckdb
 from py_lucidum.core import Dataset, ModelPredictionSource, dataset_workspace_metadata, quote_ident, sql_literal
 
 from .sample import GENERATED_SAMPLE_FILENAME
-from .validation import DEFAULT_TRAINING_MODE
+from .validation import DEFAULT_TRAINING_MODE, display_monotonicity, normalise_monotonicity
 
 
 ARTIFACT_FILES = {
@@ -26,9 +26,9 @@ ARTIFACT_FILES = {
     "evaluation": "evaluation.parquet",
     "tree_table": "tree_table.parquet",
     "manifest": "manifest.json",
-    "feature_config": "feature_config.json",
+    "features": "features.json",
+    "feature_config": "feature_config.parquet",
     "parameters": "parameters.json",
-    "training_log": "training_log.json",
     "model": "model.txt",
     "tabulation_manifest": "tabulation_manifest.json",
     "tabulated_predictions": "tabulated_predictions.parquet",
@@ -106,12 +106,11 @@ def best_metrics_from_evaluation(evaluation: Any, metric_name: str, best_iterati
     }
 
 
-def normalise_best_metrics(value: Any) -> dict[str, float | None]:
-    metrics = value if isinstance(value, dict) else {}
-    return {
-        "training": json_safe_number(metrics.get("training")),
-        "test": json_safe_number(metrics.get("test")),
-    }
+def feature_importance_value(row: dict[str, Any]) -> float:
+    shap_value = json_safe_number(row.get("mean_abs_shap"))
+    if shap_value is not None:
+        return shap_value
+    return json_safe_number(row.get("gain")) or 0.0
 
 
 def dedupe_columns(columns: list[str]) -> list[str]:
@@ -296,11 +295,22 @@ class GbmModelStore:
             return default
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def _clean_manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        cleaned = dict(manifest)
+        cleaned.pop("source_columns", None)
+        init_score = cleaned.get("init_score")
+        if isinstance(init_score, dict):
+            cleaned_init_score = dict(init_score)
+            cleaned_init_score.pop("artifact_path", None)
+            cleaned["init_score"] = cleaned_init_score
+        return cleaned
+
     def manifest(self, model_id: str) -> dict[str, Any]:
         path = self.artifact_path(model_id, "manifest")
         manifest = self.read_json(path)
         if not isinstance(manifest, dict):
             raise ValueError("Choose a valid GBM model")
+        manifest = self._clean_manifest(manifest)
         manifest.setdefault("training_mode", DEFAULT_TRAINING_MODE)
         return manifest
 
@@ -319,22 +329,21 @@ class GbmModelStore:
         return sorted(models, key=lambda item: str(item.get("created_at", "")), reverse=True)
 
     def model_list_item(self, path: Path, manifest: dict[str, Any], active_model_id: str | None) -> dict[str, Any]:
-        item = dict(manifest)
+        item = self._clean_manifest(manifest)
         item.setdefault("training_mode", DEFAULT_TRAINING_MODE)
         model_id = str(item.get("model_id") or path.name)
+        parameters = self.model_parameters(model_id)
         item["model_id"] = model_id
-        item["sources"] = self.model_sources(model_id, item.get("sources"))
-        item["parameters"] = self.model_parameters(model_id)
-        item["best_metrics"] = self.model_best_metrics(model_id, item)
+        item["sources"] = self.model_sources(model_id)
+        item["parameters"] = parameters
+        item["objective"] = str(parameters.get("objective") or "")
+        item["metric"] = str(parameters.get("metric") or "")
+        item["best_metrics"] = self.model_best_metrics(model_id, item["metric"], item.get("best_iteration"))
         item["active"] = model_id == active_model_id
         return item
 
-    def model_sources(self, model_id: str, raw_sources: Any = None) -> dict[str, str]:
-        sources = {
-            str(kind): str(value)
-            for kind, value in (raw_sources.items() if isinstance(raw_sources, dict) else [])
-            if str(kind) in SOURCE_KINDS and isinstance(value, str) and value
-        }
+    def model_sources(self, model_id: str) -> dict[str, str]:
+        sources: dict[str, str] = {}
         for source_kind in SOURCE_KINDS:
             if self.source_path(model_id, source_kind).exists():
                 sources[source_kind] = self.source_id(model_id, source_kind)
@@ -344,17 +353,98 @@ class GbmModelStore:
         parameters = self.read_json(self.artifact_path(model_id, "parameters"), {})
         return dict(parameters) if isinstance(parameters, dict) else {}
 
-    def model_best_metrics(self, model_id: str, manifest: dict[str, Any]) -> dict[str, float | None]:
-        metrics = normalise_best_metrics(manifest.get("best_metrics"))
-        if metrics["training"] is not None and metrics["test"] is not None:
-            return metrics
-        training_log = self.read_json(self.artifact_path(model_id, "training_log"), {})
-        evaluation = training_log.get("evaluation") if isinstance(training_log, dict) else None
-        derived = best_metrics_from_evaluation(evaluation, str(manifest.get("metric") or ""), manifest.get("best_iteration"))
-        return {
-            "training": metrics["training"] if metrics["training"] is not None else derived["training"],
-            "test": metrics["test"] if metrics["test"] is not None else derived["test"],
-        }
+    def model_feature_names(self, model_id: str) -> list[str]:
+        raw_features = self.read_json(self.artifact_path(model_id, "features"), [])
+        if not isinstance(raw_features, list):
+            return []
+        names: list[str] = []
+        seen: set[str] = set()
+        for item in raw_features:
+            name = str(item or "").strip()
+            if not name or name in seen or name == "__lucidum_row_id":
+                continue
+            names.append(name)
+            seen.add(name)
+        return names
+
+    def model_shap_importance(self, model_id: str) -> dict[str, float]:
+        values: dict[str, float] = {}
+        for row in self.read_parquet_records(self.artifact_path(model_id, "shap_summary")):
+            feature = str(row.get("feature") or "").strip()
+            value = json_safe_number(row.get("mean_abs_shap"))
+            if feature and value is not None:
+                values[feature] = value
+        return values
+
+    def model_feature_config(self, model_id: str, *, sort_by_importance: bool = False) -> list[dict[str, Any]]:
+        feature_names = self.model_feature_names(model_id)
+        if not feature_names:
+            return []
+        config_by_name: dict[str, dict[str, Any]] = {}
+        for item in self.read_parquet_records(self.artifact_path(model_id, "feature_config")):
+            name = str(item.get("name") or item.get("feature") or "").strip()
+            if name:
+                config_by_name[name] = item
+        parameters = self.model_parameters(model_id)
+        constraints = parameters.get("monotone_constraints")
+        monotone_constraints = constraints if isinstance(constraints, list) else []
+        shap_importance = self.model_shap_importance(model_id)
+        dataset = self._dataset or Dataset(self.dataset_path)
+        columns = dataset.column_map()
+        rows: list[dict[str, Any]] = []
+        for index, name in enumerate(feature_names):
+            saved = dict(config_by_name.get(name, {}))
+            column = columns.get(name)
+            row = dict(saved)
+            row["name"] = name
+            row["include"] = True
+            row["kind"] = str(saved.get("kind") or (column.kind if column else ""))
+            monotonicity_value = self.feature_monotonicity_value(saved, monotone_constraints, index)
+            row["monotonicity"] = display_monotonicity(monotonicity_value)
+            row["monotonicity_value"] = monotonicity_value
+            row["gain"] = round(json_safe_number(saved.get("gain")) or 0.0, 3)
+            mean_abs_shap = json_safe_number(saved.get("mean_abs_shap"))
+            if mean_abs_shap is None:
+                mean_abs_shap = shap_importance.get(name)
+            if mean_abs_shap is None:
+                row.pop("mean_abs_shap", None)
+            else:
+                row["mean_abs_shap"] = mean_abs_shap
+            rows.append(row)
+        if sort_by_importance:
+            return sorted(rows, key=lambda row: (-feature_importance_value(row), str(row["name"]).lower()))
+        return rows
+
+    @staticmethod
+    def feature_monotonicity_value(saved: dict[str, Any], constraints: list[Any], index: int) -> int:
+        if index < len(constraints):
+            try:
+                value = int(float(constraints[index]))
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                return 1
+            if value < 0:
+                return -1
+            return 0
+        for key in ("monotonicity_value", "monotonicity"):
+            if key not in saved:
+                continue
+            value = saved.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            try:
+                return normalise_monotonicity(value)
+            except ValueError:
+                continue
+        return 0
+
+    def model_best_metrics(self, model_id: str, metric_name: str, best_iteration: Any) -> dict[str, float | None]:
+        return best_metrics_from_evaluation(
+            self.read_evaluation(model_id),
+            metric_name,
+            best_iteration,
+        )
 
     def active_model_id(self) -> str | None:
         payload = self.read_json(self.active_path, {})
@@ -371,16 +461,14 @@ class GbmModelStore:
         manifest = self.manifest(model_id)
         self.ensure_root()
         self.write_json(self.active_path, {"model_id": model_id, "activated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        manifest = dict(manifest)
-        manifest["active"] = True
-        return manifest
+        return self.model_list_item(self.model_dir(model_id), manifest, model_id)
 
     def rename_model(self, model_id: str, new_model_id: str) -> dict[str, Any]:
         new_id = self.validate_model_id(new_model_id, for_new_name=True)
         old_id = self.validate_model_id(model_id)
         manifest = self.manifest(old_id)
         if new_id == old_id:
-            return self.activate_model(old_id) if self.active_model_id() == old_id else dict(manifest)
+            return self.model_list_item(self.model_dir(old_id), manifest, self.active_model_id())
         source = self.model_dir(old_id)
         target = self.model_dir(new_id)
         if target.exists():
@@ -388,15 +476,15 @@ class GbmModelStore:
         source.rename(target)
         manifest = self._renamed_manifest(manifest, old_id, new_id)
         self.write_json(self.artifact_path(new_id, "manifest"), manifest)
-        self._rewrite_shap_summary_model_id(new_id)
         if self.active_model_id() == old_id:
             self.activate_model(new_id)
-            manifest["active"] = True
-        return manifest
+            return self.model_list_item(target, manifest, new_id)
+        return self.model_list_item(target, manifest, self.active_model_id())
 
     def delete_model(self, model_id: str) -> dict[str, Any]:
         deleted_id = self.validate_model_id(model_id)
         manifest = self.manifest(deleted_id)
+        deleted = self.model_list_item(self.model_dir(deleted_id), manifest, self.active_model_id())
         was_active = self.active_model_id() == deleted_id
         shutil.rmtree(self.model_dir(deleted_id))
         if was_active:
@@ -406,49 +494,13 @@ class GbmModelStore:
                 self.activate_model(next_id)
             else:
                 self.clear_active_model()
-        return manifest
+        return deleted
 
     def _renamed_manifest(self, manifest: dict[str, Any], old_id: str, new_id: str) -> dict[str, Any]:
         renamed = dict(manifest)
         renamed["model_id"] = new_id
         renamed["label"] = new_id
-        sources = renamed.get("sources")
-        if isinstance(sources, dict):
-            renamed["sources"] = {
-                str(kind): self._renamed_source_id(value, old_id, new_id)
-                for kind, value in sources.items()
-            }
         return renamed
-
-    def _renamed_source_id(self, value: Any, old_id: str, new_id: str) -> Any:
-        if not isinstance(value, str):
-            return value
-        match = SOURCE_RE.match(value)
-        if not match or match.group(1) != old_id:
-            return value
-        return self.source_id(new_id, match.group(2))
-
-    def _rewrite_shap_summary_model_id(self, model_id: str) -> None:
-        path = self.artifact_path(model_id, "shap_summary")
-        if not path.exists():
-            return
-        con = duckdb.connect(database=":memory:")
-        try:
-            columns = con.execute(f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(path))})").fetchall()
-            if "gbm_model_id" not in {str(row[0]) for row in columns}:
-                return
-            temp = path.with_suffix(path.suffix + ".tmp")
-            con.execute(
-                f"""
-COPY (
-  SELECT * REPLACE ({sql_literal(model_id)} AS gbm_model_id)
-  FROM read_parquet({sql_literal(str(path))})
-) TO {sql_literal(str(temp))} (FORMAT PARQUET)
-"""
-            )
-            temp.replace(path)
-        finally:
-            con.close()
 
     def source_ref(self, source_id: str) -> GbmSourceRef | None:
         match = SOURCE_RE.match(source_id)
@@ -477,9 +529,8 @@ COPY (
         finally:
             con.close()
 
-    def shap_value_columns(self, model_id: str, manifest: dict[str, Any] | None = None) -> list[dict[str, str]]:
-        manifest = manifest or self.manifest(model_id)
-        used_names = set(self.source_columns(manifest))
+    def shap_value_columns(self, model_id: str, source_columns: list[str] | None = None) -> list[dict[str, str]]:
+        used_names = set(source_columns or self.source_projection_columns())
         used_names.add("__lucidum_row_id")
         columns: list[dict[str, str]] = []
         for artifact_column in self.parquet_columns(self.artifact_path(model_id, "shap_long")):
@@ -501,7 +552,7 @@ COPY (
         manifest = self.manifest(ref.model_id)
         offset_col = str(manifest.get("offset_column") or "").strip()
         where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
-        source_columns = source_columns_with_offset(self.source_columns(manifest), offset_col)
+        source_columns = source_columns_with_offset(self.source_projection_columns(), offset_col)
         tabulated_prediction_path = self.artifact_path(ref.model_id, "tabulated_predictions")
         include_tabulated = tabulated_prediction_path.exists()
         prediction_has_rate = "gbm_prediction_rate" in parquet_columns(source_path)
@@ -538,8 +589,8 @@ INNER JOIN read_parquet({sql_literal(str(source_path))}) prediction USING (__luc
         manifest = self.manifest(model_id)
         offset_col = str(manifest.get("offset_column") or "").strip()
         where_sql = f"\nWHERE TRY_CAST({quote_ident(offset_col)} AS DOUBLE) > 0" if offset_col else ""
-        source_columns = source_columns_with_offset(self.source_columns(manifest), offset_col)
-        shap_columns = self.shap_value_columns(model_id, manifest)
+        source_columns = source_columns_with_offset(self.source_projection_columns(), offset_col)
+        shap_columns = self.shap_value_columns(model_id, source_columns)
         prediction_path = self.source_path(model_id, "predictions")
         include_prediction = prediction_path.exists()
         prediction_has_rate = "gbm_prediction_rate" in parquet_columns(prediction_path)
@@ -573,13 +624,8 @@ INNER JOIN read_parquet({sql_literal(str(source_path))}) shap USING (__lucidum_r
 {prediction_join_sql}
 )"""
 
-    def source_columns(self, manifest: dict[str, Any]) -> list[str]:
-        raw_columns = manifest.get("source_columns")
-        if isinstance(raw_columns, list):
-            columns = [str(name).strip() for name in raw_columns if str(name or "").strip()]
-            if columns:
-                return dedupe_columns(columns)
-        dataset = Dataset(self.dataset_path)
+    def source_projection_columns(self) -> list[str]:
+        dataset = self._dataset or Dataset(self.dataset_path)
         return list(dataset.column_map())
 
     def dataset_relation_sql(self) -> str:
@@ -593,11 +639,14 @@ INNER JOIN read_parquet({sql_literal(str(source_path))}) shap USING (__lucidum_r
 
     def model_detail(self, model_id: str) -> dict[str, Any]:
         manifest = self.manifest(model_id)
+        parameters = self.model_parameters(model_id)
         detail = {
             "manifest": manifest,
-            "features": self.read_json(self.artifact_path(model_id, "feature_config"), []),
-            "parameters": self.read_json(self.artifact_path(model_id, "parameters"), {}),
-            "training_log": self.read_json(self.artifact_path(model_id, "training_log"), {}),
+            "features": self.model_feature_config(model_id, sort_by_importance=True),
+            "parameters": parameters,
+            "objective": str(parameters.get("objective") or ""),
+            "metric": str(parameters.get("metric") or ""),
+            "evaluation": self.read_evaluation(model_id),
             "active": self.active_model_id() == model_id,
         }
         return detail
@@ -613,6 +662,42 @@ INNER JOIN read_parquet({sql_literal(str(source_path))}) shap USING (__lucidum_r
         finally:
             con.close()
         return [dict(zip(names, row)) for row in rows]
+
+    def read_evaluation(self, model_id: str) -> dict[str, dict[str, list[float | None]]]:
+        path = self.artifact_path(model_id, "evaluation")
+        if not path.exists():
+            return {}
+        con = duckdb.connect(database=":memory:")
+        try:
+            rows = con.execute(
+                f"""
+SELECT dataset, metric, iteration, value
+FROM read_parquet({sql_literal(str(path))})
+WHERE dataset IS NOT NULL AND metric IS NOT NULL
+ORDER BY dataset, metric, iteration
+"""
+            ).fetchall()
+        finally:
+            con.close()
+        evaluation: dict[str, dict[str, list[float | None]]] = {}
+        for dataset_name, metric_name, iteration, value in rows:
+            dataset_key = str(dataset_name)
+            metric_key = str(metric_name)
+            try:
+                index = int(iteration) - 1
+            except (TypeError, ValueError):
+                continue
+            if index < 0:
+                continue
+            values = evaluation.setdefault(dataset_key, {}).setdefault(metric_key, [])
+            while len(values) < index:
+                values.append(None)
+            number = json_safe_number(value)
+            if len(values) == index:
+                values.append(number)
+            else:
+                values[index] = number
+        return evaluation
 
     def source_manifest_entries(self) -> list[tuple[dict[str, Any], str, dict[str, str]]]:
         entries: list[tuple[dict[str, Any], str, dict[str, str]]] = []
@@ -688,7 +773,7 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
             if info["kind"] == "gbm_shap_long":
                 shap_labels = {
                     column["name"]: column["label"]
-                    for column in self.store.shap_value_columns(str(model.get("model_id") or ""), model)
+                    for column in self.store.shap_value_columns(str(model.get("model_id") or ""))
                 }
                 columns = [
                     {

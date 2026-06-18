@@ -14,7 +14,7 @@ from unittest.mock import patch
 import duckdb
 
 from py_lucidum.app import create_app
-from py_lucidum.core import Dataset, sql_literal
+from py_lucidum.core import Dataset, quote_ident, sql_literal
 from py_lucidum.demo import demo_dataset_path
 from py_lucidum.tools.gbm.grid import parse_parameter_grid, prepare_grid_run, sampled_combination_indexes, validate_grid_or_request
 from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager, best_grid_model
@@ -117,6 +117,96 @@ def asgi_delete(app: Any, path: str) -> tuple[int, bytes]:
     return status, response_body
 
 
+def write_gbm_evaluation(store: GbmModelStore, model_id: str, evaluation: dict[str, dict[str, list[Any]]]) -> None:
+    selects: list[str] = []
+    for dataset_name, metrics in evaluation.items():
+        for metric_name, values in metrics.items():
+            for iteration, value in enumerate(values, start=1):
+                value_sql = "NULL" if value is None else str(float(value))
+                selects.append(
+                    f"SELECT {sql_literal(str(dataset_name))} AS dataset, {sql_literal(str(metric_name))} AS metric, "
+                    f"{iteration} AS iteration, {value_sql} AS value"
+                )
+    if not selects:
+        return
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.execute(
+            f"""
+COPY (
+  {" UNION ALL ".join(selects)}
+) TO {sql_literal(str(store.artifact_path(model_id, "evaluation")))} (FORMAT PARQUET)
+"""
+        )
+    finally:
+        con.close()
+
+
+def write_gbm_parameters(
+    store: GbmModelStore,
+    model_id: str,
+    *,
+    objective: str = "poisson",
+    metric: str = "poisson",
+    **values: Any,
+) -> None:
+    store.write_json(
+        store.artifact_path(model_id, "parameters"),
+        {"objective": objective, "metric": metric, **values},
+    )
+
+
+def sql_scalar(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return str(value) if math.isfinite(number) else "NULL"
+    return sql_literal(str(value))
+
+
+def write_gbm_feature_config(
+    store: GbmModelStore,
+    model_id: str,
+    feature_config: list[dict[str, Any]] | None = None,
+    *,
+    features: list[str] | None = None,
+) -> None:
+    feature_names = features
+    if feature_names is None:
+        feature_names = [
+            str(row.get("name") or row.get("feature") or "").strip()
+            for row in feature_config or []
+            if str(row.get("name") or row.get("feature") or "").strip()
+        ]
+    store.write_json(store.artifact_path(model_id, "features"), feature_names)
+    if feature_config is not None:
+        columns = ["name", "kind", "include", "monotonicity", "monotonicity_value", "gain", "mean_abs_shap"]
+        selects: list[str] = []
+        for row in feature_config:
+            values = dict(row)
+            values["name"] = str(values.get("name") or values.get("feature") or "").strip()
+            selects.append(
+                "SELECT "
+                + ", ".join(f"{sql_scalar(values.get(column))} AS {quote_ident(column)}" for column in columns)
+            )
+        if not selects:
+            return
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  {" UNION ALL ".join(selects)}
+) TO {sql_literal(str(store.artifact_path(model_id, "feature_config")))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+
+
 class GbmToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
@@ -157,8 +247,6 @@ class GbmToolTests(unittest.TestCase):
                 "model_id": model_id,
                 "label": "SHAP model",
                 "created_at": "2026-05-25T00:00:00Z",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
                 "best_iteration": 3,
@@ -166,16 +254,12 @@ class GbmToolTests(unittest.TestCase):
                 "test_rows": 1,
                 "scored_rows": 3,
                 "shap_rows": 3 if with_shap else 0,
-                "feature_importance": [
-                    {"name": "Age", "kind": "integer", "gain": 12.0},
-                    {"name": "lat", "kind": "numeric", "gain": 6.0},
-                    {"name": "Segment", "kind": "categorical", "gain": 3.0},
-                ],
-                "sources": {"shap_long": f"gbm:{model_id}:shap_long", "shap_summary": f"gbm:{model_id}:shap_summary"},
             },
         )
-        store.write_json(
-            model_dir / "feature_config.json",
+        write_gbm_parameters(store, model_id)
+        write_gbm_feature_config(
+            store,
+            model_id,
             [
                 {"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 12.0},
                 {"name": "lat", "kind": "numeric", "include": True, "monotonicity": "", "gain": 6.0},
@@ -296,7 +380,6 @@ COPY (
                 "link": "auto",
                 "response_column": "actualNumerator",
                 "denominator_column": "denominator",
-                "sources": {"predictions": "glm:rating-glm:predictions"},
             },
         )
         con = duckdb.connect(database=":memory:")
@@ -1898,20 +1981,19 @@ COPY (
                     "model_id": model_id,
                     "label": model_id,
                     "created_at": created_at,
-                    "objective": metric,
-                    "metric": metric,
                     "response_column": "actualNumerator",
                     "offset_column": "denominator",
                     "best_iteration": best_iteration,
                     "training_rows": 2,
                     "test_rows": 1,
-                    "feature_importance": [],
-                    "sources": {},
                 },
             )
+            write_gbm_parameters(store, model_id, objective=metric, metric=metric)
         store.write_json(
             store.artifact_path("m1", "parameters"),
             {
+                "objective": "gamma",
+                "metric": "gamma",
                 "num_iterations": 77,
                 "learning_rate": 0.11,
                 "num_leaves": 31,
@@ -1920,14 +2002,8 @@ COPY (
                 "early_stopping_rounds": 25,
             },
         )
-        store.write_json(
-            store.artifact_path("m1", "training_log"),
-            {"evaluation": {"training": {"gamma": [7.4, 7.3, 7.2]}, "test": {"gamma": [7.5, 7.35, 7.25]}}},
-        )
-        store.write_json(
-            store.artifact_path("m2", "training_log"),
-            {"evaluation": {"train": {"poisson": [1.4, 1.2, 1.1]}}},
-        )
+        write_gbm_evaluation(store, "m1", {"training": {"gamma": [7.4, 7.3, 7.2]}, "test": {"gamma": [7.5, 7.35, 7.25]}})
+        write_gbm_evaluation(store, "m2", {"train": {"poisson": [1.4, 1.2, 1.1]}})
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         models_status, models_body = asgi_get(app, "/api/gbm/models")
@@ -1941,9 +2017,11 @@ COPY (
         self.assertEqual(config_status, 200)
         self.assertEqual(models["m1"]["parameters"]["learning_rate"], 0.11)
         self.assertEqual(models["m1"]["parameters"]["num_iterations"], 77)
+        self.assertEqual(models["m1"]["objective"], "gamma")
+        self.assertEqual(models["m1"]["metric"], "gamma")
         self.assertEqual(models["m1"]["best_metrics"], {"training": 7.2, "test": 7.25})
         self.assertEqual(models["m2"]["best_metrics"], {"training": 1.2, "test": None})
-        self.assertEqual(models["m3"]["parameters"], {})
+        self.assertEqual(models["m3"]["parameters"], {"objective": "gamma", "metric": "gamma"})
         self.assertEqual(models["m3"]["best_metrics"], {"training": None, "test": None})
         self.assertEqual(config_models["m1"]["best_metrics"], models["m1"]["best_metrics"])
 
@@ -1960,19 +2038,16 @@ COPY (
                     "model_id": model_id,
                     "label": label,
                     "created_at": f"2026-05-25T00:00:0{model_id[-1]}Z",
-                    "objective": "poisson",
-                    "metric": "poisson",
                     "response_column": "actualNumerator",
                     "offset_column": "denominator",
                     "best_iteration": 7,
                     "training_rows": 2,
                     "test_rows": 1,
-                    "feature_importance": [],
-                    "sources": {},
                 },
             )
-            store.write_json(
-                model_dir / "feature_config.json",
+            write_gbm_feature_config(
+                store,
+                model_id,
                 [
                     {"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 3.0}
                     if model_id == "m1"
@@ -2006,14 +2081,14 @@ COPY (
         self.assertTrue(features["Segment"]["include"])
         self.assertEqual(features["Segment"]["gain"], 4.0)
 
-    def test_rename_active_model_updates_folder_manifest_sources_and_schema(self) -> None:
+    def test_rename_active_model_updates_folder_computed_sources_and_schema(self) -> None:
         store = self.write_model_artifacts()
         con = duckdb.connect(database=":memory:")
         try:
             con.execute(
                 f"""
 COPY (
-  SELECT 'm1' AS gbm_model_id, 'Age' AS feature, 0.2 AS mean_abs_shap, 0.2 AS mean_shap, 1 AS row_count
+  SELECT 'Age' AS feature, 0.2 AS mean_abs_shap, 0.2 AS mean_shap, 1 AS row_count
 ) TO {sql_literal(str(store.artifact_path("m1", "shap_summary")))} (FORMAT PARQUET)
 """
             )
@@ -2034,24 +2109,19 @@ COPY (
         manifest = store.manifest("renamed-model")
         self.assertEqual(manifest["model_id"], "renamed-model")
         self.assertEqual(manifest["label"], "renamed-model")
-        self.assertEqual(manifest["sources"]["predictions"], "gbm:renamed-model:predictions")
+        self.assertNotIn("sources", manifest)
         self.assertEqual(store.active_model_id(), "renamed-model")
 
-        shap_summary_path = store.artifact_path("renamed-model", "shap_summary")
-        con = duckdb.connect(database=":memory:")
-        try:
-            shap_ids = con.execute(
-                f"SELECT DISTINCT gbm_model_id FROM read_parquet({sql_literal(str(shap_summary_path))})"
-            ).fetchall()
-        finally:
-            con.close()
-        self.assertEqual(shap_ids, [("renamed-model",)])
+        detail = store.model_detail("renamed-model")
+        detail_features = {row["name"]: row for row in detail["features"]}
+        self.assertEqual(detail_features["Age"]["mean_abs_shap"], 0.2)
 
         schema_status, schema_body = asgi_get(app, "/api/schema")
         source_ids = [source["id"] for source in json.loads(schema_body)["data_sources"]]
         self.assertEqual(schema_status, 200)
         self.assertIn("gbm:renamed-model:predictions", source_ids)
         self.assertIn("gbm:renamed-model:shap_long", source_ids)
+        self.assertIn("gbm:renamed-model:shap_summary", source_ids)
         self.assertNotIn("gbm:m1:predictions", source_ids)
         prediction_source = next(source for source in json.loads(schema_body)["data_sources"] if source["id"] == "gbm:renamed-model:predictions")
         self.assertEqual(prediction_source["label"], "renamed-model - Predictions")
@@ -2085,15 +2155,13 @@ COPY (
                     "model_id": model_id,
                     "label": model_id,
                     "created_at": created_at,
-                    "objective": "poisson",
-                    "metric": "poisson",
                     "response_column": "actualNumerator",
                     "offset_column": "denominator",
                     "best_iteration": 3,
                     "training_rows": 2,
-                    "sources": {},
                 },
             )
+            write_gbm_parameters(store, model_id)
         store.activate_model("older")
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
@@ -2299,9 +2367,28 @@ COPY (
         self.assertEqual(manifest["init_score"]["column"], "Baseline")
         self.assertEqual(manifest["init_score"]["transform"], "log")
         self.assertEqual(manifest["init_score"]["boost_from_average"], "ignored")
-        self.assertEqual(stored_parameters["init_score"], "Baseline")
-        self.assertEqual(stored_parameters["init_score_metadata"]["column"], "Baseline")
+        self.assertEqual(manifest["init_score"]["value"], "Baseline")
+        self.assertEqual(manifest["init_score"]["artifact"], "init_score.parquet")
+        self.assertNotIn("artifact_path", manifest["init_score"])
+        self.assertNotIn("objective", manifest)
+        self.assertNotIn("metric", manifest)
+        self.assertEqual(stored_parameters["objective"], "poisson")
+        self.assertEqual(stored_parameters["metric"], "poisson")
+        self.assertNotIn("init_score", stored_parameters)
+        self.assertNotIn("init_score_metadata", stored_parameters)
+        self.assertNotIn("training_mode", stored_parameters)
+        self.assertEqual(stored_parameters["num_iterations"], 2)
+        self.assertEqual(stored_parameters["early_stopping_rounds"], 0)
         self.assertTrue(store.artifact_path(model_id, "init_score").exists())
+
+        app = create_app(data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        status, body = asgi_get(app, "/api/gbm/config")
+        config_parameters = {row["name"]: row["value"] for row in json.loads(body)["parameters"]}
+        self.assertEqual(status, 200)
+        self.assertEqual(config_parameters["init_score"], "Baseline")
+
+        check_train = lgb.Dataset(pd.DataFrame({"Age": [1.0, 2.0, 3.0, 4.0]}), label=[1.0, 2.0, 3.0, 4.0])
+        lgb.train(stored_parameters, check_train, num_boost_round=1)
 
         con = duckdb.connect(database=":memory:")
         try:
@@ -2379,7 +2466,27 @@ COPY (
         self.assertIsNone(result["offset_column"])
         self.assertEqual(result["training_rows"], 50000)
         manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
-        self.assertEqual(manifest["best_metrics"], result["best_metrics"])
+        self.assertNotIn("objective", manifest)
+        self.assertNotIn("metric", manifest)
+        self.assertNotIn("best_metrics", manifest)
+        self.assertNotIn("feature_importance", manifest)
+        self.assertNotIn("sources", manifest)
+        self.assertNotIn("source_columns", manifest)
+        self.assertFalse((store.model_dir(result["model_id"]) / "training_log.json").exists())
+        self.assertTrue(store.artifact_path(result["model_id"], "evaluation").exists())
+        self.assertEqual(
+            store.read_json(store.artifact_path(result["model_id"], "features")),
+            ["DRIVER_AGE", "LATITUDE"],
+        )
+        self.assertTrue(store.artifact_path(result["model_id"], "feature_config").exists())
+        self.assertFalse((store.model_dir(result["model_id"]) / "feature_config.json").exists())
+        feature_config = store.read_parquet_records(store.artifact_path(result["model_id"], "feature_config"))
+        by_feature = {row["name"]: row for row in feature_config}
+        self.assertEqual(by_feature["DRIVER_AGE"]["kind"], "integer")
+        self.assertEqual(by_feature["DRIVER_AGE"]["include"], True)
+        self.assertEqual(by_feature["DRIVER_AGE"]["monotonicity"], "")
+        self.assertEqual(by_feature["DRIVER_AGE"]["monotonicity_value"], 0)
+        self.assertIn("gain", by_feature["DRIVER_AGE"])
         self.assertEqual(manifest["feature_scenario"], {"name": "scenario1", "features": ["DRIVER_AGE", "LATITUDE"]})
         self.assertEqual(
             manifest["feature_interaction_constraints"],
@@ -2389,6 +2496,9 @@ COPY (
         self.assertIsNone(result["best_metrics"]["test"])
         con = duckdb.connect(database=":memory:")
         try:
+            feature_config_columns = con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'feature_config')))})"
+            ).fetchall()
             artifact_columns = con.execute(
                 f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'predictions')))})"
             ).fetchall()
@@ -2400,6 +2510,10 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             ).fetchall()
         finally:
             con.close()
+        self.assertEqual(
+            [row[0] for row in feature_config_columns],
+            ["name", "kind", "include", "monotonicity", "monotonicity_value", "gain", "mean_abs_shap"],
+        )
         self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "gbm_prediction"])
         parents = {(tree, node): parent for tree, node, _left, _right, parent, _feature in tree_rows}
         split_features = {(tree, node): feature for tree, node, _left, _right, _parent, feature in tree_rows}
@@ -2487,8 +2601,9 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             },
         )
 
-        self.assertIn("Age", result["source_columns"])
-        self.assertNotIn("BadText", result["source_columns"])
+        manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
+        self.assertNotIn("source_columns", manifest)
+        self.assertNotIn("BadText", "\n".join(guarded.sql))
         self.assertTrue(any("__lucidum_row_id" in sql for sql in guarded.sql))
 
     def test_ebm_training_switches_leaf_stages_and_persists_mode(self) -> None:
@@ -2541,10 +2656,13 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         booster = lgb.Booster(model_file=str(store.artifact_path(result["model_id"], "model")))
         leaf_counts = [int(tree["num_leaves"]) for tree in booster.dump_model()["tree_info"]]
         stored_parameters = store.read_json(store.artifact_path(result["model_id"], "parameters"))
-        training_log = store.read_json(store.artifact_path(result["model_id"], "training_log"))
+        manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
 
         self.assertEqual(result["training_mode"], "ebm")
-        self.assertEqual(stored_parameters["training_mode"], "ebm")
+        self.assertEqual(manifest["training_mode"], "ebm")
+        self.assertNotIn("objective", manifest)
+        self.assertNotIn("metric", manifest)
+        self.assertNotIn("training_mode", stored_parameters)
         self.assertEqual(stored_parameters["num_leaves"], 4)
         self.assertEqual(stored_parameters["learning_rate"], 0.05)
         self.assertEqual(result["ebm"]["initial_learning_rate"], 0.3)
@@ -2552,7 +2670,8 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         self.assertEqual([stage["num_leaves"] for stage in result["ebm"]["stages"]], [2, 3, 4])
         self.assertGreaterEqual(max(leaf_counts), 3)
         self.assertLessEqual(len(leaf_counts), 12)
-        self.assertEqual(training_log["ebm"]["target_num_leaves"], 4)
+        self.assertEqual(result["ebm"]["target_num_leaves"], 4)
+        self.assertFalse((store.model_dir(result["model_id"]) / "training_log.json").exists())
         self.assertTrue(any(item.get("leaf_stage") == 3 for item in progress if item.get("phase") == "training"))
 
     def test_shap_row_limit_supports_compact_choices(self) -> None:
@@ -2671,8 +2790,10 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         )
 
         self.assertEqual(all_frame["__lucidum_row_id"].tolist(), [1, 2, 3, 4])
+        self.assertEqual(list(all_summary.columns), ["feature", "mean_abs_shap", "mean_shap", "row_count"])
         self.assertEqual(int(all_summary["row_count"].iloc[0]), 4)
         self.assertEqual(list(zero_frame.columns), ["__lucidum_row_id", "Age"])
+        self.assertEqual(list(zero_summary.columns), ["feature", "mean_abs_shap", "mean_shap", "row_count"])
         self.assertTrue(zero_frame.empty)
         self.assertTrue(zero_summary.empty)
 
@@ -2709,6 +2830,7 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         self.assertEqual(shap_frame["__lucidum_row_id"].tolist(), [1, 2])
         self.assertEqual(shap_frame["Age"].tolist(), [0.2, 0.5])
         self.assertNotIn("feature_value", shap_frame.columns)
+        self.assertEqual(list(summary.columns), ["feature", "mean_abs_shap", "mean_shap", "row_count"])
         self.assertEqual(set(summary["feature"]), {"Age", "Segment"})
         summary_by_feature = {row["feature"]: row for row in summary.to_dict("records")}
         self.assertAlmostEqual(summary_by_feature["Age"]["mean_abs_shap"], 0.35)
@@ -2868,19 +2990,17 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
                 "model_id": "m1",
                 "label": "Model 1",
                 "created_at": "2026-05-25T00:00:00Z",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
                 "best_iteration": 7,
                 "training_rows": 2,
                 "test_rows": 1,
-                "feature_importance": [{"name": "Age", "gain": 12.345}, {"name": "Segment", "gain": 2.0}],
-                "sources": {"predictions": "gbm:m1:predictions"},
             },
         )
-        store.write_json(
-            model_dir / "feature_config.json",
+        write_gbm_parameters(store, "m1")
+        write_gbm_feature_config(
+            store,
+            "m1",
             [
                 {"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 12.345},
                 {"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 2.0},
@@ -2943,18 +3063,15 @@ COPY (
                 "model_id": model_id,
                 "label": model_id,
                 "created_at": "2026-05-25T00:00:00Z",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "ID",
                 "offset_column": None,
                 "best_iteration": 1,
                 "training_rows": 1,
                 "test_rows": 1,
                 "scored_rows": 2,
-                "source_columns": ["ID", "LIMIT_BAL"],
-                "sources": {"predictions": f"gbm:{model_id}:predictions"},
             },
         )
+        write_gbm_parameters(store, model_id)
         con = duckdb.connect(database=":memory:")
         try:
             con.execute(
@@ -2981,7 +3098,6 @@ COPY (
                     "label": "legacy",
                     "created_at": "2026-05-25T00:00:00Z",
                     "response_column": "ID",
-                    "source_columns": ["ID", "LIMIT_BAL"],
                     "sources": {"predictions": "gbm:legacy:predictions"},
                 }
             ),
@@ -3006,6 +3122,106 @@ COPY (
         self.assertEqual(status, 200)
         self.assertNotIn("gbm:legacy:predictions", source_ids)
         self.assertNotEqual(GbmModelStore(self.data_path).root, self.root / ".lucidum" / "models" / "gbm")
+
+    def test_external_gbm_sidecar_can_use_features_json_without_feature_config(self) -> None:
+        store = GbmModelStore(self.data_path)
+        model_id = "external-features"
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": "External features",
+                "created_at": "2026-05-25T00:00:00Z",
+                "training_mode": "normal",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "best_iteration": 1,
+                "training_rows": 2,
+                "test_rows": 1,
+                "scored_rows": 3,
+                "init_score": {"kind": "none", "value": "none", "artifact_path": "/tmp/old/init_score.parquet"},
+            },
+        )
+        store.write_json(model_dir / "features.json", ["Age", "Segment"])
+        write_gbm_parameters(store, model_id, monotone_constraints=[1, -1])
+        write_gbm_evaluation(store, model_id, {"training": {"poisson": [1.5]}, "test": {"poisson": [1.75]}})
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 11.5 AS gbm_prediction
+  UNION ALL SELECT 2, 21.5
+  UNION ALL SELECT 3, 31.5
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 0.3 AS Age, -0.1 AS Segment
+  UNION ALL SELECT 2, 0.2, -0.2
+  UNION ALL SELECT 3, 0.1, -0.3
+) TO {sql_literal(str(model_dir / "shap_values.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 'Age' AS feature, 0.2 AS mean_abs_shap, 0.0 AS mean_shap, 3 AS row_count
+  UNION ALL SELECT 'Segment', 0.3, 0.0, 3
+) TO {sql_literal(str(model_dir / "shap_summary.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model(model_id)
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        models_status, models_body = asgi_get(app, "/api/gbm/models")
+        detail_status, detail_body = asgi_get(app, f"/api/gbm/models/{model_id}")
+        config_status, config_body = asgi_get(app, "/api/gbm/config")
+        models = {model["model_id"]: model for model in json.loads(models_body)["models"]}
+        detail = json.loads(detail_body)
+        config_payload = json.loads(config_body)
+        config_features = {row["name"]: row for row in config_payload["features"]}
+        config_models = {model["model_id"]: model for model in config_payload["models"]}
+
+        self.assertEqual(models_status, 200)
+        self.assertEqual(detail_status, 200)
+        self.assertEqual(config_status, 200)
+        self.assertNotIn("artifact_path", models[model_id]["init_score"])
+        self.assertNotIn("artifact_path", detail["manifest"]["init_score"])
+        self.assertNotIn("artifact_path", config_models[model_id]["init_score"])
+        self.assertEqual(models[model_id]["best_metrics"], {"training": 1.5, "test": 1.75})
+        detail_features = {row["name"]: row for row in detail["features"]}
+        self.assertEqual(detail_features["Age"]["monotonicity"], "Increasing")
+        self.assertEqual(detail_features["Segment"]["monotonicity"], "Decreasing")
+        self.assertEqual(detail_features["Age"]["kind"], "integer")
+        self.assertEqual(detail_features["Segment"]["kind"], "categorical")
+        self.assertEqual(detail_features["Segment"]["mean_abs_shap"], 0.3)
+        self.assertTrue(config_features["Age"]["include"])
+        self.assertEqual(config_features["Age"]["monotonicity"], "Increasing")
+        self.assertEqual(config_features["Segment"]["monotonicity"], "Decreasing")
+
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(GbmSourceProvider(GbmModelStore(self.data_path, dataset=dataset)))
+        prediction_relation = dataset.relation_sql_for_source(f"gbm:{model_id}:predictions")
+        shap_schema = dataset.schema_for_source(f"gbm:{model_id}:shap_long")
+        with dataset.lock:
+            prediction_rows = dataset.con.execute(
+                f"""
+SELECT Age, Segment, gbm_prediction, gbm_prediction_rate
+FROM {prediction_relation}
+ORDER BY Age
+"""
+            ).fetchall()
+        shap_columns = {column["name"] for column in shap_schema["columns"]}
+
+        self.assertEqual(prediction_rows[0], (30, "A", 11.5, 0.115))
+        self.assertIn("SHAP__Age", shap_columns)
+        self.assertIn("SHAP__Segment", shap_columns)
 
     def test_gbm_workspaces_are_isolated_by_dataset_file_and_signature(self) -> None:
         other_path = self.root / "credit.csv"
@@ -3063,13 +3279,11 @@ COPY (
                 "model_id": model_id,
                 "label": model_id,
                 "created_at": "2026-05-25T00:00:00Z",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
-                "sources": {},
             },
         )
+        write_gbm_parameters(store, model_id)
         threshold_label_sql = "NULL" if threshold_label is None else sql_literal(threshold_label)
         con = duckdb.connect(database=":memory:")
         try:
@@ -3174,13 +3388,11 @@ COPY (
                 "model_id": "old-table",
                 "label": "Old table",
                 "created_at": "2026-05-25T00:00:00Z",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
-                "sources": {},
             },
         )
+        write_gbm_parameters(store, "old-table")
         con = duckdb.connect(database=":memory:")
         try:
             con.execute(
@@ -3233,24 +3445,18 @@ COPY (
                 "model_id": model_id,
                 "label": model_id,
                 "created_at": "2026-05-25T00:00:00Z",
-                "objective": objective,
-                "metric": "l2",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
                 "best_iteration": 1,
                 "training_rows": 2,
                 "test_rows": 1,
-                "source_columns": ["Age", "Segment", "denominator"],
-                "feature_importance": [
-                    {"name": "Age", "kind": "integer", "gain": 1.0},
-                    {"name": "Segment", "kind": "categorical", "gain": 1.0},
-                ],
-                "sources": {"predictions": f"gbm:{model_id}:predictions"},
                 "init_score": {"kind": "none", "value": "none"},
             },
         )
-        store.write_json(
-            model_dir / "feature_config.json",
+        write_gbm_parameters(store, model_id, objective=objective, metric="l2")
+        write_gbm_feature_config(
+            store,
+            model_id,
             [
                 {"name": "Age", "kind": "integer", "include": True, "gain": 1.0},
                 {"name": "Segment", "kind": "categorical", "include": True, "gain": 1.0},
@@ -3422,7 +3628,7 @@ COPY (
 
         glm_store = GlmModelStore(self.data_path)
         glm_dir = glm_store.create_model_dir("tab-glm")
-        glm_store.write_json(glm_dir / "manifest.json", {"model_id": "tab-glm", "label": "GLM table", "created_at": "2026-05-25T00:00:00Z", "sources": {}})
+        glm_store.write_json(glm_dir / "manifest.json", {"model_id": "tab-glm", "label": "GLM table", "created_at": "2026-05-25T00:00:00Z"})
         glm_store.write_json(
             glm_store.artifact_path("tab-glm", "tabulation_manifest"),
             {
@@ -3467,14 +3673,12 @@ COPY (
                 "label": "EBM summary",
                 "created_at": "2026-05-25T00:00:00Z",
                 "training_mode": "ebm",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
                 "best_iteration": 3,
-                "sources": {},
             },
         )
+        write_gbm_parameters(store, "ebm-summary")
         con = duckdb.connect(database=":memory:")
         try:
             con.execute(
@@ -3519,14 +3723,12 @@ COPY (
                 "label": "Normal summary",
                 "created_at": "2026-05-25T00:00:00Z",
                 "training_mode": "normal",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
                 "best_iteration": 1,
-                "sources": {},
             },
         )
+        write_gbm_parameters(store, "normal-summary")
         con = duckdb.connect(database=":memory:")
         try:
             con.execute(
@@ -3555,26 +3757,23 @@ COPY (
                 "model_id": "empty",
                 "label": "Empty",
                 "created_at": "2026-05-25T00:00:00Z",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
-                "sources": {},
             },
         )
+        write_gbm_parameters(store, "empty")
 
         self.assertEqual(tree_summary(store, "empty"), {"model_id": "empty", "trees": []})
         self.assertEqual(tree_detail(store, "empty", 0), {"model_id": "empty", "tree": 0, "root": None, "values": []})
 
     def test_model_sources_are_exposed_and_chartable(self) -> None:
         store = self.write_model_artifacts()
-        store.write_json(
-            store.artifact_path("m1", "training_log"),
+        write_gbm_evaluation(
+            store,
+            "m1",
             {
-                "evaluation": {
-                    "training": {"poisson": [9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0]},
-                    "test": {"poisson": [9.5, 8.5, 7.5, 6.5, 5.5, 4.5, 3.5]},
-                }
+                "training": {"poisson": [9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0]},
+                "test": {"poisson": [9.5, 8.5, 7.5, 6.5, 5.5, 4.5, 3.5]},
             },
         )
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)

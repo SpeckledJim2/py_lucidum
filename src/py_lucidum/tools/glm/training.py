@@ -1335,7 +1335,6 @@ def _train_model_impl(
         "training_scope": training_scope,
         "sample_column": sample_column,
         "formula": {
-            "raw": formula["raw"],
             "stripped": formula["stripped"],
             "rhs": formula["rhs"],
             "fitted": formula["fitted"],
@@ -1348,9 +1347,6 @@ def _train_model_impl(
             "intercept_only": intercept_only,
             "internal_intercept_column": internal_intercept_column,
         },
-        "diagnostics": jsonable(diagnostics, np, pd),
-        "warnings": jsonable(model_warnings, np, pd),
-        "feature_importance": jsonable(feature_importance, np, pd),
         "feature_importance_metric": {
             "name": FEATURE_IMPORTANCE_METRIC,
             "label": FEATURE_IMPORTANCE_METRIC_LABEL,
@@ -1359,8 +1355,6 @@ def _train_model_impl(
             "interaction_allocation": "split_evenly",
         },
         "source_columns": source_columns,
-        "sources": {"predictions": store.source_id(model_id)},
-        "dataset": store.dataset_metadata(),
         "row_count": int(len(frame)),
         "training_rows": int(fit_mask.sum()),
         "scored_rows": scored_rows,
@@ -1382,16 +1376,17 @@ def _train_model_impl(
     with store.artifact_path(model_id, "estimator").open("wb") as handle:
         pickle.dump(estimator, handle, protocol=pickle.HIGHEST_PROTOCOL)
     store.artifact_path(model_id, "formula").write_text(str(formula["raw"]), encoding="utf-8")
-    store.write_json(store.artifact_path(model_id, "diagnostics"), manifest["diagnostics"])
+    store.write_json(store.artifact_path(model_id, "diagnostics"), jsonable(diagnostics, np, pd))
     timings["artifact_write_ms"] = _elapsed_ms(artifact_write_started)
     timings["elapsed_ms"] = _elapsed_ms(started)
     progress({"phase": "writing", "message": "Saved GLM artifacts", "percent": 95, "timings": timings})
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
 
-    result = store.activate_model(model_id) if activate else manifest
+    result = store.activate_model(model_id) if activate else store.model_list_item(model_dir, manifest, store.active_model_id())
     result["coefficients"] = coefficients
     result["feature_importance"] = feature_importance
-    result["diagnostics"] = manifest["diagnostics"]
+    result["diagnostics"] = jsonable(diagnostics, np, pd)
+    result["warnings"] = jsonable(model_warnings, np, pd)
     result["model_dir"] = str(model_dir)
     return result
 __all__ = [

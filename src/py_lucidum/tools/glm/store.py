@@ -221,9 +221,7 @@ class GlmModelStore:
         manifest = self.manifest(model_id)
         self.ensure_root()
         self.write_json(self.active_path, {"model_id": model_id, "activated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        active = dict(manifest)
-        active["active"] = True
-        return active
+        return self.model_list_item(self.model_dir(model_id), manifest, model_id)
 
     def rename_model(self, model_id: str, new_model_id: str) -> dict[str, Any]:
         old_id = self.validate_model_id(model_id)
@@ -240,12 +238,13 @@ class GlmModelStore:
         self.write_json(self.artifact_path(new_id, "manifest"), renamed)
         if self.active_model_id() == old_id:
             self.activate_model(new_id)
-            renamed["active"] = True
-        return renamed
+            return self.model_list_item(target, renamed, new_id)
+        return self.model_list_item(target, renamed, self.active_model_id())
 
     def delete_model(self, model_id: str) -> dict[str, Any]:
         deleted_id = self.validate_model_id(model_id)
         manifest = self.manifest(deleted_id)
+        deleted = self.model_list_item(self.model_dir(deleted_id), manifest, self.active_model_id())
         was_active = self.active_model_id() == deleted_id
         shutil.rmtree(self.model_dir(deleted_id))
         if was_active:
@@ -255,27 +254,13 @@ class GlmModelStore:
                 self.activate_model(next_id)
             else:
                 self.clear_active_model()
-        return manifest
+        return deleted
 
     def _renamed_manifest(self, manifest: dict[str, Any], old_id: str, new_id: str) -> dict[str, Any]:
         renamed = dict(manifest)
         renamed["model_id"] = new_id
         renamed["label"] = new_id
-        sources = renamed.get("sources")
-        if isinstance(sources, dict):
-            renamed["sources"] = {
-                str(kind): self._renamed_source_id(value, old_id, new_id)
-                for kind, value in sources.items()
-            }
         return renamed
-
-    def _renamed_source_id(self, value: Any, old_id: str, new_id: str) -> Any:
-        if not isinstance(value, str):
-            return value
-        match = SOURCE_RE.match(value)
-        if not match or match.group(1) != old_id:
-            return value
-        return self.source_id(new_id, "predictions")
 
     def source_ref(self, source_id: str) -> GlmSourceRef | None:
         match = SOURCE_RE.match(source_id)
@@ -300,12 +285,8 @@ class GlmModelStore:
             raise ValueError("Choose a valid GLM data source")
         return f"glm:{model_id}:predictions"
 
-    def model_sources(self, model_id: str, raw_sources: Any = None) -> dict[str, str]:
-        sources = {
-            str(kind): str(value)
-            for kind, value in (raw_sources.items() if isinstance(raw_sources, dict) else [])
-            if str(kind) in SOURCE_KINDS and isinstance(value, str) and value
-        }
+    def model_sources(self, model_id: str) -> dict[str, str]:
+        sources: dict[str, str] = {}
         if self.source_path(model_id, "predictions").exists():
             sources["predictions"] = self.source_id(model_id)
         return sources
@@ -328,7 +309,7 @@ class GlmModelStore:
         item = dict(manifest)
         model_id = str(item.get("model_id") or path.name)
         item["model_id"] = model_id
-        item["sources"] = self.model_sources(model_id, item.get("sources"))
+        item["sources"] = self.model_sources(model_id)
         item["diagnostics"] = self.model_diagnostics(model_id, item)
         item["metrics"] = item["diagnostics"]
         item["active"] = model_id == active_model_id
@@ -338,9 +319,7 @@ class GlmModelStore:
         diagnostics = self.read_json(self.artifact_path(model_id, "diagnostics"), {})
         if isinstance(diagnostics, dict):
             return diagnostics
-        manifest = manifest or {}
-        raw = manifest.get("diagnostics")
-        return dict(raw) if isinstance(raw, dict) else {}
+        return {}
 
     def source_columns(self, manifest: dict[str, Any]) -> list[str]:
         raw_columns = manifest.get("source_columns")

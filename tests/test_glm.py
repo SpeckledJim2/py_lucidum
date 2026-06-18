@@ -828,8 +828,14 @@ if result.get("iteration") != 10:
         self.assertEqual(manifest["regularization"]["mode"], "none")
         self.assertTrue(manifest["formula"]["drop_first"])
         self.assertTrue(manifest["formula"]["fit_intercept"])
-        self.assertEqual(manifest["diagnostics"]["training_rows"], 4)
-        self.assertIn("deviance", manifest["diagnostics"])
+        diagnostics = store.read_json(store.artifact_path(model_id, "diagnostics"))
+        self.assertEqual(diagnostics["training_rows"], 4)
+        self.assertIn("deviance", diagnostics)
+        self.assertNotIn("diagnostics", manifest)
+        self.assertNotIn("feature_importance", manifest)
+        self.assertNotIn("warnings", manifest)
+        self.assertNotIn("sources", manifest)
+        self.assertNotIn("raw", manifest["formula"])
         self.assertTrue(store.artifact_path(model_id, "formula").exists())
         self.assertTrue(store.artifact_path(model_id, "estimator").exists())
         self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
@@ -837,8 +843,9 @@ if result.get("iteration") != 10:
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
         self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
         self.assertEqual(manifest["feature_importance_metric"]["interaction_allocation"], "split_evenly")
-        self.assertTrue(manifest["feature_importance"])
-        self.assertTrue({row["feature"] for row in manifest["feature_importance"]}.issubset({"Age", "Segment"}))
+        feature_importance = store.read_parquet_records(store.artifact_path(model_id, "feature_importance"))
+        self.assertTrue(feature_importance)
+        self.assertTrue({row["feature"] for row in feature_importance}.issubset({"Age", "Segment"}))
         self.assert_glm_timing_metadata(manifest["timings"])
         self.assertEqual(result["timings"]["worker_mode"], manifest["timings"]["worker_mode"])
         prediction_rows = store.read_parquet_records(store.artifact_path(model_id, "predictions"))
@@ -1000,7 +1007,7 @@ FROM {dataset.relation_sql_for_source(source_id)}
 
         self.assertFalse(manifest["formula"]["fit_intercept"])
         self.assertTrue(manifest["formula"]["drop_first"])
-        self.assertEqual(manifest.get("warnings"), [])
+        self.assertEqual(result.get("warnings"), [])
         self.assertNotIn("(Intercept)", coefficient_terms)
         self.assertEqual(manifest["offset_terms"], ["log(pmax(ANNUAL_MILEAGE, 1) / 5000)"])
         self.assertEqual(result["scored_rows"], manifest["row_count"])
@@ -1037,10 +1044,10 @@ FROM {dataset.relation_sql_for_source(source_id)}
         coefficient_terms = [row["term"] for row in result["coefficients"]]
 
         self.assertTrue(manifest["formula"]["fit_intercept"])
-        self.assertEqual(manifest.get("warnings"), [])
+        self.assertEqual(result.get("warnings"), [])
         self.assertIn("(Intercept)", coefficient_terms)
         self.assertEqual(result["scored_rows"], manifest["row_count"])
-        self.assertEqual(manifest["diagnostics"]["design_matrix"]["rank"], manifest["diagnostics"]["design_matrix"]["columns"])
+        self.assertEqual(result["diagnostics"]["design_matrix"]["rank"], result["diagnostics"]["design_matrix"]["columns"])
 
     def test_rank_deficient_spline_formula_repeatedly_refuses_to_save_model(self) -> None:
         self.require_glm_dependencies()
@@ -1077,13 +1084,13 @@ FROM {dataset.relation_sql_for_source(source_id)}
             },
         )
         manifest = store.manifest(result["model_id"])
-        warnings_text = " ".join(manifest.get("warnings") or [])
+        warnings_text = " ".join(result.get("warnings") or [])
 
         self.assertTrue(manifest["formula"]["fit_intercept"])
         self.assertIn('constraints="center"', warnings_text)
         self.assertIn("0 + ns", warnings_text)
         self.assertIn("rank-deficient", warnings_text)
-        self.assertEqual(manifest.get("warnings"), result.get("warnings"))
+        self.assertNotIn("warnings", manifest)
 
     def test_intercept_only_demo_formula_fits_and_tabulates_constant_predictions(self) -> None:
         self.require_glm_dependencies()
@@ -1806,7 +1813,6 @@ ORDER BY __lucidum_row_id
                 "response_column": "ID",
                 "denominator_column": "",
                 "source_columns": ["ID", "LIMIT_BAL"],
-                "sources": {"predictions": "glm:replace-glm:predictions"},
             },
         )
         con = duckdb.connect(database=":memory:")
@@ -2424,7 +2430,6 @@ COPY (
                 "response_column": "ID",
                 "denominator_column": "",
                 "source_columns": ["ID", "LIMIT_BAL"],
-                "sources": {"predictions": "glm:other-glm:predictions"},
             },
         )
         con = duckdb.connect(database=":memory:")

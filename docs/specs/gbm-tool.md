@@ -36,6 +36,8 @@ The functionality of each tab is described in sections below.
 - equal weights for each row
 - ignore the filter when building a GBM (don't show the filter tool in the sidebar when GBM is displayed)
 - the first parameter-table row is `init_score`; `none` keeps the denominator-derived offset behavior, while a selected fitted GLM prediction or numeric source column is transformed into LightGBM's linear predictor space and replaces the denominator-derived initial score
+- saved `parameters.json` is a LightGBM Python params dict, including objective and metric; Lucidum-only init-score and training-mode metadata is stored in `manifest.json`
+- model input feature order lives in `features.json`; fitted display metadata lives in optional `feature_config.parquet`; raw dataset columns exposed by GBM prediction and SHAP sources are derived from the dataset schema, not stored in `manifest.json`
 
 ## Features and parameters tab
 
@@ -110,6 +112,7 @@ I need this tool to be persistent. It's OK to hold interim results in RAM if fas
 - LightGBM .txt file output
 - model predictions as a parquet and a way to attach them back to original .parquet for queries (attach might not be the right word - I need to be able to plot A vs E charts for the model using the Line and Bar tool - so I need the original parquet as it contains the model features and the reponse, and I need the response parquet for the GBM fitted values - but they must tie up)
 - SHAP values and a way to attach them back to original .parquet for queries
+- `shap_summary.parquet` as one row per trained feature with `feature`, `mean_abs_shap`, `mean_shap`, and `row_count`; model identity comes from the model folder/source ID, not a repeated Parquet column
 - when feature interaction constraint groups are selected, grouped SHAP contribution columns in `shap_values.parquet` named `<Grouping>_INTERACTION_GROUP`; singleton feature constraints do not create grouped SHAP columns
 - aggregated SHAP plot payloads from saved sidecars for the GBM SHAP tab
 - evaluation log (used to drive the evaluation chart) - this records the model metric (on train and test) after each round of training

@@ -17,7 +17,7 @@ from .sample import (
     generated_sample_is_current,
     generated_sample_relation_sql,
 )
-from .store import GbmModelStore, best_metrics_from_evaluation
+from .store import GbmModelStore
 from .validation import (
     INIT_SCORE_NONE,
     OFFSET_COLUMN,
@@ -422,10 +422,8 @@ def train_model(
     configured_num_leaves = max(2, int(params.get("num_leaves", 31) or 31))
     configured_learning_rate = params.get("learning_rate", 0.05)
     stored_params = dict(params)
-    stored_params["init_score"] = selected_init_score
     stored_params["num_iterations"] = num_boost_round
     stored_params["early_stopping_rounds"] = early_stopping_rounds
-    stored_params["training_mode"] = training_mode
     if training_mode == "ebm":
         params["num_leaves"] = 2
         params["learning_rate"] = EBM_INITIAL_LEARNING_RATE
@@ -452,7 +450,6 @@ def train_model(
         )
         sample_column = SAMPLE_COLUMN if dataset_sample else None
         init_score_col = selected_init_score if selected_init_score in columns else None
-        source_columns = list(columns)
         projection_columns = training_projection_columns(
             response_col=response_col,
             offset_col=offset_col,
@@ -494,6 +491,7 @@ def train_model(
     monotone_constraints = [int(feature["monotonicity"]) for feature in features]
     if any(monotone_constraints):
         params["monotone_constraints"] = monotone_constraints
+        stored_params["monotone_constraints"] = monotone_constraints
     interaction_group_constraints: list[dict[str, Any]] = []
     if selected_interaction_pairs:
         pair_feature_names = {
@@ -558,6 +556,7 @@ def train_model(
         )
     if interaction_constraints:
         params["interaction_constraints"] = interaction_constraints
+        stored_params["interaction_constraints"] = interaction_constraints
 
     emit_preparing_progress(progress_callback, "Preparing GBM: coercing response and denominator columns...", 0, scored_rows=len(score_frame))
     work_frame = score_frame.copy()
@@ -740,7 +739,6 @@ def train_model(
             init_score_dataframe(pd, work_frame, init_score_linear, init_score_prediction),
             store.artifact_path(model_id, "init_score"),
         )
-        init_score_metadata["artifact_path"] = str(store.artifact_path(model_id, "init_score"))
 
     gain_values = booster.feature_importance(importance_type="gain")
     gains = {name: float(value or 0.0) for name, value in zip(feature_names, gain_values)}
@@ -810,36 +808,24 @@ def train_model(
 
     elapsed = time.perf_counter() - started
     ebm_metadata = ebm_controller.metadata() if ebm_controller else None
-    best_metrics = best_metrics_from_evaluation(evaluation_result, selected_metric, best_iteration)
     feature_scenario = normalise_feature_scenario(payload.get("feature_scenario"))
     manifest = {
         "model_id": model_id,
         "label": model_label,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "training_mode": training_mode,
-        "objective": str(params.get("objective")),
-        "metric": selected_metric,
         "response_column": response_col,
         "offset_column": offset_col,
         "best_iteration": best_iteration,
-        "best_metrics": best_metrics,
-        "num_iterations": num_boost_round,
         "training_rows": int(train_mask.sum()),
         "test_rows": int(test_mask.sum()),
         "validation_rows": int(validation_mask.sum()),
         "scored_rows": int(len(score_frame)),
         "sample_column": sample_mode if sample_mode != "none" else None,
         "sample_source": sample_source,
-        "source_columns": source_columns,
         "shap_rows": shap_written_rows,
         "timings": {"training_seconds": elapsed},
         "warnings": validation.warnings,
-        "feature_importance": feature_config,
-        "sources": {
-            "predictions": store.source_id(model_id, "predictions"),
-            **({"shap_long": store.source_id(model_id, "shap_long"), "shap_summary": store.source_id(model_id, "shap_summary")} if shap_summary_rows else {}),
-        },
-        "dataset": store.dataset_metadata(),
     }
     if feature_scenario:
         manifest["feature_scenario"] = feature_scenario
@@ -850,19 +836,19 @@ def train_model(
     if grid_search:
         manifest["grid_search"] = grid_search
     manifest["init_score"] = init_score_metadata
-    stored_params["init_score_metadata"] = init_score_metadata
-    store.write_json(store.artifact_path(model_id, "feature_config"), feature_config)
+    feature_config_frame = pd.DataFrame(feature_config)
+    feature_config_columns = ["name", "kind", "include", "monotonicity", "monotonicity_value", "gain", "mean_abs_shap"]
+    for column in feature_config_columns:
+        if column not in feature_config_frame:
+            feature_config_frame[column] = None
+    store.write_json(store.artifact_path(model_id, "features"), feature_names)
+    write_dataframe_parquet(feature_config_frame[feature_config_columns], store.artifact_path(model_id, "feature_config"))
     store.write_json(store.artifact_path(model_id, "parameters"), stored_params)
-    store.write_json(
-        store.artifact_path(model_id, "training_log"),
-        {"evaluation": evaluation_result, "warnings": validation.warnings, **({"ebm": ebm_metadata} if ebm_metadata else {})},
-    )
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
     if activate:
-        store.activate_model(model_id)
-        manifest["active"] = True
+        result = store.activate_model(model_id)
     else:
-        manifest["active"] = False
+        result = store.model_list_item(model_dir, manifest, store.active_model_id())
     emit_progress(
         progress_callback,
         phase_progress_payload(
@@ -875,7 +861,7 @@ def train_model(
             evaluation=evaluation_result,
         ),
     )
-    return manifest
+    return result
 
 
 def normalise_feature_scenario(raw: Any) -> dict[str, Any] | None:
@@ -1332,7 +1318,7 @@ def shap_dataframes(
                     **{group["name"]: pd.Series(dtype="float64") for group in group_columns},
                 }
             ),
-            pd.DataFrame(columns=["gbm_model_id", "feature", "mean_abs_shap", "mean_shap", "row_count"]),
+            pd.DataFrame(columns=["feature", "mean_abs_shap", "mean_shap", "row_count"]),
         )
 
     sampled = feature_frame.iloc[positions]
@@ -1354,12 +1340,11 @@ def shap_dataframes(
     for group in group_columns:
         shap_frame[group["name"]] = shap_frame[group["features"]].sum(axis=1)
     if shap_frame.empty:
-        summary = pd.DataFrame(columns=["gbm_model_id", "feature", "mean_abs_shap", "mean_shap", "row_count"])
+        summary = pd.DataFrame(columns=["feature", "mean_abs_shap", "mean_shap", "row_count"])
     else:
         summary = pd.DataFrame(
             [
                 {
-                    "gbm_model_id": model_id,
                     "feature": feature_name,
                     "mean_abs_shap": float(np.abs(shap_frame[feature_name]).mean()),
                     "mean_shap": float(shap_frame[feature_name].mean()),

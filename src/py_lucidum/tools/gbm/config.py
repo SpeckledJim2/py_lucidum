@@ -14,6 +14,8 @@ from .validation import (
     DEFAULT_TRAINING_MODE,
     GBM_METRICS,
     GBM_OBJECTIVES,
+    INIT_SCORE_NONE,
+    INIT_SCORE_PARAMETER,
     OFFSET_COLUMN,
     RESPONSE_COLUMN,
     default_parameters,
@@ -37,12 +39,12 @@ class GbmConfigBuilder:
         if not model_id:
             return {}
         try:
-            manifest = self.store.manifest(model_id)
+            features = self.store.model_feature_config(model_id)
         except ValueError:
             return {}
         return {
             str(item.get("name")): float(item.get("gain") or 0)
-            for item in manifest.get("feature_importance", [])
+            for item in features
             if isinstance(item, dict) and item.get("name")
         }
 
@@ -95,15 +97,11 @@ WHERE feature IS NOT NULL
         if not model_id:
             return None
         try:
-            features = self.store.read_json(self.store.artifact_path(model_id, "feature_config"), None)
-            if isinstance(features, list) and features:
-                return self.feature_config_with_shap([item for item in features if isinstance(item, dict)], model_id)
-            manifest = self.store.manifest(model_id)
+            features = self.store.model_feature_config(model_id)
+            if features:
+                return self.feature_config_with_shap(features, model_id)
         except ValueError:
             return None
-        importance = manifest.get("feature_importance", [])
-        if isinstance(importance, list) and importance:
-            return self.feature_config_with_shap([item for item in importance if isinstance(item, dict)], model_id)
         return None
 
     def active_training_mode(self) -> str:
@@ -119,6 +117,7 @@ WHERE feature IS NOT NULL
     def parameter_rows(self) -> list[dict[str, Any]]:
         values: dict[str, Any] = {}
         model_id = self.store.active_model_id()
+        active_init_score = self.active_init_score_value()
         if model_id:
             try:
                 stored = self.store.read_json(self.store.artifact_path(model_id, "parameters"), {})
@@ -132,24 +131,32 @@ WHERE feature IS NOT NULL
         for row in default_parameters():
             item = dict(row)
             name = str(item["name"])
-            if name in values:
+            if name == INIT_SCORE_PARAMETER:
+                item["value"] = active_init_score
+            elif name in values:
                 item["value"] = values[name]
             rows.append(item)
             seen.add(name)
 
         for name, value in values.items():
             text_name = str(name)
-            if text_name in {"training_mode", "init_score_metadata"}:
+            if text_name in {INIT_SCORE_PARAMETER, "training_mode", "init_score_metadata"}:
                 continue
             if text_name not in seen:
                 rows.append({"name": text_name, "value": value, "important": False})
         return rows
 
     def active_init_score_value(self) -> str:
-        for row in self.parameter_rows():
-            if str(row.get("name") or "") == "init_score":
-                return str(row.get("value") or "none")
-        return "none"
+        model_id = self.store.active_model_id()
+        if not model_id:
+            return INIT_SCORE_NONE
+        try:
+            manifest = self.store.manifest(model_id)
+        except ValueError:
+            return INIT_SCORE_NONE
+        init_score = manifest.get("init_score") if isinstance(manifest.get("init_score"), dict) else {}
+        value = str(init_score.get("value") or "").strip()
+        return value or INIT_SCORE_NONE
 
     def feature_spec_payload(self) -> dict[str, Any]:
         spec = self.feature_spec()

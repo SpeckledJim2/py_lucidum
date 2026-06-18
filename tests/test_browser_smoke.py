@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import math
 import os
 import re
 import socket
@@ -18,6 +19,7 @@ from urllib.request import urlopen
 import duckdb
 import uvicorn
 
+from py_lucidum import __version__
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 from py_lucidum.tools.gbm.store import GbmModelStore
@@ -33,6 +35,64 @@ except ImportError:  # pragma: no cover - exercised only without optional test d
 
 
 RUN_BROWSER_TESTS = os.environ.get("PY_LUCIDUM_RUN_BROWSER_TESTS") == "1"
+
+
+def write_gbm_evaluation(store: GbmModelStore, model_id: str, evaluation: dict[str, dict[str, list[Any]]]) -> None:
+    selects: list[str] = []
+    for dataset_name, metrics in evaluation.items():
+        for metric_name, values in metrics.items():
+            for iteration, value in enumerate(values, start=1):
+                value_sql = "NULL" if value is None else str(float(value))
+                selects.append(
+                    f"SELECT {sql_literal(str(dataset_name))} AS dataset, {sql_literal(str(metric_name))} AS metric, "
+                    f"{iteration} AS iteration, {value_sql} AS value"
+                )
+    if not selects:
+        return
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.execute(
+            f"""
+COPY (
+  {" UNION ALL ".join(selects)}
+) TO {sql_literal(str(store.artifact_path(model_id, "evaluation")))} (FORMAT PARQUET)
+"""
+        )
+    finally:
+        con.close()
+
+
+def sql_scalar(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return str(value) if math.isfinite(number) else "NULL"
+    return sql_literal(str(value))
+
+
+def write_gbm_feature_config(store: GbmModelStore, model_id: str, rows: list[dict[str, Any]]) -> None:
+    store.write_json(store.artifact_path(model_id, "features"), [str(row["name"]) for row in rows])
+    columns = ["name", "kind", "include", "monotonicity", "monotonicity_value", "gain", "mean_abs_shap"]
+    selects = [
+        "SELECT " + ", ".join(f"{sql_scalar(row.get(column))} AS {quote_ident(column)}" for column in columns)
+        for row in rows
+    ]
+    if not selects:
+        return
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.execute(
+            f"""
+COPY (
+  {" UNION ALL ".join(selects)}
+) TO {sql_literal(str(store.artifact_path(model_id, "feature_config")))} (FORMAT PARQUET)
+"""
+        )
+    finally:
+        con.close()
 
 
 class BrowserSmokeTests(unittest.TestCase):
@@ -1262,8 +1322,6 @@ class BrowserSmokeTests(unittest.TestCase):
                         "model_id": model_id,
                         "label": label,
                         "created_at": created_at,
-                        "objective": "gamma",
-                        "metric": "gamma",
                         "training_mode": "ebm" if model_id.endswith("-2") else "normal",
                         "response_column": "actualNumerator",
                         "offset_column": "denominator",
@@ -1274,7 +1332,6 @@ class BrowserSmokeTests(unittest.TestCase):
                         "sample_column": "SAMPLE",
                         "sample_source": "dataset",
                         "timings": {"training_seconds": 1.234 if model_id == "browser-smoke-model" else 62.0},
-                        "feature_importance": [],
                         "feature_scenario": (
                             {"name": "scenario1", "features": ["Age", "Segment"]}
                             if model_id.endswith("-2")
@@ -1289,7 +1346,6 @@ class BrowserSmokeTests(unittest.TestCase):
                                 else {"groupings": ["OLD"], "groups": [{"grouping": "OLD", "features": ["Age"]}]}
                             )
                         ),
-                        "sources": {},
                     },
                 )
                 feature_config = [{"name": "Age", "kind": "integer", "include": True, "monotonicity": "Increasing", "gain": 5.0}]
@@ -1297,13 +1353,12 @@ class BrowserSmokeTests(unittest.TestCase):
                     feature_config.append({"name": "lat", "kind": "numeric", "include": True, "monotonicity": "", "gain": 4.0})
                 if model_id.endswith("-2") or model_id == "browser-smoke-delete-a":
                     feature_config.append({"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 6.0})
-                store.write_json(model_dir / "feature_config.json", feature_config)
+                write_gbm_feature_config(store, model_id, feature_config)
                 store.write_json(
                     model_dir / "parameters.json",
                     {
                         "objective": "gamma",
                         "metric": "gamma",
-                        "training_mode": "ebm" if model_id.endswith("-2") else "normal",
                         "learning_rate": learning_rate,
                         "num_iterations": 123 if model_id.endswith("-2") else 77,
                         "early_stopping_rounds": 25,
@@ -1315,14 +1370,12 @@ class BrowserSmokeTests(unittest.TestCase):
                 else:
                     training_eval = [round(0.17 + 0.52 / ((index + 1) ** 0.58), 6) for index in range(3000)]
                     test_eval = [round(0.18 + 0.5 / ((index + 1) ** 0.55), 6) for index in range(3000)]
-                store.write_json(
-                    model_dir / "training_log.json",
+                write_gbm_evaluation(
+                    store,
+                    model_id,
                     {
-                        "evaluation": {
-                            "training": {"gamma": training_eval},
-                            "test": {"gamma": test_eval},
-                        },
-                        "warnings": [],
+                        "training": {"gamma": training_eval},
+                        "test": {"gamma": test_eval},
                     },
                 )
                 con = duckdb.connect(database=":memory:")
@@ -1858,8 +1911,6 @@ COPY (
                 "model_id": model_id,
                 "label": label,
                 "created_at": created_at,
-                "objective": "gamma",
-                "metric": "gamma",
                 "training_mode": "normal",
                 "response_column": "actualNumerator",
                 "offset_column": "denominator",
@@ -1869,20 +1920,15 @@ COPY (
                 "scored_rows": len(predictions),
                 "sample_column": "SAMPLE",
                 "sample_source": "dataset",
-                "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
-                "sources": {
-                    "predictions": store.source_id(model_id, "predictions"),
-                    "shap_long": store.source_id(model_id, "shap_long"),
-                    "shap_summary": store.source_id(model_id, "shap_summary"),
-                },
             },
         )
-        store.write_json(model_dir / "feature_config.json", [{"name": "Age", "kind": "integer", "include": True, "gain": 1.0, "mean_abs_shap": 0.2}])
-        store.write_json(model_dir / "parameters.json", {"objective": "gamma", "metric": "gamma", "num_iterations": len(predictions)})
-        store.write_json(
-            model_dir / "training_log.json",
-            {"evaluation": {"training": {"gamma": predictions}, "test": {"gamma": predictions}}, "warnings": []},
+        write_gbm_feature_config(
+            store,
+            model_id,
+            [{"name": "Age", "kind": "integer", "include": True, "gain": 1.0, "mean_abs_shap": 0.2}],
         )
+        store.write_json(model_dir / "parameters.json", {"objective": "gamma", "metric": "gamma", "num_iterations": len(predictions)})
+        write_gbm_evaluation(store, model_id, {"training": {"gamma": predictions}, "test": {"gamma": predictions}})
         prediction_rows = "\n  UNION ALL\n  ".join(
             f"SELECT {index + 1} AS __lucidum_row_id, {float(value)} AS gbm_prediction"
             for index, value in enumerate(predictions)
@@ -1945,8 +1991,6 @@ COPY (
             "training_rows": 2,
             "scored_rows": len(predictions),
             "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
-            "sources": {"predictions": store.source_id(model_id)},
-            "diagnostics": diagnostics,
             "regularization": regularization or {"mode": "none"},
         }
         if family_parameter is not None:
@@ -5919,11 +5963,12 @@ COPY (
                       const version = document.querySelector("#sidebarVersion");
                       return version
                         && version.offsetParent !== null
-                        && /^lucidum v\\d+\\.\\d+\\.\\d+/.test(version.textContent.trim());
+                        && version.textContent.trim().length > 0;
                     }
                     """,
                     timeout=10_000,
                 )
+                self.assertEqual(page.locator("#sidebarVersion").inner_text().strip(), f"lucidum v{__version__}")
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
                 self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))

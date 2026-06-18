@@ -263,7 +263,7 @@ The GLM tool is opt-in and must be requested with `line-bar`:
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm
 ```
 
-The Formula builder accepts either a full `response ~ terms` Formulaic formula, or RHS-only `terms` that use the sidebar Actual metric as the response. Lines can include `#` comments; comments are stored with the model but stripped before fitting. The formula context includes `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms. Explicit `offset(...)` terms are supported; they are stripped from the fitted formula, stored in the manifest, and passed to `glum.fit()` and prediction.
+The Formula builder accepts either a full `response ~ terms` Formulaic formula, or RHS-only `terms` that use the sidebar Actual metric as the response. Lines can include `#` comments; raw formula text is stored in `formula.txt` with comments, but comments are stripped before fitting. The formula context includes `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms. Explicit `offset(...)` terms are supported; they are stripped from the fitted formula, stored in the manifest, and passed to `glum.fit()` and prediction.
 
 Families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`, with `link="auto"` in the first implementation. Tweedie power and negative-binomial theta can be set from the family parameter input. If a sidebar Weight is selected, GLM fits `Actual / Weight` with `sample_weight=Weight`, stores `glm_prediction` back on the original Actual scale, and exposes `glm_prediction_rate = glm_prediction / Weight`. Saved models live under the current dataset workspace in `models/glm/`, and the active model publishes a `glm:<model_id>:predictions` data source.
 
@@ -273,7 +273,7 @@ The Penalty selector defaults to `None` for the existing unregularized fit. `Aut
 
 `All` fits all valid rows. `Training` fits only rows where a physical `SAMPLE` column equals `training`, case-insensitively; GLM does not create generated sample splits.
 
-GLM model manifests include build timing diagnostics for dependency setup, data loading, formula prep, fitting, scoring, artifact writes, and isolated worker elapsed time. When LightGBM/glum load-order protection is required, GLM fitting stays isolated in a hot worker that is reused after the first build; set `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` to force the old one-shot worker path for debugging.
+GLM model sidecars include build timings in the manifest, diagnostics and warnings in `diagnostics.json`, raw formula text in `formula.txt`, and feature importances in `feature_importance.parquet`. When LightGBM/glum load-order protection is required, GLM fitting stays isolated in a hot worker that is reused after the first build; set `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` to force the old one-shot worker path for debugging.
 
 ## GBM Models
 
@@ -306,13 +306,19 @@ Parameter values can use grid-search braces, such as `{200, 300, 400}`, `{0.05, 
 
 The first parameter row, `init_score`, can stay as `none` for the current behavior or point at a numeric dataset column or fitted GLM prediction artifact. Supplied values are treated as prediction-space baselines, transformed to LightGBM's linear predictor space for objectives with log or logit links, and replace the automatic denominator-derived initial score. When used, the resolved baseline is saved as `init_score.parquet` beside the model.
 
+Saved GBM `parameters.json` is a LightGBM Python params dictionary intended for `json.load()` then `lgb.train(params=...)`, including objective and metric. Lucidum-only selections such as the UI `init_score` choice, init-score provenance, and EBM training mode live in `manifest.json`.
+
+GBM model input feature order lives in `features.json`, as a JSON array of feature names. Trained GBM display metadata lives in optional `feature_config.parquet`, enriched with kind, monotonicity, Gain, and optional SHAP importance. Prediction and SHAP data sources derive their raw dataset-column projections from the current dataset schema rather than from duplicated manifest fields.
+
 The `10k` and `100k` SHAP row options save a deterministic random sample from all scored rows using the model seed; `All` saves every scored row.
+
+Saved `shap_summary.parquet` contains one row per trained feature with `feature`, `mean_abs_shap`, `mean_shap`, and `row_count`. The model identity comes from the model folder and computed source ID, not from a repeated column inside the Parquet file.
 
 When feature interaction constraint groups are selected during training, saved `shap_values.parquet` files also include one grouped SHAP contribution column per selected grouping, named like `POSTCODE_INTERACTION_GROUP`. These grouped columns and the active model's prediction column are available in the Line and Bar Actual chooser under separate Dataset, Model predictions, and SHAP values sections.
 
 If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under the current dataset workspace in `models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved under the same dataset-version workspace.
 
-During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Use the inline `All` / `Tail` control to switch between the full history and a focused tail view. Long evaluation histories are sampled only for browser rendering; saved training logs and artifacts remain complete.
+During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Use the inline `All` / `Tail` control to switch between the full history and a focused tail view. Long evaluation histories are sampled only for browser rendering; saved `evaluation.parquet` artifacts remain complete.
 
 ### Saved feature context
 

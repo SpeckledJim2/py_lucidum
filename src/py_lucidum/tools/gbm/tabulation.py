@@ -372,8 +372,8 @@ def _prediction_to_linear(np: Any, pd: Any, values: Any, transform: str) -> Any:
     return prediction
 
 
-def _linear_offset(frame: Any, manifest: dict[str, Any], np: Any, pd: Any) -> Any:
-    objective = str(manifest.get("objective") or "").strip().lower()
+def _linear_offset(frame: Any, manifest: dict[str, Any], parameters: dict[str, Any], np: Any, pd: Any) -> Any:
+    objective = str(parameters.get("objective") or "").strip().lower()
     transform = init_score_transform(objective)
     init_score = manifest.get("init_score") if isinstance(manifest.get("init_score"), dict) else {}
     if str(init_score.get("kind") or "none").lower() != "none" and "__lucidum_init_score" in frame.columns:
@@ -570,7 +570,8 @@ def build_gbm_tabulations(
         tree_eta = tree_eta + component.fillna(0.0)
         tabulated[f"tabulated_linear__{_safe_id(str(table_info['table_id']))}"] = component
 
-    linear_offset, transform = _linear_offset(frame, manifest, np, pd)
+    parameters = store.model_parameters(model_id)
+    linear_offset, transform = _linear_offset(frame, manifest, parameters, np, pd)
     final_linear = tree_eta + linear_offset.fillna(0.0)
     missing = missing | linear_offset.isna()
     finite_linear = (~missing) & np.isfinite(final_linear.astype(float))

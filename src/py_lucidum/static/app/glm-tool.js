@@ -2530,7 +2530,7 @@ export function createGlmTool({
       const syncBuilderDraft = detailModelId !== builderDraftSourceModelId;
       syncBuilderFromModelDetail(activeDetail, { syncBuilderDraft });
       if (syncBuilderDraft) builderDraftSourceModelId = detailModelId;
-      const diagnostics = activeDetail?.diagnostics || activeDetail?.manifest?.diagnostics || {};
+      const diagnostics = activeDetail?.diagnostics || {};
       const meta = el("glmCoefficientMeta");
       const coefficients = Array.isArray(activeDetail?.coefficients) ? activeDetail.coefficients : [];
       if (meta) meta.innerHTML = diagnosticsHtml(diagnostics, activeDetail?.manifest || {}, coefficients);

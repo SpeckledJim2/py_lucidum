@@ -45,10 +45,10 @@ def active_gbm_importance(store: Any) -> dict[str, Any]:
     except Exception:
         return empty_model_payload("No active GBM is available.", model_id=model_id)
 
-    feature_rows = read_json_artifact(store, model_id, "feature_config", [])
-    if not isinstance(feature_rows, list) or not feature_rows:
-        feature_rows = manifest.get("feature_importance", [])
-    if not isinstance(feature_rows, list):
+    feature_config = getattr(store, "model_feature_config", None)
+    if callable(feature_config):
+        feature_rows = feature_config(model_id)
+    else:
         feature_rows = []
 
     shap_importance = read_gbm_shap_importance(store, model_id)
@@ -134,14 +134,14 @@ def active_glm_importance(store: Any) -> dict[str, Any]:
 
 
 def read_glm_importance_rows(store: Any, model_id: str, manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    artifact_rows: list[dict[str, Any]] = []
     try:
         path = store.artifact_path(model_id, "feature_importance")
         if isinstance(path, Path) and path.exists():
-            artifact_rows = store.read_parquet_records(path)
+            raw_rows = store.read_parquet_records(path)
+        else:
+            raw_rows = []
     except Exception:
-        artifact_rows = []
-    raw_rows = artifact_rows or manifest.get("feature_importance", [])
+        raw_rows = []
     if not isinstance(raw_rows, list):
         return []
     rows: list[dict[str, Any]] = []
@@ -177,13 +177,6 @@ def read_gbm_shap_importance(store: Any, model_id: str) -> dict[str, float]:
         if feature and value is not None:
             values[feature] = float(value)
     return values
-
-
-def read_json_artifact(store: Any, model_id: str, artifact: str, default: Any) -> Any:
-    try:
-        return store.read_json(store.artifact_path(model_id, artifact), default)
-    except Exception:
-        return default
 
 
 def safe_active_model_id(store: Any) -> str:

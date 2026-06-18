@@ -11,7 +11,7 @@ export function createGbmEvaluationChart({ escapeHtml, formatEvaluationValue }) 
   function render(source = null) {
     const target = document.getElementById("gbmEvaluationChart");
     const detail = source || {};
-    const evaluation = detail?.training_log?.evaluation || detail?.evaluation;
+    const evaluation = detail?.evaluation;
     if (!target || !window.echarts || !evaluation) return;
     const rows = [];
     for (const [datasetName, metrics] of Object.entries(evaluation)) {
@@ -22,7 +22,7 @@ export function createGbmEvaluationChart({ escapeHtml, formatEvaluationValue }) 
     if (!rows.length) return;
     rows.sort(compareEvaluationRows);
     const metricNames = new Set(rows.map((row) => row.metricName));
-    const primaryMetric = String(detail?.manifest?.metric || detail?.metric || rows[0]?.metricName || "metric");
+    const primaryMetric = String(detail?.metric || rows[0]?.metricName || "metric");
     const maxIteration = Math.max(1, ...rows.map((row) => row.values.length));
     const xMax = evaluationXAxisMax(maxIteration, detail?.progress || null);
     const xDomain = evaluationXDomain(maxIteration, detail, xMax);

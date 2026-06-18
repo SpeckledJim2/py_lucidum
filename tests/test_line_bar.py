@@ -195,17 +195,11 @@ class LineBarToolTests(unittest.TestCase):
                 "model_id": model_id,
                 "label": f"{objective} ribbons",
                 "created_at": "2026-06-04T00:00:00Z",
-                "objective": objective,
-                "metric": objective,
                 "response_column": "Actual",
                 "offset_column": "Weight",
-                "sources": {
-                    "predictions": f"gbm:{model_id}:predictions",
-                    "shap_long": f"gbm:{model_id}:shap_long",
-                    "shap_summary": f"gbm:{model_id}:shap_summary",
-                },
             },
         )
+        store.write_json(model_dir / "parameters.json", {"objective": objective, "metric": objective})
         con = duckdb.connect(database=":memory:")
         try:
             prediction_rows = predictions or [(1, 100.0), (2, 200.0), (3, 300.0), (4, 400.0)]
@@ -303,7 +297,6 @@ COPY (
                 "source_columns": source_columns,
                 "offset_terms": [],
                 "formula": {"offset_terms": []},
-                "sources": {"predictions": f"glm:{model_id}:predictions"},
             },
         )
         estimator = FakeGlmOverlayEstimator(
@@ -349,23 +342,26 @@ COPY (
                 "model_id": "importance-gbm",
                 "label": "Importance GBM",
                 "created_at": "2026-06-07T00:00:00Z",
-                "objective": "poisson",
-                "metric": "poisson",
                 "response_column": "Actual",
                 "offset_column": "Weight",
-                "feature_importance": [
-                    {"name": "UseofVan", "kind": "categorical", "gain": 3.0},
-                    {"name": "YoungestDriverAge", "kind": "integer", "gain": 2.0},
-                ],
             },
         )
-        store.write_json(
-            model_dir / "feature_config.json",
-            [
-                {"name": "UseofVan", "kind": "categorical", "include": True, "gain": 3.0},
-                {"name": "YoungestDriverAge", "kind": "integer", "include": True, "gain": 2.0},
-            ],
-        )
+        store.write_json(model_dir / "parameters.json", {"objective": "poisson", "metric": "poisson"})
+        store.write_json(model_dir / "features.json", ["UseofVan", "YoungestDriverAge"])
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 'UseofVan' AS name, 'categorical' AS kind, TRUE AS include, NULL AS monotonicity,
+         NULL AS monotonicity_value, 3.0 AS gain, NULL AS mean_abs_shap
+  UNION ALL
+  SELECT 'YoungestDriverAge', 'integer', TRUE, NULL, NULL, 2.0, NULL
+) TO {sql_literal(str(store.artifact_path("importance-gbm", "feature_config")))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
         if with_shap:
             con = duckdb.connect(database=":memory:")
             try:
@@ -382,7 +378,7 @@ COPY (
         store.activate_model("importance-gbm")
         return store
 
-    def write_active_glm_importance_model(self, *, with_importance: bool = True) -> GlmModelStore:
+    def write_active_glm_importance_model(self) -> GlmModelStore:
         store = GlmModelStore(self.data_path)
         model_dir = store.create_model_dir("importance-glm")
         manifest: dict[str, Any] = {
@@ -395,41 +391,24 @@ COPY (
             "response_column": "Actual",
             "denominator_column": "",
             "source_columns": ["YoungestDriverAge", "UseofVan", "QuoteDate", "Gross.Weight", "Actual", "Expected", "Weight"],
-            "sources": {"predictions": "glm:importance-glm:predictions"},
-        }
-        if with_importance:
-            rows = [
-                {
-                    "feature": "UseofVan",
-                    "importance": 0.75,
-                    "term_count": 2,
-                    "metric": "weighted_mean_abs_centered_linear_predictor_contribution",
-                },
-                {
-                    "feature": "YoungestDriverAge",
-                    "importance": 0.25,
-                    "term_count": 1,
-                    "metric": "weighted_mean_abs_centered_linear_predictor_contribution",
-                },
-            ]
-            manifest["feature_importance"] = rows
-            manifest["feature_importance_metric"] = {
+            "feature_importance_metric": {
                 "name": "weighted_mean_abs_centered_linear_predictor_contribution",
                 "label": "GLM eta MAD",
                 "interaction_allocation": "split_evenly",
-            }
-            con = duckdb.connect(database=":memory:")
-            try:
-                con.execute(
-                    f"""
+            },
+        }
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
 COPY (
   SELECT 'UseofVan' AS feature, 0.75 AS importance, 2 AS term_count, 'weighted_mean_abs_centered_linear_predictor_contribution' AS metric
   UNION ALL SELECT 'YoungestDriverAge', 0.25, 1, 'weighted_mean_abs_centered_linear_predictor_contribution'
 ) TO {sql_literal(str(model_dir / "feature_importance.parquet"))} (FORMAT PARQUET)
 """
-                )
-            finally:
-                con.close()
+            )
+        finally:
+            con.close()
         store.write_json(model_dir / "manifest.json", manifest)
         store.activate_model("importance-glm")
         return store
@@ -878,18 +857,6 @@ COPY (
         self.assertFalse(payload["has_importance"])
         self.assertIn("No active GBM is available.", payload["messages"])
         self.assertIn("No active GLM is available.", payload["messages"])
-
-    def test_feature_importance_endpoint_reports_old_glm_without_importance_sidecar(self) -> None:
-        self.write_active_glm_importance_model(with_importance=False)
-        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
-
-        status, _, body = asgi_get(app, "/api/line-bar/feature-importance")
-        payload = json.loads(body)
-
-        self.assertEqual(status, 200)
-        self.assertFalse(payload["has_importance"])
-        self.assertEqual(payload["models"]["glm"]["model_id"], "importance-glm")
-        self.assertIn("Rebuild the active GLM", payload["models"]["glm"]["message"])
 
     def test_lazy_banding_suggestion_uses_bounded_sample(self) -> None:
         path = self.root / "large.parquet"

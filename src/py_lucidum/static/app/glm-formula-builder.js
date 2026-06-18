@@ -1099,7 +1099,7 @@ export function createGlmFormulaBuilder({
   function syncFromModelDetail(detail = {}, options = {}) {
     if (options.syncBuilderDraft === false) return;
     const manifest = detail?.manifest || {};
-    const rawFormula = detail?.formula ?? manifest?.formula?.raw;
+    const rawFormula = detail?.formula;
     if (rawFormula !== undefined && rawFormula !== null) setFormulaText(String(rawFormula));
 
     const family = String(manifest.family || "").trim();

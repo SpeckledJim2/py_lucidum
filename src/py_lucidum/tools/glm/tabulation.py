@@ -828,7 +828,7 @@ def _rebuild_tabulated_predictions(
     tabulated["glm_tabulated_linear_prediction"] = eta.where(~missing, np.nan)
     tabulated["glm_tabulation_missing"] = missing
     write_dataframe_parquet(tabulated, store.artifact_path(model_id, "tabulated_predictions"))
-    diagnostics = dict(manifest.get("diagnostics") or {})
+    diagnostics = dict(store.model_diagnostics(model_id))
     diagnostics.update(
         {
             "scored_rows": int(((~missing) & np.isfinite(eta.astype(float))).sum()),
@@ -1563,7 +1563,7 @@ def _tabulation_model_status(store: GlmModelStore, model: dict[str, Any]) -> dic
     manifest = _tabulation_manifest(store, model_id)
     tabulatable = store.artifact_path(model_id, "estimator").exists()
     tables = list(manifest.get("tables", [])) if manifest else []
-    model_warnings = list(manifest.get("warnings", [])) if manifest else []
+    model_warnings = list(store.model_diagnostics(model_id).get("warnings", [])) if manifest else []
     if not tabulatable:
         model_warnings.append("Rebuild this GLM before tabulating; estimator.pkl is missing.")
     return {
