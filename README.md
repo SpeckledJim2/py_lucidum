@@ -6,7 +6,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
 ## Current Tools
 
-- **Dataset Viewer**: inspect a fast filtered preview of dataset rows in a sortable Tabulator grid, capped at 1,000 displayed rows, with client-side whole-table search, persistent multi-row highlighting, transpose mode, optional alphabetical column ordering, reset-sort, and copy-selected rows as CSV.
+- **Dataset Viewer**: inspect a fast filtered preview of dataset rows in a sortable Tabulator grid, capped at 1,000 displayed rows, with client-side whole-table search, persistent multi-row highlighting, transpose mode where search matches original column-name rows while keeping all preview row columns, optional alphabetical column ordering, reset-sort, and copy-selected rows as CSV.
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
 - **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, server-backed searchable/paginated tables, Base-aware transforms, sigma bars, optional active-GBM SHAP ribbons, active-GLM overlay lines, and x-axis feature ordering by saved GBM/GLM feature importance.
 - **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution with configurable bins, cumulative/probability modes, log axes, mean/median reference lines, and a compact metrics table.

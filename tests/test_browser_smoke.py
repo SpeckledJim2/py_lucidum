@@ -5783,7 +5783,7 @@ COPY (
                     arg=first_hover_transform,
                     timeout=10_000,
                 )
-                page.locator("#datasetViewerSearch").fill("AL1 2AA")
+                page.locator("#datasetViewerSearch").fill("PostcodeUnit")
                 page.wait_for_function(
                     """
                     () => {
@@ -5791,12 +5791,14 @@ COPY (
                       if (!table) return false;
                       const headers = [...table.querySelectorAll('thead th')].map((cell) => cell.textContent.trim());
                       const rows = [...table.querySelectorAll('tbody tr')];
-                      const unitRow = rows.find((row) => row.cells[0]?.textContent.trim() === 'PostcodeUnit');
-                      return headers.length === 2
+                      return headers.length === 5
                         && headers[0] === 'Column'
                         && headers[1] === 'Row 1'
-                        && rows.length >= 8
-                        && unitRow?.cells[1]?.textContent.trim() === 'AL1 2AA';
+                        && headers[4] === 'Row 4'
+                        && rows.length === 1
+                        && rows[0].cells[0]?.textContent.trim() === 'PostcodeUnit'
+                        && rows[0].cells[1]?.textContent.trim() === 'AB10 1AA'
+                        && rows[0].cells[4]?.textContent.trim() === 'AL1 2AA';
                     }
                     """,
                     timeout=10_000,

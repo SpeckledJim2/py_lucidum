@@ -353,8 +353,12 @@ export function createDatasetViewerTool({
 
   function transposedTableData(data) {
     const sourceColumns = orderedDatasetViewerColumns(data);
-    const sourceRows = filteredSourceRows(data, sourceColumns);
-    const rows = sourceColumns.map((column, columnIndex) => {
+    const sourceRows = Array.isArray(data?.rows) ? data.rows : [];
+    const query = String(state.datasetViewerSearch || "").trim().toLowerCase();
+    const visibleColumns = query
+      ? sourceColumns.filter((column) => transposedColumnMatchesSearch(column, query))
+      : sourceColumns;
+    const rows = visibleColumns.map((column, columnIndex) => {
       const row = {
         __row_id: columnIndex + 1,
         __field: column.name,
@@ -431,15 +435,8 @@ export function createDatasetViewerTool({
     }
   }
 
-  function filteredSourceRows(data, sourceColumns) {
-    const rows = Array.isArray(data?.rows) ? data.rows : [];
-    const query = String(state.datasetViewerSearch || "").trim().toLowerCase();
-    if (!query) return rows;
-    return rows.filter((row) => rowMatchesSearch(row, sourceColumns, query));
-  }
-
-  function rowMatchesSearch(row, sourceColumns, query) {
-    return sourceColumns.some((column) => formatCellValue(row[column.field]).toLowerCase().includes(query));
+  function transposedColumnMatchesSearch(column, query) {
+    return formatCellValue(column?.name).toLowerCase().includes(query);
   }
 
   function resetSort() {
