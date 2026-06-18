@@ -282,7 +282,6 @@ COPY (
         self.require_glm_dependencies()
         store = GlmModelStore(self.data_path)
         model_dir = store.create_model_dir(model_id)
-        source_columns = ["YoungestDriverAge", "UseofVan", "QuoteDate", "Gross.Weight", "Actual", "Expected", "Weight"]
         store.write_json(
             model_dir / "manifest.json",
             {
@@ -294,9 +293,14 @@ COPY (
                 "link": "auto",
                 "response_column": "Actual",
                 "denominator_column": denominator_column,
-                "source_columns": source_columns,
                 "offset_terms": [],
-                "formula": {"offset_terms": []},
+                "formula": {
+                    "drop_first": True,
+                    "fit_intercept": True,
+                    "estimator_fit_intercept": True,
+                    "intercept_only": False,
+                    "internal_intercept_column": "",
+                },
             },
         )
         estimator = FakeGlmOverlayEstimator(
@@ -390,12 +394,6 @@ COPY (
             "link": "auto",
             "response_column": "Actual",
             "denominator_column": "",
-            "source_columns": ["YoungestDriverAge", "UseofVan", "QuoteDate", "Gross.Weight", "Actual", "Expected", "Weight"],
-            "feature_importance_metric": {
-                "name": "weighted_mean_abs_centered_linear_predictor_contribution",
-                "label": "GLM eta MAD",
-                "interaction_allocation": "split_evenly",
-            },
         }
         con = duckdb.connect(database=":memory:")
         try:

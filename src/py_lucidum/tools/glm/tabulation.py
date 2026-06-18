@@ -111,8 +111,13 @@ def _schema_columns_and_kinds(dataset: Dataset) -> tuple[list[str], dict[str, st
     return [column.name for column in columns], {column.name: column.kind for column in columns}
 
 
+def _sample_column_from_columns(columns: list[str]) -> str:
+    by_lower = {str(column).lower(): str(column) for column in columns}
+    return by_lower.get("sample", "")
+
+
 def _fit_frame_for_levels(frame: Any, manifest: dict[str, Any], pd: Any) -> Any:
-    sample_column = str(manifest.get("sample_column") or "")
+    sample_column = _sample_column_from_columns([str(column) for column in frame.columns])
     training_scope = str(manifest.get("training_scope") or "all")
     if training_scope == "training" and sample_column and sample_column in frame.columns:
         return frame.loc[frame[sample_column].astype(str).str.strip().str.lower() == "training"].copy()
@@ -129,7 +134,7 @@ def _required_tabulation_columns(
     denominator_column = str(manifest.get("denominator_column") or "").strip()
     if denominator_column:
         requested.add(denominator_column)
-    sample_column = str(manifest.get("sample_column") or "").strip()
+    sample_column = _sample_column_from_columns(source_columns)
     if str(manifest.get("training_scope") or "all") == "training" and sample_column:
         requested.add(sample_column)
     for expression in offset_terms:
@@ -619,7 +624,7 @@ def _raw_tabulations_dir(store: GlmModelStore, model_id: str) -> Path:
 
 
 def _raw_tabulation_manifest_path(store: GlmModelStore, model_id: str) -> Path:
-    return store.model_dir(model_id) / "tabulation_manifest_raw.json"
+    return _raw_tabulations_dir(store, model_id) / "manifest.json"
 
 
 def _raw_table_file_path(store: GlmModelStore, model_id: str, table_id: str) -> Path:

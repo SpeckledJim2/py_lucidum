@@ -55,12 +55,12 @@ The SD error is expected to be nonzero for numeric tables because row scoring us
 
 Tabulation tables can have a free additive allocation between visible components. Rebasing is an app-level gauge transform on the linear-predictor scale:
 
-1. Preserve the first generated tables and manifest under `tabulations_raw/` and `tabulation_manifest_raw.json`.
+1. Preserve the first generated tables and manifest under `tabulations_raw/`.
 2. Read the selected cell's current `tabulated_linear` value.
 3. For an interaction table with a valid feature crosstab, subtract that value from every OK cell in the source table slice matching the transfer feature value, then add the same value to the matching row of the transfer feature's one-way table. If that one-way table does not exist, create a one-way adjustment table.
 4. For a one-way table, or a higher-dimensional table without a feature-transfer crosstab, subtract that value from every numeric source table cell and add it to the `base` table.
 5. Rebuild `tabulated_predictions.parquet` from the adjusted tables and assert the row-level linear predictions are unchanged within numerical tolerance.
-6. Store the applied rule under `tabulation_manifest.json` `rebasing.rules`.
+6. Store the applied rule under `tabulations/manifest.json` `rebasing.rules`.
 
 Reset restores `tabulations_raw/`, clears `rebasing`, and rebuilds `tabulated_predictions.parquet` from the restored raw tables.
 
@@ -69,9 +69,9 @@ Reset restores `tabulations_raw/`, clears `rebasing`, and rebuilds `tabulated_pr
 Each GLM model directory under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/glm/<model_id>/` may contain:
 
 - `estimator.pkl`: fitted `glum` estimator.
-- `tabulation_manifest.json`: tables, warnings, diagnostics, feature metadata, and build time.
+- `tabulations/manifest.json`: tables, warnings, diagnostics, feature metadata, and build time.
 - `tabulations/*.parquet`: one Parquet table per tabulation, including `base.parquet`.
-- `tabulations_raw/*.parquet` and `tabulation_manifest_raw.json`: first generated raw tables and metadata, present only while rebase rules are active.
+- `tabulations_raw/*.parquet` and `tabulations_raw/manifest.json`: first generated raw tables and metadata, present only while rebase rules are active.
 - `tabulated_predictions.parquet`: row-level tabulated predictions.
 
 `tabulated_predictions.parquet` contains:

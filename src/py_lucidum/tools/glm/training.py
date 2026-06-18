@@ -110,19 +110,6 @@ def _merge_result_timings(result: dict[str, Any], timings: dict[str, Any]) -> di
     return result_timings
 
 
-def _persist_manifest_timings(store: GlmModelStore, result: dict[str, Any], timings: dict[str, Any]) -> None:
-    model_id = str(result.get("model_id") or "").strip()
-    if not model_id:
-        return
-    manifest = store.manifest(model_id)
-    manifest_timings = manifest.get("timings")
-    if not isinstance(manifest_timings, dict):
-        manifest_timings = {}
-        manifest["timings"] = manifest_timings
-    manifest_timings.update(timings)
-    store.write_json(store.artifact_path(model_id, "manifest"), manifest)
-
-
 @contextmanager
 def _suppress_tabmat_mixed_dtype_warning() -> Iterator[None]:
     with warnings.catch_warnings():
@@ -344,7 +331,6 @@ def train_model_in_subprocess_one_shot(
         "dependency_ms": round(parent_dependency_ms + worker_dependency_ms, 1),
     }
     _merge_result_timings(result, worker_timings)
-    _persist_manifest_timings(store, result, worker_timings)
     progress({"phase": "writing", "message": "GLM worker saved artifacts", "percent": 90, "timings": result.get("timings")})
     return result
 
@@ -461,7 +447,6 @@ class PersistentGlmFitWorker:
             "dependency_ms": round(parent_dependency_ms + worker_dependency_ms, 1),
         }
         _merge_result_timings(result, worker_timings)
-        _persist_manifest_timings(store, result, worker_timings)
 
     def _ensure_process(self) -> tuple[subprocess.Popen[str], bool]:
         process = self._process
@@ -1150,7 +1135,6 @@ def _train_model_impl(
     formula = validation["formula"]
     validation_warnings = _dedupe_warnings(list(validation.get("warnings") or []))
     fit_intercept = bool(formula.get("fit_intercept", True))
-    has_predictor_terms = bool(formula.get("has_predictor_terms", True))
     intercept_only = bool(formula.get("intercept_only", False))
     context = formula_context(np)
     offset_terms = [str(term) for term in formula.get("offset_terms", [])]
@@ -1330,37 +1314,16 @@ def _train_model_impl(
         "regularization": jsonable(regularization, np, pd),
         "response_column": response_column,
         "denominator_column": denominator_column,
-        "offset_column": denominator_column,
         "offset_terms": jsonable(offset_terms, np, pd),
         "training_scope": training_scope,
-        "sample_column": sample_column,
         "formula": {
-            "stripped": formula["stripped"],
-            "rhs": formula["rhs"],
-            "fitted": formula["fitted"],
-            "estimator_fitted": estimator_fitted_formula,
-            "offset_terms": offset_terms,
             "drop_first": drop_first,
             "fit_intercept": fit_intercept,
             "estimator_fit_intercept": estimator_fit_intercept,
-            "has_predictor_terms": has_predictor_terms,
             "intercept_only": intercept_only,
             "internal_intercept_column": internal_intercept_column,
         },
-        "feature_importance_metric": {
-            "name": FEATURE_IMPORTANCE_METRIC,
-            "label": FEATURE_IMPORTANCE_METRIC_LABEL,
-            "scale": "linear_predictor",
-            "description": "Weighted mean absolute centered feature contribution on the GLM linear predictor scale.",
-            "interaction_allocation": "split_evenly",
-        },
-        "source_columns": source_columns,
-        "row_count": int(len(frame)),
-        "training_rows": int(fit_mask.sum()),
-        "scored_rows": scored_rows,
-        "fitted_na_rows": fitted_na_rows,
-        "coefficient_count": len(coefficients),
-        "timings": timings,
+        "timings": {},
     }
 
     progress({"phase": "writing", "message": "Saving GLM artifacts", "percent": 90})
@@ -1379,10 +1342,12 @@ def _train_model_impl(
     store.write_json(store.artifact_path(model_id, "diagnostics"), jsonable(diagnostics, np, pd))
     timings["artifact_write_ms"] = _elapsed_ms(artifact_write_started)
     timings["elapsed_ms"] = _elapsed_ms(started)
+    manifest["timings"] = {"elapsed_ms": timings["elapsed_ms"]}
     progress({"phase": "writing", "message": "Saved GLM artifacts", "percent": 95, "timings": timings})
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
 
     result = store.activate_model(model_id) if activate else store.model_list_item(model_dir, manifest, store.active_model_id())
+    result["timings"] = jsonable(timings, np, pd)
     result["coefficients"] = coefficients
     result["feature_importance"] = feature_importance
     result["diagnostics"] = jsonable(diagnostics, np, pd)

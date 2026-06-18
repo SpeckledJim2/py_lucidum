@@ -273,7 +273,7 @@ The Penalty selector defaults to `None` for the existing unregularized fit. `Aut
 
 `All` fits all valid rows. `Training` fits only rows where a physical `SAMPLE` column equals `training`, case-insensitively; GLM does not create generated sample splits.
 
-GLM model sidecars include build timings in the manifest, diagnostics and warnings in `diagnostics.json`, raw formula text in `formula.txt`, and feature importances in `feature_importance.parquet`. When LightGBM/glum load-order protection is required, GLM fitting stays isolated in a hot worker that is reused after the first build; set `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` to force the old one-shot worker path for debugging.
+GLM model sidecars keep `manifest.json` compact: identity, response/denominator, family/link, regularization, training scope, offset expressions, minimal formula execution flags, and total elapsed time. Raw formula text lives only in `formula.txt`; diagnostics and warnings live in `diagnostics.json`; coefficients, feature importances, predictions, and tabulated predictions live in Parquet artifacts. `estimator.pkl` is required for GLM tabulations and overlay reconstruction. Tabulation metadata lives beside the rating tables in `tabulations/manifest.json`. When LightGBM/glum load-order protection is required, GLM fitting stays isolated in a hot worker that is reused after the first build; set `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` to force the old one-shot worker path for debugging.
 
 ## GBM Models
 

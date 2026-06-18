@@ -1978,7 +1978,14 @@ COPY (
         regularization: dict[str, Any] | None = None,
     ) -> None:
         model_dir = store.create_model_dir(model_id)
-        diagnostics = {"aic": 123.45, "deviance": 67.89, "dispersion": 1.2, "na_in_fitted": 0}
+        diagnostics = {
+            "aic": 123.45,
+            "deviance": 67.89,
+            "dispersion": 1.2,
+            "na_in_fitted": 0,
+            "training_rows": 2,
+            "scored_rows": len(predictions),
+        }
         manifest = {
             "model_id": model_id,
             "label": label,
@@ -1988,9 +1995,6 @@ COPY (
             "response_column": "actualNumerator",
             "denominator_column": "denominator",
             "training_scope": training_scope,
-            "training_rows": 2,
-            "scored_rows": len(predictions),
-            "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
             "regularization": regularization or {"mode": "none"},
         }
         if family_parameter is not None:

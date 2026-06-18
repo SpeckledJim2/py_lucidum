@@ -25,7 +25,7 @@ ARTIFACT_FILES = {
     "feature_importance": "feature_importance.parquet",
     "predictions": "predictions.parquet",
     "diagnostics": "diagnostics.json",
-    "tabulation_manifest": "tabulation_manifest.json",
+    "tabulation_manifest": "tabulations/manifest.json",
     "tabulated_predictions": "tabulated_predictions.parquet",
 }
 SOURCE_KINDS = {
@@ -308,10 +308,22 @@ class GlmModelStore:
     def model_list_item(self, path: Path, manifest: dict[str, Any], active_model_id: str | None) -> dict[str, Any]:
         item = dict(manifest)
         model_id = str(item.get("model_id") or path.name)
+        diagnostics = self.model_diagnostics(model_id, item)
+        denominator_col = str(item.get("denominator_column") or "").strip()
         item["model_id"] = model_id
+        item["denominator_column"] = denominator_col
+        item["offset_column"] = denominator_col
         item["sources"] = self.model_sources(model_id)
-        item["diagnostics"] = self.model_diagnostics(model_id, item)
-        item["metrics"] = item["diagnostics"]
+        item["diagnostics"] = diagnostics
+        item["metrics"] = diagnostics
+        if diagnostics.get("training_rows") is not None:
+            item["training_rows"] = diagnostics.get("training_rows")
+        if diagnostics.get("scored_rows") is not None:
+            item["scored_rows"] = diagnostics.get("scored_rows")
+        if diagnostics.get("fitted_na_rows") is not None:
+            item["fitted_na_rows"] = diagnostics.get("fitted_na_rows")
+        if diagnostics.get("coefficient_count") is not None:
+            item["coefficient_count"] = diagnostics.get("coefficient_count")
         item["active"] = model_id == active_model_id
         return item
 
@@ -321,13 +333,9 @@ class GlmModelStore:
             return diagnostics
         return {}
 
-    def source_columns(self, manifest: dict[str, Any]) -> list[str]:
-        raw_columns = manifest.get("source_columns")
-        if isinstance(raw_columns, list):
-            columns = [str(name).strip() for name in raw_columns if str(name or "").strip()]
-            if columns:
-                return dedupe_columns(columns)
-        dataset = Dataset(self.dataset_path)
+    def source_columns(self, manifest: dict[str, Any] | None = None) -> list[str]:
+        del manifest
+        dataset = self._dataset or Dataset(self.dataset_path)
         return list(dataset.column_map())
 
     def dataset_relation_sql(self) -> str:

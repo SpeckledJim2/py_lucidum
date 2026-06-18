@@ -112,9 +112,8 @@ def active_glm_importance(store: Any) -> dict[str, Any]:
         return empty_model_payload("No active GLM is available.", model_id=model_id)
 
     rows = read_glm_importance_rows(store, model_id, manifest)
-    metric_payload = manifest.get("feature_importance_metric") if isinstance(manifest.get("feature_importance_metric"), dict) else {}
-    metric = str(metric_payload.get("name") or GLM_IMPORTANCE_METRIC)
-    metric_label = str(metric_payload.get("label") or GLM_IMPORTANCE_LABEL)
+    metric = GLM_IMPORTANCE_METRIC
+    metric_label = GLM_IMPORTANCE_LABEL
     if not rows:
         return model_payload(
             model_id=model_id,

@@ -191,6 +191,10 @@ class GlmToolTests(unittest.TestCase):
         for key in ("elapsed_ms", "dependency_ms", "data_load_ms", "prep_ms", "fit_ms", "score_ms", "artifact_write_ms", "worker_total_ms"):
             self.assertGreaterEqual(float(timings[key]), 0.0)
 
+    def assert_glm_manifest_timing_metadata(self, timings: dict[str, Any]) -> None:
+        self.assertEqual(set(timings), {"elapsed_ms"})
+        self.assertGreaterEqual(float(timings["elapsed_ms"]), 0.0)
+
     def spline_data_path(self) -> Path:
         path = self.root / "spline.csv"
         rows = ["y,x,Segment\n"]
@@ -379,7 +383,7 @@ if result.get("iteration") != 10:
             {
                 "model_id": model_id,
                 "tool": "glm",
-                "timings": {"dependency_ms": 12.3, "fit_ms": 45.6},
+                "timings": {"elapsed_ms": 1.0},
             },
         )
         progress: list[dict[str, Any]] = []
@@ -410,7 +414,7 @@ if result.get("iteration") != 10:
         self.assertEqual(timings["parent_dependency_ms"], 7.7)
         self.assertEqual(timings["worker_dependency_ms"], 12.3)
         self.assertEqual(timings["dependency_ms"], 20.0)
-        self.assertEqual(store.manifest(model_id)["timings"]["worker_mode"], "one_shot")
+        self.assertEqual(store.manifest(model_id)["timings"], {"elapsed_ms": 1.0})
         self.assertEqual(progress[0]["message"], "Running isolated GLM fit worker")
         self.assertEqual(progress[-1]["timings"]["dependency_ms"], 20.0)
 
@@ -431,7 +435,8 @@ if result.get("iteration") != 10:
         self.assertTrue(first["timings"]["worker_started"])
         self.assertFalse(second["timings"]["worker_started"])
         self.assertGreaterEqual(float(second["timings"]["worker_total_ms"]), 0.0)
-        self.assertEqual(store.manifest(second["model_id"])["timings"]["worker_started"], False)
+        self.assert_glm_manifest_timing_metadata(store.manifest(second["model_id"])["timings"])
+        self.assertNotIn("worker_started", store.manifest(second["model_id"])["timings"])
 
     def test_glm_training_dispatches_to_worker_when_isolation_required(self) -> None:
         dataset = Dataset(self.data_path)
@@ -835,19 +840,33 @@ if result.get("iteration") != 10:
         self.assertNotIn("feature_importance", manifest)
         self.assertNotIn("warnings", manifest)
         self.assertNotIn("sources", manifest)
+        self.assertNotIn("source_columns", manifest)
+        self.assertNotIn("offset_column", manifest)
+        self.assertNotIn("sample_column", manifest)
+        self.assertNotIn("row_count", manifest)
+        self.assertNotIn("training_rows", manifest)
+        self.assertNotIn("scored_rows", manifest)
+        self.assertNotIn("fitted_na_rows", manifest)
+        self.assertNotIn("coefficient_count", manifest)
+        self.assertNotIn("feature_importance_metric", manifest)
         self.assertNotIn("raw", manifest["formula"])
+        self.assertNotIn("stripped", manifest["formula"])
+        self.assertNotIn("rhs", manifest["formula"])
+        self.assertNotIn("fitted", manifest["formula"])
+        self.assertNotIn("estimator_fitted", manifest["formula"])
+        self.assertNotIn("offset_terms", manifest["formula"])
         self.assertTrue(store.artifact_path(model_id, "formula").exists())
         self.assertTrue(store.artifact_path(model_id, "estimator").exists())
         self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
         self.assertTrue(store.artifact_path(model_id, "feature_importance").exists())
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
         self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
-        self.assertEqual(manifest["feature_importance_metric"]["interaction_allocation"], "split_evenly")
         feature_importance = store.read_parquet_records(store.artifact_path(model_id, "feature_importance"))
         self.assertTrue(feature_importance)
+        self.assertEqual({row["metric"] for row in feature_importance}, {"weighted_mean_abs_centered_linear_predictor_contribution"})
         self.assertTrue({row["feature"] for row in feature_importance}.issubset({"Age", "Segment"}))
-        self.assert_glm_timing_metadata(manifest["timings"])
-        self.assertEqual(result["timings"]["worker_mode"], manifest["timings"]["worker_mode"])
+        self.assert_glm_manifest_timing_metadata(manifest["timings"])
+        self.assert_glm_timing_metadata(result["timings"])
         prediction_rows = store.read_parquet_records(store.artifact_path(model_id, "predictions"))
         self.assertTrue(prediction_rows)
         self.assertIn("glm_prediction_rate", prediction_rows[0])
@@ -914,7 +933,7 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertTrue(manifest["formula"]["fit_intercept"])
         self.assertEqual(len(fuel_coefficients), 1)
         self.assertEqual(len(result["coefficients"]), 2)
-        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["scored_rows"], dataset.row_count())
         self.assertEqual(result["fitted_na_rows"], 0)
 
     def test_unpenalized_glm_handles_categorical_main_effects_and_interactions(self) -> None:
@@ -942,7 +961,7 @@ FROM {dataset.relation_sql_for_source(source_id)}
 
         self.assertTrue(manifest["formula"]["drop_first"])
         self.assertTrue(manifest["formula"]["fit_intercept"])
-        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["scored_rows"], dataset.row_count())
         self.assertEqual(result["fitted_na_rows"], 0)
         self.assertTrue(
             any(set(row["features"]) == {"OVERNIGHT_LOCATION", "VEHICLE_USAGE"} for row in result["coefficients"])
@@ -973,9 +992,9 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertTrue(result["coefficients"])
         self.assertTrue(result["feature_importance"])
         self.assertIn("deviance", result["diagnostics"])
-        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["scored_rows"], dataset.row_count())
         self.assertEqual(result["fitted_na_rows"], 0)
-        self.assertEqual(len(prediction_rows), manifest["row_count"])
+        self.assertEqual(len(prediction_rows), dataset.row_count())
         self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
         self.assertTrue(store.artifact_path(model_id, "feature_importance").exists())
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
@@ -1010,9 +1029,9 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertEqual(result.get("warnings"), [])
         self.assertNotIn("(Intercept)", coefficient_terms)
         self.assertEqual(manifest["offset_terms"], ["log(pmax(ANNUAL_MILEAGE, 1) / 5000)"])
-        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["scored_rows"], dataset.row_count())
         self.assertEqual(result["fitted_na_rows"], 0)
-        self.assertEqual(len(prediction_rows), manifest["row_count"])
+        self.assertEqual(len(prediction_rows), dataset.row_count())
         self.assertTrue(result["coefficients"])
         self.assertTrue(result["feature_importance"])
         self.assertIn("deviance", result["diagnostics"])
@@ -1046,7 +1065,7 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertTrue(manifest["formula"]["fit_intercept"])
         self.assertEqual(result.get("warnings"), [])
         self.assertIn("(Intercept)", coefficient_terms)
-        self.assertEqual(result["scored_rows"], manifest["row_count"])
+        self.assertEqual(result["scored_rows"], dataset.row_count())
         self.assertEqual(result["diagnostics"]["design_matrix"]["rank"], result["diagnostics"]["design_matrix"]["columns"])
 
     def test_rank_deficient_spline_formula_repeatedly_refuses_to_save_model(self) -> None:
@@ -1117,9 +1136,9 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertTrue(manifest["formula"]["fit_intercept"])
         self.assertFalse(manifest["formula"]["estimator_fit_intercept"])
         self.assertTrue(manifest["formula"]["intercept_only"])
-        self.assertEqual(manifest["formula"]["fitted"], "__lucidum_glm_target ~ 1")
+        self.assertNotIn("fitted", manifest["formula"])
         self.assertTrue(internal_column)
-        self.assertNotIn(internal_column, manifest["source_columns"])
+        self.assertNotIn(internal_column, store.source_columns(manifest))
         self.assertEqual(len(result["coefficients"]), 1)
         self.assertEqual(result["coefficients"][0]["term"], "(Intercept)")
         self.assertEqual(result["coefficients"][0]["features"], [])
@@ -1133,8 +1152,8 @@ SELECT COUNT(*), COUNT(glm_prediction), MIN(glm_prediction), MAX(glm_prediction)
 FROM read_parquet({sql_literal(str(prediction_path))})
 """
             ).fetchone()
-        self.assertEqual(row_count, manifest["row_count"])
-        self.assertEqual(scored_count, manifest["row_count"])
+        self.assertEqual(row_count, dataset.row_count())
+        self.assertEqual(scored_count, dataset.row_count())
         self.assertAlmostEqual(float(min_prediction), float(max_prediction), places=10)
 
         dataset.register_data_source_provider(GlmSourceProvider(store))
@@ -1157,7 +1176,7 @@ FROM read_parquet({sql_literal(str(tabulated_path))}) t
 INNER JOIN read_parquet({sql_literal(str(prediction_path))}) p USING (__lucidum_row_id)
 """
             ).fetchone()
-        self.assertEqual(tab_count, manifest["row_count"])
+        self.assertEqual(tab_count, dataset.row_count())
         self.assertLessEqual(float(max_delta or 0.0), 1e-8)
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
         self.assertTrue(store.artifact_path(model_id, "diagnostics").exists())
@@ -1176,8 +1195,6 @@ INNER JOIN read_parquet({sql_literal(str(prediction_path))}) p USING (__lucidum_
                 "family": "poisson",
                 "response_column": "actualNumerator",
                 "denominator_column": "denominator",
-                "source_columns": ["actualNumerator", "denominator", "Age", "Segment"],
-                "sources": {"predictions": store.source_id(model_id)},
             },
         )
         con = duckdb.connect(database=":memory:")
@@ -1345,7 +1362,7 @@ ORDER BY __lucidum_row_id
         model_id = result["model_id"]
         manifest = store.manifest(model_id)
 
-        self.assertEqual(manifest["formula"]["fitted"], "__lucidum_glm_target ~ Age")
+        self.assertNotIn("fitted", manifest["formula"])
         self.assertEqual(manifest["offset_terms"], ["log(denominator)"])
         with dataset.lock:
             rows = dataset.con.execute(
@@ -1812,7 +1829,6 @@ ORDER BY __lucidum_row_id
                 "link": "auto",
                 "response_column": "ID",
                 "denominator_column": "",
-                "source_columns": ["ID", "LIMIT_BAL"],
             },
         )
         con = duckdb.connect(database=":memory:")
@@ -2228,7 +2244,7 @@ COPY (
                 "diagnostics": {},
             },
         )
-        store.tabulations_dir(model_id).mkdir(parents=True)
+        store.tabulations_dir(model_id).mkdir(parents=True, exist_ok=True)
         con = duckdb.connect(database=":memory:")
         try:
             con.execute(
@@ -2294,7 +2310,7 @@ COPY (
                     "diagnostics": {},
                 },
             )
-            store.tabulations_dir(model_id).mkdir(parents=True)
+            store.tabulations_dir(model_id).mkdir(parents=True, exist_ok=True)
         con = duckdb.connect(database=":memory:")
         try:
             for model_id, offset in [("tab-model-1", 0.0), ("tab-model-2", 1.0)]:
@@ -2429,7 +2445,6 @@ COPY (
                 "link": "auto",
                 "response_column": "ID",
                 "denominator_column": "",
-                "source_columns": ["ID", "LIMIT_BAL"],
             },
         )
         con = duckdb.connect(database=":memory:")
