@@ -53,6 +53,8 @@ Use this map before opening large files:
 
 Run the standard checks from `DEVELOPMENT.md`. For frontend, app-launch, or GBM UI changes, include the browser smoke tests. `scripts/run_browser_smoke.py` defaults to `tests/test_browser_smoke.py`; pass explicit pytest arguments after `--` only when you intentionally want another target.
 
+- Before every commit, unless the user explicitly says not to, run `.venv/bin/python scripts/bump_version.py patch`. Include `pyproject.toml` in the same commit and report the final version number.
+
 ```bash
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/python -m compileall src tests
