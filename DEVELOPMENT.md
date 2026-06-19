@@ -123,6 +123,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 - Without explicit defaults, the x-axis starts with the first dataset column, Actual starts with the first numeric column, and Expected starts as none.
 - CLI options, programmatic defaults, and URL parameters can override initial selections.
+- Line/Bar feature and Expected picker lists default to A-Z ordering. The Expected picker section starts collapsed on every app launch and can be reopened for the current browser session with the splitter chevron; its open/closed state is not persisted.
 - Saved filters load from an explicit `--filters` path, otherwise `./filter_spec.csv`, otherwise `./specs/filter_spec.csv`.
 - Saved-filter CSV files must have exactly `theme,name,expression` columns. CSV order controls theme order and row order.
 - KPI specs load from an explicit `--kpis` path, otherwise `./kpi_spec.csv`, otherwise `./specs/kpi_spec.csv`.

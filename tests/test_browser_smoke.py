@@ -429,12 +429,23 @@ class BrowserSmokeTests(unittest.TestCase):
                     page = browser.new_page(viewport={"width": 1280, "height": 800})
                     page_errors: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.add_init_script(
+                        """
+                        localStorage.setItem("py_lucidum_chart_feature_controls_height", "160");
+                        """
+                    )
                     page.goto(base_url, wait_until="domcontentloaded")
                     page.locator("#datasetMeta").get_by_text("many_columns.csv").wait_for(timeout=10_000)
                     page.locator("#lineBarTool").click()
                     page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                     page.locator("#featureList .line-bar-scroll-region").wait_for(timeout=10_000)
-                    page.locator("#expectedList .line-bar-scroll-region").wait_for(timeout=10_000)
+                    page.locator("#expectedList .line-bar-scroll-region").wait_for(state="attached", timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#chartSideControls")?.classList.contains("chart-expected-collapsed")
+                        """,
+                        timeout=10_000,
+                    )
 
                     initial_split_state = page.evaluate(
                         """
@@ -442,19 +453,142 @@ class BrowserSmokeTests(unittest.TestCase):
                           const controls = document.querySelector("#chartSideControls");
                           const feature = document.querySelector(".feature-section");
                           const expected = document.querySelector("#expectedSideSection");
+                          const row = document.querySelector("#chartControlHeightRow");
+                          const resizer = document.querySelector("#chartControlHeightResizer");
+                          const toggle = document.querySelector("#chartExpectedToggle");
+                          const icon = document.querySelector(".chart-expected-toggle-icon");
+                          const controlsRect = controls?.getBoundingClientRect();
+                          const resizerRect = resizer?.getBoundingClientRect();
                           return {
-                            controlsHeight: controls?.getBoundingClientRect().height || 0,
+                            collapsed: controls?.classList.contains("chart-expected-collapsed") || false,
+                            controlsHeight: controlsRect?.height || 0,
                             featureHeight: feature?.getBoundingClientRect().height || 0,
                             expectedHeight: expected?.getBoundingClientRect().height || 0,
                             expectedHidden: expected?.hidden || false,
+                            expectedInert: expected?.hasAttribute("inert") || false,
+                            expectedAriaHidden: expected?.getAttribute("aria-hidden") || "",
+                            savedHeight: localStorage.getItem("py_lucidum_chart_feature_controls_height") || "",
+                            toggleExpanded: toggle?.getAttribute("aria-expanded") || "",
+                            toggleLabel: toggle?.getAttribute("aria-label") || "",
+                            iconTransform: icon ? getComputedStyle(icon).transform : "",
+                            rowWidth: row?.getBoundingClientRect().width || 0,
+                            resizerWidth: resizerRect?.width || 0,
+                            toggleWidth: toggle?.getBoundingClientRect().width || 0,
+                            resizerBottomDelta: controlsRect && resizerRect
+                              ? Math.abs(controlsRect.bottom - resizerRect.bottom)
+                              : 999,
                           };
                         }
                         """
                     )
+                    self.assertTrue(initial_split_state["collapsed"])
                     self.assertGreater(initial_split_state["controlsHeight"], 300)
                     self.assertGreater(initial_split_state["featureHeight"], 96)
-                    self.assertGreater(initial_split_state["expectedHeight"], 96)
-                    self.assertFalse(initial_split_state["expectedHidden"])
+                    self.assertLessEqual(initial_split_state["expectedHeight"], 1)
+                    self.assertTrue(initial_split_state["expectedHidden"])
+                    self.assertTrue(initial_split_state["expectedInert"])
+                    self.assertEqual(initial_split_state["expectedAriaHidden"], "true")
+                    self.assertEqual(initial_split_state["savedHeight"], "160")
+                    self.assertEqual(initial_split_state["toggleExpanded"], "false")
+                    self.assertEqual(initial_split_state["toggleLabel"], "Show Expected controls")
+                    self.assertLessEqual(initial_split_state["resizerBottomDelta"], 1)
+                    self.assertGreater(initial_split_state["rowWidth"], initial_split_state["resizerWidth"])
+                    self.assertGreater(initial_split_state["toggleWidth"], 0)
+                    self.assertGreaterEqual(
+                        initial_split_state["featureHeight"],
+                        initial_split_state["controlsHeight"] - 36,
+                    )
+
+                    page.locator("#chartExpectedToggle").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const controls = document.querySelector("#chartSideControls");
+                          const expected = document.querySelector("#expectedSideSection");
+                          return controls
+                            && expected
+                            && !controls.classList.contains("chart-expected-collapsed")
+                            && !expected.hidden
+                            && !expected.hasAttribute("inert");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    expanded_split_state = page.evaluate(
+                        """
+                        () => {
+                          const controls = document.querySelector("#chartSideControls");
+                          const feature = document.querySelector(".feature-section");
+                          const expected = document.querySelector("#expectedSideSection");
+                          const toggle = document.querySelector("#chartExpectedToggle");
+                          const icon = document.querySelector(".chart-expected-toggle-icon");
+                          return {
+                            collapsed: controls?.classList.contains("chart-expected-collapsed") || false,
+                            controlsHeight: controls?.getBoundingClientRect().height || 0,
+                            featureHeight: feature?.getBoundingClientRect().height || 0,
+                            expectedHeight: expected?.getBoundingClientRect().height || 0,
+                            expectedHidden: expected?.hidden || false,
+                            expectedInert: expected?.hasAttribute("inert") || false,
+                            expectedAriaHidden: expected?.getAttribute("aria-hidden") || "",
+                            savedHeight: localStorage.getItem("py_lucidum_chart_feature_controls_height") || "",
+                            toggleExpanded: toggle?.getAttribute("aria-expanded") || "",
+                            toggleLabel: toggle?.getAttribute("aria-label") || "",
+                            iconTransform: icon ? getComputedStyle(icon).transform : "",
+                          };
+                        }
+                        """
+                    )
+                    self.assertFalse(expanded_split_state["collapsed"])
+                    self.assertFalse(expanded_split_state["expectedHidden"])
+                    self.assertFalse(expanded_split_state["expectedInert"])
+                    self.assertEqual(expanded_split_state["expectedAriaHidden"], "")
+                    self.assertEqual(expanded_split_state["savedHeight"], "160")
+                    self.assertEqual(expanded_split_state["toggleExpanded"], "true")
+                    self.assertEqual(expanded_split_state["toggleLabel"], "Hide Expected controls")
+                    self.assertNotEqual(expanded_split_state["iconTransform"], initial_split_state["iconTransform"])
+                    self.assertGreater(expanded_split_state["expectedHeight"], 96)
+
+                    page.locator("#chartExpectedToggle").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#chartSideControls")?.classList.contains("chart-expected-collapsed")
+                          && document.querySelector("#chartExpectedToggle")?.getAttribute("aria-expanded") === "false"
+                        """,
+                        timeout=10_000,
+                    )
+                    toggle_collapsed_state = page.evaluate(
+                        """
+                        () => {
+                          const expected = document.querySelector("#expectedSideSection");
+                          const toggle = document.querySelector("#chartExpectedToggle");
+                          const icon = document.querySelector(".chart-expected-toggle-icon");
+                          return {
+                            expectedHidden: expected?.hidden || false,
+                            expectedInert: expected?.hasAttribute("inert") || false,
+                            expectedAriaHidden: expected?.getAttribute("aria-hidden") || "",
+                            savedHeight: localStorage.getItem("py_lucidum_chart_feature_controls_height") || "",
+                            toggleExpanded: toggle?.getAttribute("aria-expanded") || "",
+                            toggleLabel: toggle?.getAttribute("aria-label") || "",
+                            iconTransform: icon ? getComputedStyle(icon).transform : "",
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(toggle_collapsed_state["expectedHidden"])
+                    self.assertTrue(toggle_collapsed_state["expectedInert"])
+                    self.assertEqual(toggle_collapsed_state["expectedAriaHidden"], "true")
+                    self.assertEqual(toggle_collapsed_state["savedHeight"], "160")
+                    self.assertEqual(toggle_collapsed_state["toggleExpanded"], "false")
+                    self.assertEqual(toggle_collapsed_state["toggleLabel"], "Show Expected controls")
+                    self.assertEqual(toggle_collapsed_state["iconTransform"], initial_split_state["iconTransform"])
+
+                    page.locator("#chartExpectedToggle").click()
+                    page.wait_for_function(
+                        """
+                        () => !document.querySelector("#chartSideControls")?.classList.contains("chart-expected-collapsed")
+                        """,
+                        timeout=10_000,
+                    )
 
                     resizer = page.locator("#chartControlHeightResizer")
                     resizer_box = resizer.bounding_box()
@@ -492,6 +626,7 @@ class BrowserSmokeTests(unittest.TestCase):
                             expectedInert: expected?.hasAttribute("inert") || false,
                             expectedAriaHidden: expected?.getAttribute("aria-hidden") || "",
                             savedHeight: localStorage.getItem("py_lucidum_chart_feature_controls_height") || "",
+                            toggleExpanded: document.querySelector("#chartExpectedToggle")?.getAttribute("aria-expanded") || "",
                             resizerBottomDelta: controlsRect && resizerRect
                               ? Math.abs(controlsRect.bottom - resizerRect.bottom)
                               : 999,
@@ -503,16 +638,17 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertTrue(collapsed_split_state["expectedHidden"])
                     self.assertTrue(collapsed_split_state["expectedInert"])
                     self.assertEqual(collapsed_split_state["expectedAriaHidden"], "true")
-                    self.assertEqual(collapsed_split_state["savedHeight"], "collapsed")
+                    self.assertEqual(collapsed_split_state["savedHeight"], "160")
+                    self.assertEqual(collapsed_split_state["toggleExpanded"], "false")
                     self.assertLessEqual(collapsed_split_state["expectedHeight"], 1)
                     self.assertLessEqual(collapsed_split_state["resizerBottomDelta"], 1)
                     self.assertGreater(
                         collapsed_split_state["featureHeight"],
-                        initial_split_state["featureHeight"] + 80,
+                        expanded_split_state["featureHeight"] + 80,
                     )
                     self.assertGreaterEqual(
                         collapsed_split_state["featureHeight"],
-                        collapsed_split_state["controlsHeight"] - 16,
+                        collapsed_split_state["controlsHeight"] - 36,
                     )
 
                     resizer_box = resizer.bounding_box()
@@ -552,6 +688,7 @@ class BrowserSmokeTests(unittest.TestCase):
                             expectedInert: expected?.hasAttribute("inert") || false,
                             expectedAriaHidden: expected?.getAttribute("aria-hidden") || "",
                             savedHeight: localStorage.getItem("py_lucidum_chart_feature_controls_height") || "",
+                            toggleExpanded: document.querySelector("#chartExpectedToggle")?.getAttribute("aria-expanded") || "",
                           };
                         }
                         """
@@ -560,7 +697,8 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertFalse(restored_split_state["expectedHidden"])
                     self.assertFalse(restored_split_state["expectedInert"])
                     self.assertEqual(restored_split_state["expectedAriaHidden"], "")
-                    self.assertNotEqual(restored_split_state["savedHeight"], "collapsed")
+                    self.assertEqual(restored_split_state["savedHeight"], "160")
+                    self.assertEqual(restored_split_state["toggleExpanded"], "true")
                     self.assertGreater(restored_split_state["expectedHeight"], 96)
 
                     page.locator('#featureList .feature.active[data-value="feature_001"]').wait_for(timeout=10_000)
@@ -3383,6 +3521,21 @@ COPY (
                 self.assertIn("glm_tabulated_prediction", [row["value"] for row in expected_pinned_state["pinned"]])
                 self.assertIn("gbm_tabulated_prediction", [row["value"] for row in expected_pinned_state["pinned"]])
                 self.assertTrue(expected_pinned_state["specialBackground"])
+                page.locator("#chartExpectedToggle").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const controls = document.querySelector("#chartSideControls");
+                      const expected = document.querySelector("#expectedSideSection");
+                      return controls
+                        && expected
+                        && !controls.classList.contains("chart-expected-collapsed")
+                        && !expected.hidden
+                        && !expected.hasAttribute("inert");
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator('.segmented[data-control="expectedSort"] button[data-value="alpha"]').click()
                 expected_alpha_state = page.evaluate(
                     """

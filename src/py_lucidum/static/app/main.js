@@ -45,7 +45,6 @@
         gbm: "GBM render",
         specs: "Specs render",
       };
-      const CHART_FEATURE_CONTROLS_HEIGHT_KEY = "py_lucidum_chart_feature_controls_height";
       const CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED = "collapsed";
       const state = {
         schema: null,
@@ -76,8 +75,8 @@
         mapHotspots: 0,
         mapLabelSize: 0,
         mapSmoothingLevel: 0,
-        featureSort: "original",
-        expectedSort: "original",
+        featureSort: "alpha",
+        expectedSort: "alpha",
         openSidebarSection: null,
         collapsedKpiGroups: new Set(),
         kpiGroupsInitialised: false,
@@ -189,6 +188,8 @@
       });
       let datasetViewerTool = null;
       let datasetViewerToolPromise = null;
+      let chartFeatureControlsExpandedHeight = null;
+      let chartExpectedStartupCollapseApplied = false;
 
       async function ensureDatasetViewerTool() {
         if (!toolEnabled("dataset_viewer")) return null;
@@ -1346,7 +1347,7 @@
           lineBarTool.setView(state.view);
           lineBarTool.updateAxisControls();
           requestAnimationFrame(() => {
-            restoreSavedChartFeatureControlsHeight();
+            applyStartupChartExpectedCollapse();
             lineBarTool.resize();
           });
         } else if (tool === "histogram") {
@@ -2510,16 +2511,21 @@
         const controls = document.querySelector(".chart-side-controls");
         const firstPanel = controls?.querySelector(".chart-side-section");
         const resizer = el("chartControlHeightResizer");
-        restoreSavedChartFeatureControlsHeight();
+        const toggle = el("chartExpectedToggle");
+        syncChartExpectedToggle();
 
         let dragging = false;
         let startY = 0;
         let startHeight = 0;
+        let dragStartExpandedHeight = null;
         resizer.addEventListener("pointerdown", (event) => {
           event.preventDefault();
           dragging = true;
           startY = event.clientY;
           startHeight = firstPanel?.getBoundingClientRect().height || 0;
+          dragStartExpandedHeight = controls?.classList.contains("chart-expected-collapsed")
+            ? null
+            : startHeight;
           resizer.classList.add("dragging");
           document.body.classList.add("resizing-chart-control-heights");
           resizer.setPointerCapture(event.pointerId);
@@ -2537,12 +2543,11 @@
           document.body.classList.remove("resizing-chart-control-heights");
           window.getSelection()?.removeAllRanges();
           if (controls?.classList.contains("chart-expected-collapsed")) {
-            localStorage.setItem(CHART_FEATURE_CONTROLS_HEIGHT_KEY, CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
-          } else {
-            const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-feature-controls-height"));
-            if (Number.isFinite(height)) {
-              localStorage.setItem(CHART_FEATURE_CONTROLS_HEIGHT_KEY, String(Math.round(height)));
+            if (Number.isFinite(dragStartExpandedHeight) && dragStartExpandedHeight > 0) {
+              chartFeatureControlsExpandedHeight = dragStartExpandedHeight;
             }
+          } else {
+            rememberExpandedChartFeatureControlsHeight();
           }
           if (event.pointerId !== undefined) {
             try {
@@ -2553,17 +2558,45 @@
         }
         resizer.addEventListener("pointerup", finishDrag);
         resizer.addEventListener("pointercancel", finishDrag);
+        toggle?.addEventListener("click", () => toggleExpectedSideSection());
       }
 
-      function restoreSavedChartFeatureControlsHeight() {
-        const savedHeight = localStorage.getItem(CHART_FEATURE_CONTROLS_HEIGHT_KEY);
-        if (savedHeight === CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED) {
-          setChartFeatureControlsHeight(CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
-          return;
+      function applyStartupChartExpectedCollapse() {
+        if (chartExpectedStartupCollapseApplied) return;
+        chartExpectedStartupCollapseApplied = true;
+        setChartFeatureControlsHeight(CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
+      }
+
+      function rememberExpandedChartFeatureControlsHeight() {
+        const controls = document.querySelector(".chart-side-controls");
+        if (controls?.classList.contains("chart-expected-collapsed")) return;
+        const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-feature-controls-height"));
+        if (Number.isFinite(height) && height > 0) {
+          chartFeatureControlsExpandedHeight = height;
         }
-        const numericHeight = Number(savedHeight);
-        if (Number.isFinite(numericHeight) && numericHeight > 0) {
-          setChartFeatureControlsHeight(numericHeight, { allowCollapse: false });
+      }
+
+      function defaultChartFeatureControlsHeight() {
+        const controls = document.querySelector(".chart-side-controls");
+        const availableHeight = controls?.getBoundingClientRect().height || window.innerHeight;
+        const splitterHeight = el("chartControlHeightRow")?.getBoundingClientRect().height || 18;
+        const gridGap = 8;
+        const minFeaturePanelHeight = 96;
+        const usableHeight = Math.max(minFeaturePanelHeight, availableHeight - splitterHeight - gridGap * 2);
+        return Math.max(minFeaturePanelHeight, Math.round(usableHeight / 2));
+      }
+
+      function toggleExpectedSideSection() {
+        const controls = document.querySelector(".chart-side-controls");
+        const collapsed = controls?.classList.contains("chart-expected-collapsed");
+        if (collapsed) {
+          const height = Number.isFinite(chartFeatureControlsExpandedHeight)
+            ? chartFeatureControlsExpandedHeight
+            : defaultChartFeatureControlsHeight();
+          setChartFeatureControlsHeight(height, { allowCollapse: false });
+        } else {
+          rememberExpandedChartFeatureControlsHeight();
+          setChartFeatureControlsHeight(CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
         }
       }
 
@@ -2571,6 +2604,7 @@
         const controls = document.querySelector(".chart-side-controls");
         const expectedSection = el("expectedSideSection");
         controls?.classList.toggle("chart-expected-collapsed", collapsed);
+        syncChartExpectedToggle();
         if (!expectedSection) return;
         if (collapsed && expectedSection.contains(document.activeElement)) {
           document.activeElement?.blur?.();
@@ -2584,13 +2618,23 @@
         }
       }
 
+      function syncChartExpectedToggle() {
+        const toggle = el("chartExpectedToggle");
+        if (!toggle) return;
+        const collapsed = document.querySelector(".chart-side-controls")?.classList.contains("chart-expected-collapsed") || false;
+        const label = collapsed ? "Show Expected controls" : "Hide Expected controls";
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+        toggle.setAttribute("aria-label", label);
+        toggle.title = label;
+      }
+
       function setChartFeatureControlsHeight(rawHeight, options = {}) {
         const controls = document.querySelector(".chart-side-controls");
         const availableHeight = controls?.getBoundingClientRect().height || window.innerHeight;
-        const resizerHeight = 6;
+        const splitterHeight = el("chartControlHeightRow")?.getBoundingClientRect().height || 18;
         const gridGap = 8;
-        const expandedSplitterSpace = resizerHeight + gridGap * 2;
-        const collapsedSplitterSpace = resizerHeight + gridGap;
+        const expandedSplitterSpace = splitterHeight + gridGap * 2;
+        const collapsedSplitterSpace = splitterHeight + gridGap;
         const minFeaturePanelHeight = 96;
         const minExpectedPanelHeight = 0;
         const numericHeight = Number(rawHeight);
@@ -2617,6 +2661,7 @@
           maxExpandedHeight,
         );
         document.documentElement.style.setProperty("--chart-feature-controls-height", `${Math.round(height)}px`);
+        chartFeatureControlsExpandedHeight = height;
       }
 
       function bindControls() {

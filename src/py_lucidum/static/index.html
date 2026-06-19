@@ -326,8 +326,8 @@
                   <h2>x-axis feature</h2>
                   <div class="segmented" data-control="featureSort">
                     <button data-value="importance" class="hidden">Imp</button>
-                    <button data-value="original" class="active">Original</button>
-                    <button data-value="alpha">A-Z</button>
+                    <button data-value="original">Original</button>
+                    <button data-value="alpha" class="active">A-Z</button>
                   </div>
                 </div>
                 <div class="chart-search-row">
@@ -337,14 +337,19 @@
                 <div id="featureList" class="feature-list"></div>
               </section>
 
-              <div id="chartControlHeightResizer" class="chart-control-height-resizer app-resizer app-resizer--horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize x-axis and expected controls"></div>
+              <div id="chartControlHeightRow" class="chart-control-height-row">
+                <div id="chartControlHeightResizer" class="chart-control-height-resizer app-resizer app-resizer--horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize x-axis and expected controls"></div>
+                <button id="chartExpectedToggle" class="chart-expected-toggle" type="button" aria-controls="expectedSideSection" aria-expanded="true" aria-label="Hide Expected controls" title="Hide Expected controls">
+                  <span class="chart-expected-toggle-icon" aria-hidden="true"></span>
+                </button>
+              </div>
 
               <section id="expectedSideSection" class="chart-side-section">
                 <div class="section-title-row">
                   <h2 id="expectedMetricTitle" class="metric-title">Expected</h2>
                   <div class="segmented" data-control="expectedSort">
-                    <button data-value="original" class="active">Original</button>
-                    <button data-value="alpha">A-Z</button>
+                    <button data-value="original">Original</button>
+                    <button data-value="alpha" class="active">A-Z</button>
                   </div>
                 </div>
                 <select id="expectedNumerator" class="hidden" aria-hidden="true" tabindex="-1"></select>
