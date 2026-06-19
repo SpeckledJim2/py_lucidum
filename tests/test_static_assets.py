@@ -3605,35 +3605,150 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn('.feature-list-message {', css)
         self.assertIn('.line-bar-importance-row .kind {', css)
 
-    def test_date_x_axis_labels_are_month_aware(self) -> None:
+    def test_date_x_axis_labels_are_fit_based(self) -> None:
         js = self.app_js_contract()
 
-        self.assertIn("const DATE_AXIS_TARGET_LABELS = 12;", js)
-        self.assertIn("const DATE_AXIS_MIN_MONTH_LABELS = 2;", js)
-        self.assertIn("const DATE_AXIS_MAX_MONTH_LABELS = 14;", js)
+        self.assertIn("const DATE_AXIS_FONT_SIZES = [10, 9, 8, 7];", js)
+        self.assertIn("const DATE_AXIS_ROTATION = 60;", js)
+        self.assertIn("const DATE_AXIS_HORIZONTAL_LABEL_LIMIT = 10;", js)
+        self.assertIn("const DATE_AXIS_YEAR_HORIZONTAL_LABEL_LIMIT = 25;", js)
+        self.assertIn("const DATE_AXIS_VISIBLE_LABEL_LIMIT = 60;", js)
+        self.assertIn('const DATE_AXIS_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];', js)
         self.assertIn('return kind === "date" || kind === "datetime";', js)
         self.assertIn("const rawXValues = data.rows.map((r) => r.x);", js)
-        self.assertIn("const xLabelPolicy = getXAxisLabelPolicy(labels, data.x_kind, rawXValues);", js)
+        self.assertIn("const dateBucket = normaliseDateBucket(data.date_bucket);", js)
+        self.assertIn('const xLabelPolicy = getXAxisLabelPolicy(labels, data.x_kind, rawXValues, dateBucket, chart.getWidth?.() || el("chart").clientWidth);', js)
         self.assertIn("showAllSymbol: true,", js)
         self.assertIn("interval: xLabelPolicy.interval,", js)
         self.assertIn("formatter: xLabelPolicy.formatter,", js)
         self.assertIn("showMinLabel: xLabelPolicy.showMinLabel,", js)
         self.assertIn("showMaxLabel: xLabelPolicy.showMaxLabel,", js)
-        self.assertIn('function getXAxisLabelPolicy(labels, kind = "", rawValues = labels)', js)
-        self.assertIn("if (isDateKind(kind)) return getDateXAxisLabelPolicy(labels, rawValues);", js)
-        self.assertIn("function getDateXAxisLabelPolicy(labels, rawValues)", js)
-        self.assertIn("interval: (index) => selectedIndexSet.has(index),", js)
-        self.assertIn("formatDateAxisLabel(rawValues[index] ?? value, parsedDates[index])", js)
-        self.assertIn(".map((date, index) => (date && date.day === 1 ? index : null))", js)
-        self.assertIn("if (monthStartIndexes.length <= DATE_AXIS_MAX_MONTH_LABELS) return monthStartIndexes;", js)
-        self.assertIn("return indexes.length >= DATE_AXIS_MIN_MONTH_LABELS ? indexes : sparseDateXAxisLabelIndexes(count);", js)
-        self.assertIn("return sparseDateXAxisLabelIndexes(count);", js)
-        self.assertIn("const indexes = new Set([0, count - 1]);", js)
-        self.assertIn("return Array.from(indexes).sort((a, b) => a - b);", js)
-        self.assertIn("function formatDateAxisLabel(value, parsedDate)", js)
-        self.assertIn("return `${parsedDate.day} ${month} ${parsedDate.year}`;", js)
+        self.assertIn("dataZoom: xLabelPolicy.dataZoomEnabled ? lineBarDataZoomOptions() : [],", js)
+        self.assertIn('chart.on("datazoom", scheduleDateXAxisLabelRefresh);', js)
+        self.assertIn("function getDateXAxisLabelPolicy(labels, rawValues, dateBucket = \"none\", chartWidth = 0, visibleRange = null)", js)
+        self.assertIn("function dateXAxisLabelFit(formattedLabels, chartWidth = 0, visibleRange = null, dateBucket = \"none\")", js)
+        self.assertIn("function dateXAxisLabelRotation(dateBucket, visibleCount)", js)
+        self.assertIn("rotate: visibleFit.show ? visibleFit.rotate : 0,", js)
+        self.assertIn("function refreshDateXAxisLabelsForCurrentZoom()", js)
+        self.assertIn("function formatDateAxisLabel(value, parsedDate, dateBucket = \"none\")", js)
+        self.assertIn('if (dateBucket === "hour") return `${dateLabel} ${padDateAxisTime(parsedDate.hour)}:${padDateAxisTime(parsedDate.minute)}`;', js)
+        self.assertIn('if (dateBucket === "day") return `${DATE_AXIS_WEEKDAYS[parsedDate.weekday]} ${dateLabel}`;', js)
+        self.assertIn('if (dateBucket === "year") return String(parsedDate.year);', js)
+        self.assertNotIn("dateXAxisLabelIndexes", js)
+        self.assertNotIn("sparseDateXAxisLabelIndexes", js)
         self.assertNotIn("dateAxisYearLabelIndexes", js)
         self.assertIn("formatXLabel(r.x, data.x_kind)", js)
+
+        line_bar_js = self.assert_no_store("/static/app/line-bar-tool.js")[1].decode("utf-8")
+        helper = "\n".join([
+            'const DATE_AXIS_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];',
+            'const DATE_AXIS_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];',
+            "const DATE_AXIS_FONT_SIZES = [10, 9, 8, 7];",
+            "const DATE_AXIS_LABEL_WIDTH_FACTOR = 0.56;",
+            "const DATE_AXIS_LABEL_PADDING = 8;",
+            "const DATE_AXIS_HORIZONTAL_LABEL_LIMIT = 10;",
+            "const DATE_AXIS_YEAR_HORIZONTAL_LABEL_LIMIT = 25;",
+            "const DATE_AXIS_VISIBLE_LABEL_LIMIT = 60;",
+            "const DATE_AXIS_ROTATION = 60;",
+            self.js_function_source(line_bar_js, "normaliseDateXAxisVisibleRange"),
+            self.js_function_source(line_bar_js, "dateXAxisLabelFit"),
+            self.js_function_source(line_bar_js, "dateXAxisLabelRotation"),
+            self.js_function_source(line_bar_js, "dateXAxisLabelFootprint"),
+            self.js_function_source(line_bar_js, "dateXAxisLabelSpace"),
+            self.js_function_source(line_bar_js, "dateXAxisPlotWidth"),
+            self.js_function_source(line_bar_js, "estimateDateAxisLabelWidth"),
+            self.js_function_source(line_bar_js, "parseDateCategory"),
+            self.js_function_source(line_bar_js, "formatDateAxisLabel"),
+            self.js_function_source(line_bar_js, "padDateAxisTime"),
+            self.js_function_source(line_bar_js, "getDateXAxisLabelPolicy"),
+        ])
+        script = helper + """
+function isoDate(offset) {
+  const date = new Date(Date.UTC(2024, 0, 1 + offset, 13, 0, 0));
+  return date.toISOString().replace("T", " ").slice(0, 19);
+}
+function isoHour(offset) {
+  const date = new Date(Date.UTC(2024, 0, 1, offset, 0, 0));
+  return date.toISOString().replace("T", " ").slice(0, 19);
+}
+const parsed = parseDateCategory("2024-01-02 13:00:00");
+if (formatDateAxisLabel("x", parsed, "hour") !== "2 Jan 2024 13:00") throw new Error("hour label failed");
+if (formatDateAxisLabel("x", parsed, "day") !== "Tue 2 Jan 2024") throw new Error("day weekday label failed");
+if (formatDateAxisLabel("x", parsed, "week") !== "2 Jan 2024") throw new Error("week label failed");
+if (formatDateAxisLabel("x", parsed, "year") !== "2024") throw new Error("year label failed");
+if (formatDateAxisLabel("bad", null, "hour") !== "bad") throw new Error("raw fallback failed");
+
+const small = [isoDate(0), isoDate(1), isoDate(2)];
+const smallPolicy = getDateXAxisLabelPolicy(small, small, "day", 900);
+if (!smallPolicy.show) throw new Error("small date labels should show");
+if (smallPolicy.dataZoomEnabled) throw new Error("small date labels should not enable zoom");
+if (smallPolicy.fontSize !== 10) throw new Error(`small font changed: ${smallPolicy.fontSize}`);
+if (smallPolicy.rotate !== 0) throw new Error(`small date labels should be horizontal: ${smallPolicy.rotate}`);
+if (smallPolicy.formatter("", 0) !== "Mon 1 Jan 2024") throw new Error("small formatter failed");
+
+const medium = Array.from({ length: 20 }, (_, index) => isoDate(index));
+const mediumPolicy = getDateXAxisLabelPolicy(medium, medium, "day", 1200);
+if (!mediumPolicy.show) throw new Error("rotated medium date labels should show");
+if (mediumPolicy.dataZoomEnabled) throw new Error("medium date labels should not need zoom when rotated");
+if (mediumPolicy.rotate !== 60) throw new Error("medium labels should be rotated");
+
+const years24 = Array.from({ length: 24 }, (_, index) => `${2000 + index}-01-01 00:00:00`);
+const yearPolicy = getDateXAxisLabelPolicy(years24, years24, "year", 900);
+if (!yearPolicy.show) throw new Error("24 year labels should show");
+if (yearPolicy.dataZoomEnabled) throw new Error("24 year labels should not enable zoom");
+if (yearPolicy.rotate !== 0) throw new Error("fewer than 25 year labels should be horizontal");
+if (yearPolicy.formatter("", 0) !== "2000") throw new Error("year formatter failed");
+
+const years25 = Array.from({ length: 25 }, (_, index) => `${2000 + index}-01-01 00:00:00`);
+const yearRotatedPolicy = getDateXAxisLabelPolicy(years25, years25, "year", 900);
+if (!yearRotatedPolicy.show) throw new Error("25 year labels should show");
+if (yearRotatedPolicy.rotate !== 60) throw new Error("25 year labels should be rotated");
+
+const quoteWeeks = Array.from({ length: 29 }, (_, index) => isoDate(index * 7));
+const quoteWeekPolicy = getDateXAxisLabelPolicy(quoteWeeks, quoteWeeks, "week", 900);
+if (!quoteWeekPolicy.show) throw new Error("QUOTE_DATE-style week labels should show on startup");
+if (quoteWeekPolicy.dataZoomEnabled) throw new Error("QUOTE_DATE-style week labels should not enable zoom");
+if (quoteWeekPolicy.rotate !== 60) throw new Error("QUOTE_DATE-style week labels should be rotated");
+
+const hours59 = Array.from({ length: 59 }, (_, index) => isoHour(index));
+const hours59Policy = getDateXAxisLabelPolicy(hours59, hours59, "hour", 300);
+if (!hours59Policy.show) throw new Error("fewer than 60 hour labels should always show");
+if (hours59Policy.dataZoomEnabled) throw new Error("fewer than 60 hour labels should not enable zoom");
+if (hours59Policy.rotate !== 60) throw new Error("fewer than 60 dense hour labels should be rotated");
+if (hours59Policy.fontSize !== 7) throw new Error(`fewer than 60 dense hour labels should use smallest font: ${hours59Policy.fontSize}`);
+
+const months59 = Array.from({ length: 59 }, (_, index) => isoDate(index * 31));
+const months59Policy = getDateXAxisLabelPolicy(months59, months59, "month", 300);
+if (!months59Policy.show) throw new Error("fewer than 60 month labels should always show");
+if (months59Policy.dataZoomEnabled) throw new Error("fewer than 60 month labels should not enable zoom");
+
+const dense = Array.from({ length: 80 }, (_, index) => isoDate(index));
+const densePolicy = getDateXAxisLabelPolicy(dense, dense, "day", 500);
+if (densePolicy.show) throw new Error("dense date labels should hide");
+if (!densePolicy.dataZoomEnabled) throw new Error("dense date labels should enable zoom");
+if (densePolicy.fontSize !== 7) throw new Error(`dense fallback font changed: ${densePolicy.fontSize}`);
+if (densePolicy.rotate !== 0) throw new Error("hidden dense labels should not rotate");
+
+const zoomedPolicy = getDateXAxisLabelPolicy(dense, dense, "day", 500, { startIndex: 0, endIndex: 3 });
+if (!zoomedPolicy.show) throw new Error("zoomed date labels should reappear");
+if (!zoomedPolicy.dataZoomEnabled) throw new Error("zoom should remain enabled after zooming");
+if (zoomedPolicy.rotate !== 0) throw new Error("zoomed fewer-than-10 labels should be horizontal");
+"""
+        self.run_node_script(script)
+
+    def test_line_bar_date_bucket_suggestion_contract(self) -> None:
+        js = self.app_js_contract()
+
+        self.assertIn('/api/date-bucket/suggestion', js)
+        self.assertIn("function requestDateBucketSuggestionForSelectedColumn", js)
+        self.assertIn("function currentDateBucketFeatureKey()", js)
+        self.assertIn('return JSON.stringify([sourceId, state.x || "", state.activeFilter || ""]);', js)
+        self.assertIn('setGroupMeta("line_bar", "Estimating date bucket...");', js)
+        self.assertIn('state.dateBucket = "year";', js)
+        self.assertIn("state.dateBucketManualKey = state.dateBucketFeature;", js)
+        self.assertIn("resetDateBucketSuggestionState();", js)
+        self.assertIn("dateBucketSuggestionRequestSeq: 0", js)
+        self.assertIn("function invalidateLineBarDateBucketSuggestion()", js)
 
     def test_numeric_x_axis_labels_are_cleaned_defensively(self) -> None:
         js = self.app_js_contract()
@@ -3645,6 +3760,25 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("if (!Number.isFinite(number)) return text;", js)
         self.assertIn("return number.toLocaleString(undefined, { maximumFractionDigits: 12 });", js)
         self.assertIn('if (kind !== "integer") return String(value);', js)
+        self.assertIn("const rotate = labels.length > 30 || maxLength > 10 ? 65 : 0;", js)
+
+        line_bar_js = self.assert_no_store("/static/app/line-bar-tool.js")[1].decode("utf-8")
+        script = "\n".join([
+            "const LABEL_DENSITY_LIMIT = 200;",
+            "function isDateKind() { return false; }",
+            self.js_function_source(line_bar_js, "getXAxisLabelPolicy"),
+            """
+const labels30 = Array.from({ length: 30 }, (_, index) => String(index));
+const labels31 = Array.from({ length: 31 }, (_, index) => String(index));
+const policy30 = getXAxisLabelPolicy(labels30, "integer");
+const policy31 = getXAxisLabelPolicy(labels31, "integer");
+if (policy30.rotate !== 0) throw new Error(`30 short labels should stay horizontal, got ${policy30.rotate}`);
+if (policy31.rotate !== 65) throw new Error(`31 short labels should rotate, got ${policy31.rotate}`);
+const longPolicy = getXAxisLabelPolicy(["short", "long-label-x"], "categorical");
+if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate");
+""",
+        ])
+        self.run_node_script(script)
 
     def test_line_bar_x_axis_title_uses_selected_feature_with_tight_spacing(self) -> None:
         js = self.app_js_contract()
@@ -3657,8 +3791,9 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("const titleGap = rotate ? Math.max(26, labelSpace - 10) : 26;", js)
         self.assertIn("nameGap: titleGap,", js)
         self.assertIn("bottom: titleGap + 16 + dataZoomSpace,", js)
-        self.assertIn("nameGap: 26,", js)
-        self.assertIn("bottom: 46 + dataZoomSpace,", js)
+        self.assertIn("const titleGap = visibleFit.show ? Math.max(26, labelSpace - 10) : 22;", js)
+        self.assertIn("nameGap: titleGap,", js)
+        self.assertIn("bottom: titleGap + 16 + dataZoomSpace,", js)
 
     def test_theme_toggle_uses_icons_and_accessible_labels(self) -> None:
         _, html_body = self.assert_no_store("/")

@@ -57,6 +57,8 @@
         bandWidth: "0",
         quantileMode: "off",
         dateBucket: "none",
+        dateBucketFeature: null,
+        dateBucketManualKey: null,
         transform: "none",
         sigma: "0",
         partialDependence: "none",
@@ -135,6 +137,8 @@
         bandFeature: null,
         bandSuggestionPendingKey: null,
         bandSuggestionRequestSeq: 0,
+        dateBucketSuggestionPendingKey: null,
+        dateBucketSuggestionRequestSeq: 0,
         profileRequestSeq: 0,
         profileDetailRequestSeq: 0,
         chartRequestSeq: 0,
@@ -1018,6 +1022,13 @@
         return refreshTool("line_bar", options);
       }
 
+      function invalidateLineBarDateBucketSuggestion() {
+        state.dateBucketFeature = null;
+        state.dateBucketManualKey = null;
+        state.dateBucketSuggestionPendingKey = null;
+        state.dateBucketSuggestionRequestSeq = (state.dateBucketSuggestionRequestSeq || 0) + 1;
+      }
+
       function refreshUkMap(options = {}) {
         return refreshTool("uk_map", options);
       }
@@ -1773,6 +1784,7 @@
         const targetSource = actualSelectionSourceId();
         if (!targetSource || targetSource === state.source) return false;
         state.source = targetSource;
+        invalidateLineBarDateBucketSuggestion();
         return true;
       }
 
@@ -1782,6 +1794,7 @@
         if (!targetSource || targetSource === state.source) return false;
         const selectedExpected = expectedValue || el("expectedNumerator").value;
         state.source = targetSource;
+        invalidateLineBarDateBucketSuggestion();
         syncControlsForSourceChange({
           expectedValue: selectedExpected,
           expectedSource: targetSource,
@@ -2284,6 +2297,7 @@
           return;
         }
         state.activeFilter = nextFilter;
+        invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshMetricSummary();
@@ -2305,6 +2319,7 @@
           return;
         }
         state.activeFilter = "";
+        invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshMetricSummary();
@@ -2751,6 +2766,7 @@
           state.bandFeature = null;
           state.bandSuggestionPendingKey = null;
           state.bandSuggestionRequestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
+          invalidateLineBarDateBucketSuggestion();
           clearToolCaches();
           renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
           refreshDatasetGlmCount();

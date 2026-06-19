@@ -51,10 +51,16 @@ export function createLineBarTool({
   const TABLE_PAGE_SIZE = 10000;
   const TABLE_SEARCH_DEBOUNCE_MS = 250;
   const LABEL_DENSITY_LIMIT = 200;
-  const DATE_AXIS_TARGET_LABELS = 12;
-  const DATE_AXIS_MIN_MONTH_LABELS = 2;
-  const DATE_AXIS_MAX_MONTH_LABELS = 14;
   const DATE_AXIS_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const DATE_AXIS_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const DATE_AXIS_FONT_SIZES = [10, 9, 8, 7];
+  const DATE_AXIS_LABEL_WIDTH_FACTOR = 0.56;
+  const DATE_AXIS_LABEL_PADDING = 8;
+  const DATE_AXIS_HORIZONTAL_LABEL_LIMIT = 10;
+  const DATE_AXIS_YEAR_HORIZONTAL_LABEL_LIMIT = 25;
+  const DATE_AXIS_VISIBLE_LABEL_LIMIT = 60;
+  const DATE_AXIS_ROTATION = 60;
+  const DATE_BUCKET_VALUES = new Set(["none", "hour", "day", "week", "month", "year"]);
   const RESPONSE_AXIS_PADDING = 0.08;
   const RESPONSE_AXIS_TARGET_INTERVALS = 15;
   const SHAP_RIBBON_SERIES = [
@@ -79,6 +85,8 @@ export function createLineBarTool({
   let tableCacheData = null;
   let tableRenderToken = 0;
   let lineBarTable = null;
+  let dateXAxisContext = null;
+  let dateXAxisRefreshFrame = null;
 
   function isNumericKind(kind) {
     return kind === "numeric" || kind === "integer";
@@ -133,6 +141,7 @@ export function createLineBarTool({
     state.x = name;
     state.xSource = targetSource;
     state.bandFeature = null;
+    resetDateBucketSuggestionState();
     renderFeatures();
     renderExpectedNumerators();
     updateAxisControls();
@@ -266,6 +275,34 @@ export function createLineBarTool({
     return JSON.stringify([sourceId, state.x || ""]);
   }
 
+  function normaliseDateBucket(value) {
+    const bucket = String(value || "none").toLowerCase();
+    return DATE_BUCKET_VALUES.has(bucket) ? bucket : "none";
+  }
+
+  function syncDateBucketControl() {
+    syncSegmented("dateBucket", normaliseDateBucket(state.dateBucket));
+  }
+
+  function currentDateBucketFeatureKey() {
+    const sourceId = selectedColumn()?.source_id || state.xSource || state.source || "dataset";
+    return JSON.stringify([sourceId, state.x || "", state.activeFilter || ""]);
+  }
+
+  function clearPendingDateBucketSuggestion() {
+    state.dateBucketSuggestionPendingKey = null;
+  }
+
+  function resetDateBucketSuggestionState() {
+    state.dateBucketFeature = null;
+    state.dateBucketManualKey = null;
+    clearPendingDateBucketSuggestion();
+  }
+
+  function resetDateBucketSuggestionIfKeyChanged(previousKey) {
+    if (previousKey !== currentDateBucketFeatureKey()) resetDateBucketSuggestionState();
+  }
+
   function fallbackBandWidthForSelectedColumn() {
     return isNumericKind(selectedColumn()?.kind) ? "1" : "0";
   }
@@ -321,6 +358,48 @@ export function createLineBarTool({
     }
   }
 
+  async function requestDateBucketSuggestionForSelectedColumn(dateBucketKey = currentDateBucketFeatureKey()) {
+    if (!state.schema || !state.x || state.dateBucketSuggestionPendingKey === dateBucketKey) return;
+    const column = selectedColumn();
+    if (!isDateKind(column?.kind) || state.dateBucketManualKey === dateBucketKey) return;
+    const requestSeq = (state.dateBucketSuggestionRequestSeq || 0) + 1;
+    state.dateBucketSuggestionRequestSeq = requestSeq;
+    state.dateBucketSuggestionPendingKey = dateBucketKey;
+    syncDateBucketControl();
+    try {
+      const sourceId = selectedColumn()?.source_id || state.xSource || state.source || "dataset";
+      const data = await api("/api/date-bucket/suggestion", {
+        method: "POST",
+        body: JSON.stringify({
+          source: sourceId,
+          xSource: sourceId,
+          feature: state.x,
+          filter: state.activeFilter,
+        }),
+      });
+      if (requestSeq !== state.dateBucketSuggestionRequestSeq || state.dateBucketSuggestionPendingKey !== dateBucketKey) return;
+      if (currentDateBucketFeatureKey() !== dateBucketKey || state.dateBucketManualKey === dateBucketKey) return;
+      state.dateBucket = normaliseDateBucket(data.date_bucket);
+      state.dateBucketFeature = dateBucketKey;
+      clearPendingDateBucketSuggestion();
+      syncDateBucketControl();
+      if (state.tool === "line_bar") refreshChart({ force: true });
+    } catch (error) {
+      if (requestSeq !== state.dateBucketSuggestionRequestSeq || state.dateBucketSuggestionPendingKey !== dateBucketKey) return;
+      if (currentDateBucketFeatureKey() !== dateBucketKey || state.dateBucketManualKey === dateBucketKey) return;
+      state.dateBucket = "year";
+      state.dateBucketFeature = dateBucketKey;
+      clearPendingDateBucketSuggestion();
+      syncDateBucketControl();
+      const warning = `Date bucket estimate failed; using Year. ${error.message}`;
+      if (state.tool === "line_bar") {
+        refreshChart({ force: true }).then(() => setStatus(warning, false));
+      } else {
+        setStatus(warning, false);
+      }
+    }
+  }
+
   function stepBandWidth(direction) {
     clearPendingBandSuggestion();
     const current = Number(state.bandWidth) > 0 ? Number(state.bandWidth) : Number(fallbackBandWidthForSelectedColumn()) || 1;
@@ -351,8 +430,12 @@ export function createLineBarTool({
     el("bandControl").classList.toggle("hidden", !isNumeric);
     el("quantileControl").classList.toggle("hidden", !isNumeric);
     const bandFeatureKey = currentBandFeatureKey();
+    const dateBucketKey = currentDateBucketFeatureKey();
     if (isNumeric && state.tool === "line_bar" && state.bandFeature !== bandFeatureKey) {
       requestBandSuggestionForSelectedColumn(bandFeatureKey);
+    }
+    if (isDate && state.tool === "line_bar" && state.dateBucketManualKey !== dateBucketKey && state.dateBucketFeature !== dateBucketKey) {
+      requestDateBucketSuggestionForSelectedColumn(dateBucketKey);
     }
     if (isNumeric && state.quantileMode === "quantile") {
       normalizeBandWidthForQuantiles();
@@ -365,7 +448,10 @@ export function createLineBarTool({
     }
     if (!isDate) {
       state.dateBucket = "none";
-      syncSegmented("dateBucket", "none");
+      resetDateBucketSuggestionState();
+      syncDateBucketControl();
+    } else {
+      syncDateBucketControl();
     }
     if (!isNumeric) {
       state.bandWidth = "0";
@@ -470,8 +556,10 @@ export function createLineBarTool({
       extraClass,
       active,
       onClick: () => {
+        const previousDateBucketKey = currentDateBucketFeatureKey();
         state.x = col.name;
         state.xSource = sourceId;
+        resetDateBucketSuggestionIfKeyChanged(previousDateBucketKey);
         renderFeatures({ preserveScroll: true });
         updateAxisControls();
         refreshChart();
@@ -683,9 +771,11 @@ export function createLineBarTool({
   }
 
   function selectDatasetFeature(featureName) {
+    const previousDateBucketKey = currentDateBucketFeatureKey();
     state.source = "dataset";
     state.x = featureName;
     state.xSource = "dataset";
+    resetDateBucketSuggestionIfKeyChanged(previousDateBucketKey);
     renderFeatures({ preserveScroll: true });
     renderExpectedNumerators();
     updateAxisControls();
@@ -767,12 +857,21 @@ export function createLineBarTool({
     const isDate = kind === "date" || kind === "datetime";
     const isNumeric = isNumericKind(kind);
     const bandFeatureKey = currentBandFeatureKey();
+    const dateBucketKey = currentDateBucketFeatureKey();
     if (isNumeric && state.bandFeature !== bandFeatureKey) {
       requestBandSuggestionForSelectedColumn(bandFeatureKey);
       return null;
     }
     if (isNumeric && state.bandSuggestionPendingKey === bandFeatureKey) {
       setGroupMeta("line_bar", "Estimating banding...");
+      return null;
+    }
+    if (isDate && state.dateBucketManualKey !== dateBucketKey && state.dateBucketFeature !== dateBucketKey) {
+      requestDateBucketSuggestionForSelectedColumn(dateBucketKey);
+      return null;
+    }
+    if (isDate && state.dateBucketSuggestionPendingKey === dateBucketKey) {
+      setGroupMeta("line_bar", "Estimating date bucket...");
       return null;
     }
     const column = selectedColumn();
@@ -858,7 +957,10 @@ export function createLineBarTool({
     measureToolRender("line_bar", () => {
       updateMetricTitles(cache.data);
       applyToolPresentation("line_bar");
-      requestAnimationFrame(() => chart.resize());
+      requestAnimationFrame(() => {
+        chart.resize();
+        refreshDateXAxisLabelsForCurrentZoom();
+      });
     });
   }
 
@@ -866,7 +968,11 @@ export function createLineBarTool({
     const labels = data.rows.map((r) => formatXLabel(r.x, data.x_kind));
     const labelMode = state.labels;
     const rawXValues = data.rows.map((r) => r.x);
-    const xLabelPolicy = getXAxisLabelPolicy(labels, data.x_kind, rawXValues);
+    const dateBucket = normaliseDateBucket(data.date_bucket);
+    const xLabelPolicy = getXAxisLabelPolicy(labels, data.x_kind, rawXValues, dateBucket, chart.getWidth?.() || el("chart").clientWidth);
+    dateXAxisContext = isDateKind(data.x_kind)
+      ? { labels, rawXValues, dateBucket, xKind: data.x_kind }
+      : null;
     const dataLabelsAllowed = labels.length < LABEL_DENSITY_LIMIT;
     const showBarLabels = dataLabelsAllowed && (labelMode === "bar" || labelMode === "all");
     const showLineLabels = dataLabelsAllowed && (labelMode === "line" || labelMode === "all");
@@ -997,13 +1103,85 @@ export function createLineBarTool({
           { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatResponseValue(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
           { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
         ],
-        dataZoom: labels.length > 120 ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }] : [],
+        dataZoom: xLabelPolicy.dataZoomEnabled ? lineBarDataZoomOptions() : [],
         series: [barSeries, ...shapSeries, ...glmSeries, ...lineSeries, ...(upliftBaseline ? [upliftBaseline] : []), ...customSeries],
       },
       true,
     );
-    requestAnimationFrame(() => chart.resize());
-    return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-");
+    requestAnimationFrame(() => {
+      chart.resize();
+      refreshDateXAxisLabelsForCurrentZoom();
+    });
+    return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-", xLabelPolicy.hiddenReason);
+  }
+
+  function lineBarDataZoomOptions() {
+    return [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }];
+  }
+
+  function scheduleDateXAxisLabelRefresh() {
+    if (dateXAxisRefreshFrame !== null) return;
+    dateXAxisRefreshFrame = requestAnimationFrame(() => {
+      dateXAxisRefreshFrame = null;
+      refreshDateXAxisLabelsForCurrentZoom();
+    });
+  }
+
+  function refreshDateXAxisLabelsForCurrentZoom() {
+    if (!dateXAxisContext) return;
+    const range = currentDateXAxisVisibleRange(dateXAxisContext.labels.length);
+    const policy = getDateXAxisLabelPolicy(
+      dateXAxisContext.labels,
+      dateXAxisContext.rawXValues,
+      dateXAxisContext.dateBucket,
+      chart.getWidth?.() || el("chart").clientWidth,
+      range,
+    );
+    const currentZoomEnabled = Array.isArray(chart.getOption?.()?.dataZoom) && chart.getOption().dataZoom.length > 0;
+    const option = {
+      grid: { bottom: policy.bottom },
+      xAxis: {
+        nameGap: policy.nameGap,
+        axisLabel: {
+          show: policy.show,
+          interval: policy.interval,
+          formatter: policy.formatter,
+          showMinLabel: policy.showMinLabel,
+          showMaxLabel: policy.showMaxLabel,
+          rotate: policy.rotate,
+          fontSize: policy.fontSize,
+        },
+      },
+    };
+    if (currentZoomEnabled !== policy.dataZoomEnabled) {
+      option.dataZoom = policy.dataZoomEnabled ? lineBarDataZoomOptions() : [];
+    }
+    chart.setOption(option);
+  }
+
+  function currentDateXAxisVisibleRange(count) {
+    const zooms = Array.isArray(chart.getOption?.()?.dataZoom) ? chart.getOption().dataZoom : [];
+    const zoom = zooms.find((item) => item && (Number.isFinite(Number(item.start)) || Number.isFinite(Number(item.end)) || item.startValue !== undefined || item.endValue !== undefined));
+    if (!zoom) return normaliseDateXAxisVisibleRange(null, count);
+    const lastIndex = Math.max(0, count - 1);
+    if (zoom.startValue !== undefined || zoom.endValue !== undefined) {
+      return normaliseDateXAxisVisibleRange({
+        startIndex: dateXAxisZoomValueIndex(zoom.startValue, count, 0),
+        endIndex: dateXAxisZoomValueIndex(zoom.endValue, count, lastIndex),
+      }, count);
+    }
+    return normaliseDateXAxisVisibleRange({
+      startIndex: Math.floor((Number(zoom.start ?? 0) / 100) * lastIndex),
+      endIndex: Math.ceil((Number(zoom.end ?? 100) / 100) * lastIndex),
+    }, count);
+  }
+
+  function dateXAxisZoomValueIndex(value, count, fallback) {
+    if (value === undefined || value === null || value === "") return fallback;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return Math.round(numeric);
+    const labelIndex = dateXAxisContext?.labels?.indexOf(String(value)) ?? -1;
+    return labelIndex >= 0 ? labelIndex : fallback;
   }
 
   function partialDependenceOverlay(data, key) {
@@ -1180,8 +1358,9 @@ export function createLineBarTool({
     return "";
   }
 
-  function chartDensityMessage(groupCount, xLabelsHidden, chartLabelsHidden) {
+  function chartDensityMessage(groupCount, xLabelsHidden, chartLabelsHidden, xLabelReason = "") {
     if (!xLabelsHidden && !chartLabelsHidden) return "";
+    if (xLabelsHidden && xLabelReason && !chartLabelsHidden) return `X-axis labels hidden ${xLabelReason}.`;
     const labelTarget = xLabelsHidden && chartLabelsHidden
       ? "X-axis and chart labels"
       : xLabelsHidden ? "X-axis labels" : "Chart labels";
@@ -1424,8 +1603,8 @@ export function createLineBarTool({
     };
   }
 
-  function getXAxisLabelPolicy(labels, kind = "", rawValues = labels) {
-    if (isDateKind(kind)) return getDateXAxisLabelPolicy(labels, rawValues);
+  function getXAxisLabelPolicy(labels, kind = "", rawValues = labels, dateBucket = "none", chartWidth = 0) {
+    if (isDateKind(kind)) return getDateXAxisLabelPolicy(labels, rawValues, dateBucket, chartWidth);
     const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label).length), 0);
     const tooMany = labels.length >= LABEL_DENSITY_LIMIT;
     const dataZoomSpace = labels.length > 120 ? 36 : 0;
@@ -1440,9 +1619,11 @@ export function createLineBarTool({
         fontSize: 10,
         nameGap: 22,
         bottom: 38 + dataZoomSpace,
+        dataZoomEnabled: labels.length > 120,
+        hiddenReason: `as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories`,
       };
     }
-    const rotate = labels.length > 18 || maxLength > 10 ? 65 : 0;
+    const rotate = labels.length > 30 || maxLength > 10 ? 65 : 0;
     const fontSize = labels.length > 50 ? 8 : 10;
     const estimatedTextWidth = maxLength * fontSize * 0.5;
     const rotatedHeight = estimatedTextWidth * Math.sin((rotate * Math.PI) / 180) + fontSize * Math.cos((rotate * Math.PI) / 180);
@@ -1458,68 +1639,142 @@ export function createLineBarTool({
       fontSize,
       nameGap: titleGap,
       bottom: titleGap + 16 + dataZoomSpace,
+      dataZoomEnabled: labels.length > 120,
+      hiddenReason: "",
     };
   }
 
-  function getDateXAxisLabelPolicy(labels, rawValues) {
-    const parsedDates = rawValues.map(parseDateCategory);
-    const selectedIndexes = dateXAxisLabelIndexes(parsedDates, labels.length);
-    const selectedIndexSet = new Set(selectedIndexes);
-    const dataZoomSpace = labels.length > 120 ? 36 : 0;
+  function getDateXAxisLabelPolicy(labels, rawValues, dateBucket = "none", chartWidth = 0, visibleRange = null) {
+    const formattedLabels = rawValues.map((value) => formatDateAxisLabel(value, parseDateCategory(value), dateBucket));
+    const fullFit = dateXAxisLabelFit(formattedLabels, chartWidth, normaliseDateXAxisVisibleRange(null, labels.length), dateBucket);
+    const visibleFit = dateXAxisLabelFit(formattedLabels, chartWidth, normaliseDateXAxisVisibleRange(visibleRange, labels.length), dateBucket);
+    const dataZoomEnabled = !fullFit.show;
+    const dataZoomSpace = dataZoomEnabled ? 36 : 0;
+    const labelSpace = visibleFit.show ? visibleFit.labelSpace : 38;
+    const titleGap = visibleFit.show ? Math.max(26, labelSpace - 10) : 22;
     return {
-      show: selectedIndexes.length > 0,
-      interval: (index) => selectedIndexSet.has(index),
-      formatter: (value, index) => formatDateAxisLabel(rawValues[index] ?? value, parsedDates[index]),
-      showMinLabel: selectedIndexSet.has(0) ? true : undefined,
-      showMaxLabel: selectedIndexSet.has(labels.length - 1) ? true : undefined,
-      rotate: 0,
-      fontSize: 10,
-      nameGap: 26,
-      bottom: 46 + dataZoomSpace,
+      show: visibleFit.show,
+      interval: 0,
+      formatter: (_value, index) => formattedLabels[index] ?? String(_value),
+      showMinLabel: visibleFit.show ? true : undefined,
+      showMaxLabel: visibleFit.show ? true : undefined,
+      rotate: visibleFit.show ? visibleFit.rotate : 0,
+      fontSize: visibleFit.fontSize,
+      nameGap: titleGap,
+      bottom: titleGap + 16 + dataZoomSpace,
+      dataZoomEnabled,
+      hiddenReason: dataZoomEnabled ? "because date labels would overlap; use zoom to inspect labels" : "",
     };
   }
 
-  function dateXAxisLabelIndexes(parsedDates, count) {
-    if (count <= 0) return [];
-    const monthStartIndexes = parsedDates
-      .map((date, index) => (date && date.day === 1 ? index : null))
-      .filter((index) => index !== null);
-    if (monthStartIndexes.length >= DATE_AXIS_MIN_MONTH_LABELS) {
-      if (monthStartIndexes.length <= DATE_AXIS_MAX_MONTH_LABELS) return monthStartIndexes;
-      const stride = Math.ceil(monthStartIndexes.length / DATE_AXIS_TARGET_LABELS);
-      const indexes = monthStartIndexes.filter((_, position) => position % stride === 0);
-      return indexes.length >= DATE_AXIS_MIN_MONTH_LABELS ? indexes : sparseDateXAxisLabelIndexes(count);
-    }
-    return sparseDateXAxisLabelIndexes(count);
+  function normaliseDateXAxisVisibleRange(range, count) {
+    const lastIndex = Math.max(0, count - 1);
+    const startIndex = Math.max(0, Math.min(lastIndex, Math.floor(Number(range?.startIndex ?? 0))));
+    const endIndex = Math.max(startIndex, Math.min(lastIndex, Math.ceil(Number(range?.endIndex ?? lastIndex))));
+    return { startIndex, endIndex };
   }
 
-  function sparseDateXAxisLabelIndexes(count) {
-    if (count <= DATE_AXIS_TARGET_LABELS) return Array.from({ length: count }, (_, index) => index);
-    const indexes = new Set([0, count - 1]);
-    const step = Math.ceil((count - 1) / (DATE_AXIS_TARGET_LABELS - 1));
-    for (let index = 0; index < count; index += step) {
-      indexes.add(index);
+  function dateXAxisLabelFit(formattedLabels, chartWidth = 0, visibleRange = null, dateBucket = "none") {
+    const count = formattedLabels.length;
+    if (count <= 0) return { show: false, fontSize: DATE_AXIS_FONT_SIZES[0], rotate: 0 };
+    const { startIndex, endIndex } = normaliseDateXAxisVisibleRange(visibleRange, count);
+    const visibleCount = Math.max(1, endIndex - startIndex + 1);
+    const plotWidth = dateXAxisPlotWidth(chartWidth);
+    const slotWidth = plotWidth / visibleCount;
+    const rotate = dateXAxisLabelRotation(dateBucket, visibleCount);
+    const visibleLabels = formattedLabels.slice(startIndex, endIndex + 1);
+    for (const fontSize of DATE_AXIS_FONT_SIZES) {
+      const maxWidth = visibleLabels
+        .reduce((width, label) => Math.max(width, estimateDateAxisLabelWidth(label, fontSize)), 0);
+      const labelWidth = dateXAxisLabelFootprint(maxWidth, fontSize, rotate);
+      if (visibleCount <= 1 || labelWidth <= slotWidth) {
+        return {
+          show: true,
+          fontSize,
+          rotate,
+          labelSpace: dateXAxisLabelSpace(maxWidth, fontSize, rotate),
+        };
+      }
     }
-    return Array.from(indexes).sort((a, b) => a - b);
+    if (visibleCount < DATE_AXIS_VISIBLE_LABEL_LIMIT) {
+      const fontSize = visibleCount > 40 ? 7 : 8;
+      const maxWidth = visibleLabels
+        .reduce((width, label) => Math.max(width, estimateDateAxisLabelWidth(label, fontSize)), 0);
+      return {
+        show: true,
+        fontSize,
+        rotate,
+        labelSpace: dateXAxisLabelSpace(maxWidth, fontSize, rotate),
+      };
+    }
+    return { show: false, fontSize: DATE_AXIS_FONT_SIZES[DATE_AXIS_FONT_SIZES.length - 1], rotate: 0, labelSpace: 38 };
+  }
+
+  function dateXAxisLabelRotation(dateBucket, visibleCount) {
+    const horizontalLimit = dateBucket === "year" ? DATE_AXIS_YEAR_HORIZONTAL_LABEL_LIMIT : DATE_AXIS_HORIZONTAL_LABEL_LIMIT;
+    return visibleCount < horizontalLimit ? 0 : DATE_AXIS_ROTATION;
+  }
+
+  function dateXAxisLabelFootprint(labelWidth, fontSize, rotate) {
+    if (!rotate) return labelWidth + DATE_AXIS_LABEL_PADDING;
+    const radians = (rotate * Math.PI) / 180;
+    return labelWidth * Math.cos(radians) + fontSize * Math.sin(radians) + DATE_AXIS_LABEL_PADDING;
+  }
+
+  function dateXAxisLabelSpace(labelWidth, fontSize, rotate) {
+    if (!rotate) return 38;
+    const radians = (rotate * Math.PI) / 180;
+    const rotatedHeight = labelWidth * Math.sin(radians) + fontSize * Math.cos(radians);
+    return Math.min(190, Math.max(70, Math.ceil(rotatedHeight) + 18));
+  }
+
+  function dateXAxisPlotWidth(chartWidth = 0) {
+    const width = Number(chartWidth);
+    return Math.max(120, (Number.isFinite(width) && width > 0 ? width : 900) - 72 - 76);
+  }
+
+  function estimateDateAxisLabelWidth(label, fontSize) {
+    return String(label || "").length * fontSize * DATE_AXIS_LABEL_WIDTH_FACTOR;
   }
 
   function parseDateCategory(value) {
     if (value === null || value === undefined) return null;
-    const match = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const match = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?/);
     if (!match) return null;
     const year = Number(match[1]);
     const month = Number(match[2]);
     const day = Number(match[3]);
+    const hour = Number(match[4] || 0);
+    const minute = Number(match[5] || 0);
+    const second = Number(match[6] || 0);
     if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
-    const checked = new Date(Date.UTC(year, month - 1, day));
-    if (checked.getUTCFullYear() !== year || checked.getUTCMonth() !== month - 1 || checked.getUTCDate() !== day) return null;
-    return { year, month, day };
+    if (![hour, minute, second].every((valuePart) => Number.isInteger(valuePart))) return null;
+    const checked = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    if (
+      checked.getUTCFullYear() !== year
+      || checked.getUTCMonth() !== month - 1
+      || checked.getUTCDate() !== day
+      || checked.getUTCHours() !== hour
+      || checked.getUTCMinutes() !== minute
+      || checked.getUTCSeconds() !== second
+    ) {
+      return null;
+    }
+    return { year, month, day, hour, minute, second, weekday: checked.getUTCDay() };
   }
 
-  function formatDateAxisLabel(value, parsedDate) {
+  function formatDateAxisLabel(value, parsedDate, dateBucket = "none") {
     if (!parsedDate) return String(value);
     const month = DATE_AXIS_MONTHS[parsedDate.month - 1];
-    return `${parsedDate.day} ${month} ${parsedDate.year}`;
+    const dateLabel = `${parsedDate.day} ${month} ${parsedDate.year}`;
+    if (dateBucket === "hour") return `${dateLabel} ${padDateAxisTime(parsedDate.hour)}:${padDateAxisTime(parsedDate.minute)}`;
+    if (dateBucket === "day") return `${DATE_AXIS_WEEKDAYS[parsedDate.weekday]} ${dateLabel}`;
+    if (dateBucket === "year") return String(parsedDate.year);
+    return dateLabel;
+  }
+
+  function padDateAxisTime(value) {
+    return String(value).padStart(2, "0");
   }
 
   function getBarLayout(count) {
@@ -1775,6 +2030,7 @@ export function createLineBarTool({
     el("chartMessage").classList.toggle("hidden", view !== "chart" || !el("chartMessage").textContent);
     if (view === "chart") {
       chart.resize();
+      refreshDateXAxisLabelsForCurrentZoom();
     } else {
       renderTableShell();
       refreshLineBarTable();
@@ -1783,6 +2039,7 @@ export function createLineBarTool({
 
   function bindControls() {
     chart.on("legendselectchanged", updateResponseAxisForLegendSelection);
+    chart.on("datazoom", scheduleDateXAxisLabelRefresh);
     const lineBarControls = new Set(["sort", "lowGroup", "labels", "bandWidth", "quantileMode", "dateBucket", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
     document.querySelectorAll(".segmented").forEach((group) => {
       if (!lineBarControls.has(group.dataset.control)) return;
@@ -1826,6 +2083,13 @@ export function createLineBarTool({
           }
           syncQuantileControl();
         }
+        if (group.dataset.control === "dateBucket") {
+          clearPendingDateBucketSuggestion();
+          state.dateBucket = normaliseDateBucket(state.dateBucket);
+          state.dateBucketFeature = currentDateBucketFeatureKey();
+          state.dateBucketManualKey = state.dateBucketFeature;
+          syncDateBucketControl();
+        }
         if (group.dataset.control === "partialDependence") {
           updateAxisControls();
         }
@@ -1852,6 +2116,7 @@ export function createLineBarTool({
 
   function resize() {
     chart.resize();
+    refreshDateXAxisLabelsForCurrentZoom();
   }
 
   function refreshTheme() {

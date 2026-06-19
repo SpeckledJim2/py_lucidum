@@ -15,6 +15,7 @@ APP_ACTIONS = {
     ("GET", "/"): "Open app",
     ("GET", "/api/schema"): "Load schema",
     ("POST", "/api/banding/suggestion"): "Band suggestion",
+    ("POST", "/api/date-bucket/suggestion"): "Date bucket suggestion",
     ("POST", "/api/filter/row-count"): "Filter row count",
     ("POST", "/api/metrics/summary"): "Metric summary",
     ("POST", "/api/reload"): "Reload dataset",

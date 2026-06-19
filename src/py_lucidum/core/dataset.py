@@ -292,6 +292,55 @@ FROM sample
                 return 1
         return suggested_band_width(stddev)
 
+    def date_bucket_suggestion_for_column(
+        self,
+        source_id: Any,
+        feature: Any,
+        filter_sql: str = "",
+    ) -> dict[str, Any]:
+        source = self.normalise_source(source_id)
+        feature_name = str(feature or "").strip()
+        if not feature_name:
+            raise ValueError("Choose a date feature")
+        columns = {column.name: column for column in self.schema_columns_for_source(source)}
+        column = columns.get(feature_name)
+        if column is None:
+            raise ValueError("Choose a valid feature for the selected data source")
+        if column.kind not in {"date", "datetime"}:
+            raise ValueError("Choose a date or datetime feature for date bucketing")
+        where_sql = f"WHERE ({filter_sql})" if filter_sql else ""
+        raw = quote_ident(column.name)
+        sql = f"""
+WITH bounds AS (
+  SELECT
+    MIN({raw}) AS min_value,
+    MAX({raw}) AS max_value
+  FROM {self.relation_sql_for_source(source)}
+  {where_sql}
+)
+SELECT
+  min_value,
+  max_value,
+  CASE
+    WHEN min_value IS NULL OR max_value IS NULL THEN 'none'
+    WHEN max_value < min_value + INTERVAL 1 MONTH THEN 'hour'
+    WHEN max_value < min_value + INTERVAL 3 MONTH THEN 'day'
+    WHEN max_value < min_value + INTERVAL 12 MONTH THEN 'week'
+    WHEN max_value < min_value + INTERVAL 3 YEAR THEN 'month'
+    ELSE 'year'
+  END AS date_bucket
+FROM bounds
+"""
+        row = self.con.execute(sql).fetchone()
+        if not row:
+            return {"date_bucket": "none", "min_value": None, "max_value": None}
+        min_value, max_value, date_bucket = row
+        return {
+            "date_bucket": str(date_bucket or "none"),
+            "min_value": min_value,
+            "max_value": max_value,
+        }
+
     def band_suggestions(self, schema: list[ColumnInfo]) -> dict[str, float | int | None]:
         if self._band_suggestions is not None:
             return self._band_suggestions

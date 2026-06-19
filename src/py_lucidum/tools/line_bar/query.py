@@ -31,6 +31,7 @@ from py_lucidum.tools.gbm.validation import CROSS_ENTROPY_OBJECTIVES, LOG_LINK_O
 BINARY_LINK_OBJECTIVES = {"binary", *CROSS_ENTROPY_OBJECTIVES}
 DEFAULT_MAX_GROUPS = 10000
 DEFAULT_TABLE_PAGE_SIZE = 10000
+DATE_BUCKETS = {"hour", "day", "week", "month", "year"}
 
 
 def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
@@ -71,6 +72,7 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
         payload = {
             "x": result["x_col"],
             "x_kind": result["x_kind"],
+            "date_bucket": result["date_bucket"],
             "source": result["source_id"],
             "row_count": result["row_count"],
             "filtered_row_count": result["filtered_row_count"],
@@ -133,6 +135,7 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
         return {
             "x": result["x_col"],
             "x_kind": result["x_kind"],
+            "date_bucket": result["date_bucket"],
             "source": result["source_id"],
             "row_count": result["row_count"],
             "filtered_row_count": result["filtered_row_count"],
@@ -185,6 +188,7 @@ def build_grouped_result(
     responses = normalise_responses(request.get("responses"), columns)
     denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
     x_info = columns[x_col]
+    date_bucket = normalise_date_bucket(request.get("dateBucket")) if x_info.kind in {"date", "datetime"} else "none"
     quantile_count = (
         normalise_quantile_count(request.get("bandWidth"))
         if use_quantiles(request.get("quantileMode")) and is_numeric_kind(x_info.kind)
@@ -194,7 +198,7 @@ def build_grouped_result(
         x_col=x_col,
         kind=x_info.kind,
         band_width=request.get("bandWidth"),
-        date_bucket=request.get("dateBucket"),
+        date_bucket=date_bucket,
         quantile_count=quantile_count,
     )
     x_group_kind = "quantile" if quantile_count else x_info.kind
@@ -233,6 +237,7 @@ def build_grouped_result(
         "x_col": x_col,
         "x_kind": x_info.kind,
         "x_group_kind": x_group_kind,
+        "date_bucket": date_bucket,
         "row_count": context["row_count"],
         "filtered_row_count": relation_row_count(dataset, relation, filter_sql),
         "filter_sql": filter_sql,
@@ -496,6 +501,11 @@ def use_quantiles(value: Any) -> bool:
     if value is False or value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on", "quantile", "quantiles"}
+
+
+def normalise_date_bucket(value: Any) -> str:
+    bucket = str(value or "none").strip().lower()
+    return bucket if bucket in DATE_BUCKETS else "none"
 
 
 def normalise_quantile_count(value: Any) -> int:

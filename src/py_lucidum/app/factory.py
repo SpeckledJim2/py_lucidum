@@ -329,6 +329,31 @@ def create_app(
             "timings": {"duckdb_ms": elapsed_ms},
         }
 
+    @app.post("/api/date-bucket/suggestion")
+    def date_bucket_suggestion(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        check_token(request)
+        started = time.perf_counter()
+        dataset = app.state.dataset
+        try:
+            with dataset.lock:
+                source = dataset.normalise_source(payload.get("xSource") or payload.get("source"))
+                feature = str(payload.get("feature") or "").strip()
+                filter_sql = dataset.normalise_filter(payload.get("filter"), source_id=source)
+                suggestion = dataset.date_bucket_suggestion_for_column(source, feature, filter_sql)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except duckdb.Error as exc:
+            raise HTTPException(status_code=400, detail=duckdb_error_message(exc)) from exc
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        return {
+            "feature": feature,
+            "source": source,
+            "date_bucket": suggestion["date_bucket"],
+            "min_value": suggestion["min_value"],
+            "max_value": suggestion["max_value"],
+            "timings": {"duckdb_ms": elapsed_ms},
+        }
+
     @app.get("/api/health")
     def health(request: Request) -> dict[str, str]:
         check_token(request)

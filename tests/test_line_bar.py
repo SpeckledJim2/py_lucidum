@@ -24,7 +24,7 @@ from py_lucidum.tools.gbm.sources import GbmSourceProvider
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
-from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count
+from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count, table
 
 
 class PredictionSidecarProvider:
@@ -178,6 +178,32 @@ class LineBarToolTests(unittest.TestCase):
                 {"label": "Expected", "numerator": "Expected"},
             ],
         }
+
+    def write_date_bucket_dataset(
+        self,
+        name: str,
+        rows: list[tuple[str | None, str]],
+        *,
+        column_type: str = "TIMESTAMP",
+    ) -> Path:
+        path = self.root / name
+        values: list[str] = []
+        for index, (value, segment) in enumerate(rows, start=1):
+            date_value = f"CAST(NULL AS {column_type})" if value is None else f"{column_type} {sql_literal(value)}"
+            values.append(f"({date_value}, {sql_literal(segment)}, {float(index)})")
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT *
+  FROM (VALUES {", ".join(values)}) AS rows(EventTime, Segment, Actual)
+) TO {sql_literal(str(path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        return path
 
     def write_active_gbm_for_shap_ribbons(
         self,
@@ -877,6 +903,125 @@ COPY (
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["band_suggestion"], 1)
+
+    def test_lazy_date_bucket_suggestion_endpoint_uses_calendar_thresholds(self) -> None:
+        cases = [
+            ("hour", "2024-01-01 00:00:00", "2024-01-20 23:00:00"),
+            ("day", "2024-01-01 00:00:00", "2024-03-15 00:00:00"),
+            ("week", "2024-01-01 00:00:00", "2024-11-01 00:00:00"),
+            ("month", "2024-01-01 00:00:00", "2026-06-01 00:00:00"),
+            ("year", "2024-01-01 00:00:00", "2027-01-01 00:00:00"),
+        ]
+        for expected, minimum, maximum in cases:
+            with self.subTest(expected=expected):
+                path = self.write_date_bucket_dataset(
+                    f"date_bucket_{expected}.parquet",
+                    [(minimum, "all"), (maximum, "all")],
+                )
+                app = create_app(path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+                status, _, body = asgi_post_json(app, "/api/date-bucket/suggestion", {"feature": "EventTime"})
+                payload = json.loads(body)
+
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["source"], "dataset")
+                self.assertEqual(payload["feature"], "EventTime")
+                self.assertEqual(payload["date_bucket"], expected)
+                self.assertIsNotNone(payload["min_value"])
+                self.assertIsNotNone(payload["max_value"])
+                self.assertIn("duckdb_ms", payload["timings"])
+
+    def test_lazy_date_bucket_suggestion_accepts_date_columns(self) -> None:
+        path = self.write_date_bucket_dataset(
+            "date_bucket_date.parquet",
+            [("2024-01-01", "all"), ("2024-11-01", "all")],
+            column_type="DATE",
+        )
+        app = create_app(path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/date-bucket/suggestion", {"feature": "EventTime"})
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["date_bucket"], "week")
+
+    def test_lazy_date_bucket_suggestion_endpoint_respects_filters(self) -> None:
+        path = self.write_date_bucket_dataset(
+            "date_bucket_filter.parquet",
+            [
+                ("2024-01-01 00:00:00", "short"),
+                ("2024-01-20 00:00:00", "short"),
+                ("2026-01-01 00:00:00", "long"),
+            ],
+        )
+        app = create_app(path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/date-bucket/suggestion", {"feature": "EventTime"})
+        filtered_status, _, filtered_body = asgi_post_json(
+            app,
+            "/api/date-bucket/suggestion",
+            {"feature": "EventTime", "filter": "Segment = 'short'"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(filtered_status, 200)
+        self.assertEqual(json.loads(body)["date_bucket"], "month")
+        self.assertEqual(json.loads(filtered_body)["date_bucket"], "hour")
+
+    def test_lazy_date_bucket_suggestion_endpoint_handles_empty_and_null_ranges(self) -> None:
+        empty_path = self.write_date_bucket_dataset(
+            "date_bucket_empty.parquet",
+            [("2024-01-01 00:00:00", "kept"), ("2024-01-20 00:00:00", "kept")],
+        )
+        null_path = self.write_date_bucket_dataset(
+            "date_bucket_null.parquet",
+            [(None, "null"), (None, "null")],
+        )
+        empty_app = create_app(empty_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        null_app = create_app(null_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        empty_status, _, empty_body = asgi_post_json(
+            empty_app,
+            "/api/date-bucket/suggestion",
+            {"feature": "EventTime", "filter": "Segment = 'missing'"},
+        )
+        null_status, _, null_body = asgi_post_json(null_app, "/api/date-bucket/suggestion", {"feature": "EventTime"})
+
+        self.assertEqual(empty_status, 200)
+        self.assertEqual(null_status, 200)
+        self.assertEqual(json.loads(empty_body)["date_bucket"], "none")
+        self.assertEqual(json.loads(null_body)["date_bucket"], "none")
+        self.assertIsNone(json.loads(empty_body)["min_value"])
+        self.assertIsNone(json.loads(null_body)["max_value"])
+
+    def test_lazy_date_bucket_suggestion_errors_are_actionable(self) -> None:
+        path = self.write_date_bucket_dataset(
+            "date_bucket_errors.parquet",
+            [("2024-01-01 00:00:00", "all"), ("2024-01-20 00:00:00", "all")],
+        )
+        app = create_app(path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+
+        source_status, _, source_body = asgi_post_json(
+            app,
+            "/api/date-bucket/suggestion",
+            {"source": "missing", "feature": "EventTime"},
+        )
+        feature_status, _, feature_body = asgi_post_json(app, "/api/date-bucket/suggestion", {"feature": "Missing"})
+        kind_status, _, kind_body = asgi_post_json(app, "/api/date-bucket/suggestion", {"feature": "Actual"})
+        filter_status, _, filter_body = asgi_post_json(
+            app,
+            "/api/date-bucket/suggestion",
+            {"feature": "EventTime", "filter": "Missing > 0"},
+        )
+
+        self.assertEqual(source_status, 400)
+        self.assertIn("valid data source", json.loads(source_body)["detail"])
+        self.assertEqual(feature_status, 400)
+        self.assertIn("valid feature", json.loads(feature_body)["detail"])
+        self.assertEqual(kind_status, 400)
+        self.assertIn("date or datetime feature", json.loads(kind_body)["detail"])
+        self.assertEqual(filter_status, 400)
+        self.assertIn("Invalid filter", json.loads(filter_body)["detail"])
 
     def test_dataset_schema_excludes_and_reports_invalid_columns(self) -> None:
         original_probe = Dataset.probe_column_readable
@@ -1978,6 +2123,51 @@ COPY (
         date_result = chart(dataset, self.request("QuoteDate >= DATE '2024-02-01'"))
         self.assertEqual(date_result["filtered_row_count"], 2)
         self.assertEqual([row["x"] for row in date_result["rows"]], ["Business"])
+
+    def test_chart_date_bucket_truncates_dates_and_none_uses_raw_values(self) -> None:
+        dataset = Dataset(self.data_path)
+        raw_request = self.request()
+        raw_request.update({"x": "QuoteDate", "dateBucket": "none"})
+        month_request = self.request()
+        month_request.update({"x": "QuoteDate", "dateBucket": "month"})
+
+        raw_result = chart(dataset, raw_request)
+        month_result = chart(dataset, month_request)
+        month_table = table(dataset, {**month_request, "tablePage": 1, "tablePageSize": 10})
+
+        self.assertEqual(raw_result["date_bucket"], "none")
+        self.assertEqual(month_result["date_bucket"], "month")
+        self.assertEqual(month_table["date_bucket"], "month")
+        self.assertEqual(
+            [row["x"] for row in raw_result["rows"]],
+            ["2024-01-01", "2024-01-02", "2024-02-01", "2024-02-20"],
+        )
+        self.assertEqual([row["x"] for row in month_result["rows"]], ["2024-01-01 00:00:00", "2024-02-01 00:00:00"])
+        self.assertEqual([row["resp0"] for row in month_result["rows"]], [150, 350])
+
+    def test_chart_week_and_month_buckets_use_calendar_starts(self) -> None:
+        path = self.write_date_bucket_dataset(
+            "calendar_buckets.parquet",
+            [
+                ("2024-01-02 10:00:00", "all"),
+                ("2024-01-07 10:00:00", "all"),
+                ("2024-01-08 10:00:00", "all"),
+                ("2024-02-20 10:00:00", "all"),
+            ],
+        )
+        dataset = Dataset(path)
+        week_request = self.request()
+        week_request.update({"x": "EventTime", "dateBucket": "week", "responses": [{"label": "Actual", "numerator": "Actual"}]})
+        month_request = self.request()
+        month_request.update({"x": "EventTime", "dateBucket": "month", "responses": [{"label": "Actual", "numerator": "Actual"}]})
+
+        week_result = chart(dataset, week_request)
+        month_result = chart(dataset, month_request)
+
+        self.assertEqual(week_result["date_bucket"], "week")
+        self.assertEqual([row["x"] for row in week_result["rows"]], ["2024-01-01 00:00:00", "2024-01-08 00:00:00", "2024-02-19 00:00:00"])
+        self.assertEqual(month_result["date_bucket"], "month")
+        self.assertEqual([row["x"] for row in month_result["rows"]], ["2024-01-01 00:00:00", "2024-02-01 00:00:00"])
 
     def test_numeric_banding_without_quantiles_still_uses_fixed_width(self) -> None:
         dataset = Dataset(self.data_path)
