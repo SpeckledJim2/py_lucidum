@@ -56,7 +56,13 @@ DEFAULT_KEYS = {
     "source",
 }
 TOOL_BUTTON_RE = re.compile(r'<button\b[^>]*\bdata-tool="([^"]+)"[^>]*>')
+MODEL_SIDEBAR_PANEL_RE = re.compile(r'<section\b[^>]*\bid="(gbmSidebarPanel|glmSidebarPanel)"[^>]*>')
 CLASS_ATTR_RE = re.compile(r'\bclass="([^"]*)"')
+ARIA_HIDDEN_ATTR_RE = re.compile(r'\s+aria-hidden="[^"]*"')
+MODEL_SIDEBAR_PANEL_TOOLS = {
+    "gbmSidebarPanel": "gbm",
+    "glmSidebarPanel": "glm",
+}
 
 
 def favicon_media_type(path: Path) -> str:
@@ -69,19 +75,36 @@ def favicon_media_type(path: Path) -> str:
 def render_initial_tool_visibility(html_text: str, enabled_tools: Sequence[str]) -> str:
     enabled = {str(tool) for tool in enabled_tools}
 
-    def replace_tool_button(match: re.Match[str]) -> str:
-        tag = match.group(0)
-        tool_id = match.group(1)
+    def set_hidden_state(tag: str, hidden: bool, *, hide_interaction: bool = False) -> str:
         class_match = CLASS_ATTR_RE.search(tag)
         if not class_match:
             return tag
         classes = [class_name for class_name in class_match.group(1).split() if class_name != "hidden"]
-        if tool_id not in enabled:
+        if hidden:
             classes.append("hidden")
         class_value = " ".join(classes)
-        return f"{tag[:class_match.start(1)]}{class_value}{tag[class_match.end(1):]}"
+        updated = f"{tag[:class_match.start(1)]}{class_value}{tag[class_match.end(1):]}"
+        if not hide_interaction:
+            return updated
+        updated = ARIA_HIDDEN_ATTR_RE.sub("", updated)
+        updated = re.sub(r"\s+inert\b", "", updated)
+        if hidden:
+            updated = updated[:-1] + ' aria-hidden="true" inert>'
+        return updated
 
-    return TOOL_BUTTON_RE.sub(replace_tool_button, html_text)
+    def replace_tool_button(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        tool_id = match.group(1)
+        return set_hidden_state(tag, tool_id not in enabled)
+
+    def replace_model_sidebar_panel(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        panel_id = match.group(1)
+        tool_id = MODEL_SIDEBAR_PANEL_TOOLS.get(panel_id, "")
+        return set_hidden_state(tag, tool_id not in enabled, hide_interaction=True)
+
+    html_text = TOOL_BUTTON_RE.sub(replace_tool_button, html_text)
+    return MODEL_SIDEBAR_PANEL_RE.sub(replace_model_sidebar_panel, html_text)
 
 
 def index_html(dataset_name: str, enabled_tools: Sequence[str]) -> str:

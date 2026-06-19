@@ -1657,6 +1657,24 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_default_sidebar_hides_model_accordions(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,vehicle_age,price,value\n"
+                "AB,AB10 1,AB10 1AA,57.1,-2.1,1,100,10\n"
+                "AL,AL1 1,AL1 1AA,51.8,-0.3,2,200,20\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path)
+            try:
+                self.exercise_default_sidebar_hides_model_accordions(base_url)
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_saved_filter_theme_headings_collapse_their_rows(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -2556,6 +2574,47 @@ COPY (
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
                 assert_sidebar_headers_visible()
                 wait_accordion_state(None)
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
+
+    def exercise_default_sidebar_hides_model_accordions(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
+                page.locator("#datasetViewerWrap:not(.hidden)").wait_for(timeout=10_000)
+                self.assertFalse(page.locator("#gbmSidebarPanel").is_visible())
+                self.assertFalse(page.locator("#glmSidebarPanel").is_visible())
+                self.assertFalse(page.locator("#gbmModelCollapseBtn").is_visible())
+                self.assertFalse(page.locator("#glmModelCollapseBtn").is_visible())
+                self.assertTrue(page.locator("#filterCollapseBtn").is_visible())
+                self.assertTrue(page.locator("#kpiCollapseBtn").is_visible())
+                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "false")
+                self.assertTrue(
+                    page.evaluate(
+                        """
+                        () => {
+                          const sections = [...document.querySelectorAll("[data-sidebar-section]")]
+                            .filter((section) => section.offsetParent !== null)
+                            .map((section) => section.dataset.sidebarSection);
+                          return sections.join("|") === "kpi|filter";
+                        }
+                        """
+                    )
+                )
+                page.locator("#filterCollapseBtn").click()
+                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "true")
+                self.assertTrue(page.locator("#savedFilterSelect").is_visible())
+                page.locator("#filterCollapseBtn").click()
+                self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "false")
+                self.assertFalse(page.locator("#savedFilterSelect").is_visible())
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()

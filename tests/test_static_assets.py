@@ -98,6 +98,21 @@ class StaticAssetTests(unittest.TestCase):
                 classes = set(class_match.group(1).split())
                 self.assertEqual("hidden" not in classes, tool_id in expected_visible_tools)
 
+    def assert_model_sidebar_panel_visibility(self, html: str, expected_visible_tools: set[str]) -> None:
+        panels = {"gbm": "gbmSidebarPanel", "glm": "glmSidebarPanel"}
+        for tool_id, panel_id in panels.items():
+            with self.subTest(panel=panel_id):
+                match = re.search(rf'<section\b[^>]*\bid="{re.escape(panel_id)}"[^>]*>', html)
+                self.assertIsNotNone(match)
+                tag = match.group(0)
+                class_match = re.search(r'\bclass="([^"]*)"', tag)
+                self.assertIsNotNone(class_match)
+                classes = set(class_match.group(1).split())
+                visible = "hidden" not in classes
+                self.assertEqual(visible, tool_id in expected_visible_tools)
+                self.assertEqual('aria-hidden="true"' in tag, not visible)
+                self.assertEqual(bool(re.search(r"\binert\b", tag)), not visible)
+
     def app_css_contract(self) -> str:
         module_paths = ["/static/app.css", *self.CSS_MODULE_PATHS]
         return "\n".join(
@@ -1151,14 +1166,13 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertNotIn("cdn.jsdelivr.net", html)
         self.assertNotIn("unpkg.com", html)
         self.assertIn('id="modelToolWrap" class="model-tool-wrap hidden"', html)
-        self.assertIn('id="glmSidebarPanel" class="section glm-sidebar-panel sidebar-accordion-section sidebar-section-closed"', html)
+        self.assert_model_sidebar_panel_visibility(html, set())
         self.assertNotIn('id="sidebarGlmResizer"', html)
         self.assertNotIn('aria-label="Resize KPI and GLM model controls"', html)
         self.assertIn('id="glmModelCollapseBtn"', html)
         self.assertIn('<span class="sidebar-section-title">GLMs</span>', html)
         self.assertIn('id="glmModelSelectedMeta"', html)
         self.assertIn('id="glmModelSelect" class="feature-list glm-model-list" role="listbox"', html)
-        self.assertIn('id="gbmSidebarPanel" class="section gbm-sidebar-panel sidebar-accordion-section sidebar-section-closed"', html)
         self.assertNotIn('id="sidebarGbmResizer"', html)
         self.assertNotIn('aria-label="Resize KPI and GBM model controls"', html)
         self.assertIn('id="gbmModelCollapseBtn"', html)
@@ -1184,6 +1198,22 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
             with self.subTest(tools=tools):
                 html = self.root_html_for_tools(tools)
                 self.assert_tool_button_visibility(html, expected_visible_tools)
+
+    def test_initial_model_sidebar_panels_match_enabled_tools(self) -> None:
+        cases = [
+            (None, set()),
+            (["line-bar"], set()),
+            (["gbm", "line-bar"], {"gbm"}),
+            (["glm", "line-bar"], {"glm"}),
+            (["glm", "gbm", "line-bar"], {"glm", "gbm"}),
+        ]
+        for tools, expected_visible_tools in cases:
+            with self.subTest(tools=tools):
+                html = self.root_html_for_tools(tools)
+                self.assert_model_sidebar_panel_visibility(html, expected_visible_tools)
+                self.assertLess(html.index('data-sidebar-section="kpi"'), html.index('data-sidebar-section="gbm"'))
+                self.assertLess(html.index('data-sidebar-section="gbm"'), html.index('data-sidebar-section="glm"'))
+                self.assertLess(html.index('data-sidebar-section="glm"'), html.index('data-sidebar-section="filter"'))
 
     def test_static_app_assets_disable_cache(self) -> None:
         self.assert_no_store("/static/app.js")
@@ -3334,6 +3364,11 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("function selectKpi(kpi)", js)
         self.assertIn("function toggleSidebarSection(section)", js)
         self.assertIn("function setOpenSidebarSection(section)", js)
+        self.assertIn("function setModelSidebarPanelVisibility(panelId, enabled)", js)
+        self.assertIn('setModelSidebarPanelVisibility("gbmSidebarPanel", gbmEnabled);', js)
+        self.assertIn('setModelSidebarPanelVisibility("glmSidebarPanel", glmEnabled);', js)
+        self.assertIn('state.openSidebarSection === "gbm" && !gbmEnabled', js)
+        self.assertIn('state.openSidebarSection === "glm" && !glmEnabled', js)
         self.assertIn("function syncSidebarAccordion()", js)
         self.assertIn('panel?.classList.toggle("sidebar-section-open", open);', js)
         self.assertIn('panel?.classList.toggle("sidebar-section-closed", !open);', js)

@@ -1082,6 +1082,18 @@
         return "column_profile";
       }
 
+      function setModelSidebarPanelVisibility(panelId, enabled) {
+        const panel = el(panelId);
+        if (!panel) return;
+        panel.classList.toggle("hidden", !enabled);
+        if (enabled) {
+          panel.removeAttribute("aria-hidden");
+        } else {
+          panel.setAttribute("aria-hidden", "true");
+        }
+        panel.toggleAttribute("inert", !enabled);
+      }
+
       function renderToolSelector() {
         const datasetViewerEnabled = toolEnabled("dataset_viewer");
         const profileEnabled = toolEnabled("column_profile");
@@ -1108,6 +1120,12 @@
         el("gbmTool").classList.toggle("hidden", !gbmEnabled);
         el("specsTool").classList.toggle("hidden", !specsEnabled);
         el("toolSelectorSection").classList.toggle("hidden", !(datasetViewerEnabled || profileEnabled || lineBarEnabled || histogramEnabled || ukMapEnabled || glmEnabled || gbmEnabled || specsEnabled));
+        setModelSidebarPanelVisibility("gbmSidebarPanel", gbmEnabled);
+        setModelSidebarPanelVisibility("glmSidebarPanel", glmEnabled);
+        if ((state.openSidebarSection === "gbm" && !gbmEnabled) || (state.openSidebarSection === "glm" && !glmEnabled)) {
+          state.openSidebarSection = null;
+        }
+        syncSidebarAccordion();
       }
 
       function schemaFileMeta() {
