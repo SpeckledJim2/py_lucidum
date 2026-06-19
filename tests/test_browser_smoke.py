@@ -6325,6 +6325,31 @@ COPY (
                     timeout=10_000,
                 )
 
+                with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
+                    page.evaluate(
+                        """
+                        () => {
+                            document.querySelector("#actualNumerator").value = "vehicle_age";
+                            document.querySelector("#denominator").value = "__none__";
+                            document.querySelector("#denominator").dispatchEvent(new Event("change", { bubbles: true }));
+                        }
+                        """
+                    )
+                page.wait_for_function(
+                    """
+                    () => {
+                        const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                        const option = chart?.getOption?.();
+                        const axis = Array.isArray(option?.xAxis) ? option.xAxis[0] : option?.xAxis;
+                        const formatter = axis?.axisLabel?.formatter;
+                        return axis?.minInterval === 1
+                          && formatter?.(1) === "1"
+                          && formatter?.(1.5) === "";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+
                 with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_filter_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
                         page.evaluate(
@@ -6501,7 +6526,7 @@ COPY (
                 self.assertEqual(profile_requests, 6)
                 self.assertEqual(profile_detail_requests, 7)
                 self.assertEqual(chart_requests, 2)
-                self.assertEqual(histogram_requests, 5)
+                self.assertEqual(histogram_requests, 6)
                 self.assertEqual(map_requests, 9)
             finally:
                 browser.close()

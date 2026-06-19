@@ -178,9 +178,9 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Histogram is a default-enabled chart tool registered after Line/Bar and before UK Mapping. Aliases are `histogram`, `hist`, and `histo`.
 - Histogram uses the shared sidebar data source, Actual, Weight, KPI, and active filter controls. With `Average row value`, `N`, empty, or `__none__` Weight, the plotted value is Actual and bar volume is row count. With a numeric Weight column, the plotted value is `Actual / Weight` and bar volume is Weight sum.
 - Rows with missing Actual are excluded. When a numeric Weight is selected, rows with missing, zero, or negative Weight are also excluded and warned. Log x-scale excludes nonpositive plotted values and warns.
-- `bins` accepts `auto` or an explicit count. Explicit counts clamp to `1..10000`; `auto` uses `sqrt(valid_count)` clamped to `10..200`. `sampleMode=100k` deterministically samples only the chart binning; the metrics table remains exact for the full filtered valid population.
+- `bins` accepts `auto` or an explicit count. Explicit counts clamp to `1..10000`; `auto` uses `sqrt(valid_count)` clamped to `10..200`. When x log scale and Weight are off, integer Actual columns and numeric Actual values that are all whole numbers use centered, touching integer bins with the requested count as an upper bound; response `bins` reports the actual returned bin count. `sampleMode=100k` deterministically samples only the chart binning; the metrics table remains exact for the full filtered valid population.
 - `distribution` supports incremental and cumulative bars. `yAxis` supports sum and probability; probability divides by the same valid chart volume used for the sum axis. Log x/y settings are render controls around the returned valid histogram values.
-- The response includes bin rows, exact metric rows, row-count metadata, denominator metadata, warnings, and timings. The frontend renders an ECharts histogram with mean/median reference lines and a compact Tabulator metrics grid.
+- The response includes bin rows, binning metadata, exact metric rows, row-count metadata, denominator metadata, warnings, and timings. The frontend uses integer binning metadata for sensible integer x-axis labels and renders an ECharts histogram with mean/median reference lines and a compact Tabulator metrics grid.
 
 **UK mapping**
 

@@ -53,27 +53,47 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             rows: list[dict[str, Any]] = []
             sampled_valid_count = 0
             bins_used = 0
+            binning = continuous_binning_metadata(actual)
         else:
             extent = value_extent(dataset, relation, actual, denominator, filter_sql, log_scale)
             if extent is None:
                 rows = []
                 sampled_valid_count = 0
                 bins_used = 0
+                binning = continuous_binning_metadata(actual)
             else:
-                bins_used = bin_count_for_extent(bins_requested, extent)
-                rows, sampled_valid_count = histogram_rows(
-                    dataset,
-                    relation,
-                    actual,
-                    denominator,
-                    filter_sql,
-                    log_scale,
-                    distribution,
-                    y_axis,
-                    bins_used,
-                    extent,
-                    sample_mode,
-                )
+                integer_plan = integer_bin_plan(actual, denominator, log_scale, extent, bins_requested)
+                if integer_plan:
+                    bins_used = integer_plan["bins"]
+                    binning = integer_binning_metadata(actual, integer_plan)
+                    rows, sampled_valid_count = integer_histogram_rows(
+                        dataset,
+                        relation,
+                        actual,
+                        denominator,
+                        filter_sql,
+                        log_scale,
+                        distribution,
+                        y_axis,
+                        integer_plan,
+                        sample_mode,
+                    )
+                else:
+                    bins_used = bin_count_for_extent(bins_requested, extent)
+                    binning = continuous_binning_metadata(actual, extent)
+                    rows, sampled_valid_count = histogram_rows(
+                        dataset,
+                        relation,
+                        actual,
+                        denominator,
+                        filter_sql,
+                        log_scale,
+                        distribution,
+                        y_axis,
+                        bins_used,
+                        extent,
+                        sample_mode,
+                    )
 
         return {
             "source": source_id,
@@ -89,6 +109,7 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             "y_axis": y_axis,
             "log_scale": log_scale,
             "sample_mode": sample_mode,
+            "binning": binning,
             "response": {
                 "label": actual["label"],
                 "numerator": actual["numerator"],
@@ -112,9 +133,10 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
 
 def normalise_actual(request: dict[str, Any], columns: dict[str, ColumnInfo]) -> dict[str, str]:
     numerator = str(request.get("actual") or request.get("numerator") or "").strip()
-    if not numerator or numerator not in columns or not is_numeric_kind(columns[numerator].kind):
+    column = columns.get(numerator)
+    if not numerator or column is None or not is_numeric_kind(column.kind):
         raise ValueError("Choose a valid numeric Actual column")
-    return {"label": str(request.get("label") or numerator), "numerator": numerator}
+    return {"label": str(request.get("label") or numerator), "numerator": numerator, "kind": column.kind}
 
 
 def normalise_distribution(value: Any) -> str:
@@ -160,6 +182,57 @@ def bin_count_for_extent(requested: int, extent: dict[str, Any]) -> int:
     if minimum == maximum:
         return 1
     return max(1, requested)
+
+
+def integer_bin_plan(
+    actual: dict[str, str],
+    denominator: dict[str, str | None],
+    log_scale: str,
+    extent: dict[str, Any],
+    requested: int,
+) -> dict[str, int] | None:
+    if denominator.get("column") or log_scale in {"x", "both"}:
+        return None
+    value_min = json_number(extent.get("value_min"))
+    value_max = json_number(extent.get("value_max"))
+    if value_min is None or value_max is None:
+        return None
+    if not float(value_min).is_integer() or not float(value_max).is_integer():
+        return None
+    non_integral_count = int(extent.get("non_integral_count") or 0)
+    if actual.get("kind") != "integer" and non_integral_count:
+        return None
+    min_int = int(round(float(value_min)))
+    max_int = int(round(float(value_max)))
+    if min_int > max_int:
+        return None
+    if max(abs(min_int), abs(max_int)) >= 9_007_199_254_740_992:
+        return None
+    level_count = max_int - min_int + 1
+    requested_count = max(1, int(requested))
+    step = max(1, math.ceil(level_count / requested_count))
+    bin_count = max(1, math.ceil(level_count / step))
+    return {"min": min_int, "max": max_int, "step": step, "bins": bin_count}
+
+
+def continuous_binning_metadata(actual: dict[str, str], extent: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "mode": "continuous",
+        "kind": actual.get("kind") or "numeric",
+        "min": json_number((extent or {}).get("value_min")),
+        "max": json_number((extent or {}).get("value_max")),
+        "step": None,
+    }
+
+
+def integer_binning_metadata(actual: dict[str, str], plan: dict[str, int]) -> dict[str, Any]:
+    return {
+        "mode": "integer",
+        "kind": actual.get("kind") or "integer",
+        "min": int(plan["min"]),
+        "max": int(plan["max"]),
+        "step": int(plan["step"]),
+    }
 
 
 def actual_sql(actual: dict[str, str]) -> str:
@@ -271,7 +344,8 @@ SELECT
     MIN(value) AS value_min,
     MAX(value) AS value_max,
     MIN(bin_value) AS bin_min,
-    MAX(bin_value) AS bin_max
+    MAX(bin_value) AS bin_max,
+    SUM(CASE WHEN value = FLOOR(value) THEN 0 ELSE 1 END) AS non_integral_count
 FROM valid_values
 """
     cursor = dataset.con.execute(sql)
@@ -339,6 +413,126 @@ FROM valid_values
     stats.append({"statistic": "Maximum", "value": json_number(row.get("maximum"))})
     stats.append({"statistic": "Weight sum", "value": json_number(row.get("weight_sum"))})
     return stats
+
+
+def integer_histogram_rows(
+    dataset: Dataset,
+    relation: str,
+    actual: dict[str, str],
+    denominator: dict[str, str | None],
+    filter_sql: str,
+    log_scale: str,
+    distribution: str,
+    y_axis: str,
+    plan: dict[str, int],
+    sample_mode: str,
+) -> tuple[list[dict[str, Any]], int]:
+    value_expr = value_sql(actual, denominator)
+    weight_expr = weight_sql(denominator)
+    valid = valid_condition(actual, denominator, log_scale)
+    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    sample_limit_sql = f"ORDER BY hash(__rownum) LIMIT {SAMPLE_LIMIT}" if sample_mode == "100k" else ""
+    min_int = int(plan["min"])
+    max_int = int(plan["max"])
+    step = max(1, int(plan["step"]))
+    bins = max(1, int(plan["bins"]))
+    sql = f"""
+WITH filtered AS (
+  SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}{where_sql}
+),
+valid_values AS (
+  SELECT
+    __rownum,
+    {value_expr} AS value,
+    {weight_expr} AS weight_value
+  FROM filtered
+  WHERE {valid}
+),
+sampled AS (
+  SELECT * FROM valid_values
+  {sample_limit_sql}
+),
+params AS (
+  SELECT
+    {min_int}::BIGINT AS min_level,
+    {max_int}::BIGINT AS max_level,
+    {step}::BIGINT AS step,
+    {bins}::INTEGER AS bin_count
+),
+indexed AS (
+  SELECT
+    LEAST(
+      params.bin_count - 1,
+      GREATEST(0, FLOOR((sampled.value - params.min_level) / params.step)::INTEGER)
+    ) AS bin_index,
+    sampled.weight_value
+  FROM sampled, params
+),
+agg AS (
+  SELECT
+    bin_index,
+    COUNT(*) AS row_count,
+    COALESCE(SUM(weight_value), 0) AS volume
+  FROM indexed
+  GROUP BY bin_index
+),
+bin_numbers AS (
+  SELECT bin_index FROM range(0, {bins}) AS generated_bins(bin_index)
+),
+bin_bounds AS (
+  SELECT
+    bins.bin_index,
+    params.min_level + bins.bin_index * params.step AS label_lower,
+    LEAST(params.max_level, params.min_level + (bins.bin_index + 1) * params.step - 1) AS label_upper
+  FROM bin_numbers bins
+  CROSS JOIN params
+),
+bin_rows AS (
+  SELECT
+    bounds.bin_index,
+    bounds.label_lower - 0.5 AS bin_lower,
+    bounds.label_upper + 0.5 AS bin_upper,
+    bounds.label_lower AS bin_label_lower,
+    bounds.label_upper AS bin_label_upper,
+    COALESCE(agg.row_count, 0) AS row_count,
+    COALESCE(agg.volume, 0) AS volume
+  FROM bin_bounds bounds
+  LEFT JOIN agg ON bounds.bin_index = agg.bin_index
+),
+with_totals AS (
+  SELECT
+    *,
+    SUM(volume) OVER () AS total_volume,
+    SUM(row_count) OVER () AS sampled_valid_count
+  FROM bin_rows
+),
+cumulative AS (
+  SELECT
+    *,
+    SUM(volume) OVER (ORDER BY bin_index ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_volume
+  FROM with_totals
+)
+SELECT
+    bin_index,
+    bin_lower,
+    bin_upper,
+    (bin_lower + bin_upper) / 2 AS bin_mid,
+    bin_label_lower,
+    bin_label_upper,
+    row_count,
+    volume,
+    volume / NULLIF(total_volume, 0) AS probability,
+    cumulative_volume,
+    cumulative_volume / NULLIF(total_volume, 0) AS cumulative_probability,
+    sampled_valid_count
+FROM cumulative
+ORDER BY bin_index
+"""
+    rows = normalise_histogram_rows(dataset, sql, distribution, y_axis)
+    sampled = int(rows[0].pop("sampled_valid_count", 0) or 0) if rows else 0
+    for row in rows[1:]:
+        row.pop("sampled_valid_count", None)
+    return rows, sampled
 
 
 def histogram_rows(
@@ -536,7 +730,7 @@ def normalise_histogram_rows(dataset: Dataset, sql: str, distribution: str, y_ax
             "bin_lower": lower,
             "bin_upper": upper,
             "bin_mid": json_number(raw.get("bin_mid")),
-            "bin_label": bin_label(lower, upper),
+            "bin_label": histogram_bin_label(raw, lower, upper),
             "row_count": json_number(raw.get("row_count")) or 0,
             "volume": json_number(raw.get("volume")) or 0,
             "probability": json_number(raw.get("probability")) or 0,
@@ -546,6 +740,20 @@ def normalise_histogram_rows(dataset: Dataset, sql: str, distribution: str, y_ax
             "sampled_valid_count": json_number(raw.get("sampled_valid_count")) or 0,
         })
     return rows
+
+
+def histogram_bin_label(raw: dict[str, Any], lower: Any, upper: Any) -> str:
+    label_lower = json_number(raw.get("bin_label_lower"))
+    label_upper = json_number(raw.get("bin_label_upper"))
+    if label_lower is None or label_upper is None:
+        return bin_label(lower, upper)
+    return integer_bin_label(label_lower, label_upper)
+
+
+def integer_bin_label(lower: Any, upper: Any) -> str:
+    if lower == upper:
+        return format_bound(lower)
+    return f"{format_bound(lower)} to {format_bound(upper)}"
 
 
 def bin_label(lower: Any, upper: Any) -> str:

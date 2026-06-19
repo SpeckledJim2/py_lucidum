@@ -4281,6 +4281,19 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("position: fixed;\n        z-index: 1000;", css)
         self.assertIn("pointer-events: none;", css)
         self.assertIn(".profile-histogram-tooltip[hidden] {\n        display: none;", css)
+        self.assertIn("line-height: 1.15;", css)
+        self.assertNotIn("grid-template-columns: repeat(20, minmax(3px, 1fr));", css)
+        self.assertIn(".profile-stats-table {", css)
+        self.assertIn(".profile-count-value {", css)
+        self.assertIn(".profile-count-percent {", css)
+        self.assertIn(".profile-count-sort-button {", css)
+        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));", css)
+        self.assertIn("overflow: visible;\n        text-overflow: clip;", css)
+        self.assertIn(".profile-count-table {", css)
+        self.assertNotIn("<th>Sample values</th>", js)
+        self.assertNotIn("<th>Distribution</th>", js)
+        self.assertNotIn("function profileSamplesHtml", js)
+        self.assertNotIn("function profileDistributionHtml", js)
 
     def test_histogram_tool_static_assets_are_registered(self) -> None:
         _, html_body = self.assert_no_store("/")
@@ -4313,8 +4326,13 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("const lower = Number(api.value(2));", js)
         self.assertIn("const upper = Number(api.value(3));", js)
         self.assertIn("const height = Number(api.value(1));", js)
-        self.assertIn("const x = Math.floor(leftPx);", js)
-        self.assertIn("const width = Math.max(1, Math.ceil(rightPx) - x);", js)
+        self.assertIn("const x = Math.floor(leftPx - 0.5);", js)
+        self.assertIn("const width = Math.max(1, Math.ceil(rightPx + 0.5) - x);", js)
+        self.assertIn("function histogramXAxisPolicy(data, _rows, xLog, chartWidth, formatContinuousValue)", js)
+        self.assertIn("function formatHistogramXAxisValue(value, binning, formatContinuousValue)", js)
+        self.assertIn("minInterval: 1,", js)
+        self.assertIn("maxInterval: step,", js)
+        self.assertIn("hideOverlap: true", js)
         self.assertIn("rowFormatter: formatHistogramStatRow", js)
         self.assertIn('const meanColor = getCss("--histogram-mean-color") || DEFAULT_HISTOGRAM_MEAN_COLOR;', js)
         self.assertIn('const medianColor = getCss("--histogram-median-color") || DEFAULT_HISTOGRAM_MEDIAN_COLOR;', js)
@@ -4350,19 +4368,47 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn(".histogram-grid .tabulator-row .tabulator-cell {\n        align-items: center;", css)
         self.assertIn(".histogram-grid .tabulator-row.histogram-stat-mean-row .tabulator-cell {\n        color: var(--histogram-mean-color, #d13f3f) !important;", css)
         self.assertIn(".histogram-grid .tabulator-row.histogram-stat-median-row .tabulator-cell {\n        color: var(--histogram-median-color, #1f7a8c) !important;", css)
-        self.assertIn("line-height: 1.15;", css)
-        self.assertNotIn("grid-template-columns: repeat(20, minmax(3px, 1fr));", css)
-        self.assertIn(".profile-stats-table {", css)
-        self.assertIn(".profile-count-value {", css)
-        self.assertIn(".profile-count-percent {", css)
-        self.assertIn(".profile-count-sort-button {", css)
-        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));", css)
-        self.assertIn("overflow: visible;\n        text-overflow: clip;", css)
-        self.assertIn(".profile-count-table {", css)
-        self.assertNotIn("<th>Sample values</th>", js)
-        self.assertNotIn("<th>Distribution</th>", js)
-        self.assertNotIn("function profileSamplesHtml", js)
-        self.assertNotIn("function profileDistributionHtml", js)
+
+    def test_histogram_axis_policy_formats_integer_ticks(self) -> None:
+        js = self.assert_no_store("/static/app/histogram-tool.js")[1].decode("utf-8")
+        helper = "\n".join(
+            [
+                "const HISTOGRAM_X_AXIS_MIN_LABELS = 8;",
+                "const HISTOGRAM_X_AXIS_MAX_LABELS = 20;",
+                "const HISTOGRAM_X_AXIS_LABEL_PX = 48;",
+                self.js_function_source(js, "histogramXAxisPolicy"),
+                self.js_function_source(js, "targetHistogramXAxisLabelCount"),
+                self.js_function_source(js, "niceIntegerAxisStep"),
+                self.js_function_source(js, "formatHistogramXAxisValue"),
+            ]
+        )
+        script = helper + """
+const continuous = (value) => `numeric:${value}`;
+const integerPolicy = histogramXAxisPolicy(
+  { binning: { mode: "integer", kind: "integer", min: 17, max: 96, step: 1 } },
+  [],
+  false,
+  1000,
+  continuous,
+);
+if (integerPolicy.axisOptions.minInterval !== 1) throw new Error("integer minInterval failed");
+if (integerPolicy.axisOptions.maxInterval !== 5) throw new Error(`expected 5-year labels, got ${integerPolicy.axisOptions.maxInterval}`);
+if (integerPolicy.axisLabel.hideOverlap !== true) throw new Error("integer hideOverlap failed");
+if (integerPolicy.axisLabel.formatter(20) !== "20") throw new Error("integer formatter failed");
+if (integerPolicy.axisLabel.formatter(16.5) !== "") throw new Error("half-step tick should be blank");
+if (integerPolicy.axisLabel.formatter(1234) !== "1,234") throw new Error("integer grouping failed");
+
+const continuousPolicy = histogramXAxisPolicy(
+  { binning: { mode: "continuous", kind: "numeric", min: 0, max: 1, step: null } },
+  [],
+  false,
+  1000,
+  continuous,
+);
+if (continuousPolicy.axisLabel.formatter(16.5) !== "numeric:16.5") throw new Error("continuous formatter changed");
+if (continuousPolicy.axisOptions.minInterval !== undefined) throw new Error("continuous axis should not force integer intervals");
+"""
+        self.run_node_script(script)
 
     def test_app_js_contains_unit_point_map_controls(self) -> None:
         js = self.app_js_contract()

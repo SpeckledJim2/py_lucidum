@@ -137,12 +137,73 @@ class HistogramToolTests(unittest.TestCase):
     def test_auto_bins_clamp_and_zero_valid_rows_warn(self) -> None:
         result = histogram(Dataset(self.data_path), self.request(bins="auto"))
 
-        self.assertEqual(result["bins"], 10)
+        self.assertEqual(result["bins"], 8)
 
         empty = histogram(Dataset(self.data_path), self.request(filter="Actual IS NULL"))
         self.assertEqual(empty["valid_count"], 0)
         self.assertEqual(empty["rows"], [])
         self.assertTrue(any("No valid histogram values" in warning for warning in empty["warnings"]))
+
+    def test_integer_actual_uses_one_touching_bin_per_level_when_requested_bins_are_high(self) -> None:
+        age_path = Path(self.tmp.name) / "age_levels.csv"
+        age_path.write_text("Age\n" + "\n".join(str(value) for value in range(21)) + "\n", encoding="utf-8")
+
+        result = histogram(Dataset(age_path), self.request(actual="Age", bins=100))
+
+        self.assertEqual(result["bins"], 21)
+        self.assertEqual(len(result["rows"]), 21)
+        self.assertEqual([row["bin_label"] for row in result["rows"][:3]], ["0", "1", "2"])
+        self.assertEqual(result["rows"][0]["bin_lower"], -0.5)
+        self.assertEqual(result["rows"][0]["bin_upper"], 0.5)
+        self.assertEqual(result["rows"][-1]["bin_lower"], 19.5)
+        self.assertEqual(result["rows"][-1]["bin_upper"], 20.5)
+        self.assertEqual(result["binning"], {"mode": "integer", "kind": "integer", "min": 0, "max": 20, "step": 1})
+        self.assertTrue(all(row["row_count"] == 1 for row in result["rows"]))
+        for previous, current in zip(result["rows"], result["rows"][1:]):
+            self.assertEqual(previous["bin_upper"], current["bin_lower"])
+
+    def test_integer_actual_groups_integer_ranges_when_requested_bins_are_lower(self) -> None:
+        age_path = Path(self.tmp.name) / "age_ranges.csv"
+        age_path.write_text("Age\n" + "\n".join(str(value) for value in range(21)) + "\n", encoding="utf-8")
+
+        result = histogram(Dataset(age_path), self.request(actual="Age", bins=5))
+
+        self.assertEqual(result["bins"], 5)
+        self.assertEqual([row["bin_label"] for row in result["rows"]], ["0 to 4", "5 to 9", "10 to 14", "15 to 19", "20"])
+        self.assertEqual([row["row_count"] for row in result["rows"]], [5, 5, 5, 5, 1])
+        self.assertEqual(result["binning"], {"mode": "integer", "kind": "integer", "min": 0, "max": 20, "step": 5})
+        self.assertEqual([(row["bin_lower"], row["bin_upper"]) for row in result["rows"][:2]], [(-0.5, 4.5), (4.5, 9.5)])
+
+    def test_integral_numeric_actual_uses_integer_bins_without_integer_schema_kind(self) -> None:
+        value_path = Path(self.tmp.name) / "whole_numeric.csv"
+        value_path.write_text("Value\n0.0\n1.0\n2.0\n", encoding="utf-8")
+
+        result = histogram(Dataset(value_path), self.request(actual="Value", bins=100))
+
+        self.assertEqual(result["bins"], 3)
+        self.assertEqual(result["binning"], {"mode": "integer", "kind": "numeric", "min": 0, "max": 2, "step": 1})
+        self.assertEqual([row["bin_label"] for row in result["rows"]], ["0", "1", "2"])
+
+    def test_integer_cumulative_probability_uses_integer_bins(self) -> None:
+        result = histogram(
+            Dataset(self.data_path),
+            self.request(denominator="Average row value", yAxis="probability", distribution="cumulative"),
+        )
+
+        self.assertEqual(result["bins"], 2)
+        self.assertEqual([row["row_count"] for row in result["rows"]], [4, 3])
+        self.assertAlmostEqual(result["rows"][0]["height"], 4 / 7)
+        self.assertAlmostEqual(result["rows"][1]["height"], 1.0)
+        self.assertEqual(result["rows"][1]["cumulative_volume"], 7)
+
+    def test_weighted_ratio_keeps_continuous_bins_for_integer_actual(self) -> None:
+        result = histogram(Dataset(self.data_path), self.request(denominator="Weight", bins=100))
+
+        self.assertEqual(result["bins"], 100)
+        self.assertEqual(len(result["rows"]), 100)
+        self.assertEqual(result["binning"]["mode"], "continuous")
+        self.assertEqual(result["binning"]["kind"], "integer")
+        self.assertNotEqual(result["rows"][0]["bin_label"], "1")
 
     def test_log_x_excludes_nonpositive_values(self) -> None:
         log_path = Path(self.tmp.name) / "log_sample.csv"
@@ -158,6 +219,8 @@ class HistogramToolTests(unittest.TestCase):
         result = histogram(Dataset(log_path), self.request(actual="Actual", logScale="x", bins=2))
 
         self.assertEqual(result["valid_count"], 2)
+        self.assertEqual(result["bins"], 2)
+        self.assertEqual(result["binning"]["mode"], "continuous")
         self.assertEqual(sum(row["row_count"] for row in result["rows"]), 2)
         self.assertTrue(any("nonpositive values excluded" in warning for warning in result["warnings"]))
 

@@ -5,6 +5,9 @@ const DEFAULT_HISTOGRAM_MEAN_COLOR = "#d13f3f";
 const DEFAULT_HISTOGRAM_MEDIAN_COLOR = "#1f7a8c";
 const HISTOGRAM_MEAN_ROW_CLASS = "histogram-stat-mean-row";
 const HISTOGRAM_MEDIAN_ROW_CLASS = "histogram-stat-median-row";
+const HISTOGRAM_X_AXIS_MIN_LABELS = 8;
+const HISTOGRAM_X_AXIS_MAX_LABELS = 20;
+const HISTOGRAM_X_AXIS_LABEL_PX = 48;
 
 export function createHistogramTool({
   api,
@@ -186,6 +189,8 @@ export function createHistogramTool({
     const yValues = rows.map((row) => Number(row.height)).filter((value) => Number.isFinite(value) && value > 0);
     const yBaseline = yLog ? (yValues.length ? Math.max(Math.min(...yValues) / 10, 1e-12) : 1e-12) : 0;
     const xBounds = axisBounds(rows, xLog);
+    const chartWidth = Number(chart.getWidth?.()) || el("histogramChart")?.clientWidth || 800;
+    const xAxisPolicy = histogramXAxisPolicy(data, rows, xLog, chartWidth, formatAxisValue);
     const barColor = getCss("--bar") || "#5bc0de";
     const lineColor = getCss("--line") || "#d7dde7";
     const textColor = getCss("--text") || "#1f2937";
@@ -217,7 +222,8 @@ export function createHistogramTool({
           min: xBounds.min,
           max: xBounds.max,
           scale: true,
-          axisLabel: { color: textColor, formatter: (value) => formatAxisValue(value) },
+          ...xAxisPolicy.axisOptions,
+          axisLabel: { color: textColor, ...xAxisPolicy.axisLabel },
           axisLine: { lineStyle: { color: lineColor } },
           splitLine: { lineStyle: { color: lineColor } },
           nameTextStyle: { color: textColor, fontSize: 13, fontWeight: 700 },
@@ -282,6 +288,58 @@ export function createHistogramTool({
     return { min: Math.min(...lowers), max: Math.max(...uppers) };
   }
 
+  function histogramXAxisPolicy(data, _rows, xLog, chartWidth, formatContinuousValue) {
+    const axisLabel = {
+      formatter: (value) => formatHistogramXAxisValue(value, data?.binning, formatContinuousValue),
+    };
+    if (xLog || data?.binning?.mode !== "integer") {
+      return { axisOptions: {}, axisLabel };
+    }
+    const minimum = Number(data.binning.min);
+    const maximum = Number(data.binning.max);
+    const range = maximum - minimum;
+    if (!Number.isFinite(range) || range <= 0) {
+      return {
+        axisOptions: { minInterval: 1, splitNumber: 1 },
+        axisLabel: { ...axisLabel, hideOverlap: true },
+      };
+    }
+    const targetLabels = targetHistogramXAxisLabelCount(chartWidth);
+    const step = niceIntegerAxisStep(range / targetLabels);
+    return {
+      axisOptions: {
+        minInterval: 1,
+        maxInterval: step,
+        splitNumber: targetLabels,
+      },
+      axisLabel: { ...axisLabel, hideOverlap: true },
+    };
+  }
+
+  function targetHistogramXAxisLabelCount(chartWidth) {
+    const width = Number(chartWidth);
+    const raw = Number.isFinite(width) && width > 0 ? Math.floor(width / HISTOGRAM_X_AXIS_LABEL_PX) : 12;
+    return Math.max(HISTOGRAM_X_AXIS_MIN_LABELS, Math.min(HISTOGRAM_X_AXIS_MAX_LABELS, raw));
+  }
+
+  function niceIntegerAxisStep(rawStep) {
+    const value = Math.max(1, Number(rawStep) || 1);
+    const exponent = Math.floor(Math.log10(value));
+    const base = 10 ** exponent;
+    const normalized = value / base;
+    const multiplier = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+    return Math.max(1, multiplier * base);
+  }
+
+  function formatHistogramXAxisValue(value, binning, formatContinuousValue) {
+    if (binning?.mode !== "integer") return formatContinuousValue(value);
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    const rounded = Math.round(number);
+    if (Math.abs(number - rounded) > 1e-9) return "";
+    return rounded.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  }
+
   function renderHistogramBar(_params, api, yBaseline, yLog, color) {
     const lower = Number(api.value(2));
     const upper = Number(api.value(3));
@@ -294,9 +352,9 @@ export function createHistogramTool({
     const rightPx = Math.max(start[0], end[0]);
     const topPx = Math.min(start[1], end[1]);
     const bottomPx = Math.max(start[1], end[1]);
-    const x = Math.floor(leftPx);
+    const x = Math.floor(leftPx - 0.5);
     const y = Math.floor(topPx);
-    const width = Math.max(1, Math.ceil(rightPx) - x);
+    const width = Math.max(1, Math.ceil(rightPx + 0.5) - x);
     const barHeight = Math.max(1, Math.ceil(bottomPx) - y);
     const shape = echartsImpl.graphic.clipRectByRect(
       { x, y, width, height: barHeight },
