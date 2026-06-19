@@ -3100,6 +3100,11 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn(".line-bar-table-grid.tabulator .tabulator-row.tabulator-calcs", css)
         self.assertIn(".line-bar-table-grid.tabulator .tabulator-header .tabulator-frozen.tabulator-frozen-left,\n      .line-bar-table-grid.tabulator .tabulator-row .tabulator-cell.tabulator-frozen.tabulator-frozen-left {\n        border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent);", css)
         self.assertIn(".line-bar-table-grid.tabulator .tabulator-tableholder .tabulator-table .tabulator-row.tabulator-calcs.tabulator-calcs-bottom {\n        border-top: 1px solid var(--line);", css)
+        self.assertIn(".line-bar-table-grid.tabulator .tabulator-footer {\n        background: var(--panel);", css)
+        self.assertIn(".line-bar-table-grid.tabulator .tabulator-footer .tabulator-calcs-holder {\n        background: var(--panel) !important;", css)
+        self.assertIn(".line-bar-table-grid.tabulator .tabulator-footer .tabulator-calcs-holder .tabulator-row {\n        background: var(--panel) !important;", css)
+        self.assertIn(".line-bar-table-grid.tabulator .tabulator-footer .tabulator-calcs-holder .tabulator-row .tabulator-cell {\n        border-right-color: color-mix(in srgb, var(--line) 80%, transparent);", css)
+        self.assertIn(".line-bar-table-grid.tabulator .tabulator-footer .tabulator-calcs-holder .tabulator-row .tabulator-cell.tabulator-frozen.tabulator-frozen-left {\n        border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent);", css)
         self.assertIn(".line-bar-table-state {", css)
         self.assertIn(".line-bar-table-grid.tabulator .tabulator-placeholder {", css)
 

@@ -977,6 +977,7 @@ class BrowserSmokeTests(unittest.TestCase):
                 with sync_playwright() as playwright:
                     browser = playwright.chromium.launch()
                     page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page.emulate_media(color_scheme="light")
                     page_errors: list[str] = []
                     chart_requests = 0
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
@@ -987,6 +988,64 @@ class BrowserSmokeTests(unittest.TestCase):
                             chart_requests += 1
 
                     page.on("request", count_request)
+
+                    def wait_for_total_row_theme(expected_dark: bool) -> dict[str, Any]:
+                        page.wait_for_function(
+                            """
+                            (expectedDark) => {
+                              const normalizeColor = (value) => {
+                                const probe = document.createElement("span");
+                                probe.style.color = value;
+                                document.body.append(probe);
+                                const color = getComputedStyle(probe).color;
+                                probe.remove();
+                                return color;
+                              };
+                              const bodyStyles = getComputedStyle(document.body);
+                              const panelColor = normalizeColor(bodyStyles.getPropertyValue("--panel").trim());
+                              const textColor = normalizeColor(bodyStyles.getPropertyValue("--text").trim());
+                              const holder = document.querySelector("#lineBarTableGrid .tabulator-footer .tabulator-calcs-holder");
+                              const row = holder?.querySelector(".tabulator-row.tabulator-calcs");
+                              const cell = row?.querySelector(".tabulator-cell");
+                              if (!holder || !row || !cell) return false;
+                              return document.body.classList.contains("dark") === expectedDark
+                                && getComputedStyle(holder).backgroundColor === panelColor
+                                && getComputedStyle(row).backgroundColor === panelColor
+                                && getComputedStyle(cell).color === textColor;
+                            }
+                            """,
+                            arg=expected_dark,
+                            timeout=10_000,
+                        )
+                        return page.evaluate(
+                            """
+                            () => {
+                              const normalizeColor = (value) => {
+                                const probe = document.createElement("span");
+                                probe.style.color = value;
+                                document.body.append(probe);
+                                const color = getComputedStyle(probe).color;
+                                probe.remove();
+                                return color;
+                              };
+                              const bodyStyles = getComputedStyle(document.body);
+                              const panelColor = normalizeColor(bodyStyles.getPropertyValue("--panel").trim());
+                              const textColor = normalizeColor(bodyStyles.getPropertyValue("--text").trim());
+                              const holder = document.querySelector("#lineBarTableGrid .tabulator-footer .tabulator-calcs-holder");
+                              const row = holder?.querySelector(".tabulator-row.tabulator-calcs");
+                              const cell = row?.querySelector(".tabulator-cell");
+                              return {
+                                dark: document.body.classList.contains("dark"),
+                                panelColor,
+                                textColor,
+                                holderBackground: holder ? getComputedStyle(holder).backgroundColor : "",
+                                rowBackground: row ? getComputedStyle(row).backgroundColor : "",
+                                cellColor: cell ? getComputedStyle(cell).color : "",
+                              };
+                            }
+                            """
+                        )
+
                     page.goto(base_url, wait_until="domcontentloaded")
                     page.locator("#datasetMeta").get_by_text("line_bar_table.csv").wait_for(timeout=10_000)
                     page.locator("#lineBarTool").click()
@@ -1040,6 +1099,24 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(table_search_state["footerCells"][0], "Total")
                     self.assertEqual(table_search_state["footerCells"][1], table_search_state["visibleRows"][0][1])
                     self.assertGreaterEqual(table_search_state["search"]["top"], table_search_state["messages"]["bottom"])
+                    light_total_theme = wait_for_total_row_theme(False)
+                    self.assertEqual(light_total_theme["holderBackground"], light_total_theme["panelColor"])
+                    self.assertEqual(light_total_theme["rowBackground"], light_total_theme["panelColor"])
+                    self.assertEqual(light_total_theme["cellColor"], light_total_theme["textColor"])
+                    page.locator("#themeBtn").click()
+                    dark_total_theme = wait_for_total_row_theme(True)
+                    self.assertEqual(dark_total_theme["holderBackground"], dark_total_theme["panelColor"])
+                    self.assertEqual(dark_total_theme["rowBackground"], dark_total_theme["panelColor"])
+                    self.assertEqual(dark_total_theme["cellColor"], dark_total_theme["textColor"])
+                    self.assertNotEqual(dark_total_theme["panelColor"], light_total_theme["panelColor"])
+                    self.assertNotEqual(dark_total_theme["textColor"], light_total_theme["textColor"])
+                    page.locator("#themeBtn").click()
+                    light_total_theme_again = wait_for_total_row_theme(False)
+                    self.assertEqual(light_total_theme_again["holderBackground"], light_total_theme_again["panelColor"])
+                    self.assertEqual(light_total_theme_again["rowBackground"], light_total_theme_again["panelColor"])
+                    self.assertEqual(light_total_theme_again["cellColor"], light_total_theme_again["textColor"])
+                    self.assertEqual(light_total_theme_again["panelColor"], light_total_theme["panelColor"])
+                    self.assertEqual(light_total_theme_again["textColor"], light_total_theme["textColor"])
                     page.locator("#lineBarTableSearchClear").click()
                     page.wait_for_function(
                         """
