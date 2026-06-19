@@ -9,8 +9,18 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 - **Dataset Viewer**: inspect a fast filtered preview of dataset rows in a sortable Tabulator grid, capped at 1,000 displayed rows, with client-side whole-table search, persistent multi-row highlighting, transpose mode where search matches original column-name rows while keeping all preview row columns, optional alphabetical column ordering, reset-sort, and copy-selected rows as CSV.
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
 - **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, server-backed searchable/paginated tables, A-Z picker defaults, a launch-collapsed Expected picker with a quick toggle, Base-aware transforms, sigma bars, optional active-GBM SHAP ribbons, active-GLM overlay lines, and x-axis feature ordering by saved GBM/GLM feature importance.
+
+  ![lucidum line and bar tool](docs/assets/line_and_bar.png)
+
 - **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution with configurable bins, integer-aware bins for discrete numeric Actuals, cumulative/probability modes, log axes, mean/median reference lines, and a compact metrics table.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, including optional sector neighbour smoothing, or postcode units when unit and coordinate columns are available.
+
+  ![UK Postcode Area mapping tool](docs/assets/postcode_area.png)
+
+  ![UK Postcode Sector mapping tool](docs/assets/postcode_sector.png)
+
+  ![UK Postcode Unit mapping tool](docs/assets/postcode_unit.png)
+
 - **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, and SHAP plotting when SHAP rows are saved during training.
 - **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios/interaction constraints.
