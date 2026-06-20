@@ -6405,11 +6405,17 @@ COPY (
                 page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
                 wait_for_map_toggle_top_right()
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="area"]').is_checked())
-                self.assertEqual(page.locator("#mapLineWeightLabel").text_content().strip(), "Line width")
+                self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
+                self.assertFalse(page.locator("#mapLineWeight").is_disabled())
+                self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
+                self.assertTrue(page.locator("#mapDotSize").is_disabled())
+                self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Line width")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("min"), "-9")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("max"), "9")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("step"), "1")
                 self.assertEqual(page.locator("#mapHotspotsValue").text_content().strip(), "All")
+                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Bot")
+                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "Top")
                 page.evaluate(
                     """
                     () => {
@@ -6729,7 +6735,13 @@ COPY (
                     page.locator('.dataset-meta-uk-map-link[data-map-level="sector"]').click()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').is_checked())
-                self.assertEqual(page.locator("#mapLineWeightLabel").text_content().strip(), "Line width")
+                self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
+                self.assertFalse(page.locator("#mapLineWeight").is_disabled())
+                self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
+                self.assertTrue(page.locator("#mapDotSize").is_disabled())
+                self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Line width")
+                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Bot")
+                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "Top")
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
@@ -6753,7 +6765,14 @@ COPY (
                     page.locator('.dataset-meta-uk-map-link[data-map-level="unit"]').click()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")')
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').is_checked())
-                self.assertEqual(page.locator("#mapLineWeightLabel").text_content().strip(), "Dot size")
+                self.assertTrue(page.locator("#mapLineWeightControl").is_hidden())
+                self.assertTrue(page.locator("#mapLineWeight").is_disabled())
+                self.assertFalse(page.locator("#mapDotSizeControl").is_hidden())
+                self.assertFalse(page.locator("#mapDotSize").is_disabled())
+                self.assertEqual(page.locator("#mapDotSizeControl > span:first-child").text_content().strip(), "Dot size")
+                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Bottom 10%")
+                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "Top 10%")
+                self.assertIn("unit-mode", page.locator("#mapSliderGrid").get_attribute("class") or "")
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
@@ -6764,13 +6783,13 @@ COPY (
                 page.evaluate(
                     """
                     () => {
-                        const input = document.querySelector("#mapLineWeight");
+                        const input = document.querySelector("#mapDotSize");
                         input.value = "5";
                         input.dispatchEvent(new Event("input", { bubbles: true }));
                     }
                     """
                 )
-                page.wait_for_function('() => document.querySelector("#mapLineWeightValue")?.textContent === "5"')
+                page.wait_for_function('() => document.querySelector("#mapDotSizeValue")?.textContent === "5"')
                 large_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(large_dot_pixels, 0)
                 page.evaluate(
@@ -6799,13 +6818,13 @@ COPY (
                 page.evaluate(
                     """
                     () => {
-                        const input = document.querySelector("#mapLineWeight");
+                        const input = document.querySelector("#mapDotSize");
                         input.value = "0";
                         input.dispatchEvent(new Event("input", { bubbles: true }));
                     }
                     """
                 )
-                page.wait_for_function('() => document.querySelector("#mapLineWeightValue")?.textContent === "0"')
+                page.wait_for_function('() => document.querySelector("#mapDotSizeValue")?.textContent === "0"')
                 small_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(small_dot_pixels, 0)
                 self.assertGreater(restored_dot_pixels, small_dot_pixels)

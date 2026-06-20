@@ -425,20 +425,25 @@
                     </button>
                   </div>
                 </div>
-                <div class="map-slider-grid">
-                  <label class="map-slider-control">
-                    <span id="mapLineWeightLabel">Line width</span>
+                <div id="mapSliderGrid" class="map-slider-grid">
+                  <label id="mapLineWeightControl" class="map-slider-control">
+                    <span>Line width</span>
                     <span class="slider-scale"><b>0</b><b id="mapLineWeightValue">1</b><b>5</b></span>
                     <input id="mapLineWeight" type="range" min="0" max="5" step="1" value="1" />
+                  </label>
+                  <label id="mapDotSizeControl" class="map-slider-control" hidden>
+                    <span>Dot size</span>
+                    <span class="slider-scale"><b>0</b><b id="mapDotSizeValue">1</b><b>5</b></span>
+                    <input id="mapDotSize" type="range" min="0" max="5" step="1" value="1" />
                   </label>
                   <label class="map-slider-control">
                     <span>Opacity</span>
                     <span class="slider-scale"><b>0</b><b id="mapOpacityValue">1</b><b>1</b></span>
                     <input id="mapOpacity" type="range" min="0" max="1" step="0.2" value="1" />
                   </label>
-                  <label class="map-slider-control">
+                  <label id="mapHotspotsControl" class="map-slider-control">
                     <span>Extremes</span>
-                    <span class="slider-scale"><b>Bot</b><b id="mapHotspotsValue">All</b><b>Top</b></span>
+                    <span class="slider-scale"><b id="mapHotspotsMinLabel">Bot</b><b id="mapHotspotsValue">All</b><b id="mapHotspotsMaxLabel">Top</b></span>
                     <input id="mapHotspots" type="range" min="-9" max="9" step="1" value="0" />
                   </label>
                   <label id="mapLabelControl" class="map-slider-control">

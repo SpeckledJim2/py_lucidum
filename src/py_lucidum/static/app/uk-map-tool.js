@@ -883,7 +883,7 @@ export function createUkMapTool({
     return 4;
   }
 
-  function unitPointRadiusScale(value = state.mapLineWeight) {
+  function unitPointRadiusScale(value = state.mapDotSize) {
     const sliderValue = Math.max(0, Math.min(5, Number(value)));
     if (!Number.isFinite(sliderValue)) return MAP_UNIT_POINT_RADIUS_MULTIPLIER;
     const scale = sliderValue <= 1
@@ -893,7 +893,7 @@ export function createUkMapTool({
   }
 
   function unitPointRadiusForCurrentStyle(zoom) {
-    const sliderValue = Number(state.mapLineWeight);
+    const sliderValue = Number(state.mapDotSize);
     if (Number.isFinite(sliderValue) && sliderValue <= 0) return MAP_UNIT_POINT_MIN_RADIUS;
     return unitPointRadiusForZoom(zoom) * unitPointRadiusScale(sliderValue);
   }
@@ -1354,17 +1354,30 @@ export function createUkMapTool({
     document.querySelectorAll(".map-palette-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.palette === state.mapPalette);
     });
-    el("mapLineWeightLabel").textContent = state.mapLevel === "unit" ? "Dot size" : "Line width";
+    const unitMode = state.mapLevel === "unit";
     el("mapLineWeight").value = String(state.mapLineWeight);
+    el("mapDotSize").value = String(state.mapDotSize);
     el("mapOpacity").value = String(state.mapOpacity);
     el("mapHotspots").value = String(state.mapHotspots);
     el("mapLabelSize").value = String(state.mapLabelSize);
     el("mapSmoothing").value = String(state.mapSmoothingLevel);
     el("mapLineWeightValue").textContent = String(state.mapLineWeight);
+    el("mapDotSizeValue").textContent = String(state.mapDotSize);
     el("mapOpacityValue").textContent = formatCompactSliderValue(state.mapOpacity);
     el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
+    el("mapHotspotsMinLabel").textContent = unitMode ? "Bottom 10%" : "Bot";
+    el("mapHotspotsMaxLabel").textContent = unitMode ? "Top 10%" : "Top";
     el("mapLabelSizeValue").textContent = String(state.mapLabelSize);
     el("mapSmoothingValue").textContent = formatSmoothingLevel(state.mapSmoothingLevel);
+    el("mapSliderGrid").classList.toggle("unit-mode", unitMode);
+    const lineWeightControl = el("mapLineWeightControl") || el("mapLineWeight").closest(".map-slider-control");
+    if (lineWeightControl) lineWeightControl.hidden = unitMode;
+    el("mapLineWeight").disabled = unitMode;
+    lineWeightControl?.classList.toggle("disabled", unitMode);
+    const dotSizeControl = el("mapDotSizeControl") || el("mapDotSize").closest(".map-slider-control");
+    if (dotSizeControl) dotSizeControl.hidden = !unitMode;
+    el("mapDotSize").disabled = !unitMode;
+    dotSizeControl?.classList.toggle("disabled", !unitMode);
     const labelHidden = state.mapLevel !== "area";
     const labelControl = el("mapLabelControl") || el("mapLabelSize").closest(".map-slider-control");
     if (labelControl) labelControl.hidden = labelHidden;
@@ -1763,13 +1776,18 @@ export function createUkMapTool({
     });
     [
       ["mapLineWeight", "mapLineWeight"],
+      ["mapDotSize", "mapDotSize"],
       ["mapOpacity", "mapOpacity"],
       ["mapHotspots", "mapHotspots"],
       ["mapLabelSize", "mapLabelSize"],
     ].forEach(([id, stateKey]) => {
       el(id).addEventListener("input", (event) => {
         state[stateKey] = Number(event.target.value);
-        if (id === "mapLabelSize" && state.mapLevel !== "area") {
+        if (
+          (id === "mapLineWeight" && state.mapLevel === "unit")
+          || (id === "mapDotSize" && state.mapLevel !== "unit")
+          || (id === "mapLabelSize" && state.mapLevel !== "area")
+        ) {
           syncFloatingMapControl();
           return;
         }

@@ -454,6 +454,10 @@
         display: none;
       }
 
+      .map-slider-grid.unit-mode #mapHotspotsControl {
+        grid-column: span 2;
+      }
+
       .map-slider-control > span:first-child {
         font-weight: 500;
       }

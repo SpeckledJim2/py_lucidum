@@ -73,6 +73,7 @@
         baseMap: "blank",
         mapPalette: "divergent",
         mapLineWeight: 1,
+        mapDotSize: 1,
         mapOpacity: 1,
         mapHotspots: 0,
         mapLabelSize: 0,
