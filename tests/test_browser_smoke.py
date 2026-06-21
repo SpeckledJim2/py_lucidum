@@ -4237,7 +4237,6 @@ COPY (
                       const tabulatedGlmRow = modelRows.find((row) => row.textContent.includes("Browser smoke GLM"));
                       const blockedGbmRow = modelRows.find((row) => row.textContent.includes("Second smoke model"));
                       const untabulatedGbmRow = modelRows.find((row) => row.textContent.includes("Browser smoke model"));
-                      const blockedGbmMessage = blockedGbmRow?.querySelector(".glm-tabulation-blocked-message") || null;
                       const selectedModelCell = document.querySelector("#glmTabulationModelGrid .tabulator-row.tabulator-selected .tabulator-cell");
                       const unselectedModelCell = modelRows
                         .find((row) => !row.classList.contains("tabulator-selected"))
@@ -4253,18 +4252,18 @@ COPY (
                         selectedModels: document.querySelectorAll("#glmTabulationModelGrid .tabulator-row.tabulator-selected").length,
                         selectedModelBackground: selectedModelCell ? getComputedStyle(selectedModelCell).backgroundColor : "",
                         unselectedModelBackground: unselectedModelCell ? getComputedStyle(unselectedModelCell).backgroundColor : "",
-                        blockedGbmCountText: blockedGbmRow?.querySelector('.tabulator-cell[tabulator-field="table_count"]')?.textContent.trim() || "",
-                        blockedGbmCountTitle: blockedGbmRow?.querySelector('.tabulator-cell[tabulator-field="table_count"]')?.getAttribute("title") || "",
-                        blockedGbmMessageWeight: blockedGbmMessage ? getComputedStyle(blockedGbmMessage).fontWeight : "",
-                        blockedGbmMeanText: blockedGbmRow?.querySelector('.tabulator-cell[tabulator-field="mean_error"]')?.textContent.trim() || "",
+                        blockedGbmPresent: Boolean(blockedGbmRow),
+                        blockedGbmTextPresent: modelRows.some((row) => row.textContent.includes("n/a: >3 leaves")),
                         untabulatedGbmCountText: untabulatedGbmRow?.querySelector('.tabulator-cell[tabulator-field="table_count"]')?.textContent.trim() || "",
+                        untabulatedGbmMeanText: untabulatedGbmRow?.querySelector('.tabulator-cell[tabulator-field="mean_error"]')?.textContent.trim() || "",
+                        untabulatedGbmSdText: untabulatedGbmRow?.querySelector('.tabulator-cell[tabulator-field="linear_sd_error"]')?.textContent.trim() || "",
+                        untabulatedGbmMissingText: untabulatedGbmRow?.querySelector('.tabulator-cell[tabulator-field="missing"]')?.textContent.trim() || "",
                         untabulatedGbmNameColor: untabulatedGbmRow?.querySelector('.tabulator-cell[tabulator-field="model_name"]')
                           ? getComputedStyle(untabulatedGbmRow.querySelector('.tabulator-cell[tabulator-field="model_name"]')).color
                           : "",
                         tabulatedGlmNameColor: tabulatedGlmRow?.querySelector('.tabulator-cell[tabulator-field="model_name"]')
                           ? getComputedStyle(tabulatedGlmRow.querySelector('.tabulator-cell[tabulator-field="model_name"]')).color
                           : "",
-                        blockedGbmCursor: blockedGbmRow ? getComputedStyle(blockedGbmRow).cursor : "",
                         modelNameColumnWidth: document.querySelector("#glmTabulationModelGrid .tabulator-col[tabulator-field='model_name']")?.getBoundingClientRect().width || 0,
                         missingColumnWidth: document.querySelector("#glmTabulationModelGrid .tabulator-col[tabulator-field='missing']")?.getBoundingClientRect().width || 0,
                         tableHeaders: [...document.querySelectorAll("#glmTabulationTableGrid .tabulator-col-title")]
@@ -4295,14 +4294,13 @@ COPY (
                 self.assertIn("GBM", tabulation_single_state["modelTypes"])
                 self.assertEqual(tabulation_single_state["selectedModels"], 1)
                 self.assertNotEqual(tabulation_single_state["selectedModelBackground"], tabulation_single_state["unselectedModelBackground"])
-                self.assertEqual(tabulation_single_state["blockedGbmCountText"], "n/a: >3 leaves")
-                self.assertIn("4 leaves", tabulation_single_state["blockedGbmCountTitle"])
-                self.assertIn("3 features", tabulation_single_state["blockedGbmCountTitle"])
-                self.assertEqual(tabulation_single_state["blockedGbmMessageWeight"], "400")
-                self.assertEqual(tabulation_single_state["blockedGbmMeanText"], "")
-                self.assertEqual(tabulation_single_state["untabulatedGbmCountText"], "--")
+                self.assertFalse(tabulation_single_state["blockedGbmPresent"])
+                self.assertFalse(tabulation_single_state["blockedGbmTextPresent"])
+                self.assertEqual(tabulation_single_state["untabulatedGbmCountText"], "not tabulated")
+                self.assertEqual(tabulation_single_state["untabulatedGbmMeanText"], "")
+                self.assertEqual(tabulation_single_state["untabulatedGbmSdText"], "")
+                self.assertEqual(tabulation_single_state["untabulatedGbmMissingText"], "")
                 self.assertNotEqual(tabulation_single_state["untabulatedGbmNameColor"], tabulation_single_state["tabulatedGlmNameColor"])
-                self.assertEqual(tabulation_single_state["blockedGbmCursor"], "not-allowed")
                 self.assertGreater(tabulation_single_state["modelNameColumnWidth"], tabulation_single_state["missingColumnWidth"])
                 self.assertEqual(tabulation_single_state["tableHeaders"], ["Table name", "Dim", "Cells", "Min", "Max", "Span"])
                 self.assertNotEqual(tabulation_single_state["selectedTableBackground"], tabulation_single_state["unselectedTableBackground"])
@@ -4353,24 +4351,6 @@ COPY (
                 )
                 page.locator('[data-glm-tabulation-view="table"]').click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
-
-                page.locator("#glmTabulationModelGrid .tabulator-row", has_text="Second smoke model").click(force=True)
-                page.locator("#glmTabulationBlockedPopover", has_text="Tabulations are limited to GBMs with <=3 leaves.").wait_for(timeout=10_000)
-                blocked_model_click_state = page.evaluate(
-                    """
-                    () => ({
-                      selectedModels: [...document.querySelectorAll("#glmTabulationModelGrid .tabulator-row.tabulator-selected")]
-                        .map((row) => row.textContent),
-                      popoverText: document.querySelector("#glmTabulationBlockedPopover")?.textContent.trim() || "",
-                      popoverHidden: document.querySelector("#glmTabulationBlockedPopover")?.classList.contains("hidden"),
-                    })
-                    """
-                )
-                self.assertEqual(blocked_model_click_state["popoverText"], "Tabulations are limited to GBMs with <=3 leaves.")
-                self.assertFalse(blocked_model_click_state["popoverHidden"])
-                self.assertEqual(len(blocked_model_click_state["selectedModels"]), 1)
-                self.assertFalse(any("Second smoke model" in text for text in blocked_model_click_state["selectedModels"]))
-                page.evaluate('() => document.querySelector("#glmTabulationBlockedPopover")?.classList.add("hidden")')
 
                 page.locator("#glmTabulationModelGrid .tabulator-row", has_text="Second smoke GLM").click(modifiers=[row_selection_modifier])
                 page.wait_for_function(

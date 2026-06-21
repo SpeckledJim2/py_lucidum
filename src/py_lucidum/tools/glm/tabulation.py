@@ -1586,6 +1586,16 @@ def _tabulation_model_status(store: GlmModelStore, model: dict[str, Any]) -> dic
     }
 
 
+def _gbm_status_has_tabulation_blockers(status: dict[str, Any]) -> bool:
+    if str(status.get("model_kind") or "").lower() != "gbm":
+        return False
+    diagnostics = status.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    blockers = diagnostics.get("blocking_warnings")
+    return isinstance(blockers, list) and bool(blockers)
+
+
 def tabulation_config(store: GlmModelStore, payload: dict[str, Any], *, gbm_store: Any = None) -> dict[str, Any]:
     requested_refs = _requested_model_refs(payload)
     glm_models = store.list_models()
@@ -1595,7 +1605,8 @@ def tabulation_config(store: GlmModelStore, payload: dict[str, Any], *, gbm_stor
         from py_lucidum.tools.gbm.tabulation import tabulation_model_status as gbm_tabulation_model_status
 
         gbm_statuses = [gbm_tabulation_model_status(gbm_store, model) for model in gbm_store.list_models()]
-    all_statuses = [*glm_statuses, *gbm_statuses]
+    visible_gbm_statuses = [status for status in gbm_statuses if not _gbm_status_has_tabulation_blockers(status)]
+    all_statuses = [*glm_statuses, *visible_gbm_statuses]
     by_ref = {_model_ref_for_status(status): status for status in all_statuses}
     by_legacy_glm_id = {str(status.get("model_id") or ""): status for status in glm_statuses}
     if requested_refs:

@@ -220,7 +220,8 @@ export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) 
     const number = Number(value);
     if (!Number.isFinite(number)) return "";
     if (scale === "exp") return formatUpliftPercent(number);
-    return number.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    const formatted = number.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    return /^-0(?:[.,]0+)?$/.test(formatted) ? formatted.slice(1) : formatted;
   }
 
   function yAxisOptions(data = {}) {

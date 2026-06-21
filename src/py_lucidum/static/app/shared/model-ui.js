@@ -9,7 +9,8 @@ export function modelNumberOrNull(value) {
 export function formatModelMetric(value) {
   const number = modelNumberOrNull(value);
   if (number === null) return "--";
-  return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  const formatted = number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return /^-0(?:[.,]0+)?$/.test(formatted) ? formatted.slice(1) : formatted;
 }
 
 export function formatModelCreated(value) {

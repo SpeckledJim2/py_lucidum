@@ -3625,6 +3625,21 @@ COPY (
         )
         self.assertEqual([row["x"] for row in chart_result["rows"]], ["A", "B", "C"])
         self.assertEqual([row["resp0"] for row in chart_result["rows"]], [1.0, 2.0, 2.0])
+        self.write_gbm_tabulation_artifacts(model_id="untabulated-gbm", tree_sql=tree_sql, predictions=[1.0, 2.0, 2.0])
+        blocked_tree_sql = """
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-S1' AS left_child, '0-S2' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 1.0 AS split_gain, '35' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-S1', '0-L0', '0-L1', '0-S0', 'Segment', 1.0, '0', 'A', '==', 'right', 'None', 0.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-S2', '0-L2', '0-L3', '0-S0', 'denominator', 1.0, '1', NULL, '<=', 'right', 'None', 0.0, 2.0, 2
+  UNION ALL SELECT 0, 3, '0-L0', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L2', NULL, NULL, '0-S2', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 3.0, 1.0, 1
+  UNION ALL SELECT 0, 3, '0-L3', NULL, NULL, '0-S2', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 4.0, 1.0, 1
+"""
+        self.write_gbm_tabulation_artifacts(model_id="blocked-gbm", tree_sql=blocked_tree_sql, predictions=[1.0, 2.0, 3.0])
+        gbm_store.activate_model("tab-gbm")
 
         glm_store = GlmModelStore(self.data_path)
         glm_dir = glm_store.create_model_dir("tab-glm")
@@ -3656,8 +3671,18 @@ COPY (
 
         config = tabulation_config(glm_store, {"model_refs": ["glm:tab-glm", "gbm:tab-gbm"]}, gbm_store=gbm_store)
         table = tabulation_table(glm_store, {"model_refs": ["glm:tab-glm", "gbm:tab-gbm"], "table_id": "Age"}, gbm_store=gbm_store)
+        full_config = tabulation_config(
+            glm_store,
+            {"model_refs": ["glm:tab-glm", "gbm:tab-gbm", "gbm:untabulated-gbm", "gbm:blocked-gbm"]},
+            gbm_store=gbm_store,
+        )
 
         self.assertEqual([model["model_kind"] for model in config["models"]], ["glm", "gbm"])
+        self.assertEqual([model["model_ref"] for model in full_config["models"]], ["glm:tab-glm", "gbm:tab-gbm", "gbm:untabulated-gbm"])
+        self.assertEqual(
+            {model["model_ref"] for model in full_config["all_models"]},
+            {"glm:tab-glm", "gbm:tab-gbm", "gbm:untabulated-gbm"},
+        )
         value_columns = [column for column in table["columns"] if column.get("tabulation_value")]
         self.assertEqual([column["field"] for column in value_columns], ["glm:tab-glm", "gbm:tab-gbm"])
         self.assertEqual(table["rows"][0]["glm:tab-glm"], 0.0)

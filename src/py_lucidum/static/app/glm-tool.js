@@ -136,7 +136,6 @@ export function createGlmTool({
   let tabulationModelSelectorSignature = "";
   let tabulationTableSelectorSignature = "";
   let tabulationPanelModeSignature = "";
-  let tabulationBlockedPopoverTimer = null;
   let tabulationResizeObserver = null;
   let tabulationResizeFrame = null;
   let tabulationFallbackRows = [];
@@ -405,7 +404,6 @@ export function createGlmTool({
             <div id="glmTabulationModelGrid" class="glm-grid glm-tabulation-selector-grid glm-tabulation-model-list" aria-labelledby="glmTabulationModelLabel"></div>
             <div id="glmTabulationModelFallback" class="glm-tabulation-selector-fallback"></div>
           </div>
-          <div id="glmTabulationBlockedPopover" class="glm-tabulation-blocked-popover hidden" role="status" aria-live="polite"></div>
           <div id="glmTabulationSelectorResizer" class="glm-tabulation-selector-resizer app-resizer app-resizer--horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize GLM model and table selectors" tabindex="0"></div>
           <label id="glmTabulationTableLabel" class="glm-tabulation-label">Select table</label>
           <div id="glmTabulationTableSections" class="glm-tabulation-table-sections ${selectedIds.length > 1 ? "multi" : "single"}" aria-labelledby="glmTabulationTableLabel">
@@ -455,11 +453,10 @@ export function createGlmTool({
 
   function tabulationSelectedModelIds() {
     const availableModels = tabulationAvailableModels();
-    const selectableModels = availableModels.filter((model) => !tabulationModelIsBlocked(model));
-    const availableModelIds = new Set(selectableModels.map((model) => tabulationModelRef(model)).filter(Boolean));
+    const availableModelIds = new Set(availableModels.map((model) => tabulationModelRef(model)).filter(Boolean));
     const ids = Array.from(selectedTabulationModelIds).map(normaliseTabulationRef).filter((modelId) => availableModelIds.has(modelId));
     if (ids.length) return [...new Set(ids)];
-    const active = selectableModels.find((model) => model.active) || (config?.active_model_id ? { model_kind: "glm", model_id: config.active_model_id } : null) || selectableModels[0] || null;
+    const active = availableModels.find((model) => model.active) || (config?.active_model_id ? { model_kind: "glm", model_id: config.active_model_id } : null) || availableModels[0] || null;
     const activeRef = active ? tabulationModelRef(active) : "";
     return activeRef ? [activeRef] : [];
   }
@@ -704,14 +701,11 @@ export function createGlmTool({
       const kind = String(model.model_kind || "glm").toLowerCase() === "gbm" ? "GBM" : "GLM";
       const diagnostics = model.diagnostics || {};
       const tables = Array.isArray(model.tables) ? model.tables : [];
-      const blockedMessage = tabulationBlockedModelMessage(model, kind);
       return {
         model_ref: modelRef,
         model_name: modelLabel(model),
         model_type: kind,
         table_count: tables.length,
-        tabulation_blocked_message: blockedMessage,
-        tabulation_blocked_title: tabulationBlockedModelTitle(model, blockedMessage),
         mean_error: modelNumberOrNull(diagnostics.mean_linear_error),
         linear_sd_error: modelNumberOrNull(diagnostics.linear_sd_error),
         missing: modelNumberOrNull(diagnostics.missing_tabulated_prediction_rows),
@@ -719,32 +713,6 @@ export function createGlmTool({
         tabulatable: Boolean(model.tabulatable),
       };
     }).filter((row) => row.model_ref);
-  }
-
-  function tabulationBlockedModelMessage(model = {}, kind = "") {
-    if (kind !== "GBM") return "";
-    const diagnostics = model.diagnostics || {};
-    const warnings = [
-      ...(Array.isArray(diagnostics.blocking_warnings) ? diagnostics.blocking_warnings : []),
-      ...(Array.isArray(model.warnings) ? model.warnings : []),
-    ].map((warning) => String(warning || ""));
-    const warningText = warnings.join(" ").toLowerCase();
-    const blockedByTreeShape = warningText.includes("leaves") || warningText.includes("1d and 2d") || warningText.includes("features");
-    return blockedByTreeShape ? "n/a: >3 leaves" : "";
-  }
-
-  function tabulationModelIsBlocked(model = {}) {
-    const kind = String(model.model_kind || "glm").toLowerCase() === "gbm" ? "GBM" : "GLM";
-    return Boolean(tabulationBlockedModelMessage(model, kind));
-  }
-
-  function tabulationBlockedModelTitle(model = {}, fallback = "") {
-    const diagnostics = model.diagnostics || {};
-    const warnings = [
-      ...(Array.isArray(diagnostics.blocking_warnings) ? diagnostics.blocking_warnings : []),
-      ...(Array.isArray(model.warnings) ? model.warnings : []),
-    ].map((warning) => String(warning || "").trim()).filter(Boolean);
-    return warnings.join(" ") || fallback;
   }
 
   function tabulationTableGroups() {
@@ -959,8 +927,6 @@ export function createGlmTool({
       row.model_name,
       row.model_type,
       row.table_count,
-      row.tabulation_blocked_message,
-      row.tabulation_blocked_title,
       row.mean_error,
       row.linear_sd_error,
       row.missing,
@@ -1067,7 +1033,7 @@ export function createGlmTool({
   function selectTabulationModel(modelId, event = {}) {
     const previousKey = tabulationSelectionKey();
     const modelRef = normaliseTabulationRef(modelId);
-    const orderedIds = tabulationAvailableModels().filter((model) => !tabulationModelIsBlocked(model)).map((model) => tabulationModelRef(model)).filter(Boolean);
+    const orderedIds = tabulationAvailableModels().map((model) => tabulationModelRef(model)).filter(Boolean);
     if (!orderedIds.includes(modelRef)) return false;
     const current = new Set(tabulationSelectedModelIds());
     const commandSelection = Boolean(event.metaKey || event.ctrlKey);
@@ -1152,10 +1118,6 @@ export function createGlmTool({
   function bindTabulationFallbackSelectors() {
     document.querySelectorAll("[data-glm-tabulation-model-id]").forEach((row) => {
       row.addEventListener("click", (event) => {
-        if (row.dataset.glmTabulationBlocked === "true") {
-          showTabulationBlockedPopover(event);
-          return;
-        }
         const modelId = String(row.dataset.glmTabulationModelId || "");
         if (!modelId) return;
         if (selectTabulationModel(modelId, event)) refreshTabulationConfig({ force: true });
@@ -1163,10 +1125,6 @@ export function createGlmTool({
       row.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        if (row.dataset.glmTabulationBlocked === "true") {
-          showTabulationBlockedPopover(event);
-          return;
-        }
         const modelId = String(row.dataset.glmTabulationModelId || "");
         if (!modelId) return;
         if (selectTabulationModel(modelId, event)) refreshTabulationConfig({ force: true });
@@ -1199,21 +1157,6 @@ export function createGlmTool({
     syncTabulationTableSelectorSelection();
     syncTabulationControls();
     loadTabulationView();
-  }
-
-  function showTabulationBlockedPopover(event = null) {
-    const popover = el("glmTabulationBlockedPopover");
-    const sidebar = document.querySelector(".glm-tabulation-sidebar");
-    if (!popover || !sidebar) return;
-    const anchor = event?.target?.closest?.(".tabulator-row, [data-glm-tabulation-model-id]");
-    const sidebarRect = sidebar.getBoundingClientRect();
-    const anchorRect = anchor?.getBoundingClientRect?.();
-    popover.textContent = "Tabulations are limited to GBMs with <=3 leaves.";
-    if (anchorRect) popover.style.top = `${Math.max(8, anchorRect.bottom - sidebarRect.top + 4)}px`;
-    else popover.style.top = "56px";
-    popover.classList.remove("hidden");
-    window.clearTimeout(tabulationBlockedPopoverTimer);
-    tabulationBlockedPopoverTimer = window.setTimeout(() => popover.classList.add("hidden"), 2600);
   }
 
   async function renderTabulationSelectorTables(options = {}) {
@@ -1271,7 +1214,6 @@ export function createGlmTool({
       layout: "fitColumns",
       placeholder: "No models",
       selectableRows: true,
-      selectableRowsCheck: (row) => !row.getData()?.tabulation_blocked_message,
       rowFormatter: formatTabulationModelSelectorRow,
       columns: [
         { title: "Model name", field: "model_name", sorter: "string", formatter: tabulationTextFormatter, minWidth: 150, widthGrow: 1 },
@@ -1284,11 +1226,6 @@ export function createGlmTool({
     });
     tabulationModelTable.on("rowClick", (event, row) => {
       const data = row.getData() || {};
-      if (data.tabulation_blocked_message) {
-        showTabulationBlockedPopover(event);
-        syncTabulationModelSelectorSelection();
-        return;
-      }
       const modelRef = String(data.model_ref || "");
       if (!modelRef) return;
       selectTabulationModel(modelRef, event);
@@ -1303,11 +1240,7 @@ export function createGlmTool({
   function formatTabulationModelSelectorRow(row) {
     const data = row.getData() || {};
     const element = row.getElement();
-    const blocked = Boolean(data.tabulation_blocked_message);
     element.classList.toggle("glm-tabulation-model-untabulated", !data.tabulated);
-    element.classList.toggle("glm-tabulation-model-blocked", blocked);
-    if (blocked) element.setAttribute("aria-disabled", "true");
-    else element.removeAttribute("aria-disabled");
   }
 
   function renderTabulationTableSelectorGrids(Tabulator, groups = tabulationTableGroups()) {
@@ -1439,17 +1372,13 @@ export function createGlmTool({
         <thead><tr><th>Model name</th><th>Model type</th><th class="numeric">Number of tables</th><th class="numeric">Mean error</th><th class="numeric">linear SD error</th><th class="numeric">missing</th></tr></thead>
         <tbody>
           ${rows.map((row) => `
-            <tr data-glm-tabulation-model-id="${escapeHtml(row.model_ref)}" data-glm-tabulation-blocked="${row.tabulation_blocked_message ? "true" : "false"}" class="${!row.tabulated ? "untabulated " : ""}${row.tabulation_blocked_message ? "blocked " : ""}${selected.has(row.model_ref) ? "selected" : ""}" tabindex="0" aria-selected="${selected.has(row.model_ref) ? "true" : "false"}" ${row.tabulation_blocked_message ? 'aria-disabled="true"' : ""}>
+            <tr data-glm-tabulation-model-id="${escapeHtml(row.model_ref)}" class="${!row.tabulated ? "untabulated " : ""}${selected.has(row.model_ref) ? "selected" : ""}" tabindex="0" aria-selected="${selected.has(row.model_ref) ? "true" : "false"}">
               <td>${escapeHtml(row.model_name)}</td>
               <td>${escapeHtml(row.model_type)}</td>
-              ${row.tabulation_blocked_message ? `
-                <td class="glm-tabulation-blocked-fallback-cell" colspan="4" title="${escapeHtml(row.tabulation_blocked_title)}">${escapeHtml(row.tabulation_blocked_message)}</td>
-              ` : `
-                <td class="numeric">${row.tabulated ? escapeHtml(formatTabulationInteger(row.table_count)) : "--"}</td>
-                <td class="numeric">${escapeHtml(formatModelMetric(row.mean_error))}</td>
-                <td class="numeric">${escapeHtml(formatModelMetric(row.linear_sd_error))}</td>
-                <td class="numeric">${escapeHtml(formatTabulationInteger(row.missing))}</td>
-              `}
+              <td class="numeric">${row.tabulated ? escapeHtml(formatTabulationInteger(row.table_count)) : "not tabulated"}</td>
+              <td class="numeric">${row.tabulated ? escapeHtml(formatModelMetric(row.mean_error)) : ""}</td>
+              <td class="numeric">${row.tabulated ? escapeHtml(formatModelMetric(row.linear_sd_error)) : ""}</td>
+              <td class="numeric">${row.tabulated ? escapeHtml(formatTabulationInteger(row.missing)) : ""}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -1507,25 +1436,17 @@ export function createGlmTool({
 
   function tabulationTableCountFormatter(cell) {
     const row = cell.getRow().getData() || {};
-    const element = cell.getElement();
-    if (row.tabulation_blocked_message) {
-      element.classList.add("glm-tabulation-blocked-cell");
-      element.title = row.tabulation_blocked_title || row.tabulation_blocked_message;
-      return `<span class="glm-tabulation-blocked-message">${escapeHtml(row.tabulation_blocked_message)}</span>`;
-    }
-    element.classList.remove("glm-tabulation-blocked-cell");
-    element.removeAttribute("title");
-    if (!row.tabulated) return "--";
+    if (!row.tabulated) return "not tabulated";
     return escapeHtml(formatTabulationInteger(cell.getValue()));
   }
 
   function tabulationModelMetricFormatter(cell) {
-    if (cell.getRow().getData()?.tabulation_blocked_message) return "";
+    if (!cell.getRow().getData()?.tabulated) return "";
     return tabulationMetricFormatter(cell);
   }
 
   function tabulationModelIntegerFormatter(cell) {
-    if (cell.getRow().getData()?.tabulation_blocked_message) return "";
+    if (!cell.getRow().getData()?.tabulated) return "";
     return tabulationIntegerFormatter(cell);
   }
 
@@ -1836,7 +1757,10 @@ export function createGlmTool({
 
   function formatTabulationValue(value) {
     const number = Number(value);
-    return Number.isFinite(number) ? number.toFixed(4) : formatModelMetric(value);
+    if (!Number.isFinite(number)) return formatModelMetric(value);
+    if (Object.is(number, -0)) return "0";
+    const formatted = number.toFixed(4);
+    return /^-0(?:\.0+)?$/.test(formatted) ? "0" : formatted;
   }
 
   function tabulationCellColor(value, min, max) {
@@ -1994,8 +1918,6 @@ export function createGlmTool({
 
   function disposeTabulationSelectorTables() {
     tabulationSelectorRenderSeq += 1;
-    window.clearTimeout(tabulationBlockedPopoverTimer);
-    tabulationBlockedPopoverTimer = null;
     disposeTabulationModelSelectorTable();
     disposeTabulationTableSelectorTables();
     tabulationModelSelectorSignature = "";

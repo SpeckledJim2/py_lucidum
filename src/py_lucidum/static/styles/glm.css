@@ -879,61 +879,6 @@
         overflow: visible;
       }
 
-      .glm-tabulation-model-list .tabulator-row.glm-tabulation-model-blocked,
-      .glm-tabulation-selector-table tr.blocked {
-        cursor: not-allowed;
-      }
-
-      .glm-tabulation-blocked-popover {
-        background: color-mix(in srgb, var(--panel) 96%, var(--accent));
-        border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line));
-        border-radius: 5px;
-        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.18);
-        color: var(--text);
-        font-size: 11px;
-        font-weight: 600;
-        left: 12px;
-        line-height: 1.25;
-        max-width: calc(100% - 24px);
-        padding: 7px 9px;
-        position: absolute;
-        right: 12px;
-        z-index: 20;
-      }
-
-      .glm-tabulation-blocked-popover.hidden {
-        display: none;
-      }
-
-      .glm-tabulation-blocked-cell {
-        overflow: visible !important;
-        position: relative;
-        text-align: left !important;
-        z-index: 2;
-      }
-
-      .glm-tabulation-blocked-message {
-        background: inherit;
-        color: var(--muted);
-        display: inline-block;
-        font-weight: 400;
-        line-height: 1.15;
-        max-width: 360px;
-        overflow: hidden;
-        padding-right: 8px;
-        text-overflow: ellipsis;
-        vertical-align: middle;
-        white-space: nowrap;
-      }
-
-      .glm-tabulation-blocked-fallback-cell {
-        color: var(--muted);
-        font-weight: 400;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
       .glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.tabulator-selected,
       .glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.tabulator-selected .tabulator-cell,
       .glm-grid.glm-tabulation-selector-grid.glm-tabulation-table-list .tabulator-row.tabulator-selected,

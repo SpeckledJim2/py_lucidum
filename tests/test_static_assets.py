@@ -455,6 +455,8 @@ if (modelNumberOrNull("") !== null) throw new Error("empty number should be null
 if (modelNumberOrNull("12.5") !== 12.5) throw new Error("numeric string failed");
 if (formatModelMetric(null) !== "--") throw new Error("missing metric failed");
 if (formatModelMetric(1234.56789) !== "1,234.5679") throw new Error("metric formatting failed");
+if (formatModelMetric(-0) !== "0") throw new Error("negative zero metric failed");
+if (formatModelMetric(-0.00001) !== "0") throw new Error("rounded negative zero metric failed");
 if (formatModelCreated("2026-01-02T03:04:00") !== "2 Jan 03:04") throw new Error("created formatting failed");
 if (formatModelCreated("not-a-date") !== "not-a-date") throw new Error("invalid date failed");
 if (modelCreatedSort("not-a-date") !== 0) throw new Error("invalid sort failed");
@@ -1448,7 +1450,6 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('id="glmTabulationColor" type="checkbox"', glm_js)
         self.assertIn('id="glmTabulationModelGrid"', glm_js)
         self.assertIn('id="glmTabulationModelFallback"', glm_js)
-        self.assertIn('id="glmTabulationBlockedPopover"', glm_js)
         self.assertIn('id="glmTabulationSelectorResizer" class="glm-tabulation-selector-resizer app-resizer app-resizer--horizontal"', glm_js)
         self.assertIn('const GLM_TABULATION_MODEL_LIST_HEIGHT_KEY = "py_lucidum_glm_tabulation_model_list_height";', glm_js)
         self.assertIn('id="glmTabulationTableSections"', glm_js)
@@ -1499,11 +1500,12 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("await ensureDefaultTabulationCrosstab(model_ids, table_id);", glm_js)
         self.assertIn("const payload = { model_refs: model_ids, table_id, scale: tabulationScale, crosstab: tabulationCrosstab };", glm_js)
         self.assertIn("function tabulationModelRows(models = tabulationAvailableModels())", glm_js)
-        self.assertIn("function tabulationBlockedModelMessage(model = {}, kind = \"\")", glm_js)
-        self.assertIn("function tabulationModelIsBlocked(model = {})", glm_js)
-        self.assertIn("n/a: >3 leaves", glm_js)
-        self.assertIn('if (!row.tabulated) return "--";', glm_js)
-        self.assertIn("Tabulations are limited to GBMs with <=3 leaves.", glm_js)
+        self.assertNotIn("function tabulationBlockedModelMessage", glm_js)
+        self.assertNotIn("function tabulationModelIsBlocked", glm_js)
+        self.assertNotIn("n/a: >3 leaves", glm_js)
+        self.assertIn('if (!row.tabulated) return "not tabulated";', glm_js)
+        self.assertIn('if (!cell.getRow().getData()?.tabulated) return "";', glm_js)
+        self.assertNotIn("Tabulations are limited to GBMs with <=3 leaves.", glm_js)
         self.assertIn("function tabulationTableCountFormatter(cell)", glm_js)
         self.assertIn("function tabulationModelMetricFormatter(cell)", glm_js)
         self.assertIn("function tabulationTableGroups()", glm_js)
@@ -1538,10 +1540,10 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("let tabulationOtherTable = null;", glm_js)
         self.assertIn("function renderTabulationSelectorTables(options = {})", glm_js)
         self.assertIn('layout: "fitColumns"', glm_js)
-        self.assertIn("selectableRowsCheck: (row) => !row.getData()?.tabulation_blocked_message", glm_js)
+        self.assertNotIn("selectableRowsCheck: (row) => !row.getData()?.tabulation_blocked_message", glm_js)
         self.assertIn("rowFormatter: formatTabulationModelSelectorRow", glm_js)
-        self.assertIn("function showTabulationBlockedPopover(event = null)", glm_js)
-        self.assertIn('data-glm-tabulation-blocked', glm_js)
+        self.assertNotIn("function showTabulationBlockedPopover", glm_js)
+        self.assertNotIn('data-glm-tabulation-blocked', glm_js)
         self.assertIn("function tabulationDisplayTableValue(value)", glm_js)
         self.assertIn("function tabulationDisplayTableSpan(min, max)", glm_js)
         self.assertIn('diagnostics.classList.toggle("hidden", !html);', glm_js)
@@ -1571,6 +1573,15 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("number.toFixed(4)", glm_js)
         self.assertIn("tabulationValue ? formatTabulationValue(value) : formatModelMetric(value)", glm_js)
         self.assertIn("tabulationValue ? formatTabulationValue(value) : (numeric ? formatModelMetric(value) : value)", glm_js)
+        self.run_node_script(f"""
+{self.shared_model_ui_source(["modelNumberOrNull", "formatModelMetric"])}
+function modelNumberOrNull(value) {{ return sharedModelNumberOrNull(value); }}
+function formatModelMetric(value) {{ return sharedFormatModelMetric(value); }}
+{self.js_function_source(glm_tool_js, "formatTabulationValue")}
+if (formatTabulationValue(-0) !== "0") throw new Error("fixed negative zero failed");
+if (formatTabulationValue(-0.00001) !== "0") throw new Error("fixed rounded negative zero failed");
+if (formatTabulationValue(0.25) !== "0.2500") throw new Error("fixed positive value failed");
+""")
         self.assertIn('const statusField = String(column.status_field || `__status__${field}`);', glm_js)
         self.assertIn('glm-tabulation-colour-cell', glm_js)
         self.assertIn('glm-tabulation-rebase-cell', glm_js)
@@ -1609,6 +1620,7 @@ if (expAxis.axisLabel.formatter(1) !== "0%") throw new Error("exp base tick shou
 if (expAxis.axisLabel.formatter(1.25) !== "+25%") throw new Error("exp tick should be uplift percent");
 if (expAxis.axisLabel.formatter(0.9) !== "-10%") throw new Error("negative uplift should be shown from base");
 if (formatTabulationAxisTick(1.2, "linear") !== "1.2") throw new Error("linear ticks should stay numeric");
+if (formatTabulationAxisTick(-0.0000001, "linear") !== "0") throw new Error("linear negative zero tick should render as zero");
 """)
         self.assertIn("syncSidebarModelChooser", js)
         self.assertIn("glm_prediction", js)
@@ -1622,11 +1634,11 @@ if (formatTabulationAxisTick(1.2, "linear") !== "1.2") throw new Error("linear t
         self.assertIn(".glm-tabulation-selector-resizer", css)
         self.assertIn(".glm-tabulation-table-sections", css)
         self.assertIn(".glm-tabulation-section-title", css)
-        self.assertIn(".glm-tabulation-blocked-cell", css)
-        self.assertIn(".glm-tabulation-blocked-message", css)
-        self.assertIn(".glm-tabulation-blocked-fallback-cell", css)
-        self.assertIn(".glm-tabulation-blocked-popover", css)
-        self.assertIn(".glm-tabulation-model-list .tabulator-row.glm-tabulation-model-blocked", css)
+        self.assertNotIn(".glm-tabulation-blocked-cell", css)
+        self.assertNotIn(".glm-tabulation-blocked-message", css)
+        self.assertNotIn(".glm-tabulation-blocked-fallback-cell", css)
+        self.assertNotIn(".glm-tabulation-blocked-popover", css)
+        self.assertNotIn(".glm-tabulation-model-list .tabulator-row.glm-tabulation-model-blocked", css)
         self.assertIn(".glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.glm-tabulation-model-untabulated .tabulator-cell", css)
         self.assertIn(".glm-grid.glm-tabulation-selector-grid.glm-tabulation-model-list .tabulator-row.tabulator-selected", css)
         self.assertIn(".glm-grid.glm-tabulation-selector-grid.glm-tabulation-table-list .tabulator-row.tabulator-selected", css)
