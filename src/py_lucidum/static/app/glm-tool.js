@@ -742,10 +742,12 @@ export function createGlmTool({
     const rows = Array.from(byTable.entries()).map(([, entry]) => {
       const dim = entry.dims.size === 1 ? Array.from(entry.dims)[0] : null;
       const index = Math.min(...entry.indexes.filter((value) => Number.isFinite(value)));
+      const tableIndex = Number.isFinite(index) ? index : null;
       return {
         ...tabulationTableSelectorRow(entry.table, entry.count === models.length && dim !== null ? "common" : "other"),
+        table_index: tableIndex,
         dim,
-        sort_index: Number.isFinite(index) ? index : tabulationTableIndex(entry.table),
+        sort_index: tableIndex === null ? tabulationTableIndex(entry.table) : tableIndex,
       };
     });
     rows.sort(compareTabulationSelectorRows);
@@ -772,8 +774,10 @@ export function createGlmTool({
     const min = modelNumberOrNull(table.min);
     const max = modelNumberOrNull(table.max);
     const span = min !== null && max !== null ? max - min : null;
+    const tableIndex = tabulationTableDisplayIndex(table);
     return {
       table_id: String(table.table_id || ""),
+      table_index: tableIndex,
       table_name: tabulationTableLabel(table),
       dim: tabulationTableDim(table),
       cells: Number(table.cell_count || 0),
@@ -782,7 +786,7 @@ export function createGlmTool({
       span,
       skipped: Boolean(table.skipped),
       section,
-      sort_index: tabulationTableIndex(table),
+      sort_index: tableIndex === null ? tabulationTableIndex(table) : tableIndex,
     };
   }
 
@@ -793,6 +797,11 @@ export function createGlmTool({
   function tabulationTableIndex(table = {}) {
     const index = Number(table.index);
     return Number.isFinite(index) ? index : 9999;
+  }
+
+  function tabulationTableDisplayIndex(table = {}) {
+    const index = Number(table.index);
+    return Number.isFinite(index) ? index : null;
   }
 
   function tabulationCrosstabOptions(features = [], modelIds = tabulationSelectedModelIds()) {
@@ -938,6 +947,7 @@ export function createGlmTool({
   function tabulationTableSelectorSignatureValue(groups = tabulationTableGroups()) {
     const displayRows = (rows = []) => tabulationDisplayTableRows(rows).map((row) => [
       row.table_id,
+      row.table_index,
       row.table_name,
       row.dim,
       row.cells,
@@ -1258,12 +1268,25 @@ export function createGlmTool({
     const target = el(elementId);
     if (!target) return null;
     target.classList.remove("hidden");
+    const indexColumn = {
+      title: "#",
+      field: "table_index",
+      sorter: "number",
+      formatter: tabulationIntegerFormatter,
+      hozAlign: "right",
+      headerHozAlign: "right",
+      width: 42,
+      minWidth: 42,
+      widthGrow: 0,
+    };
     const columns = multiModel
       ? [
+        indexColumn,
         { title: "Table name", field: "table_name", sorter: "string", formatter: tabulationTextFormatter, minWidth: 180, widthGrow: 2 },
         { title: "Dim", field: "dim", sorter: "number", formatter: tabulationDimFormatter, hozAlign: "right", headerHozAlign: "right", width: 54 },
       ]
       : [
+        indexColumn,
         { title: "Table name", field: "table_name", sorter: "string", formatter: tabulationTextFormatter, minWidth: 180, widthGrow: 2 },
         { title: "Dim", field: "dim", sorter: "number", formatter: tabulationDimFormatter, hozAlign: "right", headerHozAlign: "right", width: 54 },
         { title: "Cells", field: "cells", sorter: "number", formatter: tabulationIntegerFormatter, hozAlign: "right", headerHozAlign: "right", width: 78 },
@@ -1323,10 +1346,21 @@ export function createGlmTool({
       if (!tabulatorReady(table)) return;
       try {
         table.deselectRow();
-        table.selectRow(selectedTabulationTableId);
+        const row = tabulationTableSelectorRowForId(table, selectedTabulationTableId);
+        if (row) row.select();
       } catch (_) {
       }
     });
+  }
+
+  function tabulationTableSelectorRowForId(table, tableId) {
+    const target = String(tableId || "");
+    if (!target) return null;
+    try {
+      return table.getRows().find((row) => String(row.getData()?.table_id || "") === target) || null;
+    } catch (_) {
+      return null;
+    }
   }
 
   function syncTabulationFallbackModelSelectorSelection(selected = new Set(tabulationSelectedModelIds())) {
@@ -1406,14 +1440,15 @@ export function createGlmTool({
       return;
     }
     const headers = multiModel
-      ? "<th>Table name</th><th class=\"numeric\">Dim</th>"
-      : "<th>Table name</th><th class=\"numeric\">Dim</th><th class=\"numeric\">Cells</th><th class=\"numeric\">Min</th><th class=\"numeric\">Max</th><th class=\"numeric\">Span</th>";
+      ? "<th class=\"numeric\">#</th><th>Table name</th><th class=\"numeric\">Dim</th>"
+      : "<th class=\"numeric\">#</th><th>Table name</th><th class=\"numeric\">Dim</th><th class=\"numeric\">Cells</th><th class=\"numeric\">Min</th><th class=\"numeric\">Max</th><th class=\"numeric\">Span</th>";
     target.innerHTML = `
       <table class="glm-table glm-tabulation-selector-table">
         <thead><tr>${headers}</tr></thead>
         <tbody>
           ${rows.map((row) => `
             <tr data-glm-tabulation-table-id="${escapeHtml(row.table_id)}" class="${row.table_id === selectedTabulationTableId ? "selected" : ""}" tabindex="0" aria-selected="${row.table_id === selectedTabulationTableId ? "true" : "false"}">
+              <td class="numeric">${escapeHtml(formatTabulationInteger(row.table_index))}</td>
               <td>${escapeHtml(row.table_name)}</td>
               <td class="numeric">${escapeHtml(formatTabulationDim(row.dim))}</td>
               ${multiModel ? "" : `

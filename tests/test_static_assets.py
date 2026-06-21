@@ -1521,6 +1521,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('formatter: tabulationModelMetricFormatter', glm_js)
         self.assertIn('title: "linear SD error"', glm_js)
         self.assertIn('title: "missing"', glm_js)
+        self.assertIn('title: "#"', glm_js)
+        self.assertIn('field: "table_index"', glm_js)
         self.assertIn('title: "Table name"', glm_js)
         self.assertIn('title: "Dim"', glm_js)
         self.assertIn('title: "Cells"', glm_js)

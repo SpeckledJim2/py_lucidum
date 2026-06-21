@@ -1419,6 +1419,8 @@ ORDER BY __lucidum_row_id
         self.assertAlmostEqual(diagnostics["linear_sd_error"], float(finite_error.std()))
         self.assertIn("base", [table["table_id"] for table in tab_manifest["tables"]])
         self.assertIn("Age", [table["table_id"] for table in tab_manifest["tables"]])
+        self.assertEqual(tab_manifest["tables"][0]["table_id"], "base")
+        self.assertEqual(tab_manifest["tables"][0]["index"], 1)
 
         dataset.register_data_source_provider(GlmSourceProvider(store))
         source_id = store.source_id(model_id)
@@ -1428,6 +1430,37 @@ ORDER BY __lucidum_row_id
         with dataset.lock:
             rows = dataset.con.execute(f"SELECT COUNT(glm_tabulated_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
         self.assertGreater(rows[0], 0)
+
+    def test_glm_tabulation_manifest_indexes_follow_formula_order(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "C(Segment) + Age:C(Segment) + Age + pmin(Age, 60):C(Segment)",
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+        feature_spec = {
+            "rows": [
+                {"feature": "Age", "grouping": "Driver", "base": "40", "min": "30", "max": "70", "banding": "5"},
+                {"feature": "Segment", "grouping": "Driver", "base": "A"},
+            ]
+        }
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+
+        self.assertEqual(
+            [(table["table_id"], table["index"]) for table in tab_manifest["tables"]],
+            [("base", 1), ("Segment", 2), ("Age|Segment", 3), ("Age", 4)],
+        )
 
     def test_glm_tabulation_dispatches_to_worker_when_lightgbm_loaded(self) -> None:
         dataset = Dataset(self.data_path)

@@ -3518,6 +3518,7 @@ COPY (
                 result = build_gbm_tabulations(dataset, store, "tab-gbm", feature_spec)
 
         self.assertEqual(result["status"], "tabulated")
+        self.assertEqual([(table["table_id"], table["index"]) for table in result["tables"]], [("base", 1), ("Age", 2)])
         self.assertEqual(result["diagnostics"]["mean_linear_error"], 0.0)
         self.assertEqual(result["diagnostics"]["linear_sd_error"], 0.0)
         self.assertEqual(len(captured_columns), 1)
@@ -3553,6 +3554,7 @@ COPY (
         result = build_gbm_tabulations(dataset, store, "tab-gbm", feature_spec)
 
         self.assertEqual(result["status"], "tabulated")
+        self.assertEqual([(table["table_id"], table["index"]) for table in result["tables"]], [("base", 1), ("Age|Segment", 2)])
         self.assertEqual(result["tables"][1]["features"], ["Age", "Segment"])
         prediction_rows = store.read_parquet_records(store.artifact_path("tab-gbm", "tabulated_predictions"))
         self.assertEqual([row["gbm_tabulated_prediction"] for row in prediction_rows], [1.0, 2.0, 3.0])

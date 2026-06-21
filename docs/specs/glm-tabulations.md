@@ -33,7 +33,7 @@ The existing sidebar Weight semantics are unchanged. If Weight is selected, GLM 
 For each selected model:
 
 1. Load `estimator.pkl`, `manifest.json`, source dataset rows, feature spec metadata, and the fitted Formulaic model spec.
-2. Sweep the fitted model spec terms and group term coefficient columns by the sorted dataset features used by each term. For example, `age`, `C(licence)`, and `age:C(licence)` produce separate `age`, `licence`, and `age|licence` tables.
+2. Sweep the fitted model spec terms and group term coefficient columns by the sorted dataset features used by each term. For example, `age`, `C(licence)`, and `age:C(licence)` produce separate `age`, `licence`, and `age|licence` tables. Non-base tables are emitted in the order their feature combinations first appear in the saved GLM formula; repeated combinations keep their first position.
 3. Group stored offset expressions by the dataset columns they reference. Constant offsets are accumulated into the base table.
 4. Build a dummy base row from the feature spec `Base` values where present, otherwise from observed data.
 5. For every feature in every table, create levels:
@@ -69,7 +69,7 @@ Reset restores `tabulations_raw/`, clears `rebasing`, and rebuilds `tabulated_pr
 Each GLM model directory under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/glm/<model_id>/` may contain:
 
 - `estimator.pkl`: fitted `glum` estimator.
-- `tabulations/manifest.json`: tables, warnings, diagnostics, feature metadata, and build time.
+- `tabulations/manifest.json`: tables, one-based user-facing table indexes, warnings, diagnostics, feature metadata, and build time.
 - `tabulations/*.parquet`: one Parquet table per tabulation, including `base.parquet`.
 - `tabulations_raw/*.parquet` and `tabulations_raw/manifest.json`: first generated raw tables and metadata, present only while rebase rules are active.
 - `tabulated_predictions.parquet`: row-level tabulated predictions.

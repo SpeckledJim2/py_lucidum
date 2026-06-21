@@ -2267,12 +2267,12 @@ COPY (
         model_dir = store.model_dir(model_id)
         (model_dir / "estimator.pkl").write_bytes(b"browser smoke estimator placeholder")
         tables = [
-            {"table_id": "base", "label": "base", "index": 0, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": offset, "max": offset},
-            {"table_id": "Age", "label": "Age", "index": 1, "features": ["Age"], "cell_count": 3, "skipped": False, "path": "tabulations/Age.parquet", "min": offset, "max": offset + 1.0},
+            {"table_id": "base", "label": "base", "index": 1, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": offset, "max": offset},
+            {"table_id": "Age", "label": "Age", "index": 2, "features": ["Age"], "cell_count": 3, "skipped": False, "path": "tabulations/Age.parquet", "min": offset, "max": offset + 1.0},
         ]
         if include_segment:
             tables.append(
-                {"table_id": "Segment", "label": "Segment", "index": 2, "features": ["Segment"], "cell_count": 3, "skipped": False, "path": "tabulations/Segment.parquet", "min": offset - 0.2, "max": offset + 0.3}
+                {"table_id": "Segment", "label": "Segment", "index": 3, "features": ["Segment"], "cell_count": 3, "skipped": False, "path": "tabulations/Segment.parquet", "min": offset - 0.2, "max": offset + 0.3}
             )
         store.write_json(
             store.artifact_path(model_id, "tabulation_manifest"),
@@ -2386,8 +2386,8 @@ COPY (
                     "model_ref": f"gbm:{model_id}",
                     "status": "tabulated",
                     "tables": [
-                        {"table_id": "base", "label": "base", "index": 0, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": offset, "max": offset},
-                        {"table_id": "Age", "label": "Age", "index": 1, "features": ["Age"], "cell_count": 3, "skipped": False, "path": "tabulations/Age.parquet", "min": offset, "max": offset + 0.8},
+                        {"table_id": "base", "label": "base", "index": 1, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": offset, "max": offset},
+                        {"table_id": "Age", "label": "Age", "index": 2, "features": ["Age"], "cell_count": 3, "skipped": False, "path": "tabulations/Age.parquet", "min": offset, "max": offset + 0.8},
                     ],
                     "warnings": [],
                     "diagnostics": {
@@ -4302,7 +4302,7 @@ COPY (
                 self.assertEqual(tabulation_single_state["untabulatedGbmMissingText"], "")
                 self.assertNotEqual(tabulation_single_state["untabulatedGbmNameColor"], tabulation_single_state["tabulatedGlmNameColor"])
                 self.assertGreater(tabulation_single_state["modelNameColumnWidth"], tabulation_single_state["missingColumnWidth"])
-                self.assertEqual(tabulation_single_state["tableHeaders"], ["Table name", "Dim", "Cells", "Min", "Max", "Span"])
+                self.assertEqual(tabulation_single_state["tableHeaders"], ["#", "Table name", "Dim", "Cells", "Min", "Max", "Span"])
                 self.assertNotEqual(tabulation_single_state["selectedTableBackground"], tabulation_single_state["unselectedTableBackground"])
                 self.assertGreater(tabulation_single_state["tableNameColumnWidth"], tabulation_single_state["spanColumnWidth"])
                 self.assertEqual(tabulation_single_state["ageMin"], "1")
@@ -4374,19 +4374,39 @@ COPY (
                         .map((row) => row.textContent),
                       otherRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row")]
                         .map((row) => row.textContent),
+                      commonSelectedRows: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                      otherSelectedRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
                     })
                     """
                 )
                 self.assertTrue(any("Browser smoke GLM" in text for text in tabulation_multi_state["selectedModels"]))
                 self.assertTrue(any("Second smoke GLM" in text for text in tabulation_multi_state["selectedModels"]))
-                self.assertEqual(tabulation_multi_state["commonHeaders"], ["Table name", "Dim"])
-                self.assertEqual(tabulation_multi_state["otherHeaders"], ["Table name", "Dim"])
+                self.assertEqual(tabulation_multi_state["commonHeaders"], ["#", "Table name", "Dim"])
+                self.assertEqual(tabulation_multi_state["otherHeaders"], ["#", "Table name", "Dim"])
                 self.assertTrue(any("Age" in text for text in tabulation_multi_state["commonRows"]))
                 self.assertTrue(any("Segment" in text for text in tabulation_multi_state["otherRows"]))
+                self.assertEqual(len(tabulation_multi_state["commonSelectedRows"]), 1)
+                self.assertTrue(any("Age" in text for text in tabulation_multi_state["commonSelectedRows"]))
+                self.assertEqual(tabulation_multi_state["otherSelectedRows"], [])
 
                 page.locator("#glmTabulationOtherTableGrid .tabulator-row", has_text="Segment").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#glmTabulationNotice", has_text="has no Segment tabulation").wait_for(timeout=10_000)
+                tabulation_other_selected_state = page.evaluate(
+                    """
+                    () => ({
+                      commonSelectedRows: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                      otherSelectedRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row.tabulator-selected")]
+                        .map((row) => row.textContent),
+                    })
+                    """
+                )
+                self.assertEqual(tabulation_other_selected_state["commonSelectedRows"], [])
+                self.assertEqual(len(tabulation_other_selected_state["otherSelectedRows"]), 1)
+                self.assertTrue(any("Segment" in text for text in tabulation_other_selected_state["otherSelectedRows"]))
 
                 glm_job_succeed = {"value": False}
                 glm_build_payload = {"value": None}

@@ -35,7 +35,7 @@ from .training import (
     offset_values_for_frame,
     write_dataframe_parquet,
 )
-from .validation import TARGET_COLUMN
+from .validation import TARGET_COLUMN, parse_formula, top_level_formula_terms
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -644,6 +644,12 @@ def _manifest_table_by_id(manifest: dict[str, Any], table_id: str) -> dict[str, 
     return next((table for table in manifest.get("tables", []) if str(table.get("table_id") or "") == table_id), None)
 
 
+def _assign_table_indexes(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for index, table in enumerate(tables, start=1):
+        table["index"] = index
+    return tables
+
+
 def _table_path_for_info(store: GlmModelStore, model_id: str, table_info: dict[str, Any], *, raw: bool = False) -> Path:
     table_id = str(table_info.get("table_id") or "")
     if raw:
@@ -1062,6 +1068,114 @@ def _term_texts_by_feature(groups: dict[tuple[str, ...], dict[str, Any]], featur
     return result
 
 
+def _split_top_level_expression(text: str, separators: set[str]) -> list[str]:
+    parts: list[str] = []
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    start = 0
+    for index, char in enumerate(str(text or "")):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote in {"'", '"'}:
+            escaped = True
+            continue
+        if char in {"'", '"', "`"}:
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            continue
+        if quote is not None:
+            continue
+        if char == "(":
+            depth += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            continue
+        if depth == 0 and char in separators:
+            part = text[start:index].strip()
+            if part:
+                parts.append(part)
+            start = index + 1
+    part = str(text or "")[start:].strip()
+    if part:
+        parts.append(part)
+    return parts
+
+
+def _feature_tuple_for_expression(expression: str, source_columns: list[str]) -> tuple[str, ...]:
+    return tuple(_column_tokens(expression, source_columns))
+
+
+def _formula_term_feature_combinations(term: str, source_columns: list[str]) -> list[tuple[str, ...]]:
+    normalized = re.sub(r"\s+", "", str(term or ""))
+    if normalized in {"", "0", "1"}:
+        return []
+    star_parts = _split_top_level_expression(term, {"*"})
+    if len(star_parts) <= 1:
+        features = _feature_tuple_for_expression(term, source_columns)
+        return [features] if features else []
+    factor_groups = [_feature_tuple_for_expression(part, source_columns) for part in star_parts]
+    factor_groups = [features for features in factor_groups if features]
+    combinations: list[tuple[str, ...]] = []
+    seen: set[tuple[str, ...]] = set()
+    for size in range(1, len(factor_groups) + 1):
+        for selected in itertools.combinations(factor_groups, size):
+            features = tuple(sorted({feature for group in selected for feature in group}))
+            if features and features not in seen:
+                combinations.append(features)
+                seen.add(features)
+    return combinations
+
+
+def _formula_feature_group_order(
+    store: GlmModelStore,
+    model_id: str,
+    manifest: dict[str, Any],
+    source_columns: list[str],
+    offset_terms: list[str],
+) -> list[tuple[str, ...]]:
+    formula_path = store.artifact_path(model_id, "formula")
+    if not formula_path.exists():
+        return []
+    try:
+        parts = parse_formula(formula_path.read_text(encoding="utf-8"), manifest.get("response_column"))
+    except Exception:
+        return []
+    ordered: list[tuple[str, ...]] = []
+    seen: set[tuple[str, ...]] = set()
+    for sign, term in top_level_formula_terms(parts.fitted_rhs_formula):
+        if sign == "-":
+            continue
+        for features in _formula_term_feature_combinations(term, source_columns):
+            if features not in seen:
+                ordered.append(features)
+                seen.add(features)
+    for expression in offset_terms:
+        features = _feature_tuple_for_expression(expression, source_columns)
+        if features and features not in seen:
+            ordered.append(features)
+            seen.add(features)
+    return ordered
+
+
+def _ordered_non_base_group_items(
+    groups: dict[tuple[str, ...], dict[str, Any]],
+    formula_order: list[tuple[str, ...]],
+) -> list[tuple[tuple[str, ...], dict[str, Any]]]:
+    remaining = dict(groups)
+    ordered: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+    for features in formula_order:
+        info = remaining.pop(features, None)
+        if info is not None:
+            ordered.append((features, info))
+    ordered.extend(remaining.items())
+    return ordered
+
+
 def _feature_meta_for_table(
     table_id: str,
     features: list[str],
@@ -1099,6 +1213,10 @@ def _build_model_tabulations(
     offset_terms = [str(term) for term in (manifest.get("offset_terms") or manifest.get("formula", {}).get("offset_terms") or [])]
     groups = _term_groups(estimator, offset_terms, source_columns)
     non_base_groups = {features: info for features, info in groups.items() if features}
+    non_base_group_items = _ordered_non_base_group_items(
+        non_base_groups,
+        _formula_feature_group_order(store, model_id, manifest, source_columns, offset_terms),
+    )
     all_features = sorted({feature for features in non_base_groups for feature in features})
     required_columns = _required_tabulation_columns(source_columns, manifest, all_features, offset_terms)
     frame = _tabulation_frame_from_dataset(dataset, required_columns)
@@ -1180,10 +1298,9 @@ def _build_model_tabulations(
 
     store.tabulations_dir(model_id).mkdir(parents=True, exist_ok=True)
     cumulative_adjustment = 0.0
-    table_index = 1
     skipped_tables: list[dict[str, Any]] = []
     table_frames: dict[str, Any] = {}
-    for features, info in sorted(non_base_groups.items(), key=lambda item: (len(item[0]), item[0])):
+    for features, info in non_base_group_items:
         table_id = "|".join(features)
         table_label = " × ".join(features)
         group_term_texts = [str(term) for term in (info.get("terms") or [])]
@@ -1221,7 +1338,6 @@ def _build_model_tabulations(
             skipped = {"table_id": table_id, "label": table_label, "features": list(features), "cell_count": cell_count, "skipped": True, "warning": warning}
             skipped_tables.append(skipped)
             tables.append(skipped)
-            table_index += 1
             continue
         grid = _cartesian_table({feature: table_feature_levels[feature] for feature in features}, pd)
         table = grid.copy()
@@ -1248,7 +1364,6 @@ def _build_model_tabulations(
             {
                 "table_id": table_id,
                 "label": table_label,
-                "index": table_index,
                 "features": list(features),
                 "cell_count": int(cell_count),
                 "skipped": False,
@@ -1257,7 +1372,6 @@ def _build_model_tabulations(
                 "max": json_safe_number(table["tabulated_linear"].max(skipna=True)),
             }
         )
-        table_index += 1
 
     if () in groups:
         base_grid = pd.DataFrame([base])
@@ -1275,7 +1389,8 @@ def _build_model_tabulations(
     base_value = estimator_intercept_value(estimator, manifest) + cumulative_adjustment
     base_table = pd.DataFrame([{"table_id": "base", "status": "ok", "tabulated_linear": base_value, "base_adjustment": cumulative_adjustment}])
     write_dataframe_parquet(base_table, _table_file_path(store, model_id, "base"))
-    tables.insert(0, {"table_id": "base", "label": "base", "index": 0, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": base_value, "max": base_value})
+    tables.insert(0, {"table_id": "base", "label": "base", "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": base_value, "max": base_value})
+    _assign_table_indexes(tables)
 
     progress_callback({"phase": "scoring", "message": f"Scoring tabulated GLM {model_id}", "model_id": model_id})
     tabulated = frame[["__lucidum_row_id"]].copy()

@@ -13,6 +13,7 @@ from py_lucidum.core import Dataset, is_numeric_kind, quote_ident, sql_literal
 from py_lucidum.tools.glm.tabulation import (
     MAX_TABULATION_CELLS,
     _as_number,
+    _assign_table_indexes,
     _base_row,
     _base_value,
     _cartesian_table,
@@ -494,7 +495,6 @@ def build_gbm_tabulations(
     skipped_tables: list[dict[str, Any]] = []
     table_frames: dict[str, Any] = {}
     base_value = 0.0
-    table_index = 1
     if () in groups:
         base_frame = pd.DataFrame([base])
         base_value += float(_evaluate_tree_group(base_frame, groups[()], np, pd)[0])
@@ -511,7 +511,6 @@ def build_gbm_tabulations(
             skipped = {"table_id": table_id, "label": table_label, "features": list(features), "cell_count": cell_count, "skipped": True, "warning": warning}
             skipped_tables.append(skipped)
             tables.append(skipped)
-            table_index += 1
             continue
         grid = _cartesian_table({feature: feature_levels[feature] for feature in features}, pd)
         table = grid.copy()
@@ -542,7 +541,6 @@ def build_gbm_tabulations(
             {
                 "table_id": table_id,
                 "label": table_label,
-                "index": table_index,
                 "features": list(features),
                 "cell_count": int(cell_count),
                 "skipped": False,
@@ -551,11 +549,11 @@ def build_gbm_tabulations(
                 "max": json_safe_number(table["tabulated_linear"].max(skipna=True)),
             }
         )
-        table_index += 1
 
     base_table = pd.DataFrame([{"table_id": "base", "status": "ok", "tabulated_linear": base_value, "base_adjustment": base_value}])
     _write_dataframe_parquet(base_table, _table_file_path(store, model_id, "base"))
-    tables.insert(0, {"table_id": "base", "label": "base", "index": 0, "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": base_value, "max": base_value})
+    tables.insert(0, {"table_id": "base", "label": "base", "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": base_value, "max": base_value})
+    _assign_table_indexes(tables)
 
     progress({"phase": "scoring", "message": f"Scoring tabulated GBM {model_id}", "model_id": model_id})
     tabulated = frame[["__lucidum_row_id"]].copy()
