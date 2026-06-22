@@ -161,15 +161,20 @@ def _print_open_urls(app: object, host: str, port: int, display_url: str) -> Non
     print(f"Open from another device on your LAN: {lan_url}", flush=True)
 
 
-def _stop_instruction(run_in_background: bool) -> str:
+def _stop_instruction(run_in_background: bool, buttons: bool = False) -> str:
     if run_in_background:
+        if not buttons:
+            return "Call POST /api/shutdown or stop the hosting Python process to quit"
         return "Use the app Stop app button to quit"
     return "Press CTRL+C to quit"
 
 
-def _print_stop_status(run_in_background: bool) -> None:
+def _print_stop_status(run_in_background: bool, buttons: bool = False) -> None:
     if run_in_background:
-        print("lucidum is running in the background. Use the app Stop app button to stop it.", flush=True)
+        if buttons:
+            print("lucidum is running in the background. Use the app Stop app button to stop it.", flush=True)
+        else:
+            print("lucidum is running in the background. Call POST /api/shutdown or stop the hosting Python process to stop it.", flush=True)
     else:
         print("lucidum is still running until you press Ctrl+C in this terminal.", flush=True)
 
@@ -184,8 +189,9 @@ def _start_app_server(
 ) -> None:
     ensure_port_available(host, port)
     config = uvicorn.Config(app, host=host, port=port, log_level="warning", access_log=False)
-    server = LucidumServer(config, url, _stop_instruction(run_in_background), open_browser=open_browser)
     state = getattr(app, "state", None)
+    buttons = bool(getattr(state, "header_buttons", False))
+    server = LucidumServer(config, url, _stop_instruction(run_in_background, buttons), open_browser=open_browser)
     if state is not None:
         state.shutdown_callback = lambda: setattr(server, "should_exit", True)
         metadata = getattr(state, "lucidum_server_metadata", None)
@@ -211,11 +217,12 @@ def run_app(
     ensure_port_available(host, selected_port)
     display_url = url or _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
+    buttons = bool(getattr(getattr(app, "state", None), "header_buttons", False))
     if url:
         print(f"Open {display_url}", flush=True)
     else:
         _print_open_urls(app, host, selected_port, display_url)
-    _print_stop_status(run_in_background)
+    _print_stop_status(run_in_background, buttons)
     _start_app_server(app, host, selected_port, display_url, open_browser, run_in_background)
     return display_url
 
@@ -246,6 +253,7 @@ def serve(
     no_features: bool = False,
     use_features: bool = True,
     tools: str | Sequence[str] | None = None,
+    buttons: bool = False,
 ) -> str:
     selected_port = port or find_free_port()
     ensure_port_available(host, selected_port)
@@ -280,6 +288,7 @@ def serve(
         use_kpis=kpis_enabled,
         features_path=selected_features_path,
         use_features=features_enabled,
+        header_buttons=buttons,
     )
     url = _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
@@ -288,7 +297,7 @@ def serve(
     print(f"Saved filters: {saved_filters_status(app)}", flush=True)
     print(f"KPIs: {kpis_status(app)}", flush=True)
     print(f"Feature specs: {features_status(app)}", flush=True)
-    _print_stop_status(run_in_background)
+    _print_stop_status(run_in_background, buttons)
     _start_app_server(app, host, selected_port, url, open_browser, run_in_background)
     return url
 
@@ -318,6 +327,7 @@ def serve_line_bar(
     features_path: str | Path | None = None,
     no_features: bool = False,
     use_features: bool = True,
+    buttons: bool = False,
 ) -> str:
     return serve(
         path=path,
@@ -345,6 +355,7 @@ def serve_line_bar(
         no_features=no_features,
         use_features=use_features,
         tools=["line_bar"],
+        buttons=buttons,
     )
 
 
@@ -405,6 +416,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=None, help="Bind port. Defaults to a free local port.")
     parser.add_argument("--no-token", action="store_true", help="Disable the token in the URL and API requests")
     parser.add_argument("--open", action="store_true", help="Open the app with Python's configured browser/viewer")
+    parser.add_argument("--buttons", action="store_true", help="Show the Stop app and Open monitor buttons in the app header")
     parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
@@ -481,6 +493,7 @@ def main() -> int:
             features=args.features,
             no_features=args.no_features,
             tools=args.tools,
+            buttons=args.buttons,
         )
     except (RuntimeError, ValueError, OSError) as error:
         parser.exit(1, f"lucidum: error: {error}\n")

@@ -95,13 +95,13 @@ class ColumnProfileToolTests(unittest.TestCase):
     def column(self, payload: dict[str, Any], name: str) -> dict[str, Any]:
         return next(column for column in payload["columns"] if column["name"] == name)
 
-    def test_default_tools_include_dataset_viewer_and_column_profile_first(self) -> None:
-        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
-        self.assertEqual(normalise_tools("all"), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "glm", "gbm", "specs"])
-        self.assertEqual(normalise_tools("profile,line-bar"), ["column_profile", "line_bar"])
+    def test_default_tools_include_line_bar_first(self) -> None:
+        self.assertEqual(normalise_tools(None), ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
+        self.assertEqual(normalise_tools("all"), ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "glm", "gbm", "specs"])
+        self.assertEqual(normalise_tools("profile,line-bar"), ["line_bar", "column_profile"])
         self.assertEqual(normalise_tools("glm,line-bar"), ["line_bar", "glm"])
         self.assertEqual(normalise_tools("gbm,line-bar,map"), ["line_bar", "uk_map", "gbm"])
-        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["dataset_viewer", "line_bar"])
+        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["line_bar", "dataset_viewer"])
         with self.assertRaisesRegex(ValueError, "Tool 'glm' requires 'line-bar'"):
             normalise_tools("glm")
         with self.assertRaisesRegex(ValueError, "Tool 'gbm' requires 'line-bar'"):
@@ -112,7 +112,7 @@ class ColumnProfileToolTests(unittest.TestCase):
         app = create_app(self.data_path, token="dev-token")
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
+        self.assertEqual(app.state.enabled_tools, ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
         self.assertIn("/api/dataset-viewer/table", paths)
         self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/column-profile/detail", paths)

@@ -1978,7 +1978,7 @@ COPY (
                 "AB,AB10 1,1,100,10\n",
                 encoding="utf-8",
             )
-            base_url, server, thread = self.start_app(data_path)
+            base_url, server, thread = self.start_app(data_path, buttons=True)
             try:
                 self.exercise_stopped_overlay(base_url)
             finally:
@@ -2055,7 +2055,7 @@ COPY (
             for index in range(1, 1001):
                 rows.append(f"AB,AB10 1,{index % 99},{100 + index},{10 + index},AB10 1AA,57.1,-2.1")
             data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
-            base_url, server, thread = self.start_app(data_path)
+            base_url, server, thread = self.start_app(data_path, buttons=True)
             try:
                 self.exercise_dataset_viewer_large_transpose(base_url)
             finally:
@@ -2076,6 +2076,7 @@ COPY (
         token: str | None = None,
         defaults: dict[str, str] | None = None,
         tools: list[str] | None = None,
+        buttons: bool = False,
     ) -> tuple[str, uvicorn.Server, threading.Thread]:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -2095,6 +2096,7 @@ COPY (
             use_features=use_features,
             token=token,
             tools=tools,
+            header_buttons=buttons,
         )
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         server = uvicorn.Server(config)
@@ -2736,7 +2738,7 @@ COPY (
                 )
 
             try:
-                page.goto(base_url, wait_until="domcontentloaded")
+                page.goto(f"{base_url}?tool=column_profile", wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.locator("#profileTool.active").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
@@ -2803,8 +2805,8 @@ COPY (
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
-                page.locator("#datasetViewerWrap:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                 self.assertFalse(page.locator("#gbmSidebarPanel").is_visible())
                 self.assertFalse(page.locator("#glmSidebarPanel").is_visible())
                 self.assertFalse(page.locator("#gbmModelCollapseBtn").is_visible())
@@ -2890,7 +2892,7 @@ COPY (
                 )
 
             try:
-                page.goto(base_url, wait_until="domcontentloaded")
+                page.goto(f"{base_url}?tool=column_profile", wait_until="domcontentloaded")
                 page.locator("#profileTool.active").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").wait_for(timeout=10_000)
@@ -5528,7 +5530,7 @@ COPY (
             page_errors: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
             try:
-                page.goto(base_url, wait_until="domcontentloaded")
+                page.goto(f"{base_url}?tool=dataset_viewer", wait_until="domcontentloaded")
                 page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.wait_for_function(
@@ -5598,7 +5600,7 @@ COPY (
             page_errors: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
             try:
-                page.goto(base_url, wait_until="domcontentloaded")
+                page.goto(f"{base_url}?tool=dataset_viewer", wait_until="domcontentloaded")
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
@@ -5827,6 +5829,10 @@ COPY (
                 self.assertEqual(page.locator(".dataset-meta-uk-map-icon").count(), 0)
                 self.assertTrue(page.locator("#ukMapTool img").is_visible())
                 self.assertTrue(page.locator("#ukMapTool img").evaluate("node => node.complete && node.naturalWidth > 0"))
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                self.assertGreaterEqual(chart_requests, 1)
+                page.locator("#datasetViewerTool").click()
                 page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.wait_for_function('() => Boolean(document.querySelector("#datasetViewerStylesheet"))', timeout=10_000)
@@ -6845,7 +6851,7 @@ COPY (
                 self.assertEqual(page_errors, [])
                 self.assertEqual(profile_requests, 6)
                 self.assertEqual(profile_detail_requests, 7)
-                self.assertEqual(chart_requests, 2)
+                self.assertEqual(chart_requests, 4)
                 self.assertEqual(histogram_requests, 6)
                 self.assertEqual(map_requests, 9)
             finally:
@@ -9302,7 +9308,8 @@ COPY (
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#lineBarTool").click()
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#kpiCollapseBtn").wait_for(timeout=10_000)
                 page.locator("#kpiCollapseBtn").click()
                 page.wait_for_function(
                     '() => document.querySelector("#kpiCollapseBtn")?.getAttribute("aria-expanded") === "true"',

@@ -425,6 +425,27 @@
         if (link) link.href = monitorUrl();
       }
 
+      function setHeaderButtonVisible(node, visible) {
+        if (!node) return;
+        node.classList.toggle("hidden", !visible);
+        if (visible) {
+          node.removeAttribute("aria-hidden");
+          node.removeAttribute("inert");
+        } else {
+          node.setAttribute("aria-hidden", "true");
+          node.setAttribute("inert", "");
+        }
+      }
+
+      function syncHeaderButtons() {
+        syncMonitorLink();
+        const visible = state.schema
+          ? Boolean(state.schema.header_buttons)
+          : !el("monitorLink")?.classList.contains("hidden");
+        setHeaderButtonVisible(el("monitorLink"), visible);
+        setHeaderButtonVisible(el("stopAppBtn"), visible);
+      }
+
       function startServerHeartbeat() {
         if (serverHeartbeatTimer) return;
         serverHeartbeatTimer = window.setInterval(checkServerHealth, 2000);
@@ -1084,9 +1105,9 @@
       function chooseDefaultTool() {
         const requested = locationParams.get("tool");
         if (requested && toolEnabled(requested)) return requested;
+        if (toolEnabled("line_bar")) return "line_bar";
         if (toolEnabled("dataset_viewer")) return "dataset_viewer";
         if (toolEnabled("column_profile")) return "column_profile";
-        if (toolEnabled("line_bar")) return "line_bar";
         if (toolEnabled("histogram")) return "histogram";
         if (toolEnabled("uk_map")) return "uk_map";
         if (toolEnabled("glm")) return "glm";
@@ -2393,15 +2414,19 @@
       async function stopApp() {
         if (!(await confirmStopApp())) return;
         const button = el("stopAppBtn");
-        button.disabled = true;
-        button.textContent = "Stopping...";
+        if (button) {
+          button.disabled = true;
+          button.textContent = "Stopping...";
+        }
         setStatus("Stopping app...");
         try {
           await api("/api/shutdown", { method: "POST" });
           showStoppedOverlay();
         } catch (error) {
-          button.disabled = false;
-          button.textContent = "Stop app";
+          if (button) {
+            button.disabled = false;
+            button.textContent = "Stop app";
+          }
           setStatus(error.message, true);
         }
       }
@@ -2771,7 +2796,7 @@
         el("gbmModelCollapseBtn").addEventListener("click", () => toggleSidebarSection("gbm"));
         el("filterCollapseBtn").addEventListener("click", () => toggleSidebarSection("filter"));
         el("filterSidebarClearBtn").addEventListener("click", clearFilter);
-        el("stopAppBtn").addEventListener("click", stopApp);
+        el("stopAppBtn")?.addEventListener("click", stopApp);
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");
           syncThemeButton();
@@ -2788,6 +2813,7 @@
           if (state.tool === "uk_map") ukMapTool.captureView("reload");
           state.schema = await api("/api/reload", { method: "POST" });
           renderSidebarVersion();
+          syncHeaderButtons();
           const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
           state.bandFeature = null;
           state.bandSuggestionPendingKey = null;
@@ -2855,13 +2881,14 @@
       export async function boot() {
         bindControls();
         syncThemeButton();
-        syncMonitorLink();
+        syncHeaderButtons();
         cacheShutdownIcon();
         try {
           setStartupProgress("Requesting schema");
           startStartupTelemetryPolling("Requesting schema");
           state.schema = await api("/api/schema");
           renderSidebarVersion();
+          syncHeaderButtons();
           stopStartupTelemetryPolling();
           setStartupProgress("Schema received");
           const path = state.schema.path.split(/[\\/]/).pop();

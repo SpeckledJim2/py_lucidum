@@ -4,9 +4,9 @@ Lucidum includes a lightweight in-memory telemetry monitor for local server acti
 
 ## Opening the Monitor
 
-Launch Lucidum normally, then open the monitor from the `Monitor` link in the app header. The link opens `/monitor` in a new tab and carries the current token when token auth is enabled.
+Launch Lucidum with `--buttons` to show the app header's `Open monitor` button. The button opens `/monitor` in a new tab and carries the current token when token auth is enabled.
 
-You can also open it directly by changing the app URL path:
+Without `--buttons`, the header button is hidden. You can still open the monitor directly by changing the app URL path:
 
 ```text
 http://127.0.0.1:8000/monitor?token=...
@@ -73,7 +73,7 @@ Telemetry is intentionally lightweight and local-process scoped:
 
 ## Troubleshooting
 
-If the monitor shows `Invalid or missing app token`, open it from the app header so the token is copied automatically, or add the same `token=...` query parameter from the Lucidum app URL.
+If the monitor shows `Invalid or missing app token`, open it from the app header when Lucidum was launched with `--buttons`, or add the same `token=...` query parameter from the Lucidum app URL.
 
 If the monitor appears idle while the app is active, check that the app tab and monitor tab are connected to the same Lucidum server URL and port.
 

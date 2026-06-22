@@ -47,7 +47,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `lucidum path/to/data.parquet`
   - `lucidum path/to/data.csv`
   - `lucidum path/to/parquet-folder/`
-  - common options include `--open`, `--host`, `--port`, `--no-token`, `--x`, `--actual`, `--expected`, `--denominator`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
+  - common options include `--open`, `--host`, `--port`, `--no-token`, `--buttons`, `--x`, `--actual`, `--expected`, `--denominator`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
 - Python:
   - `py_lucidum.serve(...)`
   - `py_lucidum.serve_line_bar(...)`
@@ -148,7 +148,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **Dataset Viewer**
 
-- Dataset Viewer is default-enabled, registered first when enabled, and opens on startup for ordinary launches. Explicit `--tools` / `create_app(..., tools=...)` selections are exact and include it only when `dataset-viewer` is requested.
+- Dataset Viewer is default-enabled but registered after Line/Bar when both tools are enabled. Explicit `--tools` / `create_app(..., tools=...)` selections are exact and include it only when `dataset-viewer` is requested.
 - Requests return readable raw dataset columns and up to 1,000 filtered preview rows, plus `has_more` when another row exists beyond the cap. They deliberately do not compute exact total or filtered row counts.
 - The active footer/saved-filter expression is applied server-side before the display cap.
 - Whole-table search, column sorting, row selection, transpose, optional alphabetical column ordering, reset-sort, and copy-selected rows are client-side over the loaded display rows only. In transpose mode, search matches only the original column names shown in the first transposed column and keeps every loaded preview row as a `Row n` column.
@@ -156,7 +156,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **Column profile**
 
-- Column profile is default-enabled but not mandatory: explicit `--tools` and `create_app(..., tools=...)` selections include it only when requested. It appears immediately after Dataset Viewer when both tools are enabled.
+- Column profile is default-enabled but not mandatory: explicit `--tools` and `create_app(..., tools=...)` selections include it only when requested. It appears after Line/Bar and Dataset Viewer when all three tools are enabled.
 - Summary requests return every readable dataset column with inferred kind, DuckDB type, filtered missing count, distinct count, and min/max for numeric/date-like columns. Auto-mode summaries are exact when `filtered rows * readable columns <= 10,000,000`; larger summaries use the first 100,000 filtered readable rows and include `calculation` metadata plus a UI action to recalculate all rows exactly. Passing `mode: "full"` to `/api/column-profile/summary` forces exact all-row summary stats.
 - Unreadable columns are omitted from profile summaries and returned through `skipped_columns` with sanitized errors.
 - Detail requests return value counts for categorical columns and histogram/stat tables for numeric/date-like columns.
@@ -164,6 +164,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **Line and bar chart**
 
+- Line/Bar is default-enabled, registered first when enabled, and opens on startup for ordinary launches unless a valid `?tool=` URL parameter requests another enabled tool.
 - X-axis features can be integer, numeric, string/categorical, date, or datetime.
 - The x-axis feature list has `Imp`, `Original`, and `A-Z` sort modes. `Imp` appears only when an active GBM or GLM has saved feature-level importances, lists raw dataset features grouped as GBM, GLM, and `Not used`, and selects dataset features only. GBM importance prefers saved mean absolute SHAP when present and otherwise uses LightGBM Gain. GLM importance uses the persisted weighted mean absolute centered feature contribution on the GLM linear-predictor scale.
 - Numeric x-axis banding uses the existing visible controls only: concrete band widths, step buttons, and explicit `-` for no banding. The initial concrete width is estimated lazily from the selected source/filter when a numeric feature is selected, using a bounded sample of up to 100,000 rows.
@@ -266,9 +267,10 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 - CLI launches use token-protected URLs by default.
 - `--no-token` disables token checks for local-only use.
+- Main app header `Stop app` and `Open monitor` buttons are hidden by default. `--buttons`, `serve(..., buttons=True)`, or `create_app(..., header_buttons=True)` shows both controls.
 - In notebook-style runtimes with an existing event loop, `serve()` and `run_app()` start the Uvicorn server in a background thread and return the URL.
 - In a normal terminal or Python shell, server calls block until stopped.
-- The browser Stop app button calls `POST /api/shutdown`; health polling greys out the page after server shutdown.
+- When enabled, the browser Stop app button calls `POST /api/shutdown`; health polling greys out the page after server shutdown. The monitor page remains available at `/monitor` with the normal token rules even when the main app header button is hidden.
 
 ## UI Direction
 

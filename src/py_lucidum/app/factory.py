@@ -57,6 +57,7 @@ DEFAULT_KEYS = {
 }
 TOOL_BUTTON_RE = re.compile(r'<button\b[^>]*\bdata-tool="([^"]+)"[^>]*>')
 MODEL_SIDEBAR_PANEL_RE = re.compile(r'<section\b[^>]*\bid="(gbmSidebarPanel|glmSidebarPanel)"[^>]*>')
+HEADER_BUTTON_RE = re.compile(r'<(?:a|button)\b[^>]*\bid="(monitorLink|stopAppBtn)"[^>]*>')
 CLASS_ATTR_RE = re.compile(r'\bclass="([^"]*)"')
 ARIA_HIDDEN_ATTR_RE = re.compile(r'\s+aria-hidden="[^"]*"')
 MODEL_SIDEBAR_PANEL_TOOLS = {
@@ -107,11 +108,34 @@ def render_initial_tool_visibility(html_text: str, enabled_tools: Sequence[str])
     return MODEL_SIDEBAR_PANEL_RE.sub(replace_model_sidebar_panel, html_text)
 
 
-def index_html(dataset_name: str, enabled_tools: Sequence[str]) -> str:
+def render_initial_header_button_visibility(html_text: str, header_buttons: bool) -> str:
+    def set_hidden_state(tag: str, hidden: bool) -> str:
+        class_match = CLASS_ATTR_RE.search(tag)
+        if not class_match:
+            return tag
+        classes = [class_name for class_name in class_match.group(1).split() if class_name != "hidden"]
+        if hidden:
+            classes.append("hidden")
+        class_value = " ".join(classes)
+        updated = f"{tag[:class_match.start(1)]}{class_value}{tag[class_match.end(1):]}"
+        updated = ARIA_HIDDEN_ATTR_RE.sub("", updated)
+        updated = re.sub(r"\s+inert\b", "", updated)
+        if hidden:
+            updated = updated[:-1] + ' aria-hidden="true" inert>'
+        return updated
+
+    def replace_header_button(match: re.Match[str]) -> str:
+        return set_hidden_state(match.group(0), not header_buttons)
+
+    return HEADER_BUTTON_RE.sub(replace_header_button, html_text)
+
+
+def index_html(dataset_name: str, enabled_tools: Sequence[str], header_buttons: bool = False) -> str:
     title = f"lucidum · {html.escape(dataset_name)}" if dataset_name else "lucidum"
     html_text = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     html_text = html_text.replace("<title>lucidum</title>", f"<title>{title}</title>", 1)
-    return render_initial_tool_visibility(html_text, enabled_tools)
+    html_text = render_initial_tool_visibility(html_text, enabled_tools)
+    return render_initial_header_button_visibility(html_text, header_buttons)
 
 
 def monitor_html(dataset_name: str) -> str:
@@ -148,6 +172,7 @@ def create_app(
     features_path: str | Path | None = None,
     use_features: bool = True,
     no_features: bool = False,
+    header_buttons: bool = False,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
     resolved_dataset_path = Path(dataset_path).expanduser().resolve()
@@ -189,6 +214,7 @@ def create_app(
     app.state.resolved_features_path = resolve_features_path(selected_features_path, use_features=features_enabled)
     app.state.feature_spec = load_features(selected_features_path, use_features=features_enabled, missing_ok=allow_missing_spec_paths)
     app.state.enabled_tools = enabled_tools
+    app.state.header_buttons = bool(header_buttons)
     app.state.defaults = {
         key: value
         for key, value in (defaults or {}).items()
@@ -212,11 +238,12 @@ def create_app(
         payload["tools"] = tool_payload(app.state.enabled_tools)
         payload["data_sources"] = app.state.dataset.data_sources()
         payload["app_version"] = __version__
+        payload["header_buttons"] = app.state.header_buttons
         return payload
 
     @app.get("/")
     def index() -> HTMLResponse:
-        return no_store_html_response(index_html(app.state.dataset.path.name, app.state.enabled_tools))
+        return no_store_html_response(index_html(app.state.dataset.path.name, app.state.enabled_tools, app.state.header_buttons))
 
     app.mount("/static", NoStoreStaticFiles(directory=STATIC_DIR), name="static")
 

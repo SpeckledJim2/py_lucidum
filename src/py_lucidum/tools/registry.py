@@ -11,9 +11,9 @@ from py_lucidum.app.context import AppContext
 
 
 TOOL_MODULES = (
+    "py_lucidum.tools.line_bar",
     "py_lucidum.tools.dataset_viewer",
     "py_lucidum.tools.column_profile",
-    "py_lucidum.tools.line_bar",
     "py_lucidum.tools.histogram",
     "py_lucidum.tools.uk_map",
     "py_lucidum.tools.glm",

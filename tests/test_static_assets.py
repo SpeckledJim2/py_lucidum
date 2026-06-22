@@ -79,8 +79,8 @@ class StaticAssetTests(unittest.TestCase):
         self.assertEqual(headers.get("cache-control"), "no-store")
         return headers, body
 
-    def root_html_for_tools(self, tools: list[str] | None) -> str:
-        app = create_app(self.data_path, tools=tools)
+    def root_html_for_tools(self, tools: list[str] | None, *, header_buttons: bool = False) -> str:
+        app = create_app(self.data_path, tools=tools, header_buttons=header_buttons)
         status, headers, body = asgi_get(app, "/")
 
         self.assertEqual(status, 200)
@@ -313,6 +313,14 @@ if (state.x !== null || state.xSource !== "") {
 
         self.assertEqual(status, 200)
         self.assertEqual(schema["app_version"], __version__)
+        self.assertEqual(schema["header_buttons"], False)
+
+        app = create_app(self.data_path, header_buttons=True)
+        status, _, body = asgi_get(app, "/api/schema")
+        schema = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(schema["header_buttons"], True)
 
     def test_shared_schema_helpers_are_importable(self) -> None:
         module = Path("src/py_lucidum/static/app/shared/schema.js").resolve().as_uri()
@@ -1109,12 +1117,14 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("function renderSidebarVersion()", js)
         self.assertIn('const version = String(state.schema?.app_version || "").trim();', js)
         self.assertIn("target.textContent = version ? `lucidum v${version}` : \"\";", js)
+        self.assertIn('id="lineBarTool" class="tool-option" type="button" data-tool="line_bar" aria-label="Line and bar"', html)
+        self.assertIn('class="tool-label">Line and bar</span>', html)
         self.assertIn('id="datasetViewerTool" class="tool-option active" type="button" data-tool="dataset_viewer" aria-label="Dataset viewer"', html)
         self.assertIn('class="tool-label">Dataset viewer</span>', html)
         self.assertIn('id="profileTool" class="tool-option" type="button" data-tool="column_profile" aria-label="Column profile"', html)
         self.assertIn('class="tool-label">Column profile</span>', html)
-        self.assertIn('id="lineBarTool" class="tool-option" type="button" data-tool="line_bar" aria-label="Line and bar"', html)
-        self.assertIn('class="tool-label">Line and bar</span>', html)
+        self.assertLess(html.index('id="lineBarTool"'), html.index('id="datasetViewerTool"'))
+        self.assertLess(html.index('id="lineBarTool"'), html.index('id="profileTool"'))
         self.assertIn('id="histogramTool" class="tool-option" type="button" data-tool="histogram" aria-label="Histogram"', html)
         self.assertIn('class="tool-label">Histogram</span>', html)
         self.assertIn('id="ukMapTool" class="tool-option" type="button" data-tool="uk_map" aria-label="UK mapping"', html)
@@ -1162,8 +1172,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('aria-label="Switch to dark mode"', html)
         self.assertIn("theme-icon-moon", html)
         self.assertIn("theme-icon-sun", html)
-        self.assertIn('id="monitorLink" class="ghost monitor-link header-icon-button" href="/monitor" target="_blank"', html)
+        self.assertIn('id="monitorLink" class="ghost monitor-link header-icon-button hidden" href="/monitor" target="_blank"', html)
         self.assertIn('aria-label="Open monitor" title="Open monitor"', html)
+        self.assertIn('id="stopAppBtn" class="danger-action hidden" aria-hidden="true" inert>Stop app</button>', html)
         self.assertIn('id="reloadBtn" class="ghost header-icon-button" type="button" aria-label="Reload dataset" title="Reload dataset"', html)
         self.assertIn('class="header-action-icon"', html)
         self.assertNotIn(">Monitor</a>", html)
@@ -1210,6 +1221,17 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
             with self.subTest(tools=tools):
                 html = self.root_html_for_tools(tools)
                 self.assert_tool_button_visibility(html, expected_visible_tools)
+
+    def test_header_buttons_are_opt_in(self) -> None:
+        hidden_html = self.root_html_for_tools(None)
+        visible_html = self.root_html_for_tools(None, header_buttons=True)
+
+        self.assertIn('id="monitorLink" class="ghost monitor-link header-icon-button hidden"', hidden_html)
+        self.assertIn('id="stopAppBtn" class="danger-action hidden" aria-hidden="true" inert>Stop app</button>', hidden_html)
+        self.assertIn('id="monitorLink" class="ghost monitor-link header-icon-button" href="/monitor"', visible_html)
+        self.assertIn('id="stopAppBtn" class="danger-action">Stop app</button>', visible_html)
+        self.assertNotIn('id="monitorLink" class="ghost monitor-link header-icon-button hidden"', visible_html)
+        self.assertNotIn('id="stopAppBtn" class="danger-action hidden"', visible_html)
 
     def test_initial_model_sidebar_panels_match_enabled_tools(self) -> None:
         cases = [
@@ -4333,8 +4355,8 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         html = html_body.decode("utf-8")
         js = self.app_js_contract()
 
+        self.assertLess(html.index('id="lineBarTool"'), html.index('id="datasetViewerTool"'))
         self.assertLess(html.index('id="datasetViewerTool"'), html.index('id="profileTool"'))
-        self.assertLess(html.index('id="profileTool"'), html.index('id="lineBarTool"'))
         self.assertIn('import { createColumnProfileTool } from "./column-profile-tool.js";', js)
         self.assertIn("export function createColumnProfileTool", js)
         self.assertIn("column_profile: freshProfileCache()", js)

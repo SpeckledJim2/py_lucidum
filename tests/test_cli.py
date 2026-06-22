@@ -625,6 +625,12 @@ class CliRuntimeTests(unittest.TestCase):
                 True,
             ),
             (
+                "header_buttons",
+                ["lucidum", "--demo", "--buttons"],
+                {"path": demo_path, "buttons": True},
+                True,
+            ),
+            (
                 "specs_tool",
                 ["lucidum", "--demo", "--tools", "specs"],
                 {"path": demo_path, "tools": "specs"},
@@ -646,6 +652,7 @@ class CliRuntimeTests(unittest.TestCase):
                     demo_path_mock.assert_called_once_with()
                 else:
                     demo_path_mock.assert_not_called()
+                self.assertEqual(serve_mock.call_args.kwargs["buttons"], expected_kwargs.get("buttons", False))
                 for key, value in expected_kwargs.items():
                     self.assertEqual(serve_mock.call_args.kwargs[key], value)
 

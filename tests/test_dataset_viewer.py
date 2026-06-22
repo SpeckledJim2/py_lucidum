@@ -73,15 +73,15 @@ class DatasetViewerToolTests(unittest.TestCase):
         self.assertEqual(status, 200, body.decode("utf-8"))
         return json.loads(body)
 
-    def test_dataset_viewer_is_first_default_tool(self) -> None:
-        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
+    def test_line_bar_is_first_default_tool(self) -> None:
+        self.assertEqual(normalise_tools(None), ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
         self.assertEqual(normalise_tools("line-bar"), ["line_bar"])
         self.assertEqual(normalise_tools("gbm,line-bar"), ["line_bar", "gbm"])
-        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["dataset_viewer", "line_bar"])
+        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["line_bar", "dataset_viewer"])
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
+        self.assertEqual(app.state.enabled_tools, ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
         self.assertIn("/api/dataset-viewer/table", paths)
         self.assertIn("/api/filter/row-count", paths)
         self.assertIn("/api/metrics/summary", paths)

@@ -77,11 +77,11 @@ class HistogramToolTests(unittest.TestCase):
         return payload
 
     def test_app_registers_histogram_default_after_line_bar(self) -> None:
-        self.assertEqual(normalise_tools(None), ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
+        self.assertEqual(normalise_tools(None), ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
         app = create_app(self.data_path, token="")
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"])
+        self.assertEqual(app.state.enabled_tools, ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
         self.assertIn("/api/histogram/chart", paths)
 
         status, _, body = asgi_post_json(app, "/api/histogram/chart", self.request())

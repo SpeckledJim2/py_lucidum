@@ -92,7 +92,7 @@ Launch the bundled synthetic demo dataset:
 .venv/bin/lucidum --demo --port 8000
 ```
 
-Open the printed URL in your browser. Stop the server with `Ctrl+C` in the terminal or the `Stop app` button in the browser header.
+Open the printed URL in your browser. Stop the server with `Ctrl+C` in the terminal. Pass `--buttons` when you want the browser header to show `Stop app` and `Open monitor` buttons.
 
 Run your own data:
 
@@ -155,6 +155,7 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 .venv/bin/lucidum --demo --features specs/feature_spec.csv
 .venv/bin/lucidum --demo --no-features
 .venv/bin/lucidum --demo --tools line-bar
+.venv/bin/lucidum --demo --buttons
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm,gbm
 .venv/bin/lucidum path/to/my_data.parquet --tools all
 ```
@@ -162,12 +163,13 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--open` opens the generated URL with Python's configured browser handler.
 - `--host 0.0.0.0` binds to all network interfaces for LAN testing. Keep token protection enabled unless another access layer is in place.
 - `--no-token` disables URL/API token protection for local-only use.
+- `--buttons` shows the `Stop app` and `Open monitor` buttons in the browser header. Without it, those header buttons are hidden; stop terminal launches with `Ctrl+C`, and open the monitor directly at `/monitor?token=...` when needed.
 - `--x`, `--actual`, `--expected`, and `--denominator` set initial Line/Bar selections.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
 - `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When the Specifications tab is enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save; the path line shows the save target and marks new files or suppressed existing files.
-- Without `--tools`, the default user-facing tools are `dataset-viewer`, `column-profile`, `line-bar`, `histogram`, `uk-map`, and `specs`, with Dataset Viewer opening first. Use `--tools all` to load every tool, including GLM and GBM. When `--tools` is provided with a comma-separated list, only those app tabs are loaded. Add `glm` after installing the `glm` extra to train GLMs, and add `gbm` after installing the `gbm` extra to train GBMs; either modelling tool must be requested with `line-bar` because model context-menu actions open Line/Bar charts.
+- Without `--tools`, the default user-facing tools are `line-bar`, `dataset-viewer`, `column-profile`, `histogram`, `uk-map`, and `specs`, with Line and Bar opening first. Use `--tools all` to load every tool, including GLM and GBM; Line and Bar still appears first when enabled. When `--tools` is provided with a comma-separated list, only those app tabs are loaded. Add `glm` after installing the `glm` extra to train GLMs, and add `gbm` after installing the `gbm` extra to train GBMs; either modelling tool must be requested with `line-bar` because model context-menu actions open Line/Bar charts.
 
 UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
 
@@ -197,6 +199,7 @@ import py_lucidum
 py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
 py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
 py_lucidum.serve("path/to/monthly_parquets/", port=8000, open_browser=True)
+py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, buttons=True)
 ```
 
 In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.
@@ -218,7 +221,8 @@ app = create_app(
     filters_path="specs/filter_spec.csv",
     kpis_path="specs/kpi_spec.csv",
     features_path="specs/feature_spec.csv",
-    tools=["dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"],
+    tools=["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"],
+    header_buttons=True,
 )
 
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
