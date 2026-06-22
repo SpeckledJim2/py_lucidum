@@ -30,7 +30,7 @@ ARTIFACT_FILES = {
     "feature_config": "feature_config.parquet",
     "parameters": "parameters.json",
     "model": "model.txt",
-    "tabulation_manifest": "tabulation_manifest.json",
+    "tabulation_manifest": "tabulations/tabulation_manifest.json",
     "tabulated_predictions": "tabulated_predictions.parquet",
 }
 

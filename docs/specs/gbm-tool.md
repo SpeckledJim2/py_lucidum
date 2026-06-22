@@ -118,6 +118,7 @@ I need this tool to be persistent. It's OK to hold interim results in RAM if fas
 - evaluation log (used to drive the evaluation chart) - this records the model metric (on train and test) after each round of training
 - how long it took to train the model and calculate the SHAP values
 - the LightGBM converted to a tabular format (in R this is the output from the lgb.model.dt.tree function)
+- saved GBM tabulation sidecars can be exported from the Tabulations panel to `<model_id>_tabulations_<scale>.xlsx` in the model's `tabulations/` folder, with `tabulation_manifest.json` stored beside it, using only existing manifests and parquet sidecars
 
 ## Shared Data Outputs
 

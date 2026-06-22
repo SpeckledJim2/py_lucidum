@@ -27,7 +27,7 @@ from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summa
 from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
-from py_lucidum.tools.glm.tabulation import tabulation_config, tabulation_table
+from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_table
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
 
@@ -220,6 +220,13 @@ class GbmToolTests(unittest.TestCase):
             "30,300,50,C,CD,CD20 2,CD20 2AA,56.1,-1.1,training\n",
             encoding="utf-8",
         )
+
+    def require_openpyxl_load_workbook(self) -> Any:
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            self.skipTest(f"missing optional openpyxl dependency: {exc}")
+        return load_workbook
 
     def request_features(self) -> list[dict[str, Any]]:
         return [
@@ -3528,6 +3535,62 @@ COPY (
         self.assertEqual([row["tabulated_linear"] for row in table_rows], [0.0, 1.0, 1.0])
         prediction_rows = store.read_parquet_records(store.artifact_path("tab-gbm", "tabulated_predictions"))
         self.assertEqual([row["gbm_tabulated_prediction"] for row in prediction_rows], [1.0, 2.0, 2.0])
+
+    def test_gbm_tabulation_export_xlsx_uses_saved_sidecars(self) -> None:
+        load_workbook = self.require_openpyxl_load_workbook()
+        tree_sql = """
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 1.0 AS split_gain, '35' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 2.0, 2
+"""
+        gbm_store = self.write_gbm_tabulation_artifacts(tree_sql=tree_sql, predictions=[1.0, 2.0, 2.0])
+        dataset = Dataset(self.data_path)
+        build_gbm_tabulations(dataset, gbm_store, "tab-gbm", {"rows": [{"feature": "Age", "min": 30, "max": 50, "banding": 10, "base": 30}]})
+        glm_store = GlmModelStore(self.data_path)
+        original_import = builtins.__import__
+
+        def block_model_dependencies(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name in {"lightgbm", "numpy", "pandas"}:
+                raise AssertionError("tabulation export must not import modelling dependencies")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=block_model_dependencies):
+            result = export_tabulations(glm_store, {"model_refs": ["gbm:tab-gbm"], "scale": "linear"}, gbm_store=gbm_store)
+
+        output_path = gbm_store.tabulations_dir("tab-gbm") / "tab-gbm_tabulations_linear.xlsx"
+        manifest_path = gbm_store.tabulations_dir("tab-gbm") / "tabulation_manifest.json"
+        self.assertEqual(Path(result["path"]), output_path)
+        self.assertEqual(result["filename"], output_path.name)
+        self.assertEqual(result["model_ref"], "gbm:tab-gbm")
+        self.assertTrue(output_path.exists())
+        self.assertEqual(gbm_store.artifact_path("tab-gbm", "tabulation_manifest"), manifest_path)
+        self.assertTrue(manifest_path.exists())
+
+        workbook = load_workbook(output_path, data_only=True)
+        self.assertEqual(workbook.sheetnames, ["index", "1", "2"])
+        index = workbook["index"]
+        self.assertEqual([index.cell(row=1, column=column).value for column in range(1, 8)], ["#", "Table name", "Dim", "Cells", "Min", "Max", "Span"])
+        self.assertIsNone(index.auto_filter.ref)
+        self.assertEqual(index["A3"].hyperlink.target, "#'2'!A1")
+        self.assertEqual(index["A1"].alignment.horizontal, "center")
+        self.assertEqual(index["B1"].alignment.horizontal, "left")
+        self.assertEqual(index["C1"].alignment.horizontal, "center")
+        self.assertEqual(index["A3"].alignment.horizontal, "center")
+        self.assertEqual(index["B3"].alignment.horizontal, "left")
+        self.assertEqual(index["C3"].alignment.horizontal, "center")
+        age = workbook["2"]
+        self.assertEqual(age["A1"].value, "return to index")
+        self.assertEqual(age["A1"].hyperlink.target, "#'index'!A1")
+        self.assertEqual([age["A2"].value, age["B2"].value], ["Age", "model_output"])
+        self.assertEqual(age["A2"].alignment.horizontal, "left")
+        self.assertEqual(age["B2"].alignment.horizontal, "right")
+        self.assertEqual(age["A3"].alignment.horizontal, "left")
+        self.assertEqual(age["B3"].alignment.horizontal, "right")
+        rows = list(age.iter_rows(min_row=3, values_only=True))
+        self.assertEqual(rows, [(30, 0), (40, 1), (50, 1)])
 
     def test_gbm_tabulation_builds_three_leaf_two_feature_table_with_missing_default(self) -> None:
         self.data_path.write_text(

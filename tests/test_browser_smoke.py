@@ -4275,6 +4275,8 @@ COPY (
                         ageMin: ageRow?.querySelector('.tabulator-cell[tabulator-field="display_min"]')?.textContent.trim() || "",
                         ageMax: ageRow?.querySelector('.tabulator-cell[tabulator-field="display_max"]')?.textContent.trim() || "",
                         ageSpan: ageRow?.querySelector('.tabulator-cell[tabulator-field="display_span"]')?.textContent.trim() || "",
+                        exportText: document.querySelector("#glmExportTabulationsBtn")?.textContent.trim() || "",
+                        exportDisabled: document.querySelector("#glmExportTabulationsBtn")?.disabled,
                         diagnosticsHidden: document.querySelector("#glmTabulationDiagnostics")?.classList.contains("hidden"),
                         splitDelta: Math.abs(
                           (document.querySelector(".glm-tabulation-sidebar")?.getBoundingClientRect().width || 0)
@@ -4308,9 +4310,17 @@ COPY (
                 self.assertEqual(tabulation_single_state["ageMin"], "1")
                 self.assertEqual(tabulation_single_state["ageMax"], "2.7183")
                 self.assertEqual(tabulation_single_state["ageSpan"], "2.7183")
+                self.assertEqual(tabulation_single_state["exportText"], "Export xlsx")
+                self.assertFalse(tabulation_single_state["exportDisabled"])
                 self.assertTrue(tabulation_single_state["diagnosticsHidden"])
                 self.assertLess(tabulation_single_state["splitDelta"], 36)
                 self.assertIn("Age", tabulation_single_state["resultHeaders"])
+
+                page.locator("#glmExportTabulationsBtn").click()
+                page.locator("#glmTabulationNotice", has_text="Saved XLSX:").wait_for(timeout=10_000)
+                export_path = page.locator("#glmTabulationNotice").text_content(timeout=10_000).replace("Saved XLSX:", "", 1).strip()
+                self.assertTrue(export_path.endswith("browser-smoke-glm_tabulations_exp.xlsx"))
+                self.assertTrue(Path(export_path).exists(), export_path)
 
                 page.locator('[data-glm-tabulation-view="plot"]').click()
                 page.locator("#glmTabulationPlot canvas").first.wait_for(timeout=10_000)
@@ -4378,6 +4388,7 @@ COPY (
                         .map((row) => row.textContent),
                       otherSelectedRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row.tabulator-selected")]
                         .map((row) => row.textContent),
+                      exportDisabled: document.querySelector("#glmExportTabulationsBtn")?.disabled,
                     })
                     """
                 )
@@ -4390,6 +4401,7 @@ COPY (
                 self.assertEqual(len(tabulation_multi_state["commonSelectedRows"]), 1)
                 self.assertTrue(any("Age" in text for text in tabulation_multi_state["commonSelectedRows"]))
                 self.assertEqual(tabulation_multi_state["otherSelectedRows"], [])
+                self.assertTrue(tabulation_multi_state["exportDisabled"])
 
                 page.locator("#glmTabulationOtherTableGrid .tabulator-row", has_text="Segment").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)

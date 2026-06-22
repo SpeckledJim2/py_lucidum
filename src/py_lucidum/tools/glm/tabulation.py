@@ -624,7 +624,7 @@ def _raw_tabulations_dir(store: GlmModelStore, model_id: str) -> Path:
 
 
 def _raw_tabulation_manifest_path(store: GlmModelStore, model_id: str) -> Path:
-    return _raw_tabulations_dir(store, model_id) / "manifest.json"
+    return _raw_tabulations_dir(store, model_id) / "tabulation_manifest.json"
 
 
 def _raw_table_file_path(store: GlmModelStore, model_id: str, table_id: str) -> Path:
@@ -2016,9 +2016,251 @@ def tabulation_plot(store: GlmModelStore, payload: dict[str, Any], *, gbm_store:
     }
 
 
+def _openpyxl_dependencies() -> tuple[Any, Any, Any, Any, Any, Any, Any]:
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError as exc:
+        raise ValueError(
+            "Install GLM or GBM dependencies with `pip install 'py-lucidum[glm]'` "
+            "or `pip install 'py-lucidum[gbm]'` to export tabulations to XLSX. Missing: openpyxl"
+        ) from exc
+    return Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter
+
+
+def _export_store_for_ref(store: GlmModelStore, gbm_store: Any, model_ref: _TabulationModelRef) -> Any:
+    if model_ref.kind == "gbm":
+        if gbm_store is None:
+            raise ValueError("GBM tabulation export is unavailable because the GBM tool is not loaded")
+        return gbm_store
+    return store
+
+
+def _tabulation_export_path(store: GlmModelStore, gbm_store: Any, model_ref: _TabulationModelRef, scale: str) -> Path:
+    target_store = _export_store_for_ref(store, gbm_store, model_ref)
+    model_id = target_store.validate_model_id(model_ref.model_id)
+    target_dir = target_store.tabulations_dir(model_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir / f"{model_id}_tabulations_{scale}.xlsx"
+
+
+def _worksheet_hyperlink(sheet_name: str) -> str:
+    quoted = str(sheet_name).replace("'", "''")
+    return f"#'{quoted}'!A1"
+
+
+def _excel_cell_value(value: Any) -> Any:
+    value = _json_value(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    return value
+
+
+def _display_export_value(value: Any, scale: str) -> float | None:
+    return _display_number(value, scale)
+
+
+def _display_export_span(min_value: Any, max_value: Any, scale: str) -> float | None:
+    low = _as_number(min_value)
+    high = _as_number(max_value)
+    if low is None or high is None:
+        return None
+    if high < low:
+        low, high = high, low
+    if scale == "exp":
+        try:
+            return math.exp(high - low)
+        except OverflowError:
+            return None
+    return high - low
+
+
+def _style_header_row(worksheet: Any, row: int, *, fill: Any, font: Any, border: Any, alignment: Any) -> None:
+    for cell in worksheet[row]:
+        cell.fill = fill
+        cell.font = font
+        cell.border = border
+        cell.alignment = alignment
+
+
+def _autosize_worksheet_columns(worksheet: Any, get_column_letter: Any, *, max_width: int = 42) -> None:
+    for column_index in range(1, worksheet.max_column + 1):
+        width = 8
+        for row_index in range(1, worksheet.max_row + 1):
+            value = worksheet.cell(row=row_index, column=column_index).value
+            if value is None:
+                continue
+            width = max(width, min(max_width, len(str(value)) + 2))
+        worksheet.column_dimensions[get_column_letter(column_index)].width = width
+
+
+def _format_numeric_columns(worksheet: Any, columns: set[int], *, start_row: int = 2, number_format: str = "0.000000") -> None:
+    for column_index in columns:
+        for row_index in range(start_row, worksheet.max_row + 1):
+            worksheet.cell(row=row_index, column=column_index).number_format = number_format
+
+
+def _tabulation_sheet_rows(
+    table_info: dict[str, Any],
+    rows: list[dict[str, Any]],
+    scale: str,
+) -> tuple[list[str], list[list[Any]], int | None]:
+    features = [str(feature) for feature in (table_info.get("features") or [])]
+    if not features:
+        output_rows: list[list[Any]] = []
+        for row in rows:
+            status = str(row.get("status") or "ok")
+            value = _display_export_value(row.get("tabulated_linear"), scale) if status == "ok" else None
+            output_rows.append([_excel_cell_value(row.get("table") or row.get("table_id") or "base"), value])
+        if not output_rows:
+            output_rows.append(["base", None])
+        return ["table", "model_output"], output_rows, 2
+
+    output_rows = []
+    for row in rows:
+        status = str(row.get("status") or "ok")
+        value = _display_export_value(row.get("tabulated_linear"), scale) if status == "ok" else None
+        output_rows.append([*[_excel_cell_value(row.get(feature)) for feature in features], value])
+    return [*features, "model_output"], output_rows, len(features) + 1
+
+
+def _save_workbook_atomically(workbook: Any, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp = tempfile.NamedTemporaryFile(
+        prefix=f".{output_path.stem}.",
+        suffix=".tmp.xlsx",
+        dir=output_path.parent,
+        delete=False,
+    )
+    temp_path = Path(temp.name)
+    temp.close()
+    try:
+        workbook.save(temp_path)
+        temp_path.replace(output_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def export_tabulations(store: GlmModelStore, payload: dict[str, Any], *, gbm_store: Any = None) -> dict[str, Any]:
+    model_refs = _requested_model_refs(payload)
+    if len(model_refs) != 1:
+        raise ValueError("Choose exactly one tabulated model to export.")
+    model_ref = model_refs[0]
+    status = _status_for_ref(store, gbm_store, model_ref)
+    if not status:
+        raise ValueError(f"Choose a valid {model_ref.label_kind} model to export.")
+    if not status.get("tabulated"):
+        raise ValueError("Build model tabulations before exporting to XLSX.")
+
+    scale = "exp" if str(payload.get("scale") or "").lower() == "exp" else "linear"
+    tables = sorted(
+        [dict(table) for table in (status.get("tables") or []) if str(table.get("table_id") or "")],
+        key=lambda table: (int(table.get("index", 9999)), str(table.get("table_id") or "")),
+    )
+    if not tables:
+        raise ValueError("Build model tabulations before exporting to XLSX.")
+
+    Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter = _openpyxl_dependencies()
+    workbook = Workbook()
+    index_sheet = workbook.active
+    index_sheet.title = "index"
+
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    header_font = Font(bold=True, color="FFFFFF")
+    title_font = Font(bold=True)
+    border = Border(bottom=Side(style="thin", color="D9D9D9"))
+    centered = Alignment(horizontal="center")
+    left_aligned = Alignment(horizontal="left")
+    right_aligned = Alignment(horizontal="right")
+
+    index_headers = ["#", "Table name", "Dim", "Cells", "Min", "Max", "Span"]
+    index_sheet.append(index_headers)
+    _style_header_row(index_sheet, 1, fill=header_fill, font=header_font, border=border, alignment=centered)
+    index_sheet.cell(row=1, column=2).alignment = left_aligned
+    index_sheet.freeze_panes = "A2"
+    index_sheet.sheet_view.showGridLines = False
+
+    for table in tables:
+        table_index = int(table.get("index") or len(workbook.worksheets))
+        sheet_name = str(table_index)
+        worksheet = workbook.create_sheet(sheet_name)
+        worksheet.sheet_view.showGridLines = False
+        worksheet["A1"] = "return to index"
+        worksheet["A1"].hyperlink = _worksheet_hyperlink("index")
+        worksheet["A1"].style = "Hyperlink"
+
+        features = list(table.get("features") or [])
+        dim = len(features)
+        cells = table.get("cell_count")
+        min_value = _display_export_value(table.get("min"), scale)
+        max_value = _display_export_value(table.get("max"), scale)
+        span = _display_export_span(table.get("min"), table.get("max"), scale)
+        index_sheet.append([table_index, table.get("label") or table.get("table_id") or "", dim, cells, min_value, max_value, span])
+        index_cell = index_sheet.cell(row=index_sheet.max_row, column=1)
+        index_cell.hyperlink = _worksheet_hyperlink(sheet_name)
+        index_cell.style = "Hyperlink"
+
+        if table.get("skipped"):
+            worksheet["A2"] = "Skipped table"
+            worksheet["A2"].font = title_font
+            worksheet["A3"] = str(table.get("warning") or "This tabulation table was skipped.")
+            _autosize_worksheet_columns(worksheet, get_column_letter)
+            continue
+
+        table_info, rows = _read_table_for_ref(store, gbm_store, model_ref, str(table.get("table_id") or ""))
+        if table_info is None:
+            worksheet["A2"] = "Missing table"
+            worksheet["A2"].font = title_font
+            worksheet["A3"] = "This tabulation table could not be found."
+            _autosize_worksheet_columns(worksheet, get_column_letter)
+            continue
+
+        headers, output_rows, value_column = _tabulation_sheet_rows(table_info, rows, scale)
+        worksheet.append(headers)
+        _style_header_row(worksheet, 2, fill=header_fill, font=header_font, border=border, alignment=centered)
+        for output_row in output_rows:
+            worksheet.append(output_row)
+        worksheet.freeze_panes = "A3"
+        for column_index in range(1, worksheet.max_column + 1):
+            alignment = right_aligned if column_index == value_column else left_aligned
+            worksheet.cell(row=2, column=column_index).alignment = alignment
+        for row_index in range(3, worksheet.max_row + 1):
+            for column_index in range(1, value_column):
+                worksheet.cell(row=row_index, column=column_index).alignment = left_aligned
+            worksheet.cell(row=row_index, column=value_column).alignment = right_aligned
+        _format_numeric_columns(worksheet, {value_column}, start_row=3)
+        _autosize_worksheet_columns(worksheet, get_column_letter)
+
+    for row_index in range(2, index_sheet.max_row + 1):
+        for column_index in (1, 3, 4, 5, 6, 7):
+            index_sheet.cell(row=row_index, column=column_index).alignment = centered
+        index_sheet.cell(row=row_index, column=2).alignment = left_aligned
+        index_sheet.cell(row=row_index, column=1).number_format = "#,##0"
+        index_sheet.cell(row=row_index, column=3).number_format = "#,##0"
+        index_sheet.cell(row=row_index, column=4).number_format = "#,##0"
+        for column_index in (5, 6, 7):
+            index_sheet.cell(row=row_index, column=column_index).number_format = "0.000000"
+    _autosize_worksheet_columns(index_sheet, get_column_letter)
+
+    output_path = _tabulation_export_path(store, gbm_store, model_ref, scale)
+    _save_workbook_atomically(workbook, output_path)
+    return {
+        "path": str(output_path),
+        "filename": output_path.name,
+        "model_ref": model_ref.ref,
+        "scale": scale,
+        "table_count": len(tables),
+    }
+
+
 __all__ = [
     "MAX_TABULATION_CELLS",
     "build_tabulations",
+    "export_tabulations",
     "rebase_tabulation",
     "reset_tabulation_rebase",
     "tabulation_config",

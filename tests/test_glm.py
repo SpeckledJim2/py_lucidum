@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import duckdb
 import importlib.util
 import json
+import math
 import os
 import pickle
 import shutil
@@ -23,7 +25,7 @@ from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.core.features import load_features
 from py_lucidum.tools.glm import tabulation as glm_tabulation
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
-from py_lucidum.tools.glm.tabulation import build_tabulations, tabulation_config, tabulation_plot, tabulation_table
+from py_lucidum.tools.glm.tabulation import build_tabulations, export_tabulations, tabulation_config, tabulation_plot, tabulation_table
 from py_lucidum.tools.glm.training import (
     MissingGlmDependency,
     _raise_actionable_singular_matrix_error,
@@ -157,6 +159,115 @@ class GlmToolTests(unittest.TestCase):
         ]
         if missing:
             self.skipTest(f"missing optional modelling dependencies: {', '.join(missing)}")
+
+    def require_openpyxl_load_workbook(self) -> Any:
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            self.skipTest(f"missing optional openpyxl dependency: {exc}")
+        return load_workbook
+
+    def write_glm_export_tabulations(self, model_id: str = "export-glm") -> GlmModelStore:
+        store = GlmModelStore(self.data_path)
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": "Export GLM",
+                "created_at": "2026-06-01T00:00:00Z",
+                "response_column": "actualNumerator",
+            },
+        )
+        store.write_json(
+            store.artifact_path(model_id, "tabulation_manifest"),
+            {
+                "model_id": model_id,
+                "status": "tabulated",
+                "tables": [
+                    {
+                        "table_id": "base",
+                        "label": "base",
+                        "index": 1,
+                        "features": [],
+                        "cell_count": 1,
+                        "skipped": False,
+                        "path": "tabulations/base.parquet",
+                        "min": 0.1,
+                        "max": 0.1,
+                    },
+                    {
+                        "table_id": "Age",
+                        "label": "Age",
+                        "index": 2,
+                        "features": ["Age"],
+                        "cell_count": 3,
+                        "skipped": False,
+                        "path": "tabulations/Age.parquet",
+                        "min": 0.0,
+                        "max": 0.5,
+                    },
+                    {
+                        "table_id": "Age|Segment",
+                        "label": "Age:Segment",
+                        "index": 3,
+                        "features": ["Age", "Segment"],
+                        "cell_count": 3,
+                        "skipped": False,
+                        "path": "tabulations/Age_Segment.parquet",
+                        "min": -0.2,
+                        "max": 0.7,
+                    },
+                    {
+                        "table_id": "Skipped",
+                        "label": "Skipped",
+                        "index": 4,
+                        "features": ["Skipped"],
+                        "cell_count": 200000,
+                        "skipped": True,
+                        "warning": "Skipped by test fixture.",
+                        "path": "tabulations/Skipped.parquet",
+                    },
+                ],
+                "warnings": [],
+                "diagnostics": {},
+            },
+        )
+        store.tabulations_dir(model_id).mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                """
+                CREATE TABLE base_rows AS
+                SELECT 'base' AS table_id, 0.1 AS tabulated_linear, 'ok' AS status
+                """
+            )
+            con.execute(f"COPY base_rows TO {sql_literal(str(store.tabulations_dir(model_id) / 'base.parquet'))} (FORMAT PARQUET)")
+            con.execute(
+                """
+                CREATE TABLE age_rows AS
+                SELECT * FROM (VALUES
+                    (30, 0.0, 'ok'),
+                    (40, 0.5, 'missing'),
+                    (50, 0.5, 'ok')
+                ) AS rows(Age, tabulated_linear, status)
+                """
+            )
+            con.execute(f"COPY age_rows TO {sql_literal(str(store.tabulations_dir(model_id) / 'Age.parquet'))} (FORMAT PARQUET)")
+            con.execute(
+                """
+                CREATE TABLE interaction_rows AS
+                SELECT * FROM (VALUES
+                    (30, 'A', 0.4, 'ok'),
+                    (40, 'B', 0.7, 'missing'),
+                    (50, 'A', -0.2, 'ok')
+                ) AS rows(Age, Segment, tabulated_linear, status)
+                """
+            )
+            con.execute(f"COPY interaction_rows TO {sql_literal(str(store.tabulations_dir(model_id) / 'Age_Segment.parquet'))} (FORMAT PARQUET)")
+        finally:
+            con.close()
+        return store
 
     def assert_tabulated_linear_predictions_unchanged(self, original: list[dict[str, Any]], current: list[dict[str, Any]]) -> None:
         by_id = {row["__lucidum_row_id"]: row for row in original}
@@ -512,6 +623,7 @@ if result.get("iteration") != 10:
         self.assertIn("/api/glm/tabulations/config", paths)
         self.assertIn("/api/glm/tabulations/table", paths)
         self.assertIn("/api/glm/tabulations/plot", paths)
+        self.assertIn("/api/glm/tabulations/export", paths)
         self.assertIn("/api/glm/tabulations/rebase", paths)
         self.assertIn("/api/glm/tabulations/rebase/reset", paths)
         self.assertIn("/api/glm/models/{model_id}", paths)
@@ -1495,6 +1607,10 @@ ORDER BY __lucidum_row_id
             payload = glm_tabulation.build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
 
         self.assertEqual(payload["model_ids"], [model_id])
+        self.assertEqual(
+            store.artifact_path(model_id, "tabulation_manifest"),
+            store.tabulations_dir(model_id) / "tabulation_manifest.json",
+        )
         self.assertTrue(store.artifact_path(model_id, "tabulation_manifest").exists())
         self.assertTrue(store.artifact_path(model_id, "tabulated_predictions").exists())
 
@@ -2383,6 +2499,127 @@ COPY (
         self.assertEqual(row["__status____pivot__1"], "missing")
         self.assertEqual(feature_payload["min"], 0.1)
         self.assertEqual(feature_payload["max"], 1.4)
+
+    def test_glm_tabulation_export_xlsx_workbook_contract(self) -> None:
+        load_workbook = self.require_openpyxl_load_workbook()
+        model_id = "export-glm"
+        store = self.write_glm_export_tabulations(model_id)
+
+        result = export_tabulations(store, {"model_refs": [f"glm:{model_id}"], "scale": "exp"})
+
+        output_path = store.tabulations_dir(model_id) / f"{model_id}_tabulations_exp.xlsx"
+        self.assertEqual(Path(result["path"]), output_path)
+        self.assertEqual(result["filename"], output_path.name)
+        self.assertEqual(result["model_ref"], f"glm:{model_id}")
+        self.assertEqual(result["scale"], "exp")
+        self.assertEqual(result["table_count"], 4)
+        self.assertTrue(output_path.exists())
+
+        workbook = load_workbook(output_path, data_only=True)
+        self.assertEqual(workbook.sheetnames, ["index", "1", "2", "3", "4"])
+        index = workbook["index"]
+        self.assertEqual([index.cell(row=1, column=column).value for column in range(1, 8)], ["#", "Table name", "Dim", "Cells", "Min", "Max", "Span"])
+        self.assertIsNone(index.auto_filter.ref)
+        self.assertEqual(index["A2"].value, 1)
+        self.assertEqual(index["A2"].hyperlink.target, "#'1'!A1")
+        self.assertEqual(index["A1"].alignment.horizontal, "center")
+        self.assertEqual(index["B1"].alignment.horizontal, "left")
+        self.assertEqual(index["C1"].alignment.horizontal, "center")
+        self.assertEqual(index["A2"].alignment.horizontal, "center")
+        self.assertEqual(index["B2"].alignment.horizontal, "left")
+        self.assertEqual(index["C2"].alignment.horizontal, "center")
+        self.assertAlmostEqual(index["E3"].value, 1.0)
+        self.assertAlmostEqual(index["F3"].value, math.exp(0.5))
+        self.assertAlmostEqual(index["G3"].value, math.exp(0.5))
+
+        base = workbook["1"]
+        self.assertEqual(base["A1"].value, "return to index")
+        self.assertEqual(base["A1"].hyperlink.target, "#'index'!A1")
+        self.assertEqual([base["A2"].value, base["B2"].value], ["table", "model_output"])
+        self.assertEqual(base["A2"].alignment.horizontal, "left")
+        self.assertEqual(base["B2"].alignment.horizontal, "right")
+        self.assertEqual(base["A3"].value, "base")
+        self.assertEqual(base["A3"].alignment.horizontal, "left")
+        self.assertEqual(base["B3"].alignment.horizontal, "right")
+        self.assertAlmostEqual(base["B3"].value, math.exp(0.1))
+
+        one_way = workbook["2"]
+        self.assertEqual([one_way["A2"].value, one_way["B2"].value], ["Age", "model_output"])
+        self.assertEqual(one_way["A2"].alignment.horizontal, "left")
+        self.assertEqual(one_way["B2"].alignment.horizontal, "right")
+        self.assertEqual(one_way["A3"].alignment.horizontal, "left")
+        self.assertEqual(one_way["B3"].alignment.horizontal, "right")
+        age_rows = list(one_way.iter_rows(min_row=3, values_only=True))
+        self.assertIn((40, None), age_rows)
+        ok_age_row = next(row for row in age_rows if row[0] == 50)
+        self.assertAlmostEqual(ok_age_row[1], math.exp(0.5))
+
+        interaction = workbook["3"]
+        self.assertEqual([interaction["A2"].value, interaction["B2"].value, interaction["C2"].value], ["Age", "Segment", "model_output"])
+        self.assertEqual(interaction["A2"].alignment.horizontal, "left")
+        self.assertEqual(interaction["B2"].alignment.horizontal, "left")
+        self.assertEqual(interaction["C2"].alignment.horizontal, "right")
+        self.assertEqual(interaction["A3"].alignment.horizontal, "left")
+        self.assertEqual(interaction["B3"].alignment.horizontal, "left")
+        self.assertEqual(interaction["C3"].alignment.horizontal, "right")
+        interaction_rows = list(interaction.iter_rows(min_row=3, values_only=True))
+        missing_row = next(row for row in interaction_rows if row[0] == 40 and row[1] == "B")
+        self.assertIsNone(missing_row[2])
+        ok_row = next(row for row in interaction_rows if row[0] == 30 and row[1] == "A")
+        self.assertAlmostEqual(ok_row[2], math.exp(0.4))
+
+        skipped = workbook["4"]
+        self.assertEqual(skipped["A1"].value, "return to index")
+        self.assertEqual(skipped["A1"].hyperlink.target, "#'index'!A1")
+        self.assertEqual(skipped["A2"].value, "Skipped table")
+        self.assertEqual(skipped["A3"].value, "Skipped by test fixture.")
+
+    def test_glm_tabulation_export_api_validation_and_stable_path(self) -> None:
+        load_workbook = self.require_openpyxl_load_workbook()
+        model_id = "export-api-glm"
+        store = self.write_glm_export_tabulations(model_id)
+        store.write_json(
+            store.artifact_path("untabulated-glm", "manifest"),
+            {"model_id": "untabulated-glm", "label": "Untabulated", "created_at": "2026-06-02T00:00:00Z"},
+        )
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        for payload, expected_detail in [
+            ({}, "Choose exactly one tabulated model to export."),
+            ({"model_refs": [f"glm:{model_id}", "glm:untabulated-glm"]}, "Choose exactly one tabulated model to export."),
+            ({"model_refs": ["glm:missing-glm"]}, "Choose a valid GLM model to export."),
+            ({"model_refs": ["glm:untabulated-glm"]}, "Build model tabulations before exporting to XLSX."),
+        ]:
+            status, body = asgi_post_json(app, "/api/glm/tabulations/export", payload)
+            self.assertEqual(status, 400)
+            self.assertIn(expected_detail, json.loads(body)["detail"])
+
+        status, body = asgi_post_json(app, "/api/glm/tabulations/export", {"model_refs": [f"glm:{model_id}"], "scale": "linear"})
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        output_path = store.tabulations_dir(model_id) / f"{model_id}_tabulations_linear.xlsx"
+        self.assertEqual(Path(payload["path"]), output_path)
+        self.assertEqual(payload["filename"], output_path.name)
+        self.assertEqual(payload["table_count"], 4)
+        self.assertTrue(output_path.exists())
+        self.assertEqual(load_workbook(output_path, data_only=True).sheetnames, ["index", "1", "2", "3", "4"])
+
+    def test_glm_tabulation_export_api_reports_missing_openpyxl_dependency(self) -> None:
+        model_id = "missing-openpyxl-glm"
+        self.write_glm_export_tabulations(model_id)
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        original_import = builtins.__import__
+
+        def block_openpyxl(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name.startswith("openpyxl"):
+                raise ImportError("blocked openpyxl")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=block_openpyxl):
+            status, body = asgi_post_json(app, "/api/glm/tabulations/export", {"model_refs": [f"glm:{model_id}"], "scale": "linear"})
+
+        self.assertEqual(status, 400)
+        self.assertIn("Missing: openpyxl", json.loads(body)["detail"])
 
     def test_glm_auto_regularization_stores_selected_penalty(self) -> None:
         self.require_glm_dependencies()

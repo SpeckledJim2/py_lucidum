@@ -37,6 +37,7 @@ APP_ACTIONS = {
     ("POST", "/api/glm/tabulations/config"): "GLM tabulation config",
     ("POST", "/api/glm/tabulations/table"): "GLM tabulation table",
     ("POST", "/api/glm/tabulations/plot"): "GLM tabulation plot",
+    ("POST", "/api/glm/tabulations/export"): "GLM tabulation export",
     ("GET", "/api/gbm/summary"): "GBM summary",
     ("GET", "/api/gbm/config"): "GBM config",
     ("GET", "/api/gbm/models"): "GBM models",

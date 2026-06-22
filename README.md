@@ -21,8 +21,8 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
   ![UK Postcode Unit mapping tool](docs/assets/postcode_unit.png)
 
-- **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions.
-- **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, and SHAP plotting when SHAP rows are saved during training.
+- **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables with XLSX export, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions.
+- **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, SHAP plotting when SHAP rows are saved during training, and XLSX export for saved tabulations.
 - **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios/interaction constraints.
 - **Specifications**: default editor tab for feature, KPI, and filter specification CSV files, with continuous validation and save actions against the app's current metadata contracts.
 
@@ -283,7 +283,7 @@ The Penalty selector defaults to `None` for the existing unregularized fit. `Aut
 
 `All` fits all valid rows. `Training` fits only rows where a physical `SAMPLE` column equals `training`, case-insensitively; GLM does not create generated sample splits.
 
-GLM model sidecars keep `manifest.json` compact: identity, response/denominator, family/link, regularization, training scope, offset expressions, minimal formula execution flags, and total elapsed time. Raw formula text lives only in `formula.txt`; diagnostics and warnings live in `diagnostics.json`; coefficients, feature importances, predictions, and tabulated predictions live in Parquet artifacts. `estimator.pkl` is required for GLM tabulations and overlay reconstruction. Tabulation metadata lives beside the rating tables in `tabulations/manifest.json`. When LightGBM/glum load-order protection is required, GLM fitting stays isolated in a hot worker that is reused after the first build; set `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` to force the old one-shot worker path for debugging.
+GLM model sidecars keep `manifest.json` compact: identity, response/denominator, family/link, regularization, training scope, offset expressions, minimal formula execution flags, and total elapsed time. Raw formula text lives only in `formula.txt`; diagnostics and warnings live in `diagnostics.json`; coefficients, feature importances, predictions, and tabulated predictions live in Parquet artifacts. `estimator.pkl` is required for GLM tabulations and overlay reconstruction. Tabulation metadata lives beside the rating tables in `tabulations/tabulation_manifest.json`, and Tabulations panel XLSX exports are saved in that same `tabulations/` folder. When LightGBM/glum load-order protection is required, GLM fitting stays isolated in a hot worker that is reused after the first build; set `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` to force the old one-shot worker path for debugging.
 
 ## GBM Models
 

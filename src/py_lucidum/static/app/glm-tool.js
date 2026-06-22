@@ -123,6 +123,7 @@ export function createGlmTool({
   let modelListLastRefreshAt = 0;
   let isBuilding = false;
   let isTabulating = false;
+  let isExportingTabulations = false;
   let liveProgress = null;
   let tabulationConfig = null;
   let tabulationModelTable = null;
@@ -435,6 +436,7 @@ export function createGlmTool({
                     ${tabulationCrosstabOptionsHtml(crosstabOptions)}
                   </select>
                 </div>
+                <button id="glmExportTabulationsBtn" class="tab glm-inline-action-button glm-tabulation-export-button ${isExportingTabulations ? "building" : ""}" type="button" ${canExportSelectedTabulations() ? "" : "disabled"}>${isExportingTabulations ? "Exporting..." : "Export xlsx"}</button>
               </div>
             </div>
           </div>
@@ -501,6 +503,12 @@ export function createGlmTool({
   function selectedTabulationModel() {
     const refs = tabulationSelectedModelIds();
     return refs.length === 1 ? tabulationConfigModel(refs[0]) : null;
+  }
+
+  function canExportSelectedTabulations() {
+    const refs = tabulationSelectedModelIds();
+    const model = refs.length === 1 ? tabulationConfigModel(refs[0]) : null;
+    return Boolean(refs.length === 1 && model?.tabulated && !isTabulating && !isExportingTabulations);
   }
 
   function selectedTabulationRebaseRules() {
@@ -1037,6 +1045,12 @@ export function createGlmTool({
       buildButton.classList.toggle("building", isTabulating);
       buildButton.textContent = isTabulating ? "Tabulating..." : "Tabulate";
     }
+    const exportButton = el("glmExportTabulationsBtn");
+    if (exportButton) {
+      exportButton.disabled = !canExportSelectedTabulations();
+      exportButton.classList.toggle("building", isExportingTabulations);
+      exportButton.textContent = isExportingTabulations ? "Exporting..." : "Export xlsx";
+    }
     refreshTabulationDiagnostics();
   }
 
@@ -1123,6 +1137,7 @@ export function createGlmTool({
       loadTabulationView();
     });
     el("glmBuildTabulationsBtn")?.addEventListener("click", buildSelectedTabulations);
+    el("glmExportTabulationsBtn")?.addEventListener("click", exportSelectedTabulations);
   }
 
   function bindTabulationFallbackSelectors() {
@@ -1562,6 +1577,30 @@ export function createGlmTool({
       pollTabulationJob(job.job_id);
     } catch (error) {
       setTabulationFailure(error.message);
+    }
+  }
+
+  async function exportSelectedTabulations() {
+    if (isExportingTabulations) return;
+    if (!canExportSelectedTabulations()) {
+      setInlineTabulationNotice(["Choose exactly one tabulated model to export."]);
+      return;
+    }
+    const modelRefs = tabulationSelectedModelIds();
+    isExportingTabulations = true;
+    setInlineTabulationNotice(["Saving XLSX..."]);
+    syncTabulationControls();
+    try {
+      const result = await api("/api/glm/tabulations/export", {
+        method: "POST",
+        body: JSON.stringify({ model_refs: modelRefs, scale: tabulationScale }),
+      });
+      setInlineTabulationNotice([`Saved XLSX: ${result.path || result.filename || "XLSX saved"}`]);
+    } catch (error) {
+      setInlineTabulationNotice([error.message]);
+    } finally {
+      isExportingTabulations = false;
+      syncTabulationControls();
     }
   }
 
@@ -2151,6 +2190,12 @@ export function createGlmTool({
       tabulationButton.disabled = isTabulating || !tabulationAvailableModels().length;
       tabulationButton.classList.toggle("building", isTabulating);
       tabulationButton.textContent = isTabulating ? "Tabulating..." : "Tabulate";
+    }
+    const exportButton = el("glmExportTabulationsBtn");
+    if (exportButton) {
+      exportButton.disabled = !canExportSelectedTabulations();
+      exportButton.classList.toggle("building", isExportingTabulations);
+      exportButton.textContent = isExportingTabulations ? "Exporting..." : "Export xlsx";
     }
   }
 

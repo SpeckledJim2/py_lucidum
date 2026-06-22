@@ -60,7 +60,7 @@ Tabulation tables can have a free additive allocation between visible components
 3. For an interaction table with a valid feature crosstab, subtract that value from every OK cell in the source table slice matching the transfer feature value, then add the same value to the matching row of the transfer feature's one-way table. If that one-way table does not exist, create a one-way adjustment table.
 4. For a one-way table, or a higher-dimensional table without a feature-transfer crosstab, subtract that value from every numeric source table cell and add it to the `base` table.
 5. Rebuild `tabulated_predictions.parquet` from the adjusted tables and assert the row-level linear predictions are unchanged within numerical tolerance.
-6. Store the applied rule under `tabulations/manifest.json` `rebasing.rules`.
+6. Store the applied rule under `tabulations/tabulation_manifest.json` `rebasing.rules`.
 
 Reset restores `tabulations_raw/`, clears `rebasing`, and rebuilds `tabulated_predictions.parquet` from the restored raw tables.
 
@@ -69,9 +69,9 @@ Reset restores `tabulations_raw/`, clears `rebasing`, and rebuilds `tabulated_pr
 Each GLM model directory under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/glm/<model_id>/` may contain:
 
 - `estimator.pkl`: fitted `glum` estimator.
-- `tabulations/manifest.json`: tables, one-based user-facing table indexes, warnings, diagnostics, feature metadata, and build time.
+- `tabulations/tabulation_manifest.json`: tables, one-based user-facing table indexes, warnings, diagnostics, feature metadata, and build time.
 - `tabulations/*.parquet`: one Parquet table per tabulation, including `base.parquet`.
-- `tabulations_raw/*.parquet` and `tabulations_raw/manifest.json`: first generated raw tables and metadata, present only while rebase rules are active.
+- `tabulations_raw/*.parquet` and `tabulations_raw/tabulation_manifest.json`: first generated raw tables and metadata, present only while rebase rules are active.
 - `tabulated_predictions.parquet`: row-level tabulated predictions.
 
 `tabulated_predictions.parquet` contains:
@@ -89,8 +89,15 @@ Each GLM model directory under `.lucidum/datasets/<dataset-slug>/<dataset-signat
 - `POST /api/glm/tabulations/config`: returns tabulatable status, union table list, warnings, and diagnostics for selected models.
 - `POST /api/glm/tabulations/table`: returns a multi-model wide table payload for the selected table and display scale.
 - `POST /api/glm/tabulations/plot`: returns ECharts-ready series for 1D tables and 2D crosstab tables.
+- `POST /api/glm/tabulations/export`: exports exactly one selected GLM or GBM model to XLSX using saved tabulation manifests and parquet sidecars only.
 - `POST /api/glm/tabulations/rebase`: rebases one selected GLM table cell and recalculates tabulated predictions.
 - `POST /api/glm/tabulations/rebase/reset`: restores the raw tabulations for one GLM and recalculates tabulated predictions.
+
+## XLSX Export
+
+XLSX exports are saved beside the selected model's tabulation sidecars as `<model_id>_tabulations_<scale>.xlsx`, replacing the previous same-scale export. GLM and GBM both store the export manifest at `tabulations/tabulation_manifest.json`, beside the table sidecars and workbook. The workbook contains an `index` sheet followed by numbered sheets matching the manifest table indexes. The index columns are `#`, `Table name`, `Dim`, `Cells`, `Min`, `Max`, and `Span`; the first column links to cell `A1` of each numbered worksheet. Every numbered worksheet links back to `index!A1` from `A1`, writes headers in row 2, and starts data in row 3.
+
+Non-base worksheets are exported in long format with rating factor columns in manifest order followed by `model_output`. The base worksheet uses `table` and `model_output`. `exp` scale exponentiates saved `tabulated_linear` values, and non-ok cells are blank. Skipped tables still get numbered worksheets with a short skipped-table message so workbook numbering stays aligned with the index.
 
 ## Source Exposure
 

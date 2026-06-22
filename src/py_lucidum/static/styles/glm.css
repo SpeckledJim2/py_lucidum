@@ -323,9 +323,17 @@
         opacity: 1;
       }
 
-      #glmBuildTabulationsBtn {
+      #glmBuildTabulationsBtn,
+      #glmExportTabulationsBtn {
         min-height: 26px;
         padding: 2px 7px;
+        white-space: nowrap;
+      }
+
+      #glmExportTabulationsBtn.building,
+      #glmExportTabulationsBtn.building:disabled {
+        cursor: progress;
+        opacity: 1;
       }
 
       .glm-editor-shell {

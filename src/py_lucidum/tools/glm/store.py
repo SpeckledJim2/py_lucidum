@@ -25,7 +25,7 @@ ARTIFACT_FILES = {
     "feature_importance": "feature_importance.parquet",
     "predictions": "predictions.parquet",
     "diagnostics": "diagnostics.json",
-    "tabulation_manifest": "tabulations/manifest.json",
+    "tabulation_manifest": "tabulations/tabulation_manifest.json",
     "tabulated_predictions": "tabulated_predictions.parquet",
 }
 SOURCE_KINDS = {
