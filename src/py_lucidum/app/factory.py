@@ -235,7 +235,13 @@ def create_app(
     @app.get("/api/schema")
     def schema(request: Request) -> dict[str, Any]:
         check_token(request)
-        return schema_payload()
+        try:
+            app.state.dataset.refresh_if_source_changed()
+            return schema_payload()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except duckdb.Error as exc:
+            raise HTTPException(status_code=400, detail=duckdb_error_message(exc)) from exc
 
     @app.post("/api/filter/row-count")
     async def filter_row_count(request: Request) -> dict[str, Any]:

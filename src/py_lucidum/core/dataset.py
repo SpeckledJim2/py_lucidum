@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat as stat_module
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,9 @@ class ModelPredictionSource:
     active: bool = False
 
 
+ParquetFolderManifest = tuple[tuple[Path, int, int], ...]
+
+
 class Dataset:
     def __init__(self, path: str | Path):
         self.path = Path(path).expanduser().resolve()
@@ -28,6 +32,7 @@ class Dataset:
         self.con.execute("PRAGMA disable_progress_bar")
         self.source_kind = "file"
         self._parquet_files: tuple[Path, ...] = ()
+        self._parquet_folder_manifest: ParquetFolderManifest = ()
         self._configure_source()
         self._schema: list[ColumnInfo] | None = None
         self._invalid_column_errors: dict[str, str] | None = None
@@ -46,12 +51,16 @@ class Dataset:
         return self._parquet_files
 
     def _configure_source(self) -> None:
-        self._parquet_files = ()
         if self.path.is_dir():
+            manifest = self._direct_child_parquet_manifest()
+            files = self._parquet_files_from_manifest(manifest)
+            self._validate_parquet_folder_schema(files)
             self.source_kind = "parquet_folder"
-            self._parquet_files = self._direct_child_parquet_files()
-            self._validate_parquet_folder_schema(self._parquet_files)
+            self._parquet_files = files
+            self._parquet_folder_manifest = manifest
             return
+        self._parquet_files = ()
+        self._parquet_folder_manifest = ()
         suffix = self.path.suffix.lower()
         if suffix == ".parquet":
             self.source_kind = "parquet_file"
@@ -60,20 +69,27 @@ class Dataset:
         else:
             self.source_kind = "file"
 
-    def _direct_child_parquet_files(self) -> tuple[Path, ...]:
-        files = tuple(
-            sorted(
-                (
-                    path
-                    for path in self.path.iterdir()
-                    if path.is_file() and path.suffix.lower() == ".parquet"
-                ),
-                key=lambda path: path.name,
-            )
-        )
-        if not files:
+    def _direct_child_parquet_manifest(self) -> ParquetFolderManifest:
+        entries: list[tuple[Path, int, int]] = []
+        for path in sorted(self.path.iterdir(), key=lambda path: path.name):
+            if path.suffix.lower() != ".parquet":
+                continue
+            try:
+                file_stat = path.stat()
+            except FileNotFoundError:
+                continue
+            if not stat_module.S_ISREG(file_stat.st_mode):
+                continue
+            entries.append((path, int(file_stat.st_size), int(file_stat.st_mtime_ns)))
+        if not entries:
             raise ValueError(f"Parquet folder contains no direct .parquet files: {self.path}")
-        return files
+        return tuple(entries)
+
+    def _parquet_files_from_manifest(self, manifest: ParquetFolderManifest) -> tuple[Path, ...]:
+        return tuple(entry[0] for entry in manifest)
+
+    def _direct_child_parquet_files(self) -> tuple[Path, ...]:
+        return self._parquet_files_from_manifest(self._direct_child_parquet_manifest())
 
     def _validate_parquet_folder_schema(self, files: tuple[Path, ...]) -> None:
         reference_file = files[0]
@@ -211,11 +227,28 @@ class Dataset:
     def reload(self) -> None:
         with self._lock:
             self._configure_source()
-            self._schema = None
-            self._invalid_column_errors = None
-            self._row_count = None
-            self._band_suggestions = None
-            self._source_band_suggestions = {}
+            self._clear_cached_state()
+
+    def refresh_if_source_changed(self) -> bool:
+        with self._lock:
+            if self.source_kind != "parquet_folder":
+                return False
+            manifest = self._direct_child_parquet_manifest()
+            if manifest == self._parquet_folder_manifest:
+                return False
+            files = self._parquet_files_from_manifest(manifest)
+            self._validate_parquet_folder_schema(files)
+            self._parquet_files = files
+            self._parquet_folder_manifest = manifest
+            self._clear_cached_state()
+            return True
+
+    def _clear_cached_state(self) -> None:
+        self._schema = None
+        self._invalid_column_errors = None
+        self._row_count = None
+        self._band_suggestions = None
+        self._source_band_suggestions = {}
 
     def schema(self) -> dict[str, Any]:
         with self._lock:

@@ -11,6 +11,7 @@ This file gives future coding agents the shortest reliable path into `py_lucidum
 ## Environment Notes
 
 - This repo is normally driven from Positron, not the Codex app. Do not try to use the Codex in-app Browser plugin here; it will not be available. For browser verification, use the repo's Playwright smoke tooling, local `curl` checks, or a manually launched local browser session.
+- To launch the committed multi-Parquet fixture from a source checkout, run `.venv/bin/lucidum datasets/monthly --port 8000`. Folder inputs are for non-modelling tools only; do not combine this fixture with `glm`, `gbm`, or `--tools all`.
 
 ## Shape Of The App
 

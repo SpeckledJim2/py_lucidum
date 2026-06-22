@@ -188,6 +188,80 @@ class ParquetFolderTests(unittest.TestCase):
         self.assertEqual(uk_map["row_count"], 50_000)
         self.assertGreater(len(uk_map["rows"]), 0)
 
+    def test_schema_auto_refreshes_added_folder_parquet_on_app_join(self) -> None:
+        folder = self.root / "daily"
+        folder.mkdir()
+        con = duckdb.connect(database=":memory:")
+        try:
+            copy_query_to_parquet(con, "SELECT 1::INTEGER AS x, 10::DOUBLE AS y", folder / "2026-06-20.parquet")
+        finally:
+            con.close()
+        app = create_app(folder, token="", use_saved_filters=False, use_kpis=False, use_features=False)
+
+        status, initial = asgi_get_json(app, "/api/schema")
+        self.assertEqual(status, 200)
+        self.assertEqual(initial["file_count"], 1)
+        self.assertEqual(initial["row_count"], 1)
+
+        con = duckdb.connect(database=":memory:")
+        try:
+            copy_query_to_parquet(
+                con,
+                "SELECT 2::INTEGER AS x, 20::DOUBLE AS y UNION ALL SELECT 3::INTEGER AS x, 30::DOUBLE AS y",
+                folder / "2026-06-21.parquet",
+            )
+        finally:
+            con.close()
+
+        status, refreshed = asgi_get_json(app, "/api/schema")
+        self.assertEqual(status, 200)
+        self.assertEqual(refreshed["file_count"], 2)
+        self.assertEqual(refreshed["file_size"], sum(path.stat().st_size for path in folder.glob("*.parquet")))
+        self.assertEqual(refreshed["row_count"], 3)
+        self.assertEqual([path.name for path in app.state.dataset.parquet_files], ["2026-06-20.parquet", "2026-06-21.parquet"])
+
+    def test_unchanged_folder_manifest_does_not_clear_cached_row_count(self) -> None:
+        folder = self.root / "unchanged"
+        folder.mkdir()
+        con = duckdb.connect(database=":memory:")
+        try:
+            copy_query_to_parquet(con, "SELECT 1 AS x", folder / "a.parquet")
+        finally:
+            con.close()
+        dataset = Dataset(folder)
+        self.assertEqual(dataset.row_count(), 1)
+        dataset._row_count = 1234
+
+        changed = dataset.refresh_if_source_changed()
+
+        self.assertFalse(changed)
+        self.assertEqual(dataset._row_count, 1234)
+
+    def test_schema_auto_refresh_rejects_added_incompatible_parquet(self) -> None:
+        folder = self.root / "bad-daily"
+        folder.mkdir()
+        con = duckdb.connect(database=":memory:")
+        try:
+            copy_query_to_parquet(con, "SELECT 1::INTEGER AS x", folder / "a.parquet")
+        finally:
+            con.close()
+        app = create_app(folder, token="", use_saved_filters=False, use_kpis=False, use_features=False)
+        status, initial = asgi_get_json(app, "/api/schema")
+        self.assertEqual(status, 200)
+        self.assertEqual(initial["row_count"], 1)
+
+        con = duckdb.connect(database=":memory:")
+        try:
+            copy_query_to_parquet(con, "SELECT 'bad'::VARCHAR AS x", folder / "b.parquet")
+        finally:
+            con.close()
+
+        status, payload = asgi_get_json(app, "/api/schema")
+        self.assertEqual(status, 400)
+        self.assertIn("type mismatches: x expected INTEGER got VARCHAR", payload["detail"])
+        self.assertEqual([path.name for path in app.state.dataset.parquet_files], ["a.parquet"])
+        self.assertEqual(app.state.dataset.row_count(), 1)
+
     def test_folder_input_requires_direct_child_parquet_files(self) -> None:
         folder = self.root / "empty"
         nested = folder / "nested"
