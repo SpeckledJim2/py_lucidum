@@ -1322,6 +1322,7 @@
         if (previousTool === "column_profile" && tool !== "column_profile") columnProfileTool.closeMenus();
         if (previousTool === "specs" && tool !== "specs") specificationsTool.closeMenus();
         state.tool = tool;
+        el("visualArea").classList.remove("startup-mode");
         el("datasetViewerTool").classList.toggle("active", tool === "dataset_viewer");
         el("profileTool").classList.toggle("active", tool === "column_profile");
         el("lineBarTool").classList.toggle("active", tool === "line_bar");

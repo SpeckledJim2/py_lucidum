@@ -6,6 +6,10 @@
         min-height: 0;
       }
 
+      .visual-area.startup-mode {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       .visual-area.map-mode {
         grid-template-columns: minmax(0, 1fr);
       }
