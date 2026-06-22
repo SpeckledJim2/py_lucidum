@@ -536,6 +536,10 @@
         background: var(--saved-filter-theme-hover-bg);
       }
 
+      .saved-filter-theme.saved-filter-theme--selected {
+        color: var(--danger);
+      }
+
       .saved-filter-theme-icon {
         flex: 0 0 auto;
         width: 7px;

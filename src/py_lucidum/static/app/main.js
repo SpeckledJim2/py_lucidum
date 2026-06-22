@@ -2088,13 +2088,28 @@
         return new Set(selectedSavedFilterRows().map(savedFilterRowKey));
       }
 
+      function syncSavedFilterThemeSelectionState() {
+        const list = el("savedFilterSelect");
+        const selectedThemes = new Set(
+          Array.from(list.querySelectorAll('.saved-filter-option[aria-selected="true"]'))
+            .map((button) => button.dataset.filterTheme || "General")
+        );
+        list.querySelectorAll(".saved-filter-theme").forEach((heading) => {
+          heading.classList.toggle("saved-filter-theme--selected", selectedThemes.has(heading.dataset.filterTheme || "General"));
+        });
+      }
+
       function restoreSavedFilterSelection(selectedKeys) {
-        if (!selectedKeys?.size) return;
+        if (!selectedKeys?.size) {
+          syncSavedFilterThemeSelectionState();
+          return;
+        }
         el("savedFilterSelect").querySelectorAll(".saved-filter-option").forEach((button) => {
           const active = selectedKeys.has(savedFilterButtonKey(button));
           button.setAttribute("aria-selected", String(active));
           button.classList.toggle("active", active);
         });
+        syncSavedFilterThemeSelectionState();
       }
 
       function renderSavedFilters() {
@@ -2148,10 +2163,12 @@
               button.setAttribute("aria-selected", String(!selected));
               button.classList.toggle("active", !selected);
             }
+            syncSavedFilterThemeSelectionState();
             applySavedFilters();
           });
           list.append(button);
         }
+        syncSavedFilterThemeSelectionState();
       }
 
       function setFilterSelectionMode(mode, options = {}) {
@@ -2175,6 +2192,7 @@
             });
           }
         }
+        syncSavedFilterThemeSelectionState();
         if (options.apply !== false) {
           applySavedFilters();
         }
@@ -2318,6 +2336,7 @@
           button.setAttribute("aria-selected", "false");
           button.classList.remove("active");
         });
+        syncSavedFilterThemeSelectionState();
         if (state.activeFilter === "") {
           syncActiveFilterLabels();
           refreshMetricSummary();
