@@ -26,6 +26,9 @@ class Dataset:
             raise FileNotFoundError(f"Dataset does not exist: {self.path}")
         self.con = duckdb.connect(database=":memory:")
         self.con.execute("PRAGMA disable_progress_bar")
+        self.source_kind = "file"
+        self._parquet_files: tuple[Path, ...] = ()
+        self._configure_source()
         self._schema: list[ColumnInfo] | None = None
         self._invalid_column_errors: dict[str, str] | None = None
         self._row_count: int | None = None
@@ -38,7 +41,97 @@ class Dataset:
     def lock(self) -> threading.RLock:
         return self._lock
 
+    @property
+    def parquet_files(self) -> tuple[Path, ...]:
+        return self._parquet_files
+
+    def _configure_source(self) -> None:
+        self._parquet_files = ()
+        if self.path.is_dir():
+            self.source_kind = "parquet_folder"
+            self._parquet_files = self._direct_child_parquet_files()
+            self._validate_parquet_folder_schema(self._parquet_files)
+            return
+        suffix = self.path.suffix.lower()
+        if suffix == ".parquet":
+            self.source_kind = "parquet_file"
+        elif suffix == ".csv":
+            self.source_kind = "csv_file"
+        else:
+            self.source_kind = "file"
+
+    def _direct_child_parquet_files(self) -> tuple[Path, ...]:
+        files = tuple(
+            sorted(
+                (
+                    path
+                    for path in self.path.iterdir()
+                    if path.is_file() and path.suffix.lower() == ".parquet"
+                ),
+                key=lambda path: path.name,
+            )
+        )
+        if not files:
+            raise ValueError(f"Parquet folder contains no direct .parquet files: {self.path}")
+        return files
+
+    def _validate_parquet_folder_schema(self, files: tuple[Path, ...]) -> None:
+        reference_file = files[0]
+        reference_schema = self._parquet_file_schema(reference_file)
+        reference_columns = dict(reference_schema)
+        for path in files[1:]:
+            schema = self._parquet_file_schema(path)
+            columns = dict(schema)
+            if columns != reference_columns:
+                raise ValueError(
+                    self._parquet_schema_mismatch_message(
+                        reference_file,
+                        path,
+                        reference_columns,
+                        columns,
+                    )
+                )
+
+    def _parquet_file_schema(self, path: Path) -> list[tuple[str, str]]:
+        try:
+            rows = self.con.execute(f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(path))})").fetchall()
+        except duckdb.Error as exc:
+            raise ValueError(f"Could not read Parquet file {path.name}: {duckdb_error_message(exc)}") from exc
+        return [(str(row[0]), str(row[1])) for row in rows]
+
+    def _parquet_schema_mismatch_message(
+        self,
+        reference_file: Path,
+        path: Path,
+        reference_columns: dict[str, str],
+        columns: dict[str, str],
+    ) -> str:
+        missing = [name for name in reference_columns if name not in columns]
+        extra = [name for name in columns if name not in reference_columns]
+        type_mismatches = [
+            f"{name} expected {reference_columns[name]} got {columns[name]}"
+            for name in reference_columns
+            if name in columns and reference_columns[name] != columns[name]
+        ]
+        details: list[str] = []
+        if missing:
+            details.append(f"missing columns: {', '.join(missing[:5])}")
+        if extra:
+            details.append(f"extra columns: {', '.join(extra[:5])}")
+        if type_mismatches:
+            details.append(f"type mismatches: {', '.join(type_mismatches[:5])}")
+        suffix = "; ".join(details) if details else "schema differs"
+        return (
+            "Parquet folder columns must have identical names and DuckDB types; "
+            f"{path.name} differs from {reference_file.name} ({suffix})."
+        )
+
+    def _parquet_file_list_sql(self) -> str:
+        return "[" + ", ".join(sql_literal(str(path)) for path in self._parquet_files) + "]"
+
     def relation_sql(self) -> str:
+        if self.source_kind == "parquet_folder":
+            return f"read_parquet({self._parquet_file_list_sql()})"
         path = sql_literal(str(self.path))
         suffix = self.path.suffix.lower()
         if suffix == ".parquet":
@@ -103,6 +196,7 @@ class Dataset:
                     "id": "dataset",
                     "label": self.path.name,
                     "kind": "dataset",
+                    "source_kind": schema["source_kind"],
                     "row_count": schema["row_count"],
                     "columns": schema["columns"],
                     "invalid_columns": invalid_columns,
@@ -116,6 +210,7 @@ class Dataset:
 
     def reload(self) -> None:
         with self._lock:
+            self._configure_source()
             self._schema = None
             self._invalid_column_errors = None
             self._row_count = None
@@ -128,12 +223,24 @@ class Dataset:
             invalid_columns = self.invalid_columns()
             return {
                 "path": str(self.path),
-                "file_size": self.path.stat().st_size,
+                "source_kind": self.source_kind,
+                "file_size": self.file_size(),
+                "file_count": self.file_count(),
                 "row_count": self.row_count(),
                 "columns": [self.column_payload(c) for c in columns],
                 "invalid_columns": invalid_columns,
                 "warnings": self.invalid_column_warnings(invalid_columns),
             }
+
+    def file_size(self) -> int:
+        if self.source_kind == "parquet_folder":
+            return sum(path.stat().st_size for path in self._parquet_files)
+        return self.path.stat().st_size
+
+    def file_count(self) -> int:
+        if self.source_kind == "parquet_folder":
+            return len(self._parquet_files)
+        return 1
 
     def _ensure_schema(self) -> list[ColumnInfo]:
         if self._schema is None:

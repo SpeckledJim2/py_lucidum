@@ -1142,7 +1142,13 @@
       }
 
       function schemaFileMeta() {
-        const path = state.schema?.path?.split(/[\\/]/).pop() || "";
+        let path = state.schema?.path?.split(/[\\/]/).pop() || "";
+        if (state.schema?.source_kind === "parquet_folder") {
+          const fileCount = Number(state.schema?.file_count || 0);
+          if (Number.isFinite(fileCount) && fileCount > 0) {
+            path = `${path} (${fileCount.toLocaleString()} ${fileCount === 1 ? "file" : "files"})`;
+          }
+        }
         const fileSize = formatFileSize(state.schema?.file_size);
         return fileSize ? `${path} · ${fileSize}` : path;
       }

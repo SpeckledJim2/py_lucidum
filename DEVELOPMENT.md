@@ -12,7 +12,7 @@ This document is the durable maintainer contract for `py_lucidum`: architecture,
 
 ## Purpose
 
-`py_lucidum` is a package-first Python app for fast local exploration of large CSV and Parquet datasets. Users launch the bundled synthetic demo with `lucidum --demo`, launch another file with `lucidum path.parquet`, or start the app from Python with `py_lucidum.serve(path)`.
+`py_lucidum` is a package-first Python app for fast local exploration of large CSV and Parquet datasets. Users launch the bundled synthetic demo with `lucidum --demo`, launch another file with `lucidum path.parquet`, launch a same-schema folder of Parquet files with `lucidum path/to/folder/`, or start the app from Python with `py_lucidum.serve(path)`.
 
 The app is currently local-first: it starts FastAPI and DuckDB in the user process, serves a static browser UI, and treats the input file as fixed until reload. It is designed as a shared workbench plus independently registered tools.
 
@@ -46,6 +46,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `lucidum --demo`
   - `lucidum path/to/data.parquet`
   - `lucidum path/to/data.csv`
+  - `lucidum path/to/parquet-folder/`
   - common options include `--open`, `--host`, `--port`, `--no-token`, `--x`, `--actual`, `--expected`, `--denominator`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
 - Python:
   - `py_lucidum.serve(...)`
@@ -111,9 +112,12 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 **Datasets and packaging**
 
 - The committed demo dataset is `datasets/motor_premiums.parquet`.
+- The source tree also commits `datasets/monthly/*.parquet`, a seven-file monthly split of the demo data used for folder-input manual checks and tests.
 - The wheel packages the demo dataset as `py_lucidum/datasets/motor_premiums.parquet`.
-- Other local files under `datasets/` remain ignored.
+- Other top-level local CSV/Parquet files under `datasets/` remain ignored; keep ad hoc nested dataset folders out of git unless they are intentional fixtures.
 - Parquet is the preferred working format for speed; CSV remains supported for convenience.
+- A dataset path may be a folder of direct-child `.parquet` files for non-modelling tools. Lucidum builds one DuckDB `read_parquet([...])` relation from the sorted direct children, ignores non-Parquet files and nested folders, and requires every file to have identical column-name-to-DuckDB-type mappings. The schema payload reports the folder path, direct-child Parquet `file_count`, combined byte size, combined row count, and `source_kind: "parquet_folder"`; the header displays folder names as `name (n files)`.
+- Parquet folder inputs are rejected at app creation when `glm`, `gbm`, or `--tools all` enables modelling tools. GLM/GBM model stores, workers, prediction sidecars, SHAP sidecars, generated samples, and dataset workspaces remain single-source-file only.
 - `GET /api/schema` includes `data_sources` and `feature_bases`. The default source is `dataset`; model outputs publish named tabular artifacts through this same contract.
 - `GET /api/schema` does not precompute numeric band suggestions. Column payloads keep `band_suggestion` for compatibility, normally as `null`; chart tools request initial numeric band estimates lazily through `POST /api/banding/suggestion`.
 - `GET /api/schema` excludes unreadable columns from `columns` and reports them as `invalid_columns` with sanitized errors. Normal tools should use the safe column maps; only diagnostics or choosers that explicitly report invalid columns should use the all-column map.
@@ -410,6 +414,7 @@ The current test suite should cover:
 - Line-and-bar aggregation, filters, transforms, grouping, sorting, saved filters, CSV reads, and Parquet reads.
 - UK map area, sector, and unit aggregation, alias defaults, coordinate validation, and custom column defaults.
 - Tool registry defaults, optional GLM/GBM registration, and the default `dataset` data-source contract.
+- Parquet folder input validation, direct-child file selection, combined schema metadata, default tool querying, and GLM/GBM rejection.
 - GLM config without optional dependencies, formula validation/comment stripping and `offset(...)` extraction, lazy dependency failures, training jobs, coefficient/diagnostic artifacts, active-model mutation routes, tabulation routes/artifacts, and `glm_prediction` / `glm_prediction_rate` / `glm_tabulated_prediction` data-source publishing.
 - GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, live job progress, active-model feature/parameter refresh, model data-source publishing, Gain ordering, SHAP row limits, SHAP plot aggregation routes, tree summary/detail routes, and chart/map use of prediction sources.
 - Browser smoke behavior for loading profile, chart, histogram, map, and GBM tools without unexpected extra API requests, stale active-model state, or leaked cross-tool focus/listener side effects, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.

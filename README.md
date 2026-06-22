@@ -99,6 +99,14 @@ Run your own data:
 ```bash
 .venv/bin/lucidum path/to/my_data.parquet --port 8000
 .venv/bin/lucidum path/to/my_data.csv --port 8000
+.venv/bin/lucidum path/to/monthly_parquets/ --port 8000
+```
+
+From a source checkout, `datasets/monthly/` contains a seven-file monthly split
+of the demo data that exercises folder input:
+
+```bash
+.venv/bin/lucidum datasets/monthly --port 8000
 ```
 
 If installed with `pipx`, use:
@@ -114,6 +122,12 @@ Use `--tools all` after installing the needed modelling extras when you want to
 load every available tool, including GLM and GBM.
 
 Parquet is recommended for normal use because DuckDB can read it efficiently.
+You can also pass a folder containing direct-child `.parquet` files. Lucidum
+reads those files as one dataset when every file has identical column names and
+DuckDB types. Non-Parquet files and nested folders are ignored. Folder inputs
+are available only when GLM and GBM are not enabled; use a single Parquet file
+for modelling tools. The app header displays folder inputs with their file
+count, for example `monthly (7 files)`.
 
 ## Dataset Workspaces
 
@@ -125,7 +139,7 @@ Lucidum stores model sidecars beside the data folder under a hidden dataset-scop
 
 The dataset slug comes from the CSV or Parquet filename. The dataset signature is based on the file size, modification time, row count, and schema fingerprint. This means one folder can safely contain many datasets: models trained for one file do not attach to another file in the same folder.
 
-If a dataset file is replaced or edited, it gets a new signature workspace. Existing GLM/GBM models from the previous version remain on disk but are not shown or used; rebuild models after changing the source file. Older root-level `.lucidum/models/` folders are ignored by current Lucidum versions.
+If a dataset file is replaced or edited, it gets a new signature workspace. Existing GLM/GBM models from the previous version remain on disk but are not shown or used; rebuild models after changing the source file. Older root-level `.lucidum/models/` folders are ignored by current Lucidum versions. Parquet folder inputs do not create or read GLM/GBM workspaces because modelling tools require a single source Parquet.
 
 ## Common Options
 
@@ -182,6 +196,7 @@ import py_lucidum
 
 py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
 py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
+py_lucidum.serve("path/to/monthly_parquets/", port=8000, open_browser=True)
 ```
 
 In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.

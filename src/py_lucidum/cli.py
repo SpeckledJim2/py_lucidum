@@ -391,9 +391,15 @@ def features_status(app: object) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Launch py_lucidum for a local CSV, Parquet, or bundled demo file.")
+    parser = argparse.ArgumentParser(
+        description="Launch py_lucidum for a local CSV file, Parquet file, Parquet folder, or bundled demo file."
+    )
     parser.add_argument("--version", action="version", version=f"lucidum {__version__}")
-    parser.add_argument("path", nargs="?", help="Path to a CSV or Parquet file")
+    parser.add_argument(
+        "path",
+        nargs="?",
+        help="Path to a CSV file, Parquet file, or folder of same-schema Parquet files",
+    )
     parser.add_argument("--demo", action="store_true", help="Launch the bundled motor_premiums.parquet demo dataset")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host, e.g. 127.0.0.1 or 0.0.0.0")
     parser.add_argument("--port", type=int, default=None, help="Bind port. Defaults to a free local port.")

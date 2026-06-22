@@ -8,7 +8,7 @@ It should be optional and the libraries it uses should only be loaded if the too
 
 ## Goal
 
-The GBM tool allows the user to build a LightGBM using selected columns from the provided .parquet or .csv dataset.
+The GBM tool allows the user to build a LightGBM using selected columns from the provided .parquet or .csv dataset. Parquet-folder inputs are intentionally unsupported for GBM because prediction, generated-sample, SHAP, and tabulation sidecars are scoped to one source file.
 
 It creates the model predictions, which can then be viewed in the Line and Bar chart or the Maps, as well as a range of diagnostics that can be viewed in the tool - described below.
 

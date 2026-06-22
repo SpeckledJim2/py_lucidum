@@ -3186,6 +3186,8 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         js = self.app_js_contract()
 
         self.assertIn("function formatFileSize(value)", js)
+        self.assertIn('state.schema?.source_kind === "parquet_folder"', js)
+        self.assertIn('path = `${path} (${fileCount.toLocaleString()} ${fileCount === 1 ? "file" : "files"})`;', js)
         self.assertIn("const size = bytes / divisor;", js)
         self.assertIn('return `${(bytes > 0 ? Math.max(0.1, size) : 0).toFixed(1)}${suffix}`;', js)
         self.assertNotIn("Math.round(bytes / divisor)", js)

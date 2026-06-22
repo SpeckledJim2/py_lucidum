@@ -150,6 +150,12 @@ def create_app(
     no_features: bool = False,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
+    resolved_dataset_path = Path(dataset_path).expanduser().resolve()
+    if resolved_dataset_path.is_dir() and any(tool_id in enabled_tools for tool_id in ("glm", "gbm")):
+        raise ValueError(
+            "Parquet folder inputs are not supported with GLM or GBM. "
+            "Use a single Parquet file or deselect GLM/GBM."
+        )
     allow_missing_spec_paths = "specs" in enabled_tools
     if kpis and kpis_path and Path(kpis).expanduser() != Path(kpis_path).expanduser():
         raise ValueError("Specify either kpis or kpis_path, not both")
@@ -159,7 +165,7 @@ def create_app(
     kpis_enabled = use_kpis and not no_kpis
     selected_features_path = features_path or features
     features_enabled = use_features and not no_features
-    dataset = Dataset(dataset_path)
+    dataset = Dataset(resolved_dataset_path)
     app = FastAPI(title="py_lucidum")
     app.state.dataset = dataset
     app.state.telemetry = TelemetryStore()
