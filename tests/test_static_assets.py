@@ -3943,6 +3943,7 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
     def test_line_bar_toolbar_shared_controls_precede_type_specific_controls(self) -> None:
         _, html_body = self.assert_no_store("/")
         html = html_body.decode("utf-8")
+        js = self.app_js_contract()
         shared_controls = [
             "<h3>Group low weights</h3>",
             "<h3>Labels</h3>",
@@ -3957,6 +3958,13 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
             'id="quantileControl"',
         ]
 
+        self.assertIn('id="partialDependenceControl" class="control hidden"', html)
+        self.assertIn('id="responseTransformControl" class="control hidden"', html)
+        self.assertIn('id="sigmaControl" class="control hidden"', html)
+        self.assertIn('const modelControlsAvailable = toolEnabled("gbm") || toolEnabled("glm");', js)
+        self.assertIn('el("partialDependenceControl").classList.toggle("hidden", !modelControlsAvailable);', js)
+        self.assertIn('el("responseTransformControl").classList.toggle("hidden", !modelControlsAvailable);', js)
+        self.assertIn('el("sigmaControl").classList.toggle("hidden", !hasExpected);', js)
         for before, after in zip(shared_controls, shared_controls[1:]):
             self.assertLess(html.index(before), html.index(after))
         for shared_control in shared_controls:

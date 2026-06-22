@@ -422,7 +422,11 @@ export function createLineBarTool({
     const isNumeric = isNumericKind(kind);
     const isCategorical = kind === "categorical";
     const hasExpected = Boolean(el("expectedNumerator").value);
+    const modelControlsAvailable = toolEnabled("gbm") || toolEnabled("glm");
     const shapSortAvailable = isCategorical && shapPartialDependenceVisible() && shapOverlayAvailableForSelectedColumn();
+    el("partialDependenceControl").classList.toggle("hidden", !modelControlsAvailable);
+    el("responseTransformControl").classList.toggle("hidden", !modelControlsAvailable);
+    el("sigmaControl").classList.toggle("hidden", !hasExpected);
     el("sortControl").classList.toggle("hidden", !isCategorical);
     el("expectedSortButton").classList.toggle("hidden", !hasExpected);
     el("shapSortButton")?.classList.toggle("hidden", !shapSortAvailable);
