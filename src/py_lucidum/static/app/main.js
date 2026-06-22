@@ -67,7 +67,7 @@
         histogramLogScale: "none",
         histogramSampleMode: "100k",
         source: locationParams.get("source") || "dataset",
-        tool: "dataset_viewer",
+        tool: "",
         view: "chart",
         mapLevel: "area",
         baseMap: "blank",
