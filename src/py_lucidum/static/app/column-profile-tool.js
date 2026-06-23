@@ -138,32 +138,51 @@ export function createColumnProfileTool({
     `).join("");
     const empty = profileTableEmptyHtml(columns, visibleColumns);
     const currentDetail = el("profileDetailPane")?.innerHTML || profileDetailEmptyHtml("Select a column to view details.");
+    const profileGroupMeta = document.getElementById("profileGroupMeta");
+    const profileFilter = document.getElementById("profileFilter");
+    profileGroupMeta?.remove();
+    profileFilter?.remove();
     el("profileWrap").innerHTML = `
-      <div class="profile-summary-pane">
+      <div class="profile-toolbar">
         ${profileSummaryActionsHtml(data)}
         <div class="profile-column-search-row">
           <input id="profileColumnSearch" class="search profile-column-search" type="search" placeholder="Search columns" aria-label="Search profile columns" autocomplete="off" value="${escapeHtml(state.profileColumnSearch || "")}" />
         </div>
-        <div class="profile-table-scroll">
-          <table class="profile-table">
-            <thead>
-              <tr>
-                ${profileSortHeaderHtml("name", "Column")}
-                ${profileSortHeaderHtml("type", "Type")}
-                ${profileSortHeaderHtml("missing", "Missing")}
-                ${profileSortHeaderHtml("distinct", "Distinct")}
-                <th>Min / Max</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-        ${empty}
+        <div id="profileMeta" class="profile-meta"></div>
       </div>
-      <aside id="profileDetailPane" class="profile-detail-pane" aria-live="polite">${currentDetail}</aside>
+      <div class="profile-content">
+        <div class="profile-summary-pane">
+          <div class="profile-table-scroll">
+            <table class="profile-table">
+              <thead>
+                <tr>
+                  ${profileSortHeaderHtml("name", "Column")}
+                  ${profileSortHeaderHtml("type", "Type")}
+                  ${profileSortHeaderHtml("missing", "Missing")}
+                  ${profileSortHeaderHtml("distinct", "Distinct")}
+                  <th>Min / Max</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          ${empty}
+        </div>
+        <aside id="profileDetailPane" class="profile-detail-pane" aria-live="polite">${currentDetail}</aside>
+      </div>
     `;
+    attachProfileMeta(profileGroupMeta, profileFilter);
     bindProfileTable();
     restoreProfileTableScroll(tableScroll);
+  }
+
+  function attachProfileMeta(profileGroupMeta = null, profileFilter = null) {
+    const meta = document.getElementById("profileMeta");
+    const groupMeta = profileGroupMeta || document.getElementById("profileGroupMeta");
+    const filter = profileFilter || document.getElementById("profileFilter");
+    if (!meta || !groupMeta || !filter) return;
+    if (groupMeta.parentElement !== meta) meta.append(groupMeta);
+    if (filter.parentElement !== meta) meta.append(filter);
   }
 
   function captureProfileTableScroll() {

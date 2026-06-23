@@ -5853,6 +5853,15 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                dataset_viewer_meta_position = page.evaluate(
+                    """
+                    () => {
+                      const rect = document.querySelector("#datasetViewerMeta")?.getBoundingClientRect();
+                      return rect ? { top: rect.top, rightOffset: window.innerWidth - rect.right } : null;
+                    }
+                    """
+                )
+                self.assertIsNotNone(dataset_viewer_meta_position)
                 page.wait_for_function(
                     """
                     () => document.querySelector("#filterRowMeta")?.textContent.trim() === "4 rows"
@@ -6419,6 +6428,29 @@ COPY (
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 assert_dataset_viewer_hidden()
                 assert_profile_table_unoccluded()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const toolbar = document.querySelector(".profile-toolbar");
+                      const meta = document.querySelector("#profileMeta");
+                      const group = document.querySelector("#profileGroupMeta");
+                      const filter = document.querySelector("#profileFilter");
+                      return Boolean(toolbar && meta && toolbar.contains(meta) && meta.contains(group) && meta.contains(filter));
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                profile_meta_position = page.evaluate(
+                    """
+                    () => {
+                      const rect = document.querySelector("#profileMeta")?.getBoundingClientRect();
+                      return rect ? { top: rect.top, rightOffset: window.innerWidth - rect.right } : null;
+                    }
+                    """
+                )
+                self.assertIsNotNone(profile_meta_position)
+                self.assertAlmostEqual(profile_meta_position["top"], dataset_viewer_meta_position["top"], delta=1)
+                self.assertAlmostEqual(profile_meta_position["rightOffset"], dataset_viewer_meta_position["rightOffset"], delta=1)
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")

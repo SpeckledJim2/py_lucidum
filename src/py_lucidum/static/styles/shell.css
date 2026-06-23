@@ -422,11 +422,13 @@
         max-width: min(860px, calc(100% - 150px));
       }
 
-      .visual-area.dataset-viewer-mode {
+      .visual-area.dataset-viewer-mode,
+      .visual-area.profile-mode {
         grid-template-columns: minmax(0, 1fr);
       }
 
-      .visual-area.dataset-viewer-mode .workspace {
+      .visual-area.dataset-viewer-mode .workspace,
+      .visual-area.profile-mode .workspace {
         background: transparent;
         border: 0;
         border-radius: 0;
@@ -434,7 +436,8 @@
         padding: 0;
       }
 
-      .visual-area.dataset-viewer-mode .workspace-messages {
+      .visual-area.dataset-viewer-mode .workspace-messages,
+      .visual-area.profile-mode .workspace-messages {
         display: none;
       }
 
