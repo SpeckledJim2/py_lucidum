@@ -6001,23 +6001,143 @@ COPY (
                     """
                 )
                 page.locator("#datasetViewerGrid .tabulator-row").nth(0).click()
+                page.locator("#datasetViewerGrid").click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy row to clipboard").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy row to clipboard").click()
+                page.wait_for_function(
+                    """
+                    () => (window.__lucidumCopiedText || '') === [
+                      'PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long',
+                      'AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1',
+                    ].join('\\n')
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#datasetViewerGrid .tabulator-row").nth(1).click()
-                page.locator("#datasetViewerCopySelected").get_by_text("Copy selected (2)").wait_for(timeout=10_000)
-                page.locator("#datasetViewerCopySelected").click()
-                page.wait_for_function("() => (window.__lucidumCopiedText || '').includes('PostcodeArea')")
-                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]').click()
-                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]').click()
+                page.locator("#datasetViewerGrid").click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy rows to clipboard").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy rows to clipboard").click()
                 page.wait_for_function(
                     """
-                    () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AL'
-                    """
+                    () => (window.__lucidumCopiedText || '') === [
+                      'PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long',
+                      'AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1',
+                      'AB,AB10 1,2,200,20,AB10 1AB,57.2,-2.2',
+                    ].join('\\n')
+                    """,
+                    timeout=10_000,
                 )
-                page.locator("#datasetViewerResetSort").click()
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .dataset-viewer-header-label').click()
                 page.wait_for_function(
                     """
-                    () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
-                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .tabulator-row.tabulator-selected').length === 0
+                      && document.querySelectorAll('#datasetViewerGrid .dataset-viewer-column-selected').length > 0
+                    """,
+                    timeout=10_000,
                 )
+                page.locator("#datasetViewerGrid").click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy column to clipboard").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy column to clipboard").click()
+                page.wait_for_function(
+                    """
+                    () => (window.__lucidumCopiedText || '') === [
+                      'PostcodeArea',
+                      'AB',
+                      'AB',
+                      'AL',
+                      'AL',
+                    ].join('\\n')
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .dataset-viewer-header-label').click()
+                page.locator("#datasetViewerGrid").click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy columns to clipboard").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy columns to clipboard").click()
+                page.wait_for_function(
+                    """
+                    () => (window.__lucidumCopiedText || '') === [
+                      'PostcodeArea,vehicle_age',
+                      'AB,1',
+                      'AB,2',
+                      'AL,3',
+                      'AL,4',
+                    ].join('\\n')
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid .tabulator-row").nth(0).click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .tabulator-row.tabulator-selected').length === 1
+                      && document.querySelectorAll('#datasetViewerGrid .dataset-viewer-column-selected').length === 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .dataset-viewer-header-label').click()
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .dataset-viewer-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]')?.getAttribute('aria-sort') === 'none'
+                      && document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
+                      && document.querySelectorAll('#datasetViewerGrid .dataset-viewer-column-selected').length > 0
+                    """,
+                    timeout=10_000,
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const header = document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]');
+                      const title = header?.querySelector('.tabulator-col-title');
+                      const sorter = header?.querySelector('.tabulator-col-sorter');
+                      if (!title || !sorter) return false;
+                      const titleRect = title.getBoundingClientRect();
+                      const sorterRect = sorter.getBoundingClientRect();
+                      const titleCenter = titleRect.top + titleRect.height / 2;
+                      const sorterCenter = sorterRect.top + sorterRect.height / 2;
+                      return sorterRect.left >= titleRect.right - 1
+                        && Math.abs(sorterCenter - titleCenter) <= 2;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .tabulator-col-sorter').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]')?.getAttribute('aria-sort') === 'ascending'
+                      && document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .tabulator-col-sorter').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]')?.getAttribute('aria-sort') === 'descending'
+                      && document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AL'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .tabulator-col-sorter').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]')?.getAttribute('aria-sort') === 'none'
+                      && document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .dataset-viewer-header-label').click()
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .dataset-viewer-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .tabulator-row.tabulator-selected').length === 0
+                      && document.querySelectorAll('#datasetViewerGrid .dataset-viewer-column-selected').length === 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c5"]').first.click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy to clipboard").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy to clipboard").click()
+                page.wait_for_function("() => window.__lucidumCopiedText === 'AB10 1AA'", timeout=10_000)
                 page.locator("#datasetViewerSearch").fill("AL1 2AA")
                 page.wait_for_function(
                     """
@@ -6035,6 +6155,15 @@ COPY (
                       const rows = [...document.querySelectorAll('#datasetViewerGrid .tabulator-row')].filter((row) => row.offsetParent !== null);
                       return search?.value === '' && rows.length >= 4;
                     }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .dataset-viewer-header-label').click()
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .dataset-viewer-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .dataset-viewer-column-selected').length > 0
+                      && document.querySelectorAll('#datasetViewerGrid .tabulator-row.tabulator-selected').length === 0
                     """,
                     timeout=10_000,
                 )
@@ -6062,11 +6191,112 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const selectedRows = [...document.querySelectorAll('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr.tabulator-selected')]
+                        .map((row) => row.cells[0]?.textContent.trim());
+                      return selectedRows.length === 2
+                        && selectedRows.includes('PostcodeArea')
+                        && selectedRows.includes('vehicle_age');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="r0"] .dataset-viewer-transposed-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr.tabulator-selected').length === 0
+                      && document.querySelectorAll('#datasetViewerGrid .dataset-viewer-transposed-table td.dataset-viewer-transposed-column-selected').length > 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid").click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy row to clipboard").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy row to clipboard").click()
+                page.wait_for_function(
+                    """
+                    () => (window.__lucidumCopiedText || '') === [
+                      'lat,long,PostcodeArea,PostcodeSector,PostcodeUnit,price,value,vehicle_age',
+                      '57.1,-2.1,AB,AB10 1,AB10 1AA,100,10,1',
+                    ].join('\\n')
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="r1"] .dataset-viewer-transposed-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .dataset-viewer-transposed-table td.dataset-viewer-transposed-column-selected').length > 1
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid").click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy rows to clipboard").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy rows to clipboard").click()
+                page.wait_for_function(
+                    """
+                    () => (window.__lucidumCopiedText || '') === [
+                      'lat,long,PostcodeArea,PostcodeSector,PostcodeUnit,price,value,vehicle_age',
+                      '57.1,-2.1,AB,AB10 1,AB10 1AA,100,10,1',
+                      '57.2,-2.2,AB,AB10 1,AB10 1AB,200,20,2',
+                    ].join('\\n')
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="r1"] .dataset-viewer-transposed-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .dataset-viewer-transposed-table td.dataset-viewer-transposed-column-selected').length > 0
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#datasetViewerAlphabeticalColumns").uncheck()
                 page.wait_for_function(
                     """
                     () => document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr:first-child td:first-child')?.textContent.trim() === 'PostcodeArea'
                     """
+                )
+                page.locator('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="__field"] .dataset-viewer-transposed-sort-button').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr:first-child td:first-child')?.textContent.trim() === 'lat'
+                      && document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === 'asc'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="__field"] .dataset-viewer-transposed-sort-button').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr:first-child td:first-child')?.textContent.trim() === 'vehicle_age'
+                      && document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === 'desc'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="__field"] .dataset-viewer-transposed-sort-button').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table tbody tr:first-child td:first-child')?.textContent.trim() === 'PostcodeArea'
+                      && document.querySelector('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === 'none'
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="r0"] .dataset-viewer-transposed-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .dataset-viewer-transposed-table td.dataset-viewer-transposed-column-selected').length === 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid .dataset-viewer-transposed-table tbody tr").first.locator("td").nth(1).click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy to clipboard").wait_for(timeout=10_000)
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy to clipboard").click()
+                page.wait_for_function("() => window.__lucidumCopiedText === 'AB'", timeout=10_000)
+                page.locator('#datasetViewerGrid .dataset-viewer-transposed-table thead th[data-dataset-viewer-transposed-field="r0"] .dataset-viewer-transposed-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .dataset-viewer-transposed-table td.dataset-viewer-transposed-column-selected').length > 0
+                    """,
+                    timeout=10_000,
                 )
                 page.locator("#datasetViewerGrid .dataset-viewer-transposed-table tbody tr").nth(0).hover()
                 page.wait_for_function(
@@ -6122,6 +6352,13 @@ COPY (
                     """
                     () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
                     """
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll('#datasetViewerGrid .tabulator-row.tabulator-selected').length === 1
+                      && document.querySelector('#datasetViewerGrid .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field="c5"]')?.textContent.trim() === 'AB10 1AA'
+                    """,
+                    timeout=10_000,
                 )
                 page.wait_for_function(
                     """
