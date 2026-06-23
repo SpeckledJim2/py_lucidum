@@ -1320,7 +1320,7 @@ export function createLineBarTool({
     const textStyle = { color: getCss("--text"), fontWeight: 700, fontSize: 13 };
     const overlayTextStyle = { color: getCss("--text"), fontWeight: 400, fontSize: 11 };
     const mainLegend = {
-      top: 0,
+      top: -4,
       data: legendData,
       selected: mainLegendSelection,
       textStyle,
@@ -1329,7 +1329,7 @@ export function createLineBarTool({
     return [
       mainLegend,
       {
-        top: 26,
+        top: 22,
         left: "center",
         type: "scroll",
         data: overlayLegendData,
