@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 import duckdb
@@ -30,6 +29,15 @@ class DemoDatasetTests(unittest.TestCase):
         files_mock.assert_called_once_with("py_lucidum")
         self.assertEqual(resource.parts, ("datasets", demo_module.DEMO_DATASET_NAME))
 
+    def test_demo_spec_resource_uses_multi_argument_joinpath(self) -> None:
+        root = SingleChildTraversable()
+
+        with patch("py_lucidum.demo.resources.files", return_value=root) as files_mock:
+            resource = demo_module._demo_spec_resource(demo_module.DEMO_FILTER_SPEC_NAME)
+
+        files_mock.assert_called_once_with("py_lucidum")
+        self.assertEqual(resource.parts, ("specs", demo_module.DEMO_FILTER_SPEC_NAME))
+
     def test_demo_dataset_path_exists_and_has_expected_columns(self) -> None:
         path = py_lucidum.demo_dataset_path()
         con = duckdb.connect(database=":memory:")
@@ -52,9 +60,19 @@ class DemoDatasetTests(unittest.TestCase):
         )
         self.assertEqual(sample_counts, {"training": 30000, "test": 10000, "validation": 10000})
 
+    def test_demo_spec_paths_exist_with_expected_names(self) -> None:
+        paths = demo_module.demo_spec_paths()
+
+        self.assertEqual(set(paths), {"filters", "kpis", "features"})
+        self.assertEqual(paths["filters"].name, demo_module.DEMO_FILTER_SPEC_NAME)
+        self.assertEqual(paths["kpis"].name, demo_module.DEMO_KPI_SPEC_NAME)
+        self.assertEqual(paths["features"].name, demo_module.DEMO_FEATURE_SPEC_NAME)
+        for path in paths.values():
+            self.assertTrue(path.exists())
+
     def test_default_filter_spec_expressions_validate_against_demo_dataset(self) -> None:
         dataset = Dataset(py_lucidum.demo_dataset_path())
-        filters_path = Path(__file__).parents[1] / "specs" / "filter_spec.csv"
+        filters_path = demo_module.demo_filter_spec_path()
 
         with filters_path.open(newline="", encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle)
@@ -77,7 +95,7 @@ class DemoDatasetTests(unittest.TestCase):
         dataset = Dataset(py_lucidum.demo_dataset_path())
         schema = dataset.schema()
         numeric_columns = {column["name"] for column in schema["columns"] if column["kind"] in {"integer", "numeric"}}
-        kpis_path = Path(__file__).parents[1] / "specs" / "kpi_spec.csv"
+        kpis_path = demo_module.demo_kpi_spec_path()
 
         with kpis_path.open(newline="", encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle)
@@ -99,7 +117,7 @@ class DemoDatasetTests(unittest.TestCase):
         dataset = Dataset(py_lucidum.demo_dataset_path())
         schema = dataset.schema()
         dataset_columns = {column["name"] for column in schema["columns"]}
-        features_path = Path(__file__).parents[1] / "specs" / "feature_spec.csv"
+        features_path = demo_module.demo_feature_spec_path()
 
         with features_path.open(newline="", encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle)

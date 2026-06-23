@@ -16,7 +16,7 @@ import uvicorn
 from ._version import __version__
 from .app import create_app
 from .app.servers import safe_display_url
-from .demo import demo_dataset_path
+from .demo import demo_dataset_path, demo_feature_spec_path, demo_filter_spec_path, demo_kpi_spec_path
 
 
 DEFAULT_URL_KEYS = {
@@ -30,6 +30,12 @@ DEFAULT_URL_KEYS = {
     "latitude",
     "longitude",
     "source",
+}
+
+DEFAULT_SPEC_CANDIDATES = {
+    "filters": ("filter_spec.csv", "specs/filter_spec.csv"),
+    "kpis": ("kpi_spec.csv", "specs/kpi_spec.csv"),
+    "features": ("feature_spec.csv", "specs/feature_spec.csv"),
 }
 
 
@@ -144,6 +150,21 @@ def _detect_primary_lan_ipv4() -> str | None:
 def _display_url_for_app(app: object, host: str, port: int) -> str:
     display_host = "127.0.0.1" if _is_wildcard_host(host) else host
     return _url_for_app(app, display_host, port)
+
+
+def _has_default_spec(kind: str) -> bool:
+    return any((Path.cwd() / candidate).exists() for candidate in DEFAULT_SPEC_CANDIDATES[kind])
+
+
+def _demo_spec_defaults(args: argparse.Namespace) -> dict[str, Path]:
+    defaults: dict[str, Path] = {}
+    if args.filters is None and not args.no_filters and not _has_default_spec("filters"):
+        defaults["filters"] = demo_filter_spec_path()
+    if args.kpis is None and not args.no_kpis and not _has_default_spec("kpis"):
+        defaults["kpis"] = demo_kpi_spec_path()
+    if args.features is None and not args.no_features and not _has_default_spec("features"):
+        defaults["features"] = demo_feature_spec_path()
+    return defaults
 
 
 def _lan_url_hint_for_app(app: object, host: str, port: int) -> str | None:
@@ -470,6 +491,7 @@ def main() -> int:
     if not args.demo and not args.path:
         parser.error("the following arguments are required: path or --demo")
     path = demo_dataset_path() if args.demo else args.path
+    demo_spec_defaults = _demo_spec_defaults(args) if args.demo else {}
     try:
         serve(
             path=path,
@@ -486,11 +508,11 @@ def main() -> int:
             postcode_unit=args.postcode_unit,
             latitude=args.latitude,
             longitude=args.longitude,
-            filters=args.filters,
+            filters=args.filters if args.filters is not None else demo_spec_defaults.get("filters"),
             no_filters=args.no_filters,
-            kpis=args.kpis,
+            kpis=args.kpis if args.kpis is not None else demo_spec_defaults.get("kpis"),
             no_kpis=args.no_kpis,
-            features=args.features,
+            features=args.features if args.features is not None else demo_spec_defaults.get("features"),
             no_features=args.no_features,
             tools=args.tools,
             buttons=args.buttons,

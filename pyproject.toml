@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "py-lucidum"
-version = "0.2.13"
+version = "0.2.14"
 description = "Interactive data exploration workbench for local CSV files, Parquet files, and same-schema Parquet folders."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -44,4 +44,7 @@ packages = ["src/py_lucidum"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "datasets/motor_premiums.parquet" = "py_lucidum/datasets/motor_premiums.parquet"
+"specs/filter_spec.csv" = "py_lucidum/specs/filter_spec.csv"
+"specs/kpi_spec.csv" = "py_lucidum/specs/kpi_spec.csv"
+"specs/feature_spec.csv" = "py_lucidum/specs/feature_spec.csv"
 "favicon.ico" = "py_lucidum/static/favicon.ico"

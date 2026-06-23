@@ -130,6 +130,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - CLI options, programmatic defaults, and URL parameters can override initial selections.
 - Line/Bar feature and Expected picker lists default to A-Z ordering. The Expected picker section starts collapsed on every app launch and can be reopened for the current browser session with the splitter chevron; its open/closed state is not persisted.
 - Saved filters load from an explicit `--filters` path, otherwise `./filter_spec.csv`, otherwise `./specs/filter_spec.csv`.
+- `lucidum --demo` falls back to packaged demo filter, KPI, and feature specs when a spec kind has no explicit path, no `--no-*` flag, and no current-working-directory default spec file.
 - Saved-filter CSV files must have exactly `theme,name,expression` columns. CSV order controls theme order and row order.
 - KPI specs load from an explicit `--kpis` path, otherwise `./kpi_spec.csv`, otherwise `./specs/kpi_spec.csv`.
 - KPI spec CSV files must have exactly `group,name,actual,denominator,decimals,format` columns. `denominator` aliases `N`, `Average row value`, empty, and `__none__` all mean average row value; `format` is `number`, `currency`, or `percent`. Percent formatting displays proportions as percentages, so `0.1` displays as `10%`.

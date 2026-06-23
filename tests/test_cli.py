@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import socket
 import threading
 from contextlib import redirect_stderr, redirect_stdout
@@ -528,6 +529,126 @@ class CliRuntimeTests(unittest.TestCase):
         demo_path_mock.assert_called_once_with()
         self.assertEqual(serve_mock.call_args.kwargs["path"], demo_path)
         self.assertEqual(serve_mock.call_args.kwargs["port"], 8050)
+
+    def test_main_demo_uses_bundled_specs_when_no_local_defaults_exist(self) -> None:
+        demo_path = Path("/tmp/py-lucidum-demo.parquet")
+        filters_path = Path("/tmp/py-lucidum-filter-spec.csv")
+        kpis_path = Path("/tmp/py-lucidum-kpi-spec.csv")
+        features_path = Path("/tmp/py-lucidum-feature-spec.csv")
+
+        with TemporaryDirectory() as tmp_dir:
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(tmp_dir)
+                with (
+                    patch("sys.argv", ["lucidum", "--demo"]),
+                    patch("py_lucidum.cli.demo_dataset_path", return_value=demo_path),
+                    patch("py_lucidum.cli.demo_filter_spec_path", return_value=filters_path) as filters_mock,
+                    patch("py_lucidum.cli.demo_kpi_spec_path", return_value=kpis_path) as kpis_mock,
+                    patch("py_lucidum.cli.demo_feature_spec_path", return_value=features_path) as features_mock,
+                    patch("py_lucidum.cli.serve", return_value="http://127.0.0.1:8000/") as serve_mock,
+                ):
+                    result = main()
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(result, 0)
+        filters_mock.assert_called_once_with()
+        kpis_mock.assert_called_once_with()
+        features_mock.assert_called_once_with()
+        self.assertEqual(serve_mock.call_args.kwargs["path"], demo_path)
+        self.assertEqual(serve_mock.call_args.kwargs["filters"], filters_path)
+        self.assertEqual(serve_mock.call_args.kwargs["kpis"], kpis_path)
+        self.assertEqual(serve_mock.call_args.kwargs["features"], features_path)
+
+    def test_main_demo_keeps_local_default_specs_discoverable(self) -> None:
+        demo_path = Path("/tmp/py-lucidum-demo.parquet")
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            specs_dir = root / "specs"
+            specs_dir.mkdir()
+            (specs_dir / "filter_spec.csv").write_text("theme,name,expression\n", encoding="utf-8")
+            (specs_dir / "kpi_spec.csv").write_text("group,name,actual,denominator,decimals,format\n", encoding="utf-8")
+            (specs_dir / "feature_spec.csv").write_text("Feature,Grouping\n", encoding="utf-8")
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with (
+                    patch("sys.argv", ["lucidum", "--demo"]),
+                    patch("py_lucidum.cli.demo_dataset_path", return_value=demo_path),
+                    patch("py_lucidum.cli.demo_filter_spec_path", side_effect=AssertionError("unexpected filter spec default")),
+                    patch("py_lucidum.cli.demo_kpi_spec_path", side_effect=AssertionError("unexpected kpi spec default")),
+                    patch("py_lucidum.cli.demo_feature_spec_path", side_effect=AssertionError("unexpected feature spec default")),
+                    patch("py_lucidum.cli.serve", return_value="http://127.0.0.1:8000/") as serve_mock,
+                ):
+                    result = main()
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(result, 0)
+        self.assertIsNone(serve_mock.call_args.kwargs["filters"])
+        self.assertIsNone(serve_mock.call_args.kwargs["kpis"])
+        self.assertIsNone(serve_mock.call_args.kwargs["features"])
+
+    def test_main_demo_does_not_override_explicit_or_disabled_specs(self) -> None:
+        demo_path = Path("/tmp/py-lucidum-demo.parquet")
+        cases = [
+            (
+                "explicit",
+                [
+                    "lucidum",
+                    "--demo",
+                    "--filters",
+                    "custom_filter_spec.csv",
+                    "--kpis",
+                    "custom_kpi_spec.csv",
+                    "--features",
+                    "custom_feature_spec.csv",
+                ],
+                {
+                    "filters": "custom_filter_spec.csv",
+                    "kpis": "custom_kpi_spec.csv",
+                    "features": "custom_feature_spec.csv",
+                    "no_filters": False,
+                    "no_kpis": False,
+                    "no_features": False,
+                },
+            ),
+            (
+                "disabled",
+                ["lucidum", "--demo", "--no-filters", "--no-kpis", "--no-features"],
+                {
+                    "filters": None,
+                    "kpis": None,
+                    "features": None,
+                    "no_filters": True,
+                    "no_kpis": True,
+                    "no_features": True,
+                },
+            ),
+        ]
+
+        for name, argv, expected in cases:
+            with self.subTest(name=name), TemporaryDirectory() as tmp_dir:
+                original_cwd = Path.cwd()
+                try:
+                    os.chdir(tmp_dir)
+                    with (
+                        patch("sys.argv", argv),
+                        patch("py_lucidum.cli.demo_dataset_path", return_value=demo_path),
+                        patch("py_lucidum.cli.demo_filter_spec_path", side_effect=AssertionError("unexpected filter spec default")),
+                        patch("py_lucidum.cli.demo_kpi_spec_path", side_effect=AssertionError("unexpected kpi spec default")),
+                        patch("py_lucidum.cli.demo_feature_spec_path", side_effect=AssertionError("unexpected feature spec default")),
+                        patch("py_lucidum.cli.serve", return_value="http://127.0.0.1:8000/") as serve_mock,
+                    ):
+                        result = main()
+                finally:
+                    os.chdir(original_cwd)
+
+            self.assertEqual(result, 0)
+            for key, value in expected.items():
+                self.assertEqual(serve_mock.call_args.kwargs[key], value)
 
     def test_readme_quick_start_and_common_option_launches_are_wired(self) -> None:
         demo_path = Path("/tmp/py-lucidum-demo.parquet")
