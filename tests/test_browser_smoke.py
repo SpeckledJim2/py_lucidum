@@ -4215,10 +4215,17 @@ COPY (
                     timeout=10_000,
                 )
 
+                if page.evaluate("() => document.body.classList.contains('dark')"):
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
+
                 page.get_by_role("button", name="Tabulations").click()
                 page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
+                if not page.locator("#glmTabulationColor").is_checked():
+                    page.locator("#glmTabulationColor").check()
+                    page.locator("#glmTabulationTable .glm-tabulation-colour-cell").first.wait_for(timeout=10_000)
                 page.locator('[data-glm-tabulation-scale="exp"]').click()
                 page.wait_for_function(
                     """
@@ -4230,6 +4237,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.locator("#glmTabulationTable .glm-tabulation-colour-cell").first.wait_for(timeout=10_000)
                 tabulation_single_state = page.evaluate(
                     """
                     () => {
@@ -4317,6 +4325,100 @@ COPY (
                 self.assertTrue(tabulation_single_state["diagnosticsHidden"])
                 self.assertLess(tabulation_single_state["splitDelta"], 36)
                 self.assertIn("Age", tabulation_single_state["resultHeaders"])
+
+                tabulation_light_colour = page.evaluate(
+                    """
+                    () => {
+                      const parseColor = (value) => {
+                        const text = String(value || "").trim();
+                        const rgb = text.match(/^rgba?\\(([^)]+)\\)$/i);
+                        if (rgb) {
+                          return rgb[1].replace(/\\//g, " ").split(/[\\s,]+/).filter(Boolean).slice(0, 3).map(Number);
+                        }
+                        const srgb = text.match(/^color\\(srgb\\s+([0-9.]+)\\s+([0-9.]+)\\s+([0-9.]+)/i);
+                        if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255];
+                        return [0, 0, 0];
+                      };
+                      const relativeLuminance = (color) => {
+                        const [r, g, b] = parseColor(color).map((channel) => {
+                          const value = channel / 255;
+                          return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+                        });
+                        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                      };
+                      const contrast = (a, b) => {
+                        const first = relativeLuminance(a);
+                        const second = relativeLuminance(b);
+                        return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+                      };
+                      const cell = document.querySelector("#glmTabulationTable .glm-tabulation-colour-cell");
+                      const styles = cell ? getComputedStyle(cell) : null;
+                      return {
+                        dark: document.body.classList.contains("dark"),
+                        background: styles?.backgroundColor || "",
+                        color: styles?.color || "",
+                        contrast: styles ? contrast(styles.color, styles.backgroundColor) : 0,
+                      };
+                    }
+                    """
+                )
+                self.assertFalse(tabulation_light_colour["dark"])
+                self.assertGreaterEqual(tabulation_light_colour["contrast"], 4.5)
+                page.locator("#themeBtn").click()
+                page.wait_for_function(
+                    """
+                    (lightBackground) => {
+                      const cell = document.querySelector("#glmTabulationTable .glm-tabulation-colour-cell");
+                      return document.body.classList.contains("dark")
+                        && cell
+                        && getComputedStyle(cell).backgroundColor !== lightBackground;
+                    }
+                    """,
+                    arg=tabulation_light_colour["background"],
+                    timeout=10_000,
+                )
+                tabulation_dark_colour = page.evaluate(
+                    """
+                    () => {
+                      const parseColor = (value) => {
+                        const text = String(value || "").trim();
+                        const rgb = text.match(/^rgba?\\(([^)]+)\\)$/i);
+                        if (rgb) {
+                          return rgb[1].replace(/\\//g, " ").split(/[\\s,]+/).filter(Boolean).slice(0, 3).map(Number);
+                        }
+                        const srgb = text.match(/^color\\(srgb\\s+([0-9.]+)\\s+([0-9.]+)\\s+([0-9.]+)/i);
+                        if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255];
+                        return [0, 0, 0];
+                      };
+                      const relativeLuminance = (color) => {
+                        const [r, g, b] = parseColor(color).map((channel) => {
+                          const value = channel / 255;
+                          return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+                        });
+                        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                      };
+                      const contrast = (a, b) => {
+                        const first = relativeLuminance(a);
+                        const second = relativeLuminance(b);
+                        return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+                      };
+                      const cell = document.querySelector("#glmTabulationTable .glm-tabulation-colour-cell");
+                      const styles = cell ? getComputedStyle(cell) : null;
+                      return {
+                        dark: document.body.classList.contains("dark"),
+                        background: styles?.backgroundColor || "",
+                        color: styles?.color || "",
+                        contrast: styles ? contrast(styles.color, styles.backgroundColor) : 0,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(tabulation_dark_colour["dark"])
+                self.assertNotEqual(tabulation_dark_colour["background"], tabulation_light_colour["background"])
+                self.assertNotEqual(tabulation_dark_colour["color"], tabulation_light_colour["color"])
+                self.assertGreaterEqual(tabulation_dark_colour["contrast"], 4.5)
+                page.locator("#themeBtn").click()
+                page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
 
                 page.locator("#glmExportTabulationsBtn").click()
                 page.locator("#glmTabulationNotice", has_text="Saved XLSX:").wait_for(timeout=10_000)

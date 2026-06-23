@@ -1610,6 +1610,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("number.toFixed(4)", glm_js)
         self.assertIn("tabulationValue ? formatTabulationValue(value) : formatModelMetric(value)", glm_js)
         self.assertIn("tabulationValue ? formatTabulationValue(value) : (numeric ? formatModelMetric(value) : value)", glm_js)
+        self.assertIn("color-mix(in srgb, hsl(${hue} 78% 50%) 28%, var(--panel))", glm_js)
+        self.assertNotIn("hsl(${hue} 78% 88%)", glm_js)
         self.run_node_script(f"""
 {self.shared_model_ui_source(["modelNumberOrNull", "formatModelMetric"])}
 function modelNumberOrNull(value) {{ return sharedModelNumberOrNull(value); }}
@@ -1618,6 +1620,12 @@ function formatModelMetric(value) {{ return sharedFormatModelMetric(value); }}
 if (formatTabulationValue(-0) !== "0") throw new Error("fixed negative zero failed");
 if (formatTabulationValue(-0.00001) !== "0") throw new Error("fixed rounded negative zero failed");
 if (formatTabulationValue(0.25) !== "0.2500") throw new Error("fixed positive value failed");
+{self.js_function_source(glm_tool_js, "tabulationCellColor")}
+const lowColour = tabulationCellColor(0, 0, 10);
+const highColour = tabulationCellColor(10, 0, 10);
+if (!lowColour.includes("color-mix(in srgb, hsl(130 78% 50%) 28%, var(--panel))")) throw new Error(`low colour failed: ${{lowColour}}`);
+if (!highColour.includes("color-mix(in srgb, hsl(0 78% 50%) 28%, var(--panel))")) throw new Error(`high colour failed: ${{highColour}}`);
+if (tabulationCellColor(1, 1, 1) !== "") throw new Error("flat colour range failed");
 """)
         self.assertIn('const statusField = String(column.status_field || `__status__${field}`);', glm_js)
         self.assertIn('glm-tabulation-colour-cell', glm_js)

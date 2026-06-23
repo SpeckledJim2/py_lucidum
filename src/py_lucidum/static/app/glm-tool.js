@@ -1844,7 +1844,7 @@ export function createGlmTool({
     if (!Number.isFinite(number) || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return "";
     const ratio = Math.max(0, Math.min(1, (number - lo) / (hi - lo)));
     const hue = 130 - ratio * 130;
-    return `hsl(${hue} 78% 88%)`;
+    return `color-mix(in srgb, hsl(${hue} 78% 50%) 28%, var(--panel))`;
   }
 
   function niceTabulationAxisStep(span) {
