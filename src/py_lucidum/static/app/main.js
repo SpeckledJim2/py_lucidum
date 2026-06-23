@@ -95,9 +95,11 @@
         collapsedSavedFilterThemes: new Set(),
         savedFilterThemesInitialised: false,
         activeFilter: "",
+        filterRowCountMeta: null,
         datasetViewerSearch: "",
         datasetViewerTranspose: false,
         datasetViewerAlphabeticalColumns: false,
+        datasetViewerColumnCount: null,
         profileSort: { key: "", direction: "asc" },
         profileColumnSearch: "",
         lineBarTableSearch: "",
@@ -216,6 +218,7 @@
                 stableRequestKey,
                 startToolTiming,
                 state,
+                syncDatasetViewerMeta,
                 syncClientTimingFromData,
                 syncDuckDbTimingFromData,
                 toolCache,
@@ -612,8 +615,22 @@
         return state.activeFilter || "no filter";
       }
 
+      function datasetViewerReadableColumnCount() {
+        const explicitCount = Number(state.datasetViewerColumnCount);
+        if (Number.isFinite(explicitCount) && explicitCount >= 0) return explicitCount;
+        const schemaCount = Number(state.schema?.columns?.length || 0);
+        return Number.isFinite(schemaCount) && schemaCount >= 0 ? schemaCount : 0;
+      }
+
+      function syncDatasetViewerMeta() {
+        const columnMeta = `${datasetViewerReadableColumnCount().toLocaleString()} columns`;
+        const rowMeta = state.filterRowCountMeta?.text || formatRowMeta(state.schema?.row_count || 0);
+        el("datasetViewerGroupMeta").textContent = [columnMeta, rowMeta].filter(Boolean).join(" · ");
+      }
+
       function syncActiveFilterLabels() {
         const label = activeFilterLabel();
+        el("datasetViewerFilter").textContent = label;
         el("profileFilter").textContent = label;
         el("lineBarFilter").textContent = label;
         el("histogramFilter").textContent = label;
@@ -628,6 +645,7 @@
       function syncActiveFilterIndicator() {
         const applied = filterIsApplied();
         el("filterRowMeta").classList.toggle("filter-row-meta--applied", applied);
+        el("datasetViewerFilter").classList.toggle("dataset-viewer-filter--applied", applied);
         el("profileFilter").classList.toggle("profile-filter--applied", applied);
         el("lineBarFilter").classList.toggle("line-bar-filter--applied", applied);
         el("histogramFilter").classList.toggle("histogram-filter--applied", applied);
@@ -637,13 +655,25 @@
 
       function setFilterRowMeta(rowCount, filteredRowCount = rowCount) {
         const meta = formatRowMeta(rowCount, filteredRowCount);
+        state.filterRowCountMeta = {
+          text: meta,
+          rowCount,
+          filteredRowCount,
+          filter: state.activeFilter || "",
+        };
         if (meta) el("filterRowMeta").textContent = meta;
         syncActiveFilterIndicator();
+        syncDatasetViewerMeta();
       }
 
       function setFilterRowMetaText(message) {
+        state.filterRowCountMeta = {
+          text: message || "",
+          filter: state.activeFilter || "",
+        };
         el("filterRowMeta").textContent = message || "";
         syncActiveFilterIndicator();
+        syncDatasetViewerMeta();
       }
 
       function cancelFilterRowCountRequests() {
@@ -1345,8 +1375,8 @@
         el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
         el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
-        el("datasetViewerGroupMeta").classList.add("hidden");
-        el("datasetViewerFilter").classList.add("hidden");
+        el("datasetViewerGroupMeta").classList.toggle("hidden", tool !== "dataset_viewer");
+        el("datasetViewerFilter").classList.toggle("hidden", tool !== "dataset_viewer");
         el("profileGroupMeta").classList.toggle("hidden", tool !== "column_profile");
         el("profileFilter").classList.toggle("hidden", tool !== "column_profile");
         el("lineBarGroupMeta").classList.toggle("hidden", tool !== "line_bar");
@@ -1362,6 +1392,7 @@
         el("modelToolWrap").classList.toggle("hidden", !isModelTool(tool));
         el("specificationsWrap").classList.toggle("hidden", tool !== "specs");
         syncActiveFilterLabels();
+        syncDatasetViewerMeta();
         syncActionTimingMonitor(tool);
         setStatus("");
         setChartMessage("");
@@ -1867,6 +1898,7 @@
         const previousExpectedIsPrediction = selectedExpectedIsPrediction();
         const previousDenominator = el("denominator").value;
         state.schema = await api("/api/schema");
+        state.datasetViewerColumnCount = null;
         renderSidebarVersion();
         const modelKind = String(options?.modelKind || "");
         if (preferredSource) state.source = preferredSource;
@@ -1910,6 +1942,7 @@
         const previousCollapsedKpiGroups = new Set(state.collapsedKpiGroups);
         const previousKpiGroupsInitialised = state.kpiGroupsInitialised;
         state.schema = await api("/api/schema");
+        state.datasetViewerColumnCount = null;
         renderSidebarVersion();
         const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
         clearToolCaches({ preserve: ["specs"] });
@@ -2813,6 +2846,7 @@
           const previousSidebarVisible = state.sidebarVisible;
           if (state.tool === "uk_map") ukMapTool.captureView("reload");
           state.schema = await api("/api/reload", { method: "POST" });
+          state.datasetViewerColumnCount = null;
           renderSidebarVersion();
           syncHeaderButtons();
           const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
@@ -2888,6 +2922,7 @@
           setStartupProgress("Requesting schema");
           startStartupTelemetryPolling("Requesting schema");
           state.schema = await api("/api/schema");
+          state.datasetViewerColumnCount = null;
           renderSidebarVersion();
           syncHeaderButtons();
           stopStartupTelemetryPolling();

@@ -5840,13 +5840,32 @@ COPY (
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
-                self.assertFalse(page.locator("#datasetViewerFilter").is_visible())
+                self.assertTrue(page.locator("#datasetViewerFilter").is_visible())
+                page.wait_for_function(
+                    """
+                    () => {
+                      const toolbar = document.querySelector(".dataset-viewer-toolbar");
+                      const meta = document.querySelector("#datasetViewerMeta");
+                      const group = document.querySelector("#datasetViewerGroupMeta");
+                      const filter = document.querySelector("#datasetViewerFilter");
+                      return Boolean(toolbar && meta && toolbar.contains(meta) && meta.contains(group) && meta.contains(filter));
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.wait_for_function(
                     """
                     () => document.querySelector("#filterRowMeta")?.textContent.trim() === "4 rows"
                     """,
                     timeout=10_000,
                 )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerGroupMeta")?.textContent.trim() === "8 columns · 4 rows"
+                    """,
+                    timeout=10_000,
+                )
+                assert_filter_label_color("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
                 self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
                 self.assertTrue(page.locator("#collapsedFilterIndicator").evaluate("node => node.hidden"))
                 self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
@@ -5871,6 +5890,14 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerGroupMeta")?.textContent.trim() === "8 columns · 2 / 4 rows"
+                      && document.querySelector("#datasetViewerFilter")?.textContent.trim() === "vehicle_age >= 3"
+                    """,
+                    timeout=10_000,
+                )
+                assert_filter_label_color("#datasetViewerFilter", "dataset-viewer-filter--applied", True)
                 page.wait_for_function(
                     """
                     () => {
@@ -5935,6 +5962,13 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerGroupMeta")?.textContent.trim() === "8 columns · 3 / 4 rows"
+                      && document.querySelector("#datasetViewerFilter")?.textContent.trim() === "vehicle_age >= 2"
+                    """,
+                    timeout=10_000,
+                )
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_second_filter)
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
@@ -5964,6 +5998,12 @@ COPY (
                 assert_filter_label_color("#mapControlFilter", "map-filter--applied", True)
                 page.locator("#datasetViewerTool").click()
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerGroupMeta")?.textContent.trim() === "8 columns · 3 / 4 rows"
+                    """,
+                    timeout=10_000,
+                )
                 dataset_requests_before_clear = dataset_viewer_requests
                 page.evaluate('() => document.querySelector("#filterClearBtn").click()')
                 page.wait_for_function(
@@ -5978,7 +6018,14 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerGroupMeta")?.textContent.trim() === "8 columns · 4 rows"
+                    """,
+                    timeout=10_000,
+                )
                 self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
+                assert_filter_label_color("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
                 assert_filter_label_color("#lineBarFilter", "line-bar-filter--applied", False)
                 assert_filter_label_color("#histogramFilter", "histogram-filter--applied", False)
                 assert_filter_label_color("#mapControlFilter", "map-filter--applied", False)

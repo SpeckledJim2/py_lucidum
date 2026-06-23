@@ -27,6 +27,7 @@ export function createDatasetViewerTool({
   stableRequestKey,
   startToolTiming,
   state,
+  syncDatasetViewerMeta = () => {},
   syncClientTimingFromData,
   syncDuckDbTimingFromData,
   toolCache,
@@ -117,8 +118,10 @@ export function createDatasetViewerTool({
             <span>Alphabetical columns</span>
           </label>
           <div id="datasetViewerCount" class="dataset-viewer-count"></div>
+          <div id="datasetViewerMeta" class="dataset-viewer-meta"></div>
         </div>
         <div id="datasetViewerGrid" class="dataset-viewer-grid"></div>`;
+      attachDatasetViewerMeta();
       el("datasetViewerSearch").addEventListener("input", () => {
         state.datasetViewerSearch = el("datasetViewerSearch").value;
         applySearch();
@@ -140,6 +143,7 @@ export function createDatasetViewerTool({
       el("datasetViewerGrid").addEventListener("click", handleDatasetViewerGridClick);
       el("datasetViewerGrid").addEventListener("contextmenu", handleDatasetViewerGridContextMenu);
     }
+    attachDatasetViewerMeta();
     const search = el("datasetViewerSearch");
     if (document.activeElement !== search && search.value !== (state.datasetViewerSearch || "")) {
       search.value = state.datasetViewerSearch || "";
@@ -147,6 +151,15 @@ export function createDatasetViewerTool({
     el("datasetViewerTranspose").checked = Boolean(state.datasetViewerTranspose);
     el("datasetViewerAlphabeticalColumns").checked = Boolean(state.datasetViewerAlphabeticalColumns);
     return wrap;
+  }
+
+  function attachDatasetViewerMeta() {
+    const meta = document.getElementById("datasetViewerMeta");
+    const groupMeta = document.getElementById("datasetViewerGroupMeta");
+    const filter = document.getElementById("datasetViewerFilter");
+    if (!meta || !groupMeta || !filter) return;
+    if (groupMeta.parentElement !== meta) meta.append(groupMeta);
+    if (filter.parentElement !== meta) meta.append(filter);
   }
 
   function syncTransposeControl(data) {
@@ -230,6 +243,8 @@ export function createDatasetViewerTool({
     currentDatasetRows = tableData.datasetRows;
     currentDatasetColumns = tableData.datasetColumns;
     currentVisibleDatasetColumns = tableData.visibleDatasetColumns || tableData.datasetColumns;
+    state.datasetViewerColumnCount = Array.isArray(data?.columns) ? data.columns.length : null;
+    syncDatasetViewerMeta();
     pruneSelectionsForCurrentData();
     const meta = countMeta(data);
     setStatus("");

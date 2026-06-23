@@ -768,6 +768,7 @@
       }
 
 
+      #datasetViewerFilter,
       #profileFilter,
       #histogramFilter,
       #lineBarFilter {
@@ -780,6 +781,7 @@
         white-space: nowrap;
       }
 
+      #datasetViewerFilter.dataset-viewer-filter--applied,
       #profileFilter.profile-filter--applied {
         color: var(--danger);
       }

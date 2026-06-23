@@ -61,10 +61,31 @@
 
       .dataset-viewer-count {
         color: var(--muted);
-        flex: 1 1 auto;
+        flex: 0 1 auto;
         font-size: 10px;
         line-height: 1.1;
-        min-width: 120px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .dataset-viewer-meta {
+        align-items: flex-end;
+        display: flex;
+        flex: 1 1 220px;
+        flex-direction: column;
+        gap: 4px;
+        line-height: 1.1;
+        margin-left: auto;
+        max-width: min(440px, 46%);
+        min-width: 0;
+        text-align: right;
+      }
+
+      .dataset-viewer-meta .workspace-meta,
+      .dataset-viewer-meta #datasetViewerFilter {
+        max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -417,6 +438,11 @@
         }
 
         .dataset-viewer-count {
+          flex: 1 1 auto;
+        }
+
+        .dataset-viewer-meta {
           flex-basis: 100%;
+          max-width: 100%;
         }
       }
