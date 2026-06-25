@@ -24,6 +24,7 @@ from py_lucidum.tools.gbm.sources import GbmSourceProvider
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
+from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count, table
 
 
@@ -178,6 +179,76 @@ class LineBarToolTests(unittest.TestCase):
                 {"label": "Expected", "numerator": "Expected"},
             ],
         }
+
+    def write_simple_gbm_prediction_model(
+        self,
+        predictions: list[float | None],
+        *,
+        model_id: str = "ratio-gbm",
+        active: bool = True,
+    ) -> GbmModelStore:
+        store = GbmModelStore(self.data_path)
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": model_id,
+                "created_at": "2026-06-24T00:00:00Z",
+                "response_column": "Actual",
+                "training_mode": "normal",
+            },
+        )
+        store.write_json(model_dir / "parameters.json", {"objective": "regression", "metric": "l2"})
+        self.write_prediction_parquet(model_dir / "predictions.parquet", "gbm_prediction", predictions)
+        if active:
+            store.activate_model(model_id)
+        return store
+
+    def write_simple_glm_prediction_model(
+        self,
+        predictions: list[float | None],
+        *,
+        model_id: str = "ratio-glm",
+        active: bool = True,
+    ) -> GlmModelStore:
+        store = GlmModelStore(self.data_path)
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": model_id,
+                "created_at": "2026-06-24T00:00:01Z",
+                "family": "normal",
+                "link": "auto",
+                "response_column": "Actual",
+                "denominator_column": "",
+                "training_scope": "all",
+            },
+        )
+        store.write_json(model_dir / "diagnostics.json", {"scored_rows": len(predictions)})
+        self.write_prediction_parquet(model_dir / "predictions.parquet", "glm_prediction", predictions)
+        if active:
+            store.activate_model(model_id)
+        return store
+
+    def write_prediction_parquet(self, path: Path, column: str, predictions: list[float | None]) -> None:
+        selects = []
+        for index, value in enumerate(predictions, start=1):
+            value_sql = "CAST(NULL AS DOUBLE)" if value is None else str(float(value))
+            selects.append(f"SELECT {index} AS __lucidum_row_id, {value_sql} AS {column}")
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  {" UNION ALL ".join(selects)}
+) TO {sql_literal(str(path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
 
     def write_date_bucket_dataset(
         self,
@@ -797,6 +868,84 @@ COPY (
         self.assertEqual(payload["data_sources"][0]["id"], "dataset")
         self.assertTrue(all(column["band_suggestion"] is None for column in payload["columns"]))
         self.assertTrue(all(column["band_suggestion"] is None for column in payload["data_sources"][0]["columns"]))
+
+    def test_gbm_to_glm_ratio_source_requires_active_gbm_and_glm(self) -> None:
+        self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0])
+        app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_get(app, "/api/schema")
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertFalse([source for source in payload["data_sources"] if source.get("kind") == RATIO_KIND])
+
+    def test_gbm_to_glm_ratio_source_is_numeric_when_both_models_are_active(self) -> None:
+        self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0])
+        self.write_simple_glm_prediction_model([10.0, 0.0, None, 100.0])
+        app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_get(app, "/api/schema")
+        payload = json.loads(body)
+        ratio_sources = [source for source in payload["data_sources"] if source.get("kind") == RATIO_KIND]
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(ratio_sources), 1)
+        ratio_source = ratio_sources[0]
+        self.assertTrue(ratio_source["active"])
+        self.assertEqual(ratio_source["gbm_model_id"], "ratio-gbm")
+        self.assertEqual(ratio_source["glm_model_id"], "ratio-glm")
+        self.assertEqual(ratio_source["row_count"], 4)
+        self.assertEqual(ratio_source["columns"], [
+            {
+                "name": RATIO_COLUMN,
+                "duckdb_type": "DOUBLE",
+                "kind": "numeric",
+                "band_suggestion": None,
+            }
+        ])
+
+    def test_gbm_to_glm_ratio_supports_banding_and_chart_grouping(self) -> None:
+        self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0])
+        self.write_simple_glm_prediction_model([10.0, 0.0, None, 100.0])
+        app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        status, _, body = asgi_get(app, "/api/schema")
+        schema = json.loads(body)
+        ratio_source = next(source for source in schema["data_sources"] if source.get("kind") == RATIO_KIND)
+        ratio_source_id = ratio_source["id"]
+
+        band_status, _, band_body = asgi_post_json(
+            app,
+            "/api/banding/suggestion",
+            {"source": "dataset", "xSource": ratio_source_id, "feature": RATIO_COLUMN},
+        )
+        band_payload = json.loads(band_body)
+        chart_request = self.request()
+        chart_request.update(
+            {
+                "source": "dataset",
+                "x": RATIO_COLUMN,
+                "xSource": ratio_source_id,
+                "responses": [{"label": "Actual", "numerator": "Actual"}],
+                "bandWidth": "1",
+            }
+        )
+        chart_status, _, chart_body = asgi_post_json(app, "/api/chart", chart_request)
+        chart_payload = json.loads(chart_body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(band_status, 200)
+        self.assertEqual(band_payload["source"], ratio_source_id)
+        self.assertEqual(band_payload["feature"], RATIO_COLUMN)
+        self.assertGreater(band_payload["band_suggestion"], 0)
+        self.assertEqual(chart_status, 200)
+        self.assertEqual(chart_payload["field_sources"]["x"], ratio_source_id)
+        rows = {row["x"]: row for row in chart_payload["rows"]}
+        self.assertIn("(missing)", rows)
+        self.assertIn("2", rows)
+        self.assertIn("4", rows)
+        self.assertAlmostEqual(rows["(missing)"]["resp0"], 250.0)
+        self.assertAlmostEqual(rows["2"]["resp0"], 100.0)
+        self.assertAlmostEqual(rows["4"]["resp0"], 400.0)
 
     def test_schema_does_not_calculate_eager_band_suggestions(self) -> None:
         app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
@@ -2037,6 +2186,39 @@ COPY (
         self.assertEqual(result["denominator"]["label"], "Average row value")
         self.assertEqual(result["denominator"]["bar_label"], "Row count")
         self.assertEqual(result["denominator"]["value"], 3)
+
+    def test_chart_accepts_two_expected_lines_and_truncates_extra_responses(self) -> None:
+        self.data_path.write_text(
+            "UseofVan,Actual,Expected,Expected2,Expected3\n"
+            "Social,100,90,80,70\n"
+            "Social,200,210,220,230\n"
+            "Business,300,290,280,270\n"
+            "Business,400,410,420,430\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request["responses"] = [
+            {"label": "Actual", "numerator": "Actual"},
+            {"label": "Expected", "numerator": "Expected"},
+            {"label": "Expected2", "numerator": "Expected2"},
+            {"label": "Expected3", "numerator": "Expected3"},
+        ]
+
+        result = chart(dataset, request)
+
+        self.assertEqual([response["label"] for response in result["responses"]], ["Actual", "Expected", "Expected2"])
+        self.assertEqual([summary["label"] for summary in result["response_summaries"]], ["Actual", "Expected", "Expected2"])
+        business = next(row for row in result["rows"] if row["x"] == "Business")
+        social = next(row for row in result["rows"] if row["x"] == "Social")
+        self.assertEqual(business["resp0"], 350)
+        self.assertEqual(business["resp1"], 350)
+        self.assertEqual(business["resp2"], 350)
+        self.assertEqual(social["resp0"], 150)
+        self.assertEqual(social["resp1"], 150)
+        self.assertEqual(social["resp2"], 150)
+        self.assertNotIn("resp3", business)
+        self.assertEqual(result["response_summaries"][2]["value"], 250)
 
     def test_chart_uses_common_weight_column_for_lines_bars_and_summary(self) -> None:
         dataset = Dataset(self.data_path)

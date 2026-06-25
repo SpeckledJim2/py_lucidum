@@ -22,7 +22,7 @@
 
       function paramsFromLocation() {
         const standardParams = new URLSearchParams(location.search);
-        const expectedKeys = ["token", "tool", "source", "x", "xSource", "actual", "expected", "denominator", "postcode_area", "postcode_sector", "postcode_unit", "latitude", "longitude"];
+        const expectedKeys = ["token", "tool", "source", "x", "xSource", "actual", "expected", "expected2", "denominator", "postcode_area", "postcode_sector", "postcode_unit", "latitude", "longitude"];
         if (expectedKeys.some((key) => standardParams.has(key))) return standardParams;
         const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
         try {
@@ -80,6 +80,7 @@
         mapSmoothingLevel: 0,
         featureSort: "alpha",
         expectedSort: "alpha",
+        expectedSelections: [],
         openSidebarSection: null,
         collapsedKpiGroups: new Set(),
         kpiGroupsInitialised: false,
@@ -734,7 +735,7 @@
         }));
         if (currentKind === "gbm_shap_long") return columns;
         const seen = new Set(columns.map((column) => `${column.source_id || currentSource}\u0000${column.name}`));
-        for (const column of activePredictionColumns()) {
+        for (const column of [...activeModelRatioColumns(), ...activePredictionColumns()]) {
           const sourceId = column.source_id || "";
           const key = `${sourceId}\u0000${column.name}`;
           if (!sourceId || seen.has(key)) continue;
@@ -1677,6 +1678,16 @@
         ));
       }
 
+      function activeModelRatioColumns() {
+        return activeModelSources(["model_ratio"]).flatMap((source) => (
+          numericColumnsForSource(source.id)
+            .map((column) => ({
+              ...column,
+              source_id: source.id,
+            }))
+        ));
+      }
+
       function expectedPredictionColumns() {
         return activeModelSources(["glm_predictions", "gbm_predictions"]).flatMap((source) => (
           numericColumnsForSource(source.id)
@@ -1755,23 +1766,88 @@
         return true;
       }
 
-      function setExpectedSelection(value, sourceId = "", options = {}) {
-        const select = el("expectedNumerator");
+      function expectedSelectionKey(selection) {
+        return `${selection?.sourceId || ""}\u0000${selection?.value || ""}`;
+      }
+
+      function expectedOptionForSelection(value, sourceId = "", options = {}) {
         const name = String(value || "");
-        if (!name) {
-          select.value = "";
-          return true;
-        }
+        if (!name) return null;
         const allowAnySource = options.allowAnySource !== false;
-        const selectOptions = Array.from(select.options);
-        const option = selectOptions.find((item) => (
+        const selectOptions = Array.from(el("expectedNumerator").options);
+        return selectOptions.find((item) => (
           !item.disabled &&
           item.value === name &&
           (!sourceId || item.dataset.sourceId === sourceId)
-        )) || (allowAnySource ? selectOptions.find((item) => !item.disabled && item.value === name) : null);
-        if (!option) return false;
-        option.selected = true;
-        return true;
+        )) || (allowAnySource ? selectOptions.find((item) => !item.disabled && item.value === name) : null) || null;
+      }
+
+      function expectedSelectionFromOption(option) {
+        if (!option?.value) return null;
+        return {
+          value: option.value,
+          sourceId: option.dataset.sourceId || state.source || "dataset",
+          metricKind: option.dataset.metricKind || "metric",
+        };
+      }
+
+      function normaliseExpectedSelections(selections = [], options = {}) {
+        const allowAnySource = options.allowAnySource !== false;
+        const seen = new Set();
+        const normalised = [];
+        for (const selection of selections) {
+          const value = String(selection?.value || selection?.column || "");
+          if (!value) continue;
+          const option = expectedOptionForSelection(value, selection?.sourceId || selection?.source || "", { allowAnySource });
+          const next = expectedSelectionFromOption(option);
+          if (!next) continue;
+          const key = expectedSelectionKey(next);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          normalised.push(next);
+          if (normalised.length >= 2) break;
+        }
+        return normalised;
+      }
+
+      function syncExpectedSelectToSelections() {
+        const select = el("expectedNumerator");
+        const first = expectedSelections()[0];
+        if (!first) {
+          select.value = "";
+          return;
+        }
+        const option = expectedOptionForSelection(first.value, first.sourceId, { allowAnySource: false });
+        if (option) option.selected = true;
+        else select.value = "";
+      }
+
+      function expectedSelections() {
+        return Array.isArray(state.expectedSelections) ? state.expectedSelections : [];
+      }
+
+      function setExpectedSelections(selections = [], options = {}) {
+        const normalised = normaliseExpectedSelections(selections, options);
+        state.expectedSelections = normalised;
+        syncExpectedSelectToSelections();
+        return normalised.length === selections.filter((selection) => String(selection?.value || selection?.column || "")).slice(0, 2).length;
+      }
+
+      function clearExpectedSelections() {
+        state.expectedSelections = [];
+        syncExpectedSelectToSelections();
+      }
+
+      function setExpectedSelection(value, sourceId = "", options = {}) {
+        const name = String(value || "");
+        if (!name) {
+          clearExpectedSelections();
+          return true;
+        }
+        const selections = options.append
+          ? [...expectedSelections(), { value: name, sourceId }]
+          : [{ value: name, sourceId }];
+        return setExpectedSelections(selections, options);
       }
 
       function chooseFirstActualSelection() {
@@ -1798,11 +1874,11 @@
       }
 
       function selectedExpectedIsPrediction() {
-        return el("expectedNumerator").selectedOptions[0]?.dataset.metricKind === "prediction";
+        return expectedSelections()[0]?.metricKind === "prediction";
       }
 
       function expectedSelectionSourceId() {
-        return el("expectedNumerator").selectedOptions[0]?.dataset.sourceId || "";
+        return expectedSelections()[0]?.sourceId || "";
       }
 
       function predictionColumnNamesForModelKind(modelKind) {
@@ -1836,6 +1912,25 @@
         return ordered.some((predictionColumn) => setExpectedSelection(predictionColumn, predictionSource.id, { allowAnySource: false }));
       }
 
+      function expectedSelectionsSnapshot() {
+        return expectedSelections().map((selection) => ({ ...selection }));
+      }
+
+      function restoreExpectedSelectionsAfterModelMutation(selections, modelKind = "") {
+        const resolved = [];
+        const activePredictionSource = activePredictionSourceForModelKind(modelKind);
+        for (const selection of selections) {
+          if (modelKind && selection?.metricKind === "prediction" && isPredictionColumnForModelKind(selection.value, modelKind)) {
+            if (activePredictionSource?.id) {
+              resolved.push({ ...selection, sourceId: activePredictionSource.id });
+            }
+          } else {
+            resolved.push(selection);
+          }
+        }
+        return setExpectedSelections(resolved, { allowAnySource: true });
+      }
+
       function actualSelectionSourceId() {
         return el("actualNumerator").selectedOptions[0]?.dataset.sourceId || "";
       }
@@ -1848,28 +1943,31 @@
         return true;
       }
 
-      function syncExpectedSourceFromSelection({ expectedValue = "", expectedSource = "" } = {}) {
-        const targetSource = expectedSource || expectedSelectionSourceId();
-        if (selectedExpectedIsPrediction()) return false;
+      function syncExpectedSourceFromSelection({ expectedValue = "", expectedSource = "", expectedSelections: nextSelections = null } = {}) {
+        const selections = nextSelections ? normaliseExpectedSelections(nextSelections, { allowAnySource: true }) : expectedSelections();
+        const firstSelection = selections[0] || null;
+        const targetSource = firstSelection?.sourceId || expectedSource || expectedSelectionSourceId();
+        if (firstSelection?.metricKind === "prediction" || (!nextSelections && selectedExpectedIsPrediction())) return false;
         if (!targetSource || targetSource === state.source) return false;
-        const selectedExpected = expectedValue || el("expectedNumerator").value;
+        const selectedExpected = firstSelection?.value || expectedValue || el("expectedNumerator").value;
         state.source = targetSource;
         invalidateLineBarDateBucketSuggestion();
         syncControlsForSourceChange({
-          expectedValue: selectedExpected,
-          expectedSource: targetSource,
-          expectedIsPrediction: true,
+          expectedSelections: selections.length ? selections : [{ value: selectedExpected, sourceId: targetSource }],
         });
         refreshMetricSummary();
         return true;
       }
 
-      function syncControlsForSourceChange({ actualValue = "", actualSource = "", expectedValue = "", expectedSource = "", expectedIsPrediction = null } = {}) {
+      function syncControlsForSourceChange({ actualValue = "", actualSource = "", expectedValue = "", expectedSource = "", expectedSelections: previousExpectedSelections = null } = {}) {
         const previousActual = actualValue || el("actualNumerator").value;
         const previousActualSource = actualSource || actualSelectionSourceId();
         const previousExpected = expectedValue || el("expectedNumerator").value;
         const previousExpectedSource = expectedSource || expectedSelectionSourceId();
-        const previousExpectedIsPrediction = expectedIsPrediction === null ? selectedExpectedIsPrediction() : Boolean(expectedIsPrediction);
+        const expectedSnapshot = previousExpectedSelections || expectedSelectionsSnapshot();
+        if (!expectedSnapshot.length && previousExpected) {
+          expectedSnapshot.push({ value: previousExpected, sourceId: previousExpectedSource });
+        }
         const previousDenominator = el("denominator").value;
         syncLineBarXFallback();
         fillMetricSelect(el("actualNumerator"));
@@ -1878,9 +1976,7 @@
         }
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
-        if (!setExpectedSelection(previousExpected, previousExpectedSource, { allowAnySource: !previousExpectedIsPrediction })) {
-          el("expectedNumerator").value = "";
-        }
+        setExpectedSelections(expectedSnapshot, { allowAnySource: true });
         el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
         syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
@@ -1893,9 +1989,7 @@
         const previousXSource = state.xSource;
         const previousActual = el("actualNumerator").value;
         const previousActualSource = actualSelectionSourceId();
-        const previousExpected = el("expectedNumerator").value;
-        const previousExpectedSource = expectedSelectionSourceId();
-        const previousExpectedIsPrediction = selectedExpectedIsPrediction();
+        const previousExpectedSelections = expectedSelectionsSnapshot();
         const previousDenominator = el("denominator").value;
         state.schema = await api("/api/schema");
         state.datasetViewerColumnCount = null;
@@ -1921,11 +2015,7 @@
         if (!setActualSelection(previousActual, previousActualSource)) {
           el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
         }
-        if (previousExpectedIsPrediction && modelKind) {
-          if (!setExpectedPredictionSelectionForModelKind(modelKind, previousExpected)) el("expectedNumerator").value = "";
-        } else if (!setExpectedSelection(previousExpected, previousExpectedSource, { allowAnySource: !previousExpectedIsPrediction })) {
-          el("expectedNumerator").value = "";
-        }
+        restoreExpectedSelectionsAfterModelMutation(previousExpectedSelections, modelKind);
         el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
         syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
@@ -2349,12 +2439,16 @@
         fillDenominatorSelect(el("denominator"));
         const requestedActual = requestedDefault("actual");
         const requestedExpected = requestedDefault("expected");
+        const requestedExpected2 = requestedDefault("expected2");
         const requestedDenominator = requestedDefault("denominator");
         if (!setActualSelection(requestedActual, state.source)) {
           el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
         }
         if (!el("actualNumerator").value) chooseFirstActualSelection();
-        if (!setExpectedSelection(requestedExpected)) el("expectedNumerator").value = "";
+        setExpectedSelections([
+          { value: requestedExpected, sourceId: "" },
+          { value: requestedExpected2, sourceId: "" },
+        ]);
         el("denominator").value = numericColumnExists(requestedDenominator) ? requestedDenominator : "__none__";
         applyInitialKpiDefault();
       }

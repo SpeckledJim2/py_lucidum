@@ -492,7 +492,7 @@ def normalise_responses(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[s
         label = item.get("label") or str(numerator)
         source = str(item.get("source") or "").strip()
         responses.append({"label": str(label), "numerator": str(numerator), **({"source": source} if source else {})})
-    return responses[:2]
+    return responses[:3]
 
 
 def use_quantiles(value: Any) -> bool:

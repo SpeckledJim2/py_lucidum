@@ -3651,6 +3651,11 @@ COPY (
                     {"text": "gbm_predictionnumeric", "source": "gbm:browser-smoke-model-2:predictions", "active": False},
                     feature_state,
                 )
+                ratio_source_id = "model_ratio:gbm_to_glm_ratio:browser-smoke-model-2:browser-smoke-glm"
+                self.assertIn(
+                    {"text": "gbm_to_glm_rationumeric", "source": ratio_source_id, "active": False},
+                    feature_state,
+                )
                 feature_pinned_state = page.evaluate(
                     """
                     () => {
@@ -3688,7 +3693,7 @@ COPY (
                 )
                 self.assertEqual(
                     feature_pinned_state["pinned"],
-                    ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"],
+                    ["gbm_to_glm_ratio", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"],
                 )
                 self.assertIn("glm_tabulated_prediction", feature_pinned_state["pinned"])
                 self.assertIn("gbm_tabulated_prediction", feature_pinned_state["pinned"])
@@ -3722,13 +3727,36 @@ COPY (
                       split: document.querySelector("#featureList")?.classList.contains("line-bar-split-list"),
                       specialValues: [...document.querySelectorAll("#featureList .feature")]
                         .map((button) => button.dataset.value || "")
-                        .filter((value) => ["glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"].includes(value)),
+                        .filter((value) => ["gbm_to_glm_ratio", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"].includes(value)),
                     })
                     """
                 )
-                self.assertFalse(importance_feature_state["split"])
-                self.assertEqual(importance_feature_state["specialValues"], [])
+                self.assertTrue(importance_feature_state["split"])
+                self.assertEqual(importance_feature_state["specialValues"], ["gbm_to_glm_ratio"])
                 page.locator('.segmented[data-control="featureSort"] button[data-value="original"]').click()
+                page.locator(
+                    f'#featureList .feature[data-source-id="{ratio_source_id}"][data-value="gbm_to_glm_ratio"]',
+                ).wait_for(timeout=10_000)
+
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/banding/suggestion") and response.status == 200,
+                    timeout=10_000,
+                ) as ratio_banding_info:
+                    with page.expect_request(
+                        lambda request: request.url.endswith("/api/chart") and "gbm_to_glm_ratio" in (request.post_data or ""),
+                        timeout=10_000,
+                    ) as ratio_chart_info:
+                        page.locator(
+                            f'#featureList .feature[data-source-id="{ratio_source_id}"][data-value="gbm_to_glm_ratio"]',
+                        ).click()
+                ratio_banding_body = json.loads(ratio_banding_info.value.request.post_data or "{}")
+                ratio_chart_body = json.loads(ratio_chart_info.value.post_data or "{}")
+                self.assertEqual(ratio_banding_body["source"], ratio_source_id)
+                self.assertEqual(ratio_banding_body["xSource"], ratio_source_id)
+                self.assertEqual(ratio_banding_body["feature"], "gbm_to_glm_ratio")
+                self.assertEqual(ratio_chart_body["x"], "gbm_to_glm_ratio")
+                self.assertEqual(ratio_chart_body["xSource"], ratio_source_id)
+
                 page.locator(
                     '#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"][data-value="glm_prediction"]',
                 ).wait_for(timeout=10_000)
@@ -3757,8 +3785,52 @@ COPY (
                 gbm_expected_body = json.loads(gbm_expected_info.value.post_data or "{}")
                 self.assertEqual(gbm_expected_body["source"], "glm:browser-smoke-glm:predictions")
                 self.assertEqual(gbm_expected_body["responses"][0]["numerator"], "actualNumerator")
-                self.assertEqual(gbm_expected_body["responses"][1]["numerator"], "gbm_prediction")
-                self.assertEqual(gbm_expected_body["responses"][1]["source"], "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(gbm_expected_body["responses"][1]["numerator"], "glm_prediction")
+                self.assertEqual(gbm_expected_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(gbm_expected_body["responses"][2]["numerator"], "gbm_prediction")
+                self.assertEqual(gbm_expected_body["responses"][2]["source"], "gbm:browser-smoke-model-2:predictions")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      return chart?.getOption().series?.some((series) => series.name === "gbm_prediction");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                expected_two_line_state = page.evaluate(
+                    """
+                    () => {
+                      const buttons = [...document.querySelectorAll("#expectedList .feature")];
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const series = chart.getOption().series || [];
+                      const lineColor = (name) => {
+                        const style = series.find((item) => item.name === name)?.lineStyle;
+                        return ((Array.isArray(style) ? style[0]?.color : style?.color) || "").toLowerCase();
+                      };
+                      return {
+                        active: buttons.filter((button) => button.classList.contains("active"))
+                          .map((button) => `${button.dataset.sourceId || ""}:${button.dataset.value || ""}`),
+                        disabledInactiveCount: buttons.filter((button) => button.dataset.value && !button.classList.contains("active") && button.disabled).length,
+                        noneDisabled: document.querySelector("#expectedList .expected-none-option")?.disabled || false,
+                        glmColor: lineColor("glm_prediction"),
+                        gbmColor: lineColor("gbm_prediction"),
+                        accent: getComputedStyle(document.body).getPropertyValue("--accent").trim().toLowerCase(),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    expected_two_line_state["active"],
+                    [
+                        "glm:browser-smoke-glm:predictions:glm_prediction",
+                        "gbm:browser-smoke-model-2:predictions:gbm_prediction",
+                    ],
+                )
+                self.assertGreater(expected_two_line_state["disabledInactiveCount"], 0)
+                self.assertFalse(expected_two_line_state["noneDisabled"])
+                self.assertEqual(expected_two_line_state["glmColor"], "#d13f3f")
+                self.assertEqual(expected_two_line_state["gbmColor"], expected_two_line_state["accent"])
                 feature_state = page.evaluate(
                     """
                     () => [...document.querySelectorAll("#featureList .feature")]
@@ -3778,22 +3850,13 @@ COPY (
                     feature_state,
                 )
 
-                page.locator(
-                    '#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"][data-value="glm_prediction"]',
-                ).click()
-                page.wait_for_function(
-                    """
-                    () => document.querySelector('#expectedList .feature[data-source-id="glm:browser-smoke-glm:predictions"][data-value="glm_prediction"]')
-                      ?.classList.contains("active")
-                    """,
-                    timeout=10_000,
-                )
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as segment_feature_info:
                     page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Segment").click()
                 segment_feature_body = json.loads(segment_feature_info.value.post_data or "{}")
                 self.assertEqual(segment_feature_body["source"], "glm:browser-smoke-glm:predictions")
                 self.assertEqual(segment_feature_body["x"], "Segment")
                 self.assertEqual(segment_feature_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(segment_feature_body["responses"][2]["source"], "gbm:browser-smoke-model-2:predictions")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 open_sidebar_section("#glmModelCollapseBtn")
@@ -3806,6 +3869,8 @@ COPY (
                 self.assertEqual(glm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(glm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(glm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(glm_to_glm_body["responses"][2]["numerator"], "gbm_prediction")
+                self.assertEqual(glm_to_glm_body["responses"][2]["source"], "gbm:browser-smoke-model-2:predictions")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 open_sidebar_section("#gbmModelCollapseBtn")
@@ -3816,8 +3881,10 @@ COPY (
                 self.assertEqual(glm_to_gbm_body["source"], "glm:browser-smoke-glm-2:predictions")
                 self.assertEqual(glm_to_gbm_body["x"], "Segment")
                 self.assertEqual(glm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
-                self.assertEqual(glm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
-                self.assertEqual(glm_to_gbm_body["responses"][1]["source"], "gbm:browser-smoke-model:predictions")
+                self.assertEqual(glm_to_gbm_body["responses"][1]["numerator"], "glm_prediction")
+                self.assertEqual(glm_to_gbm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(glm_to_gbm_body["responses"][2]["numerator"], "gbm_prediction")
+                self.assertEqual(glm_to_gbm_body["responses"][2]["source"], "gbm:browser-smoke-model:predictions")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 open_sidebar_section("#gbmModelCollapseBtn")
@@ -3828,8 +3895,10 @@ COPY (
                 self.assertEqual(gbm_to_gbm_body["source"], "glm:browser-smoke-glm-2:predictions")
                 self.assertEqual(gbm_to_gbm_body["x"], "Segment")
                 self.assertEqual(gbm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
-                self.assertEqual(gbm_to_gbm_body["responses"][1]["numerator"], "gbm_prediction")
-                self.assertEqual(gbm_to_gbm_body["responses"][1]["source"], "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(gbm_to_gbm_body["responses"][1]["numerator"], "glm_prediction")
+                self.assertEqual(gbm_to_gbm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(gbm_to_gbm_body["responses"][2]["numerator"], "gbm_prediction")
+                self.assertEqual(gbm_to_gbm_body["responses"][2]["source"], "gbm:browser-smoke-model-2:predictions")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 open_sidebar_section("#glmModelCollapseBtn")
@@ -3842,6 +3911,8 @@ COPY (
                 self.assertEqual(gbm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(gbm_to_glm_body["responses"][2]["numerator"], "gbm_prediction")
+                self.assertEqual(gbm_to_glm_body["responses"][2]["source"], "gbm:browser-smoke-model-2:predictions")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
                 page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Age").click()

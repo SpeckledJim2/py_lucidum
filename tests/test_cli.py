@@ -91,6 +91,8 @@ class CliRuntimeTests(unittest.TestCase):
                 defaults={
                     "x": "Driver Age",
                     "actual": "AvgPrice1_5",
+                    "expected": "Expected1",
+                    "expected2": "Expected2",
                     "denominator": "Exposure",
                     "postcode_area": "Area",
                     "postcode_unit": "Unit",
@@ -105,7 +107,7 @@ class CliRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             url,
-            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&denominator=Exposure&postcode_area=Area&postcode_unit=Unit&latitude=lat_col&longitude=long_col",
+            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&expected=Expected1&expected2=Expected2&denominator=Exposure&postcode_area=Area&postcode_unit=Unit&latitude=lat_col&longitude=long_col",
         )
 
     def test_display_url_for_wildcard_bind_uses_localhost_and_lan_hint(self) -> None:
@@ -692,6 +694,10 @@ class CliRuntimeTests(unittest.TestCase):
                     "DRIVER_AGE",
                     "--actual",
                     "PREMIUM",
+                    "--expected",
+                    "EXPECTED_PREMIUM",
+                    "--expected2",
+                    "EXPECTED_PREMIUM_2",
                     "--denominator",
                     "ANNUAL_MILEAGE",
                 ],
@@ -699,6 +705,8 @@ class CliRuntimeTests(unittest.TestCase):
                     "path": demo_path,
                     "x": "DRIVER_AGE",
                     "actual": "PREMIUM",
+                    "expected": "EXPECTED_PREMIUM",
+                    "expected2": "EXPECTED_PREMIUM_2",
                     "denominator": "ANNUAL_MILEAGE",
                 },
                 True,

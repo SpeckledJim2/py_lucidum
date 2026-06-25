@@ -296,9 +296,54 @@ state.x = "Missing";
 state.xSource = "old";
 columns = [];
 syncLineBarXFallback();
-if (state.x !== null || state.xSource !== "") {
-  throw new Error(`expected empty fallback, got ${state.x} from ${state.xSource}`);
+        if (state.x !== null || state.xSource !== "") {
+          throw new Error(`expected empty fallback, got ${state.x} from ${state.xSource}`);
+        }
+        """
+        self.run_node_script(script)
+
+    def test_line_bar_expected_selection_array_is_ordered_and_capped(self) -> None:
+        js = self.assert_no_store("/static/app/main.js")[1].decode("utf-8")
+        helper = "\n".join(
+            self.js_function_source(js, name)
+            for name in [
+                "expectedSelectionKey",
+                "expectedOptionForSelection",
+                "expectedSelectionFromOption",
+                "normaliseExpectedSelections",
+                "syncExpectedSelectToSelections",
+                "expectedSelections",
+                "setExpectedSelections",
+            ]
+        )
+        script = helper + """
+const state = { source: "dataset", expectedSelections: [] };
+const expectedSelect = {
+  value: "",
+  options: [
+    { value: "", disabled: false, dataset: {}, selected: false },
+    { value: "glm_prediction", disabled: false, dataset: { sourceId: "glm:model:predictions", metricKind: "prediction" }, selected: false },
+    { value: "gbm_prediction", disabled: false, dataset: { sourceId: "gbm:model:predictions", metricKind: "prediction" }, selected: false },
+    { value: "Expected", disabled: false, dataset: { sourceId: "dataset", metricKind: "metric" }, selected: false },
+    { value: "Ignored", disabled: false, dataset: { sourceId: "dataset", metricKind: "metric" }, selected: false },
+  ],
+};
+function el(id) {
+  if (id !== "expectedNumerator") throw new Error(id);
+  return expectedSelect;
 }
+const kept = normaliseExpectedSelections([
+  { value: "glm_prediction", sourceId: "glm:model:predictions" },
+  { value: "gbm_prediction", sourceId: "gbm:model:predictions" },
+  { value: "Expected", sourceId: "dataset" },
+]);
+if (kept.length !== 2) throw new Error(`expected cap at 2, got ${kept.length}`);
+if (kept[0].value !== "glm_prediction" || kept[1].value !== "gbm_prediction") throw new Error("expected selection order was not preserved");
+if (kept[0].metricKind !== "prediction" || kept[1].sourceId !== "gbm:model:predictions") throw new Error("expected source metadata was not preserved");
+const ok = setExpectedSelections(kept);
+if (!ok) throw new Error("expected exact selections to restore");
+if (state.expectedSelections.length !== 2) throw new Error("expected two selected rows");
+if (!expectedSelect.options[1].selected) throw new Error("first expected selection should mirror to hidden select");
 """
         self.run_node_script(script)
 
@@ -2618,12 +2663,18 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("function expectedPredictionColumns()", js)
         self.assertIn("option.dataset.sourceId = col.source_id || state.source || \"dataset\";", js)
         self.assertIn("option.dataset.metricKind = isModelPredictionColumn(col) ? \"prediction\" : \"metric\";", js)
+        self.assertIn('const expectedKeys = ["token", "tool", "source", "x", "xSource", "actual", "expected", "expected2", "denominator"', js)
+        self.assertIn("expectedSelections: [],", js)
+        self.assertIn("function normaliseExpectedSelections(selections = [], options = {})", js)
+        self.assertIn("function setExpectedSelections(selections = [], options = {})", js)
         self.assertIn("function setExpectedSelection(value, sourceId = \"\", options = {})", js)
         self.assertIn("function predictionColumnNamesForModelKind(modelKind)", js)
         self.assertIn('if (modelKind === "glm") return ["glm_prediction", "glm_prediction_rate"];', js)
         self.assertIn('if (modelKind === "gbm") return ["gbm_prediction", "gbm_prediction_rate"];', js)
-        self.assertIn("function syncExpectedSourceFromSelection({ expectedValue = \"\", expectedSource = \"\" } = {})", js)
+        self.assertIn("function syncExpectedSourceFromSelection({ expectedValue = \"\", expectedSource = \"\", expectedSelections: nextSelections = null } = {})", js)
         self.assertIn("syncControlsForSourceChange({", js)
+        self.assertIn("const disabled = Boolean(value && maxSelected && !isActive);", js)
+        self.assertIn('button.setAttribute("aria-pressed", String(isActive));', js)
         self.assertIn("function expectedDisplayColumns()", js)
         self.assertIn('expectedColumns().filter((column) => column.source_role !== "gbm_shap_value")', js)
         self.assertIn("function compareMetricColumns(a, b)", js)
@@ -2634,11 +2685,17 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("for (const col of sortedDenominatorColumns())", js)
         self.assertIn('select.append(new Option("Average row value", "__none__"));', js)
         self.assertIn('const LINE_BAR_SPECIAL_COLUMN_NAMES = [', js)
+        self.assertIn('"gbm_to_glm_ratio",', js)
         self.assertIn('"glm_tabulated_prediction",', js)
         self.assertIn('"gbm_tabulated_prediction",', js)
         self.assertIn("function isLineBarSpecialColumn(column)", js)
+        self.assertIn("function isGbmGlmRatioColumn(column)", js)
         self.assertIn("function orderedLineBarSpecialColumns(columns)", js)
         self.assertIn("function lineBarSpecialColumnOrder(column)", js)
+        self.assertIn("function activeModelRatioColumns()", js)
+        self.assertIn("for (const column of [...activeModelRatioColumns(), ...activePredictionColumns()])", js)
+        self.assertIn("const ratioColumns = orderedLineBarSpecialColumns([...sourceColumns()]).filter", js)
+        self.assertIn('const xSource = column && (isModelPredictionColumn(column) || sourceId !== (state.source || "dataset")) ? sourceId : "";', js)
         self.assertIn('if (state.expectedSort === "alpha") {', js)
         self.assertIn('otherColumns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));', js)
         self.assertIn("return { specialColumns, otherColumns };", js)
@@ -2653,6 +2710,11 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("button.dataset.value = value;", js)
         self.assertIn("button.dataset.value = label;", js)
         self.assertIn("const sourceChanged = syncExpectedSourceFromSelection({", js)
+        self.assertIn("for (const selection of expectedSelections())", js)
+        self.assertIn('const secondExpectedColor = getCss("--accent") || "#2276d2";', js)
+        self.assertIn("const responseColors = [actualColor, expectedColor, secondExpectedColor];", js)
+        self.assertIn('classList.add("metric-value--first-expected");', js)
+        self.assertIn('valueSpan.className = "metric-value metric-value--second-expected";', js)
         self.assertIn("for (const col of specialColumns)", js)
         self.assertIn("for (const col of otherColumns)", js)
         self.assertIn("function preferredStartupSource(availableSources, requestedSource)", js)
@@ -2660,11 +2722,9 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn('const predictionSource = availableSources.find((source) => ["glm_predictions", "gbm_predictions"].includes(source.kind));', js)
         self.assertIn("state.source = preferredStartupSource(availableSources, requestedSource);", js)
         self.assertIn('source: state.source || "dataset"', js)
-        self.assertIn('const previousExpected = el("expectedNumerator").value;', js)
-        self.assertIn('const previousExpectedSource = expectedSelectionSourceId();', js)
+        self.assertIn("const previousExpectedSelections = expectedSelectionsSnapshot();", js)
         self.assertIn('fillMetricSelect(el("expectedNumerator"), true);', js)
-        self.assertIn('setExpectedPredictionSelectionForModelKind(modelKind, previousExpected)', js)
-        self.assertIn('setExpectedSelection(previousExpected, previousExpectedSource, { allowAnySource: !previousExpectedIsPrediction })', js)
+        self.assertIn("restoreExpectedSelectionsAfterModelMutation(previousExpectedSelections, modelKind);", js)
 
     def test_gbm_model_navigator_incremental_refresh_contract(self) -> None:
         js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
@@ -3674,9 +3734,13 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         self.assertIn("--line-bar-pinned-kind:", css)
         self.assertIn("#featureList.line-bar-split-list", css)
         self.assertIn("#expectedList.line-bar-split-list", css)
+        self.assertIn("#expectedList .feature:disabled {", css)
         self.assertIn(".line-bar-pinned-region {", css)
         self.assertIn(".line-bar-scroll-region {", css)
         self.assertIn(".feature.line-bar-special-row {", css)
+        self.assertIn(".metric-value--first-expected {", css)
+        self.assertIn("color: #d13f3f;", css)
+        self.assertIn(".metric-value--second-expected {", css)
         self.assertIn('.feature-list-section-header {', css)
         self.assertIn('.feature-list-message {', css)
         self.assertIn('.line-bar-importance-row .kind {', css)

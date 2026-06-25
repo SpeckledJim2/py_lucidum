@@ -47,6 +47,7 @@ DEFAULT_KEYS = {
     "x",
     "actual",
     "expected",
+    "expected2",
     "denominator",
     "postcode_area",
     "postcode_sector",
@@ -465,6 +466,10 @@ def create_app(
 
     context = AppContext(dataset=dataset, check_token=check_token)
     register_tools(app, context, enabled_tools)
+    if "line_bar" in enabled_tools:
+        from py_lucidum.tools.line_bar.model_ratio import register_model_ratio_source_provider
+
+        register_model_ratio_source_provider(app, dataset)
 
     app.add_middleware(TelemetryMiddleware, store=app.state.telemetry)
     return app

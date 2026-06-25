@@ -23,6 +23,7 @@ DEFAULT_URL_KEYS = {
     "x",
     "actual",
     "expected",
+    "expected2",
     "denominator",
     "postcode_area",
     "postcode_sector",
@@ -257,6 +258,7 @@ def serve(
     x: str | None = None,
     actual: str | None = None,
     expected: str | None = None,
+    expected2: str | None = None,
     denominator: str | None = None,
     postcode_area: str | None = None,
     postcode_sector: str | None = None,
@@ -291,6 +293,7 @@ def serve(
         "x": x,
         "actual": actual,
         "expected": expected,
+        "expected2": expected2,
         "denominator": denominator,
         "postcode_area": postcode_area,
         "postcode_sector": postcode_sector,
@@ -332,6 +335,7 @@ def serve_line_bar(
     x: str | None = None,
     actual: str | None = None,
     expected: str | None = None,
+    expected2: str | None = None,
     denominator: str | None = None,
     postcode_area: str | None = None,
     postcode_sector: str | None = None,
@@ -359,6 +363,7 @@ def serve_line_bar(
         x=x,
         actual=actual,
         expected=expected,
+        expected2=expected2,
         denominator=denominator,
         postcode_area=postcode_area,
         postcode_sector=postcode_sector,
@@ -441,6 +446,7 @@ def main() -> int:
     parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
+    parser.add_argument("--expected2", default=None, help="Initial second Expected / line 3 numeric feature. Defaults to None.")
     parser.add_argument("--denominator", default=None, help="Initial Weight column. Defaults to Average row value.")
     parser.add_argument("--postcode-area", default=None, help="Postcode area column for UK mapping. Defaults to PostcodeArea.")
     parser.add_argument("--postcode-sector", default=None, help="Postcode sector column for UK mapping. Defaults to PostcodeSector.")
@@ -502,6 +508,7 @@ def main() -> int:
             x=args.x,
             actual=args.actual,
             expected=args.expected,
+            expected2=args.expected2,
             denominator=args.denominator,
             postcode_area=args.postcode_area,
             postcode_sector=args.postcode_sector,

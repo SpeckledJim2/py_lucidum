@@ -1,6 +1,7 @@
 import { loadTabulator } from "./shared/tabulator.js";
 
 const LINE_BAR_SPECIAL_COLUMN_NAMES = [
+  "gbm_to_glm_ratio",
   "glm_prediction",
   "gbm_prediction",
   "glm_prediction_rate",
@@ -98,6 +99,10 @@ export function createLineBarTool({
 
   function isLineBarSpecialColumn(column) {
     return LINE_BAR_SPECIAL_COLUMN_NAMES.includes(String(column?.name || ""));
+  }
+
+  function isGbmGlmRatioColumn(column) {
+    return String(column?.name || "") === "gbm_to_glm_ratio";
   }
 
   function lineBarSpecialColumnOrder(column) {
@@ -421,7 +426,7 @@ export function createLineBarTool({
     const isDate = kind === "date" || kind === "datetime";
     const isNumeric = isNumericKind(kind);
     const isCategorical = kind === "categorical";
-    const hasExpected = Boolean(el("expectedNumerator").value);
+    const hasExpected = expectedSelections().length > 0;
     const modelControlsAvailable = toolEnabled("gbm") || toolEnabled("glm");
     const shapSortAvailable = isCategorical && shapPartialDependenceVisible() && shapOverlayAvailableForSelectedColumn();
     el("partialDependenceControl").classList.toggle("hidden", !modelControlsAvailable);
@@ -468,34 +473,105 @@ export function createLineBarTool({
     syncQuantileControl();
   }
 
+  function expectedSelections() {
+    return Array.isArray(state.expectedSelections) ? state.expectedSelections : [];
+  }
+
+  function expectedSelectionKey(value, sourceId = "") {
+    return `${sourceId || ""}\u0000${value || ""}`;
+  }
+
+  function expectedButtonSelection(value, sourceId = "") {
+    return expectedSelections().find((selection) => (
+      selection.value === value && (selection.sourceId || "") === (sourceId || "")
+    )) || null;
+  }
+
+  function expectedSelectionOption(value, sourceId = "") {
+    const select = el("expectedNumerator");
+    const options = Array.from(select.options);
+    return options.find((option) => (
+      !option.disabled &&
+      option.value === value &&
+      (!sourceId || option.dataset.sourceId === sourceId)
+    )) || options.find((option) => !option.disabled && option.value === value) || null;
+  }
+
+  function syncExpectedSelectToFirstSelection() {
+    const first = expectedSelections()[0];
+    const option = first ? expectedSelectionOption(first.value, first.sourceId) : null;
+    if (option) option.selected = true;
+    else el("expectedNumerator").value = "";
+  }
+
+  function toggleExpectedSelection(value, sourceId = "") {
+    const current = expectedSelections();
+    if (!value) {
+      if (!current.length) return false;
+      state.expectedSelections = [];
+      syncExpectedSelectToFirstSelection();
+      return true;
+    }
+    const existingIndex = current.findIndex((selection) => (
+      selection.value === value && (selection.sourceId || "") === (sourceId || "")
+    ));
+    if (existingIndex >= 0) {
+      state.expectedSelections = current.filter((_, index) => index !== existingIndex);
+      syncExpectedSelectToFirstSelection();
+      return true;
+    }
+    if (current.length >= 2) return false;
+    const option = expectedSelectionOption(value, sourceId);
+    const nextSelection = {
+      value,
+      sourceId: option?.dataset.sourceId || sourceId || state.source || "dataset",
+      metricKind: option?.dataset.metricKind || "metric",
+    };
+    state.expectedSelections = [...current, nextSelection];
+    syncExpectedSelectToFirstSelection();
+    return true;
+  }
+
   function renderExpectedNumerators(options = {}) {
     const query = el("expectedSearch").value.trim().toLowerCase();
-    const select = el("expectedNumerator");
     const list = el("expectedList");
     const scrollPosition = captureLineBarPickerScroll(list, options.preserveScroll);
     const { pinned, scroll } = resetLineBarPickerList(list, true);
+    const selections = expectedSelections();
+    const selectedKeys = new Set(selections.map((selection) => expectedSelectionKey(selection.value, selection.sourceId)));
+    const maxSelected = selections.length >= 2;
 
     function addExpectedButton(target, label, value, kind, sourceId = "", extraClass = "") {
+      const isActive = value
+        ? selectedKeys.has(expectedSelectionKey(value, sourceId))
+        : selections.length === 0;
+      const disabled = Boolean(value && maxSelected && !isActive);
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `feature ${extraClass} ${value === select.value ? "active" : ""}`.trim();
+      button.className = `feature ${extraClass} ${isActive ? "active" : ""}`.trim();
+      button.disabled = disabled;
+      button.setAttribute("aria-pressed", String(isActive));
       if (sourceId) button.dataset.sourceId = sourceId;
       button.dataset.value = value;
       button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
       button.addEventListener("click", (event) => {
-        const changed = select.value !== value;
-        select.value = value;
+        const previousSelections = expectedSelections().map((selection) => ({ ...selection }));
+        const changed = toggleExpectedSelection(value, sourceId);
+        if (!changed) return;
         const sourceChanged = syncExpectedSourceFromSelection({
           expectedValue: value,
           expectedSource: sourceId,
+          expectedSelections: state.expectedSelections,
         });
         if (!sourceChanged) {
           renderExpectedNumerators({ preserveScroll: true });
           updateAxisControls();
         }
-        if (changed || sourceChanged) refreshChart({ force: sourceChanged });
+        refreshChart({ force: sourceChanged });
         if (event.isTrusted) {
-          focusLineBarPickerButton(list, { value, sourceId, index: 0 });
+          const remainingSelection = expectedButtonSelection(value, sourceId);
+          const fallback = remainingSelection || state.expectedSelections[0] || previousSelections[0] || { value: "", sourceId: "" };
+          focusLineBarPickerButton(list, { value: fallback.value, sourceId: fallback.sourceId || "", index: 0 });
         }
       });
       target.append(button);
@@ -526,8 +602,19 @@ export function createLineBarTool({
     syncFeatureImportanceButton();
     ensureFeatureImportance();
     if (state.featureSort === "importance") {
-      resetLineBarPickerList(list, false);
-      renderFeatureImportanceRows(query, list);
+      const ratioColumns = orderedLineBarSpecialColumns([...sourceColumns()]).filter((column) => (
+        isGbmGlmRatioColumn(column) && featureMatchesQuery(column.name, query)
+      ));
+      if (ratioColumns.length) {
+        const { pinned, scroll } = resetLineBarPickerList(list, true);
+        for (const col of ratioColumns) {
+          addLineBarFeatureButton(pinned, col, "line-bar-special-row");
+        }
+        renderFeatureImportanceRows(query, scroll);
+      } else {
+        resetLineBarPickerList(list, false);
+        renderFeatureImportanceRows(query, list);
+      }
       restoreLineBarPickerScroll(list, scrollPosition);
       return;
     }
@@ -843,12 +930,11 @@ export function createLineBarTool({
         ...(source ? { source } : {}),
       });
     }
-    if (el("expectedNumerator").value) {
-      const option = el("expectedNumerator").selectedOptions[0];
-      const source = option?.dataset.metricKind === "prediction" ? option.dataset.sourceId || "" : "";
+    for (const selection of expectedSelections()) {
+      const source = selection.metricKind === "prediction" ? selection.sourceId || "" : "";
       responses.push({
-        label: el("expectedNumerator").value,
-        numerator: el("expectedNumerator").value,
+        label: selection.value,
+        numerator: selection.value,
         ...(source ? { source } : {}),
       });
     }
@@ -879,7 +965,8 @@ export function createLineBarTool({
       return null;
     }
     const column = selectedColumn();
-    const xSource = column && isModelPredictionColumn(column) ? column.source_id || state.xSource || state.source || "dataset" : "";
+    const sourceId = column?.source_id || state.xSource || state.source || "dataset";
+    const xSource = column && (isModelPredictionColumn(column) || sourceId !== (state.source || "dataset")) ? sourceId : "";
     return {
       source: state.source || "dataset",
       ...(xSource ? { xSource } : {}),
@@ -988,7 +1075,8 @@ export function createLineBarTool({
     const previousOption = chart.getOption();
     const actualColor = getCss("--actual-line");
     const expectedColor = "#d13f3f";
-    const responseColors = [actualColor, expectedColor];
+    const secondExpectedColor = getCss("--accent") || "#2276d2";
+    const responseColors = [actualColor, expectedColor, secondExpectedColor];
     const nColor = getCss("--bar");
     const weightLabel = data.denominator?.bar_label || "Weight";
     const sigmaColor = "#8a94a6";
@@ -1075,7 +1163,7 @@ export function createLineBarTool({
         animationDurationUpdate: 0,
         stateAnimation: { duration: 0 },
         backgroundColor: "transparent",
-        color: [actualColor, expectedColor, nColor],
+        color: [actualColor, expectedColor, secondExpectedColor, nColor],
         tooltip: {
           trigger: "axis",
           formatter: (params) => formatChartTooltip(params, weightLabel),
@@ -1401,6 +1489,12 @@ export function createLineBarTool({
   function updateMetricTitles(data) {
     const summaries = data.response_summaries || [];
     renderMetricTitle(el("expectedMetricTitle"), "Expected", summaries[1]?.value);
+    el("expectedMetricTitle").querySelector(".metric-value")?.classList.add("metric-value--first-expected");
+    if (summaries[2]?.value === null || summaries[2]?.value === undefined) return;
+    const valueSpan = document.createElement("span");
+    valueSpan.className = "metric-value metric-value--second-expected";
+    valueSpan.textContent = formatResponseValue(summaries[2].value);
+    el("expectedMetricTitle").append(valueSpan);
   }
 
   function formatResponseLabel(params) {
@@ -2101,6 +2195,14 @@ export function createLineBarTool({
       });
     });
     el("expectedNumerator").addEventListener("change", () => {
+      const option = el("expectedNumerator").selectedOptions[0];
+      state.expectedSelections = option?.value
+        ? [{
+            value: option.value,
+            sourceId: option.dataset.sourceId || state.source || "dataset",
+            metricKind: option.dataset.metricKind || "metric",
+          }]
+        : [];
       const sourceChanged = syncExpectedSourceFromSelection();
       if (!sourceChanged) {
         renderExpectedNumerators();

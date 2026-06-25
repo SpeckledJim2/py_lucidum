@@ -8,7 +8,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
 - **Dataset Viewer**: inspect a fast filtered preview of dataset rows in a sortable Tabulator grid, capped at 1,000 displayed rows, with client-side whole-table search, axis-exclusive whole-row or whole-column selection, transpose mode where search matches original column-name rows while keeping all preview row columns, optional alphabetical column ordering, three-state sort icons in both orientations, right-click cell copy, and right-click CSV copy for selected rows or columns.
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
-- **Line and Bar**: plot grouped Actual and optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, server-backed searchable/paginated tables, A-Z picker defaults, a launch-collapsed Expected picker with a quick toggle, Base-aware transforms, sigma bars, optional active-GBM SHAP ribbons, active-GLM overlay lines, and x-axis feature ordering by saved GBM/GLM feature importance.
+- **Line and Bar**: plot grouped Actual and up to two optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, server-backed searchable/paginated tables, A-Z picker defaults, a launch-collapsed Expected picker with a quick toggle, Base-aware transforms, sigma bars, optional active-GBM SHAP ribbons, active-GLM overlay lines, an active GBM/GLM prediction-ratio x-axis feature, and x-axis feature ordering by saved GBM/GLM feature importance.
 
   ![lucidum line and bar tool](docs/assets/line_and_bar.png)
 
@@ -164,7 +164,7 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--host 0.0.0.0` binds to all network interfaces for LAN testing. Keep token protection enabled unless another access layer is in place.
 - `--no-token` disables URL/API token protection for local-only use.
 - `--buttons` shows the `Stop app` and `Open monitor` buttons in the browser header. Without it, those header buttons are hidden; stop terminal launches with `Ctrl+C`, and open the monitor directly at `/monitor?token=...` when needed.
-- `--x`, `--actual`, `--expected`, and `--denominator` set initial Line/Bar selections.
+- `--x`, `--actual`, `--expected`, `--expected2`, and `--denominator` set initial Line/Bar selections.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.

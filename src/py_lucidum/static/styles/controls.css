@@ -168,6 +168,15 @@
         font-weight: 400;
       }
 
+      .metric-value--first-expected {
+        color: #d13f3f;
+      }
+
+      .metric-value--second-expected {
+        color: var(--accent);
+        margin-inline-start: 6px;
+      }
+
       .sidebar-accordion-section {
         display: flex;
         flex-direction: column;
