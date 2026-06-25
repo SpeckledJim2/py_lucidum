@@ -56,6 +56,7 @@
         sidebarVisible: true,
         bandWidth: "0",
         quantileMode: "off",
+        previousBandWidthsByFeature: {},
         dateBucket: "none",
         dateBucketFeature: null,
         dateBucketManualKey: null,
@@ -2945,6 +2946,7 @@
           syncHeaderButtons();
           const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
           state.bandFeature = null;
+          state.previousBandWidthsByFeature = {};
           state.bandSuggestionPendingKey = null;
           state.bandSuggestionRequestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
           invalidateLineBarDateBucketSuggestion();

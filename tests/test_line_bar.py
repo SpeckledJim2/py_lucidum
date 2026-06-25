@@ -2402,9 +2402,20 @@ COPY (
 
         result = chart(dataset, request)
 
+        self.assertEqual(result["x_group_kind"], "quantile")
         self.assertEqual([row["x"] for row in result["rows"]], ["Q1", "Q2", "Q3", "Q4"])
+        self.assertEqual([(row["x_start"], row["x_end"]) for row in result["rows"]], [(30, 30), (45, 45), (50, 50), (60, 60)])
         self.assertEqual([row["volume"] for row in result["rows"]], [1, 1, 1, 1])
         self.assertEqual([row["resp0"] for row in result["rows"]], [100, 200, 300, 400])
+
+        table_result = table(dataset, request)
+        self.assertEqual(table_result["x_group_kind"], "quantile")
+        self.assertEqual([(row["x"], row["x_start"], row["x_end"]) for row in table_result["rows"]], [
+            ("Q1", 30, 30),
+            ("Q2", 45, 45),
+            ("Q3", 50, 50),
+            ("Q4", 60, 60),
+        ])
 
     def test_numeric_quantile_banding_keeps_missing_values_separate(self) -> None:
         self.data_path.write_text(
@@ -2422,17 +2433,31 @@ COPY (
 
         result = chart(dataset, request)
 
+        self.assertEqual(result["x_group_kind"], "quantile")
         self.assertEqual([row["x"] for row in result["rows"]], ["Q1", "Q2", "Missing"])
+        self.assertEqual([(row.get("x_start"), row.get("x_end")) for row in result["rows"]], [(1, 2), (3, 4), (None, None)])
         self.assertEqual([row["volume"] for row in result["rows"]], [2, 2, 1])
         missing = result["rows"][2]
         self.assertEqual(missing["resp0"], 20)
         self.assertFalse(missing["is_tail"])
+
+        table_result = table(dataset, request)
+        self.assertEqual(table_result["x_group_kind"], "quantile")
+        self.assertEqual([(row.get("x"), row.get("x_start"), row.get("x_end")) for row in table_result["rows"]], [
+            ("Q1", 1, 2),
+            ("Q2", 3, 4),
+            ("Missing", None, None),
+        ])
 
         low_group_request = self.request()
         low_group_request.update({"x": "Score", "bandWidth": "4", "quantileMode": "quantile", "lowGroup": "2"})
         low_group_result = chart(dataset, low_group_request)
         self.assertEqual([row["x"] for row in low_group_result["rows"]], ["Low tail", "High tail", "Missing"])
         low_tail, high_tail, missing = low_group_result["rows"]
+        self.assertNotIn("x_start", low_tail)
+        self.assertNotIn("x_end", low_tail)
+        self.assertNotIn("x_start", high_tail)
+        self.assertNotIn("x_end", high_tail)
         self.assertEqual(low_tail["resp0_num"], 40)
         self.assertEqual(low_tail["resp0_den"], 2)
         self.assertEqual(low_tail["resp1_num"], 38)

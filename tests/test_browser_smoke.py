@@ -1132,6 +1132,124 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_quantile_ranges_and_band_restore(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_quantiles.csv"
+            data_path.write_text(
+                "Score,Other,Actual\n"
+                "0.123456789,10,10\n"
+                "0.234567891,20,20\n"
+                "0.345678912,30,30\n"
+                "0.456789123,40,40\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "Score",
+                    "actual": "Actual",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page.emulate_media(color_scheme="light")
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("line_bar_quantiles.csv").wait_for(timeout=10_000)
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("4 groups")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#bandControl [data-value="5"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#bandValue")?.textContent.trim() === "(5)"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#quantileControl [data-value="quantile"]').click()
+                    page.locator('#bandControl [data-value="1"]').click()
+                    page.locator('#bandControl [data-action="band-up"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#bandValue")?.textContent.trim() === "(2)"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const chart = window.echarts?.getInstanceByDom(document.querySelector("#chart"));
+                          const labels = chart?.getOption()?.xAxis?.[0]?.data || [];
+                          return labels.includes("Q1\\n0.1235 to 0.2346") && labels.includes("Q2\\n0.3457 to 0.4568");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#featureList .feature[data-value="Other"]').click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const chart = window.echarts?.getInstanceByDom(document.querySelector("#chart"));
+                          const labels = chart?.getOption()?.xAxis?.[0]?.data || [];
+                          return document.querySelector("#bandValue")?.textContent.trim() === "(2)"
+                            && labels.includes("Q1\\n10 to 20")
+                            && labels.includes("Q2\\n30 to 40");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#featureList .feature[data-value="Score"]').click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const chart = window.echarts?.getInstanceByDom(document.querySelector("#chart"));
+                          const labels = chart?.getOption()?.xAxis?.[0]?.data || [];
+                          return document.querySelector("#bandValue")?.textContent.trim() === "(2)"
+                            && labels.includes("Q1\\n0.1235 to 0.2346")
+                            && labels.includes("Q2\\n0.3457 to 0.4568");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator("#tableTab").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const cells = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']")]
+                            .map((cell) => cell.textContent.trim());
+                          return cells.includes("Q1: 0.1235 to 0.2346") && cells.includes("Q2: 0.3457 to 0.4568");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#quantileControl [data-value="off"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#bandValue")?.textContent.trim() === "(5)"
+                          && document.querySelector('#bandControl [data-value="5"]')?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_table_search_reaches_beyond_chart_cap(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "many_line_bar_groups.csv"

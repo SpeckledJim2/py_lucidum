@@ -72,6 +72,7 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
         payload = {
             "x": result["x_col"],
             "x_kind": result["x_kind"],
+            "x_group_kind": result["x_group_kind"],
             "date_bucket": result["date_bucket"],
             "source": result["source_id"],
             "row_count": result["row_count"],
@@ -135,6 +136,7 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
         return {
             "x": result["x_col"],
             "x_kind": result["x_kind"],
+            "x_group_kind": result["x_group_kind"],
             "date_bucket": result["date_bucket"],
             "source": result["source_id"],
             "row_count": result["row_count"],
@@ -678,6 +680,8 @@ sigma AS (
     keyed_from = "base"
     rownum_expr = "__rownum"
     source_columns = "*"
+    x_bound_keyed_sql = ""
+    x_bound_agg_sql = ",\n    NULL AS x_start,\n    NULL AS x_end"
     if x_sql.get("quantile_count"):
         quantile_cte = f""",
 quantiles AS (
@@ -695,6 +699,8 @@ quantiles AS (
         keyed_from = "base LEFT JOIN quantiles USING (__rownum)"
         rownum_expr = "base.__rownum"
         source_columns = "base.*"
+        x_bound_keyed_sql = f",\n    {x_sql['raw']} AS __x_raw_value"
+        x_bound_agg_sql = ",\n    MIN(__x_raw_value) AS x_start,\n    MAX(__x_raw_value) AS x_end"
     return f"""
 WITH base AS (
   SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}{where_sql}
@@ -705,7 +711,7 @@ keyed AS (
     {x_sql['key']} AS x_key,
     {x_sql['label']} AS x_label,
     {x_sql['sort']} AS x_sort,
-    CAST(hash({rownum_expr}) % 20 AS INTEGER) AS __fold,
+    CAST(hash({rownum_expr}) % 20 AS INTEGER) AS __fold{x_bound_keyed_sql},
     {weight_expr} AS __weight_value,
     {source_columns}
   FROM {keyed_from}
@@ -716,7 +722,7 @@ agg AS (
     x_label,
     MIN(x_sort) AS x_sort,
     MIN(__rownum) AS original_order,
-    COALESCE(SUM(__weight_value), 0) AS volume
+    COALESCE(SUM(__weight_value), 0) AS volume{x_bound_agg_sql}
     {metric_sql}
   FROM keyed
   GROUP BY x_key, x_label
@@ -814,6 +820,12 @@ def normalise_row(row: dict[str, Any], responses: list[dict[str, str]]) -> dict[
         "valid_folds": json_number(row.get("valid_folds")),
         "sigma_folds": row.get("sigma_folds"),
     }
+    x_start = json_number(row.get("x_start"))
+    x_end = json_number(row.get("x_end"))
+    if x_start is not None:
+        result["x_start"] = x_start
+    if x_end is not None:
+        result["x_end"] = x_end
     for index, _ in enumerate(responses):
         result[f"resp{index}_num"] = json_number(row.get(f"resp{index}_num"))
         result[f"resp{index}_den"] = json_number(row.get(f"resp{index}_den"))
@@ -1609,6 +1621,10 @@ def apply_transform(
             "is_tail": bool(row.get("is_tail")),
             "valid_folds": row.get("valid_folds"),
         }
+        if row.get("x_start") is not None:
+            out["x_start"] = row.get("x_start")
+        if row.get("x_end") is not None:
+            out["x_end"] = row.get("x_end")
         for index, _ in enumerate(responses):
             out[f"resp{index}_num"] = row.get(f"resp{index}_num")
             out[f"resp{index}_den"] = row.get(f"resp{index}_den")

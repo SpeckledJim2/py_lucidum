@@ -61,6 +61,10 @@ export function createLineBarTool({
   const DATE_AXIS_YEAR_HORIZONTAL_LABEL_LIMIT = 25;
   const DATE_AXIS_VISIBLE_LABEL_LIMIT = 60;
   const DATE_AXIS_ROTATION = 60;
+  const QUANTILE_AXIS_FONT_SIZES = [10, 9, 8, 7];
+  const QUANTILE_AXIS_ROTATIONS = [0, 45, 65, 75];
+  const QUANTILE_AXIS_LABEL_WIDTH_FACTOR = 0.54;
+  const QUANTILE_AXIS_LABEL_PADDING = 8;
   const DATE_BUCKET_VALUES = new Set(["none", "hour", "day", "week", "month", "year"]);
   const RESPONSE_AXIS_PADDING = 0.08;
   const RESPONSE_AXIS_TARGET_INTERVALS = 15;
@@ -252,6 +256,24 @@ export function createLineBarTool({
     return Number(number.toPrecision(12)).toString();
   }
 
+  function previousBandWidthsByFeature() {
+    if (!state.previousBandWidthsByFeature || typeof state.previousBandWidthsByFeature !== "object" || Array.isArray(state.previousBandWidthsByFeature)) {
+      state.previousBandWidthsByFeature = {};
+    }
+    return state.previousBandWidthsByFeature;
+  }
+
+  function rememberNonQuantileBandWidthForCurrentFeature() {
+    previousBandWidthsByFeature()[currentBandFeatureKey()] = String(state.bandWidth ?? "0");
+  }
+
+  function restoreNonQuantileBandWidthForCurrentFeature() {
+    const saved = previousBandWidthsByFeature()[currentBandFeatureKey()];
+    if (saved === undefined) return false;
+    state.bandWidth = String(saved);
+    return true;
+  }
+
   function syncBandingControl() {
     syncSegmented("bandWidth", state.bandWidth);
     el("bandLabel").textContent = state.quantileMode === "quantile" ? "Quantiles" : "Banding";
@@ -320,6 +342,12 @@ export function createLineBarTool({
     if (!state.schema || !state.x || state.bandSuggestionPendingKey === bandFeatureKey) return;
     const column = selectedColumn();
     if (!isNumericKind(column?.kind)) return;
+    if (state.quantileMode === "quantile") {
+      state.bandFeature = bandFeatureKey;
+      clearPendingBandSuggestion();
+      syncBandingControl();
+      return;
+    }
     const requestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
     state.bandSuggestionRequestSeq = requestSeq;
     state.bandSuggestionPendingKey = bandFeatureKey;
@@ -440,7 +468,11 @@ export function createLineBarTool({
     el("quantileControl").classList.toggle("hidden", !isNumeric);
     const bandFeatureKey = currentBandFeatureKey();
     const dateBucketKey = currentDateBucketFeatureKey();
-    if (isNumeric && state.tool === "line_bar" && state.bandFeature !== bandFeatureKey) {
+    if (isNumeric && state.quantileMode === "quantile" && state.bandFeature !== bandFeatureKey) {
+      state.bandFeature = bandFeatureKey;
+      clearPendingBandSuggestion();
+    }
+    if (isNumeric && state.quantileMode !== "quantile" && state.tool === "line_bar" && state.bandFeature !== bandFeatureKey) {
       requestBandSuggestionForSelectedColumn(bandFeatureKey);
     }
     if (isDate && state.tool === "line_bar" && state.dateBucketManualKey !== dateBucketKey && state.dateBucketFeature !== dateBucketKey) {
@@ -948,11 +980,14 @@ export function createLineBarTool({
     const isNumeric = isNumericKind(kind);
     const bandFeatureKey = currentBandFeatureKey();
     const dateBucketKey = currentDateBucketFeatureKey();
-    if (isNumeric && state.bandFeature !== bandFeatureKey) {
+    if (isNumeric && state.quantileMode === "quantile" && state.bandFeature !== bandFeatureKey) {
+      normalizeBandWidthForQuantiles();
+    }
+    if (isNumeric && state.quantileMode !== "quantile" && state.bandFeature !== bandFeatureKey) {
       requestBandSuggestionForSelectedColumn(bandFeatureKey);
       return null;
     }
-    if (isNumeric && state.bandSuggestionPendingKey === bandFeatureKey) {
+    if (isNumeric && state.quantileMode !== "quantile" && state.bandSuggestionPendingKey === bandFeatureKey) {
       setGroupMeta("line_bar", "Estimating banding...");
       return null;
     }
@@ -1056,11 +1091,12 @@ export function createLineBarTool({
   }
 
   function renderChart(data) {
-    const labels = data.rows.map((r) => formatXLabel(r.x, data.x_kind));
+    const labels = data.rows.map((r) => formatChartXLabel(r, data));
     const labelMode = state.labels;
     const rawXValues = data.rows.map((r) => r.x);
     const dateBucket = normaliseDateBucket(data.date_bucket);
-    const xLabelPolicy = getXAxisLabelPolicy(labels, data.x_kind, rawXValues, dateBucket, chart.getWidth?.() || el("chart").clientWidth);
+    const displayKind = data.x_group_kind || data.x_kind;
+    const xLabelPolicy = getXAxisLabelPolicy(labels, displayKind, rawXValues, dateBucket, chart.getWidth?.() || el("chart").clientWidth);
     dateXAxisContext = isDateKind(data.x_kind)
       ? { labels, rawXValues, dateBucket, xKind: data.x_kind }
       : null;
@@ -1182,7 +1218,7 @@ export function createLineBarTool({
             color: getCss("--text"),
             interval: xLabelPolicy.interval,
             formatter: xLabelPolicy.formatter,
-            hideOverlap: false,
+            hideOverlap: Boolean(xLabelPolicy.hideOverlap),
             showMinLabel: xLabelPolicy.showMinLabel,
             showMaxLabel: xLabelPolicy.showMaxLabel,
             rotate: xLabelPolicy.rotate,
@@ -1204,7 +1240,7 @@ export function createLineBarTool({
       chart.resize();
       refreshDateXAxisLabelsForCurrentZoom();
     });
-    return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-", xLabelPolicy.hiddenReason);
+    return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-", xLabelPolicy.hiddenReason, Boolean(xLabelPolicy.hideOverlap));
   }
 
   function lineBarDataZoomOptions() {
@@ -1450,7 +1486,8 @@ export function createLineBarTool({
     return "";
   }
 
-  function chartDensityMessage(groupCount, xLabelsHidden, chartLabelsHidden, xLabelReason = "") {
+  function chartDensityMessage(groupCount, xLabelsHidden, chartLabelsHidden, xLabelReason = "", xLabelsSuppressed = false) {
+    if (xLabelsSuppressed && !chartLabelsHidden) return xLabelReason ? `Some X-axis labels hidden ${xLabelReason}.` : "Some X-axis labels hidden to avoid overlap.";
     if (!xLabelsHidden && !chartLabelsHidden) return "";
     if (xLabelsHidden && xLabelReason && !chartLabelsHidden) return `X-axis labels hidden ${xLabelReason}.`;
     const labelTarget = xLabelsHidden && chartLabelsHidden
@@ -1472,6 +1509,33 @@ export function createLineBarTool({
       column?.source_role === "gbm_shap_value"
       && String(column.artifact_column || column.label || "") === feature
     ));
+  }
+
+  function formatChartXLabel(row, data) {
+    const rangeLabel = formatQuantileRangeLabel(row, data, "\n");
+    return rangeLabel || formatXLabel(row?.x, data.x_kind);
+  }
+
+  function formatTableXLabel(row, data) {
+    const rangeLabel = formatQuantileRangeLabel(row, data, ": ");
+    return rangeLabel || formatXLabel(row?.x, data.x_kind);
+  }
+
+  function formatQuantileRangeLabel(row, data, separator) {
+    if ((data?.x_group_kind || data?.x_kind) !== "quantile") return "";
+    if (!row || row.is_tail || row.x === "Missing") return "";
+    const start = formatQuantileEndpoint(row.x_start);
+    const end = formatQuantileEndpoint(row.x_end);
+    if (!start || !end) return "";
+    const prefix = String(row.x ?? "");
+    return start === end
+      ? `${prefix}${separator}${start}`
+      : `${prefix}${separator}${start} to ${end}`;
+  }
+
+  function formatQuantileEndpoint(value) {
+    if (value === null || value === undefined) return "";
+    return formatNumber(value);
   }
 
   function formatChartTooltip(params, weightLabel) {
@@ -1703,6 +1767,7 @@ export function createLineBarTool({
 
   function getXAxisLabelPolicy(labels, kind = "", rawValues = labels, dateBucket = "none", chartWidth = 0) {
     if (isDateKind(kind)) return getDateXAxisLabelPolicy(labels, rawValues, dateBucket, chartWidth);
+    if (kind === "quantile") return getQuantileXAxisLabelPolicy(labels, chartWidth);
     const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label).length), 0);
     const tooMany = labels.length >= LABEL_DENSITY_LIMIT;
     const dataZoomSpace = labels.length > 120 ? 36 : 0;
@@ -1718,6 +1783,7 @@ export function createLineBarTool({
         nameGap: 22,
         bottom: 38 + dataZoomSpace,
         dataZoomEnabled: labels.length > 120,
+        hideOverlap: false,
         hiddenReason: `as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories`,
       };
     }
@@ -1738,8 +1804,98 @@ export function createLineBarTool({
       nameGap: titleGap,
       bottom: titleGap + 16 + dataZoomSpace,
       dataZoomEnabled: labels.length > 120,
+      hideOverlap: false,
       hiddenReason: "",
     };
+  }
+
+  function getQuantileXAxisLabelPolicy(labels, chartWidth = 0) {
+    const count = labels.length;
+    const tooMany = count >= LABEL_DENSITY_LIMIT;
+    const dataZoomSpace = count > 120 ? 36 : 0;
+    if (tooMany) {
+      return {
+        show: false,
+        interval: 0,
+        formatter: undefined,
+        showMinLabel: true,
+        showMaxLabel: true,
+        rotate: 0,
+        fontSize: 10,
+        nameGap: 22,
+        bottom: 38 + dataZoomSpace,
+        dataZoomEnabled: count > 120,
+        hideOverlap: false,
+        hiddenReason: `as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories`,
+      };
+    }
+    const visibleCount = Math.max(1, count);
+    const slotWidth = dateXAxisPlotWidth(chartWidth) / visibleCount;
+    let fallback = null;
+    for (const rotate of QUANTILE_AXIS_ROTATIONS) {
+      for (const fontSize of QUANTILE_AXIS_FONT_SIZES) {
+        const size = quantileAxisLabelMaxSize(labels, fontSize);
+        const footprint = quantileAxisLabelFootprint(size.width, size.height, rotate);
+        const labelSpace = quantileAxisLabelSpace(size.width, size.height, rotate);
+        const policy = {
+          show: true,
+          interval: 0,
+          formatter: undefined,
+          showMinLabel: true,
+          showMaxLabel: true,
+          rotate,
+          fontSize,
+          nameGap: Math.max(26, labelSpace - 10),
+          bottom: Math.max(26, labelSpace - 10) + 16 + dataZoomSpace,
+          dataZoomEnabled: count > 120,
+          hideOverlap: false,
+          hiddenReason: "",
+        };
+        fallback = policy;
+        if (visibleCount <= 1 || footprint <= slotWidth) return policy;
+      }
+    }
+    return {
+      ...(fallback || {
+        show: true,
+        interval: 0,
+        formatter: undefined,
+        showMinLabel: true,
+        showMaxLabel: true,
+        rotate: 75,
+        fontSize: 7,
+        nameGap: 82,
+        bottom: 98 + dataZoomSpace,
+        dataZoomEnabled: count > 120,
+      }),
+      hideOverlap: true,
+      hiddenReason: "because quantile labels would overlap",
+    };
+  }
+
+  function quantileAxisLabelMaxSize(labels, fontSize) {
+    return labels.reduce((maxSize, label) => {
+      const lines = String(label || "").split("\n");
+      const width = lines.reduce((lineWidth, line) => Math.max(lineWidth, line.length * fontSize * QUANTILE_AXIS_LABEL_WIDTH_FACTOR), 0);
+      const height = Math.max(fontSize, lines.length * fontSize * 1.15);
+      return {
+        width: Math.max(maxSize.width, width),
+        height: Math.max(maxSize.height, height),
+      };
+    }, { width: 0, height: fontSize });
+  }
+
+  function quantileAxisLabelFootprint(labelWidth, labelHeight, rotate) {
+    if (!rotate) return labelWidth + QUANTILE_AXIS_LABEL_PADDING;
+    const radians = (rotate * Math.PI) / 180;
+    return labelWidth * Math.cos(radians) + labelHeight * Math.sin(radians) + QUANTILE_AXIS_LABEL_PADDING;
+  }
+
+  function quantileAxisLabelSpace(labelWidth, labelHeight, rotate) {
+    if (!rotate) return Math.max(38, Math.ceil(labelHeight) + 18);
+    const radians = (rotate * Math.PI) / 180;
+    const rotatedHeight = labelWidth * Math.sin(radians) + labelHeight * Math.cos(radians);
+    return Math.min(190, Math.max(70, Math.ceil(rotatedHeight) + 18));
   }
 
   function getDateXAxisLabelPolicy(labels, rawValues, dateBucket = "none", chartWidth = 0, visibleRange = null) {
@@ -2049,7 +2205,7 @@ export function createLineBarTool({
     const tableRows = rowsData.map((row, index) => {
       const displayRow = {
         __id: `${page}:${index}`,
-        x: formatXLabel(row.x, data.x_kind),
+        x: formatTableXLabel(row, data),
         volume: formatNumber(row.volume),
       };
       data.responses.forEach((_, responseIndex) => {
@@ -2171,12 +2327,14 @@ export function createLineBarTool({
         if (group.dataset.control === "quantileMode") {
           if (state.quantileMode === "quantile" && previousControlValue !== "quantile") {
             clearPendingBandSuggestion();
+            rememberNonQuantileBandWidthForCurrentFeature();
             state.bandWidth = "10";
             state.bandFeature = currentBandFeatureKey();
             syncBandingControl();
           } else if (state.quantileMode === "quantile") {
             normalizeBandWidthForQuantiles();
           } else {
+            restoreNonQuantileBandWidthForCurrentFeature();
             syncBandingControl();
           }
           syncQuantileControl();
