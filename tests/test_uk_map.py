@@ -8,14 +8,19 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
 
+import duckdb
+
 from py_lucidum.app import create_app, normalise_tools
-from py_lucidum.core import Dataset
+from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.tools.uk_map import query as uk_map_query
 from py_lucidum.tools.uk_map.query import summary
 from py_lucidum.tools.uk_map.smoothing import (
     DEFAULT_SECTOR_ADJACENCY_PATH,
+    DEFAULT_SECTOR_SMOOTHING_POOLS_PATH,
+    MAX_SMOOTHING_LEVEL,
     load_sector_adjacency,
     normalise_smoothing_level,
+    sector_smoothing_pools,
     smooth_sector_rows,
 )
 
@@ -49,6 +54,25 @@ def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, d
     response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
     headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in start["headers"]}
     return start["status"], headers, response_body
+
+
+def write_smoothing_pool_parquet(adjacency_path: Path, output_path: Path) -> None:
+    adjacency = load_sector_adjacency(str(adjacency_path))
+    rows: list[tuple[int, str, str]] = []
+    for level in range(1, MAX_SMOOTHING_LEVEL + 1):
+        pools = sector_smoothing_pools(str(adjacency_path), level)
+        for target_index, pool in enumerate(pools):
+            target_key = adjacency.keys[target_index]
+            for pool_index in pool:
+                rows.append((level, target_key, adjacency.keys[pool_index]))
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.execute("CREATE TABLE pools(level INTEGER, target_key VARCHAR, pool_key VARCHAR)")
+        con.executemany("INSERT INTO pools VALUES (?, ?, ?)", rows)
+        con.execute(f"COPY pools TO {sql_literal(str(output_path))} (FORMAT PARQUET, COMPRESSION ZSTD)")
+    finally:
+        con.close()
 
 
 class UkMapToolTests(unittest.TestCase):
@@ -140,6 +164,16 @@ class UkMapToolTests(unittest.TestCase):
         self.assertLessEqual(payload["timings"]["duckdb_ns"], payload["timings"]["server_ns"])
         self.assertNotIn("app_ns", payload["timings"])
         self.assertNotIn("app_ms", payload["timings"])
+
+    def test_sector_smoothing_endpoint_includes_duckdb_timing(self) -> None:
+        app = create_app(self.data_path, token="", tools=["uk_map"], use_saved_filters=False, use_kpis=False)
+
+        status, _, body = asgi_post_json(app, "/api/uk-map/summary", self.request(level="sector", smoothingLevel=1))
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["smoothing"]["applied"])
+        self.assertGreater(payload["timings"]["duckdb_ns"], 0)
 
     def test_area_summary_uses_average_row_value(self) -> None:
         dataset = Dataset(self.data_path)
@@ -290,12 +324,14 @@ class UkMapToolTests(unittest.TestCase):
             encoding="utf-8",
         )
         dataset = Dataset(data_path)
-        original_smooth_sector_rows = uk_map_query.smooth_sector_rows
+        pool_path = self.root / "endpoint_smoothing_pools.parquet"
+        write_smoothing_pool_parquet(adjacency_path, pool_path)
+        original_build_smoothed_sector_sql = uk_map_query.build_smoothed_sector_sql
 
         with patch.object(
             uk_map_query,
-            "smooth_sector_rows",
-            side_effect=lambda rows, level: original_smooth_sector_rows(rows, level, adjacency_path=str(adjacency_path)),
+            "build_smoothed_sector_sql",
+            side_effect=lambda raw_sql, level: original_build_smoothed_sector_sql(raw_sql, level, pool_path=str(pool_path)),
         ):
             result = summary(dataset, self.request(level="sector", smoothingLevel=1))
 
@@ -313,6 +349,29 @@ class UkMapToolTests(unittest.TestCase):
         self.assertIsNone(rows_by_key["C"]["raw_value"])
         self.assertEqual(rows_by_key["C"]["smoothing_contributing_sectors"], 0)
 
+    def test_sector_duckdb_smoothing_matches_python_reference_for_all_levels(self) -> None:
+        dataset = Dataset(self.data_path)
+        raw_rows = uk_map_query.map_rows(
+            dataset,
+            "PostcodeSector",
+            {"label": "Actual", "numerator": "Actual"},
+            {"column": None, "label": "Average row value", "bar_label": "Row count"},
+        )
+
+        for level in range(1, MAX_SMOOTHING_LEVEL + 1):
+            with self.subTest(level=level):
+                expected_rows, expected_metadata, expected_warning = smooth_sector_rows(raw_rows, level)
+                result = summary(dataset, self.request(level="sector", smoothingLevel=level))
+                actual_metadata = dict(result["smoothing"])
+                actual_metadata.pop("requested_level", None)
+
+                self.assertIsNone(expected_warning)
+                self.assertEqual(actual_metadata, expected_metadata)
+                self.assertEqual(
+                    {row["key"]: row for row in result["rows"]},
+                    {row["key"]: row for row in expected_rows},
+                )
+
     def test_sector_adjacency_sidecar_matches_geojson_keys(self) -> None:
         geojson_path = DEFAULT_SECTOR_ADJACENCY_PATH.with_name("sectors_MappaR.geojson")
         geojson = json.loads(geojson_path.read_text(encoding="utf-8"))
@@ -326,6 +385,34 @@ class UkMapToolTests(unittest.TestCase):
             self.assertEqual(len(neighbours), len(set(neighbours)))
             self.assertNotIn(index, neighbours)
             self.assertTrue(all(0 <= neighbour < len(geojson_keys) for neighbour in neighbours))
+
+    def test_sector_smoothing_parquet_matches_adjacency_pools(self) -> None:
+        adjacency = load_sector_adjacency()
+        con = duckdb.connect(database=":memory:")
+        try:
+            pool_sql = f"read_parquet({sql_literal(str(DEFAULT_SECTOR_SMOOTHING_POOLS_PATH))})"
+            columns = con.execute(f"DESCRIBE SELECT * FROM {pool_sql}").fetchall()
+            rows = con.execute(f"""
+                SELECT level, COUNT(*), COUNT(DISTINCT target_key), COUNT(DISTINCT pool_key)
+                FROM {pool_sql}
+                GROUP BY level
+                ORDER BY level
+            """).fetchall()
+            key_rows = con.execute(f"""
+                SELECT target_key FROM {pool_sql}
+                UNION
+                SELECT pool_key FROM {pool_sql}
+            """).fetchall()
+        finally:
+            con.close()
+
+        self.assertEqual([column[0] for column in columns], ["level", "target_key", "pool_key"])
+        self.assertEqual([row[0] for row in rows], list(range(1, MAX_SMOOTHING_LEVEL + 1)))
+        self.assertEqual({row[0] for row in key_rows}, set(adjacency.keys))
+        for level, pair_count, target_count, pool_key_count in rows:
+            self.assertEqual(pair_count, sum(len(pool) for pool in sector_smoothing_pools(str(DEFAULT_SECTOR_ADJACENCY_PATH), level)))
+            self.assertEqual(target_count, len(adjacency.keys))
+            self.assertEqual(pool_key_count, len(adjacency.keys))
 
     def test_custom_postcode_column_default(self) -> None:
         dataset = Dataset(self.data_path)

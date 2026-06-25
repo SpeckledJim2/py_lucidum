@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import duckdb
+
 from py_lucidum.core import (
     ColumnInfo,
     Dataset,
@@ -18,8 +20,9 @@ from py_lucidum.core import (
 )
 from py_lucidum.tools.uk_map.smoothing import (
     MAX_SMOOTHING_LEVEL,
+    SECTOR_SMOOTHING_LOAD_WARNING,
+    build_smoothed_sector_sql,
     normalise_smoothing_level,
-    smooth_sector_rows,
 )
 
 
@@ -117,11 +120,19 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
             filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
             denominator_summary = summarize_denominator(dataset, [response], denominator, filter_sql, source_id=source_id)
             response_summaries = response_summary(dataset, [response], denominator, filter_sql, source_id=source_id)
-            rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
             if level == "sector":
-                rows, smoothing, smoothing_warning = smooth_sector_rows(rows, smoothing_level)
+                rows, smoothing, smoothing_warning = sector_rows(
+                    dataset,
+                    join_column,
+                    response,
+                    denominator,
+                    filter_sql,
+                    source_id=source_id,
+                    smoothing_level=smoothing_level,
+                )
                 smoothing["requested_level"] = smoothing_level
             else:
+                rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
                 smoothing = smoothing_metadata(0, smoothing_level, len(rows))
                 smoothing_warning = None
         warnings = denominator_warnings(denominator, denominator_summary)
@@ -293,18 +304,113 @@ def map_rows(
     ]
 
 
+def sector_rows(
+    dataset: Dataset,
+    join_column: str,
+    response: dict[str, str],
+    denominator: dict[str, str | None],
+    filter_sql: str = "",
+    source_id: Any = None,
+    *,
+    smoothing_level: int = 0,
+) -> tuple[list[dict[str, Any]], dict[str, Any], str | None]:
+    if smoothing_level <= 0:
+        rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
+        return rows, sector_smoothing_metadata(0, len(rows)), None
+
+    raw_sql = build_summary_sql(
+        dataset.relation_sql_for_source(source_id),
+        join_column,
+        response,
+        denominator,
+        filter_sql,
+        order_by=False,
+    )
+    try:
+        cursor = dataset.con.execute(build_smoothed_sector_sql(raw_sql, smoothing_level))
+    except (duckdb.Error, OSError, ValueError) as exc:
+        rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
+        metadata = sector_smoothing_metadata(smoothing_level, len(rows))
+        metadata["method"] = "shared_edge_weighted_numerator"
+        metadata["warning"] = SECTOR_SMOOTHING_LOAD_WARNING
+        metadata["fallback_rows"] = len(rows)
+        return rows, metadata, f"{SECTOR_SMOOTHING_LOAD_WARNING} {exc}"
+
+    return smoothed_sector_rows_from_cursor(cursor, smoothing_level)
+
+
+def sector_smoothing_metadata(level: int, matched_rows: int) -> dict[str, Any]:
+    return {
+        "level": level,
+        "max_level": MAX_SMOOTHING_LEVEL,
+        "applied": False,
+        "method": "none" if level <= 0 else "shared_edge_weighted_numerator",
+        "matched_rows": matched_rows,
+        "target_rows": matched_rows,
+        "smoothed_rows": 0,
+        "fallback_rows": 0,
+        "contributing_rows": 0,
+    }
+
+
+def smoothed_sector_rows_from_cursor(
+    cursor: Any,
+    smoothing_level: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any], str | None]:
+    column_names = [d[0] for d in cursor.description]
+    raw_rows = [dict(zip(column_names, row)) for row in cursor.fetchall()]
+    if not raw_rows:
+        metadata = sector_smoothing_metadata(smoothing_level, 0)
+        metadata["applied"] = True
+        return [], metadata, None
+
+    first = raw_rows[0]
+    rows = [
+        {
+            "key": row["key"],
+            "row_count": json_number(row.get("row_count")),
+            "numerator": json_number(row.get("numerator")),
+            "denominator": json_number(row.get("denominator")),
+            "volume": json_number(row.get("volume")),
+            "value": json_number(row.get("value")),
+            "raw_numerator": json_number(row.get("raw_numerator")),
+            "raw_denominator": json_number(row.get("raw_denominator")),
+            "raw_volume": json_number(row.get("raw_volume")),
+            "raw_value": json_number(row.get("raw_value")),
+            "raw_row_count": json_number(row.get("raw_row_count")),
+            "smoothing_contributing_sectors": int(row.get("smoothing_contributing_sectors") or 0),
+        }
+        for row in raw_rows
+    ]
+    metadata = {
+        "level": smoothing_level,
+        "max_level": MAX_SMOOTHING_LEVEL,
+        "applied": True,
+        "method": "shared_edge_weighted_numerator",
+        "matched_rows": int(first.get("__matched_rows") or 0),
+        "target_rows": int(first.get("__target_rows") or 0),
+        "smoothed_rows": int(first.get("__smoothed_rows") or 0),
+        "fallback_rows": int(first.get("__fallback_rows") or 0),
+        "contributing_rows": int(first.get("__contributing_rows") or 0),
+    }
+    return rows, metadata, None
+
+
 def build_summary_sql(
     relation: str,
     join_column: str,
     response: dict[str, str],
     denominator: dict[str, str | None],
     filter_sql: str = "",
+    *,
+    order_by: bool = True,
 ) -> str:
     valid_condition = denominator_valid_condition([response], denominator)
     weight_expr = weighted_value_sql(denominator, valid_condition)
     num_expr, den_expr, value_expr = response_parts(response, 0)
     join_expr = f"NULLIF(TRIM(CAST({quote_ident(join_column)} AS VARCHAR)), '')"
     where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    order_sql = "\nORDER BY key" if order_by else ""
     return f"""
 WITH base AS (
   SELECT * FROM {relation}{where_sql}
@@ -330,7 +436,7 @@ SELECT
     *,
     {value_expr}
 FROM summary
-ORDER BY key
+{order_sql}
 """
 
 
@@ -493,6 +599,7 @@ __all__ = [
     "build_summary_sql",
     "compact_unit_points",
     "map_rows",
+    "sector_rows",
     "unit_rows",
     "normalise_coordinate_column",
     "normalise_join_column",
