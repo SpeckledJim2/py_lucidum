@@ -37,24 +37,25 @@ DATE_BUCKETS = {"hour", "day", "week", "month", "year"}
 def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
     with dataset.lock:
         result = build_grouped_result(dataset, request, feature_spec=feature_spec, include_partial_dependence=True)
-        sorted_rows = result["rows"]
-        group_count = len(sorted_rows)
+        chart_result = fetch_chart_rows(dataset, result)
+        chart_rows = chart_result["rows"]
+        group_count = chart_result["group_count"]
         max_groups = normalise_positive_int(request.get("maxGroups"), DEFAULT_MAX_GROUPS)
-        chart_rows = sorted_rows[:max_groups]
         transform = str(request.get("transform") or "none")
         warnings = list(result["warnings"])
         if group_count > max_groups:
             warnings.append(f"Chart showing first {max_groups:,} of {group_count:,} groups. Table search covers all groups.")
+        transform_metadata = transform_metadata_for_result(dataset, result, transform, warnings)
         display_rows, transform_metadata = apply_transform(
             chart_rows,
             result["responses"],
             transform,
             result["sigma_multiplier"],
             warnings,
-            reference_rows=sorted_rows,
             x_kind=result["x_group_kind"],
             base=request.get("base"),
             band_width=request.get("bandWidth"),
+            transform_metadata=transform_metadata,
         )
         partial_dependence = result["partial_dependence"]
         if partial_dependence:
@@ -109,29 +110,23 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
 def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
     with dataset.lock:
         result = build_grouped_result(dataset, request, feature_spec=feature_spec, include_partial_dependence=False)
-        sorted_rows = result["rows"]
-        group_count = len(sorted_rows)
-        search = str(request.get("tableSearch") or "").strip()
-        matched_rows = [row for row in sorted_rows if table_row_matches(row, search, result["x_kind"])]
         page_size = normalise_positive_int(request.get("tablePageSize"), DEFAULT_TABLE_PAGE_SIZE)
         page = normalise_positive_int(request.get("tablePage"), 1)
-        match_count = len(matched_rows)
-        page_count = max(1, math.ceil(match_count / page_size))
-        page = min(page, page_count)
-        start = (page - 1) * page_size
-        page_rows = matched_rows[start:start + page_size]
+        table_result = fetch_table_rows(dataset, result, page=page, page_size=page_size)
+        page_rows = table_result["rows"]
         transform = str(request.get("transform") or "none")
         warnings = list(result["warnings"])
+        transform_metadata = transform_metadata_for_result(dataset, result, transform, warnings)
         display_rows, transform_metadata = apply_transform(
             page_rows,
             result["responses"],
             transform,
             result["sigma_multiplier"],
             warnings,
-            reference_rows=sorted_rows,
             x_kind=result["x_group_kind"],
             base=request.get("base"),
             band_width=request.get("bandWidth"),
+            transform_metadata=transform_metadata,
         )
         return {
             "x": result["x_col"],
@@ -158,16 +153,16 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
                 "negative_weight_rows": json_number(result["denominator_summary"].get("negative_weight_rows")),
             },
             "rows": display_rows,
-            "summary": build_table_summary(matched_rows, result["responses"], transform, transform_metadata),
+            "summary": transform_table_summary(table_result["summary"], result["responses"], transform, transform_metadata),
             "warnings": warnings,
             "transform": transform_metadata,
             "table": {
-                "search": search,
-                "page": page,
+                "search": table_result["search"],
+                "page": table_result["page"],
                 "page_size": page_size,
-                "page_count": page_count,
-                "match_count": match_count,
-                "group_count": group_count,
+                "page_count": table_result["page_count"],
+                "match_count": table_result["match_count"],
+                "group_count": table_result["group_count"],
             },
         }
 
@@ -207,17 +202,6 @@ def build_grouped_result(
     sigma_multiplier = float(request.get("sigma") or 0)
     include_sigma = sigma_multiplier > 0 and len(responses) >= 2
     denominator_summary = relation_denominator_summary(dataset, relation, responses, denominator, filter_sql)
-    sql = build_chart_sql(relation, x_sql, responses, denominator, include_sigma, filter_sql)
-    raw_rows = [
-        dict(zip([d[0] for d in dataset.con.description], row))
-        for row in dataset.con.execute(sql).fetchall()
-    ]
-    grouped_rows = apply_low_weight_grouping(
-        rows=raw_rows,
-        responses=responses,
-        x_kind=x_group_kind,
-        threshold=str(request.get("lowGroup") or "0"),
-    )
     partial_dependence = None
     if include_partial_dependence or str(request.get("sort") or "alpha") == "shap":
         partial_dependence = build_partial_dependence_overlay(
@@ -231,8 +215,20 @@ def build_grouped_result(
             responses=responses,
             denominator=denominator,
         )
-    sorted_rows = sort_rows(grouped_rows, x_group_kind, str(request.get("sort") or "alpha"), partial_dependence_medians(partial_dependence))
-    clean_numeric_band_labels(sorted_rows, x_group_kind, request.get("bandWidth"))
+    grouped_sql = build_grouped_pipeline_sql(
+        relation=relation,
+        x_col=x_col,
+        x_sql=x_sql,
+        responses=responses,
+        denominator=denominator,
+        include_sigma=include_sigma,
+        filter_sql=filter_sql,
+        x_group_kind=x_group_kind,
+        low_group=str(request.get("lowGroup") or "0"),
+        sort=str(request.get("sort") or "alpha"),
+        shap_medians=partial_dependence_medians(partial_dependence),
+    )
+    response_summaries = relation_response_summary(dataset, relation, responses, denominator, filter_sql)
     return {
         "source_id": context["source_id"],
         "field_sources": context.get("field_sources"),
@@ -246,12 +242,921 @@ def build_grouped_result(
         "responses": responses,
         "denominator": denominator,
         "denominator_summary": denominator_summary,
-        "response_summaries": relation_response_summary(dataset, relation, responses, denominator, filter_sql),
+        "response_summaries": response_summaries,
+        "grouped_sql": grouped_sql,
         "sigma_multiplier": sigma_multiplier,
         "partial_dependence": partial_dependence,
         "warnings": denominator_warnings(denominator, denominator_summary),
-        "rows": sorted_rows,
+        "request": request,
     }
+
+
+def fetch_chart_rows(dataset: Dataset, result: dict[str, Any]) -> dict[str, Any]:
+    max_groups = normalise_positive_int(result["request"].get("maxGroups"), DEFAULT_MAX_GROUPS)
+    order_terms = sort_order_terms(result["x_group_kind"], str(result["request"].get("sort") or "alpha"))
+    sql = f"""
+{result['grouped_sql']},
+group_total AS (
+  SELECT COUNT(*) AS group_count FROM sort_ready
+),
+numbered AS (
+  SELECT
+    sort_ready.*,
+    ROW_NUMBER() OVER (ORDER BY {order_terms}) AS __row_index
+  FROM sort_ready
+),
+page_rows AS (
+  SELECT
+    *,
+    TRUE AS __has_row
+  FROM numbered
+  WHERE __row_index <= {max_groups}
+)
+SELECT
+  group_total.group_count AS __group_count,
+  page_rows.*
+FROM group_total
+LEFT JOIN page_rows ON TRUE
+ORDER BY page_rows.__row_index NULLS LAST
+"""
+    rows = fetch_dict_rows(dataset, sql)
+    group_count = int(rows[0].get("__group_count") or 0) if rows else 0
+    display_rows = [
+        normalise_grouped_sql_row(row, result["responses"])
+        for row in rows
+        if row.get("__has_row")
+    ]
+    if result["x_group_kind"] == "numeric":
+        clean_numeric_band_labels(display_rows, result["x_group_kind"], result["request"].get("bandWidth"))
+    return {"group_count": group_count, "rows": display_rows}
+
+
+def fetch_table_rows(dataset: Dataset, result: dict[str, Any], *, page: int, page_size: int) -> dict[str, Any]:
+    search = str(result["request"].get("tableSearch") or "").strip()
+    order_terms = sort_order_terms(result["x_group_kind"], str(result["request"].get("sort") or "alpha"))
+    search_sql = table_search_condition(search, result["x_kind"])
+    summary_selects = table_summary_selects(result["responses"])
+    sql = f"""
+{result['grouped_sql']},
+group_total AS (
+  SELECT COUNT(*) AS group_count FROM sort_ready
+),
+matched AS (
+  SELECT *
+  FROM sort_ready
+  WHERE {search_sql}
+),
+match_summary AS (
+  SELECT
+    COUNT(*) AS match_count,
+    COALESCE(SUM(volume), 0) AS summary_volume{summary_selects}
+  FROM matched
+),
+page_info_base AS (
+  SELECT
+    group_total.group_count,
+    match_summary.match_count,
+    GREATEST(1, CAST(CEIL(CAST(match_summary.match_count AS DOUBLE) / {page_size}) AS BIGINT)) AS page_count
+  FROM group_total
+  CROSS JOIN match_summary
+),
+page_info AS (
+  SELECT
+    group_count,
+    match_count,
+    page_count,
+    LEAST({page}, page_count) AS page
+  FROM page_info_base
+),
+numbered AS (
+  SELECT
+    matched.*,
+    ROW_NUMBER() OVER (ORDER BY {order_terms}) AS __row_index
+  FROM matched
+),
+page_rows AS (
+  SELECT
+    numbered.*,
+    TRUE AS __has_row
+  FROM numbered
+  CROSS JOIN page_info
+  WHERE numbered.__row_index > (page_info.page - 1) * {page_size}
+    AND numbered.__row_index <= page_info.page * {page_size}
+)
+SELECT
+  page_info.group_count AS __group_count,
+  page_info.match_count AS __match_count,
+  page_info.page_count AS __page_count,
+  page_info.page AS __page,
+  match_summary.*,
+  page_rows.*
+FROM page_info
+CROSS JOIN match_summary
+LEFT JOIN page_rows ON TRUE
+ORDER BY page_rows.__row_index NULLS LAST
+"""
+    rows = fetch_dict_rows(dataset, sql)
+    first = rows[0] if rows else {}
+    display_rows = [
+        normalise_grouped_sql_row(row, result["responses"])
+        for row in rows
+        if row.get("__has_row")
+    ]
+    if result["x_group_kind"] == "numeric":
+        clean_numeric_band_labels(display_rows, result["x_group_kind"], result["request"].get("bandWidth"))
+    return {
+        "search": search,
+        "page": int(first.get("__page") or 1),
+        "page_count": int(first.get("__page_count") or 1),
+        "match_count": int(first.get("__match_count") or 0),
+        "group_count": int(first.get("__group_count") or 0),
+        "rows": display_rows,
+        "summary": table_summary_from_sql_row(first, result["responses"]),
+    }
+
+
+def fetch_dict_rows(dataset: Dataset, sql: str) -> list[dict[str, Any]]:
+    cursor = dataset.con.execute(sql)
+    columns = [description[0] for description in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def normalise_grouped_sql_row(row: dict[str, Any], responses: list[dict[str, str]]) -> dict[str, Any]:
+    normalised = {
+        "x": str(row.get("x")),
+        "x_sort": row.get("x_sort"),
+        "original_order": int(row.get("original_order") or 0),
+        "volume": json_number(row.get("volume")) or 0,
+        "is_tail": bool(row.get("is_tail")),
+        "sigma_se": json_number(row.get("sigma_se")),
+        "valid_folds": json_number(row.get("valid_folds")),
+        "sigma_folds": row.get("sigma_folds"),
+    }
+    x_start = json_number(row.get("x_start"))
+    x_end = json_number(row.get("x_end"))
+    if x_start is not None:
+        normalised["x_start"] = x_start
+    if x_end is not None:
+        normalised["x_end"] = x_end
+    for index, _ in enumerate(responses):
+        normalised[f"resp{index}_num"] = json_number(row.get(f"resp{index}_num"))
+        normalised[f"resp{index}_den"] = json_number(row.get(f"resp{index}_den"))
+        normalised[f"resp{index}"] = json_number(row.get(f"resp{index}"))
+    return normalised
+
+
+def table_summary_selects(responses: list[dict[str, str]]) -> str:
+    if not responses:
+        return ""
+    selects: list[str] = []
+    for index, _ in enumerate(responses):
+        selects.append(f"COALESCE(SUM(resp{index}_num), 0) AS summary_resp{index}_num")
+        selects.append(f"COALESCE(SUM(resp{index}_den), 0) AS summary_resp{index}_den")
+    return ",\n    " + ",\n    ".join(selects)
+
+
+def table_summary_from_sql_row(row: dict[str, Any], responses: list[dict[str, str]]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "volume": json_number(row.get("summary_volume")) or 0,
+        "responses": [],
+    }
+    for index, _ in enumerate(responses):
+        numerator = json_number(row.get(f"summary_resp{index}_num")) or 0
+        denominator = json_number(row.get(f"summary_resp{index}_den")) or 0
+        summary["responses"].append(numerator / denominator if denominator else None)
+    return summary
+
+
+def transform_table_summary(
+    summary: dict[str, Any],
+    responses: list[dict[str, str]],
+    transform: str,
+    transform_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    references = transform_metadata.get("values") if isinstance(transform_metadata, dict) else []
+    transformed = {
+        "volume": summary.get("volume", 0),
+        "responses": [],
+    }
+    for index, _ in enumerate(responses):
+        summary_responses = summary.get("responses")
+        value = summary_responses[index] if isinstance(summary_responses, list) and index < len(summary_responses) else None
+        reference = json_number(references[index]) if isinstance(references, list) and index < len(references) else None
+        transformed["responses"].append(transform_value(value, transform, reference))
+    return transformed
+
+
+def build_grouped_pipeline_sql(
+    *,
+    relation: str,
+    x_col: str,
+    x_sql: dict[str, str],
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+    include_sigma: bool,
+    filter_sql: str,
+    x_group_kind: str,
+    low_group: str,
+    sort: str,
+    shap_medians: dict[str, float] | None,
+) -> str:
+    required_columns = required_grouped_columns(x_col, responses, denominator)
+    source_selects = ",\n    ".join(quote_ident(column) for column in required_columns)
+    source_select_sql = ",\n    " + source_selects if source_selects else ""
+    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    response_selects = ",\n    ".join(
+        f"TRY_CAST({quote_ident(response['numerator'])} AS DOUBLE) AS __resp{index}_value"
+        for index, response in enumerate(responses)
+    )
+    denominator_select = denominator_value_select_sql(denominator)
+    quantile_cte = ""
+    keyed_from = "base"
+    rownum_expr = "__rownum"
+    x_bound_select = ""
+    x_bound_agg = ",\n    NULL AS x_start,\n    NULL AS x_end"
+    if x_sql.get("quantile_count"):
+        quantile_cte = f""",
+quantiles AS (
+  SELECT
+    __rownum,
+    NTILE({x_sql['quantile_count']}) OVER (ORDER BY __x_raw, __rownum) AS __x_quantile
+  FROM (
+    SELECT
+      __rownum,
+      {x_sql['raw']} AS __x_raw
+    FROM base
+    WHERE {x_sql['raw']} IS NOT NULL
+  ) non_missing
+)"""
+        keyed_from = "base LEFT JOIN quantiles USING (__rownum)"
+        rownum_expr = "base.__rownum"
+        x_bound_select = f",\n    {x_sql['raw']} AS __x_raw_value"
+        x_bound_agg = ",\n    MIN(__x_raw_value) AS x_start,\n    MAX(__x_raw_value) AS x_end"
+
+    response_sql = f",\n    {response_selects}" if response_selects else ""
+    valid_condition = aliased_valid_condition(len(responses), bool(denominator.get("column")))
+    metric_sql = grouped_metric_sql(responses)
+    value_sql = grouped_value_sql(responses)
+    fold_select = f",\n    CAST(hash({rownum_expr}) % 20 AS INTEGER) AS __fold" if include_sigma else ""
+    sigma_ctes = sigma_pipeline_ctes(include_sigma)
+    final_rows_sql = final_rows_pipeline_sql(
+        responses=responses,
+        include_sigma=include_sigma,
+        x_group_kind=x_group_kind,
+        low_group=low_group,
+    )
+    shap_sql = shap_medians_cte(sort, shap_medians or {})
+    shap_join = "LEFT JOIN shap_medians ON final_rows.x = shap_medians.x" if sort == "shap" else ""
+    shap_select = "shap_medians.median AS __shap_median" if sort == "shap" else "NULL AS __shap_median"
+    return f"""
+WITH base AS (
+  SELECT
+    ROW_NUMBER() OVER () AS __rownum{source_select_sql}
+  FROM {relation}{where_sql}
+){quantile_cte},
+prepared AS (
+  SELECT
+    {rownum_expr} AS __rownum,
+    {x_sql['key']} AS x_key,
+    {x_sql['label']} AS x_label,
+    {x_sql['sort']} AS x_sort{x_bound_select}{fold_select}{response_sql},
+    {denominator_select} AS __denominator_value
+  FROM {keyed_from}
+),
+weighted AS (
+  SELECT
+    *,
+    CASE WHEN {valid_condition} THEN __denominator_value ELSE NULL END AS __weight_value
+  FROM prepared
+),
+initial_agg AS (
+  SELECT
+    x_key,
+    x_label,
+    MIN(x_sort) AS x_sort,
+    MIN(__rownum) AS original_order,
+    COALESCE(SUM(__weight_value), 0) AS volume{x_bound_agg}
+    {metric_sql}
+  FROM weighted
+  GROUP BY x_key, x_label
+),
+initial_values AS (
+  SELECT
+    *{value_sql}
+  FROM initial_agg
+)
+{sigma_ctes}
+{final_rows_sql}
+{shap_sql},
+sort_ready AS (
+  SELECT
+    final_rows.*,
+    {shap_select}
+  FROM final_rows
+  {shap_join}
+)"""
+
+
+def required_grouped_columns(
+    x_col: str,
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+) -> list[str]:
+    required: list[str] = []
+    for column in [x_col, *(response["numerator"] for response in responses), denominator.get("column")]:
+        if column and column not in required:
+            required.append(str(column))
+    return required
+
+
+def denominator_value_select_sql(denominator: dict[str, str | None]) -> str:
+    column = denominator.get("column")
+    if column:
+        return f"TRY_CAST({quote_ident(str(column))} AS DOUBLE)"
+    return "1"
+
+
+def aliased_valid_condition(response_count: int, has_denominator: bool) -> str:
+    checks = [f"__resp{index}_value IS NOT NULL" for index in range(response_count)]
+    if has_denominator:
+        checks.append("__denominator_value IS NOT NULL")
+    return " AND ".join(checks) if checks else "TRUE"
+
+
+def grouped_metric_sql(responses: list[dict[str, str]]) -> str:
+    if not responses:
+        return ""
+    selects: list[str] = []
+    for index, _ in enumerate(responses):
+        selects.append(f"SUM(CASE WHEN __weight_value IS NOT NULL THEN __resp{index}_value ELSE NULL END) AS resp{index}_num")
+        selects.append(f"COALESCE(SUM(__weight_value), 0) AS resp{index}_den")
+    return ",\n    " + ",\n    ".join(selects)
+
+
+def grouped_value_sql(responses: list[dict[str, str]]) -> str:
+    if not responses:
+        return ""
+    values = [
+        f"resp{index}_num / NULLIF(resp{index}_den, 0) AS resp{index}"
+        for index, _ in enumerate(responses)
+    ]
+    return ",\n    " + ",\n    ".join(values)
+
+
+def group_threshold_expression(value: str) -> tuple[bool, str]:
+    raw = value.strip().lower()
+    if raw in {"", "0", "none", "-"}:
+        return False, "0"
+    if raw.endswith("%"):
+        parsed = parse_positive_float(raw[:-1])
+        if not parsed:
+            return False, "0"
+        return True, f"total_volume * {float(parsed)} / 100"
+    parsed = parse_positive_float(raw)
+    if not parsed:
+        return False, "0"
+    return True, str(float(parsed))
+
+
+def sigma_pipeline_ctes(include_sigma: bool) -> str:
+    if not include_sigma:
+        return ""
+    return """,
+initial_folds AS (
+  SELECT
+    x_key,
+    x_label,
+    __fold,
+    SUM(CASE WHEN __weight_value IS NOT NULL THEN __resp0_value ELSE NULL END) AS resp0_num,
+    COALESCE(SUM(__weight_value), 0) AS resp0_den,
+    SUM(CASE WHEN __weight_value IS NOT NULL THEN __resp1_value ELSE NULL END) AS resp1_num,
+    COALESCE(SUM(__weight_value), 0) AS resp1_den
+  FROM weighted
+  GROUP BY x_key, x_label, __fold
+)"""
+
+
+def final_sigma_ctes(include_sigma: bool, *, grouped: bool) -> str:
+    if not include_sigma:
+        return ""
+    return ("""
+,
+final_folds AS (
+  SELECT
+    group_map.final_group_id,
+    initial_folds.__fold,
+    SUM(initial_folds.resp0_num) AS resp0_num,
+    SUM(initial_folds.resp0_den) AS resp0_den,
+    SUM(initial_folds.resp1_num) AS resp1_num,
+    SUM(initial_folds.resp1_den) AS resp1_den
+  FROM initial_folds
+  INNER JOIN group_map
+    ON initial_folds.x_key IS NOT DISTINCT FROM group_map.source_x_key
+   AND initial_folds.x_label = group_map.source_x_label
+  GROUP BY group_map.final_group_id, initial_folds.__fold
+)""" if grouped else f"""
+,
+final_folds AS (
+  SELECT
+    {group_identity_id('x_key', 'x_label')} AS final_group_id,
+    __fold,
+    resp0_num,
+    resp0_den,
+    resp1_num,
+    resp1_den
+  FROM initial_folds
+)""") + """
+,
+fold_values AS (
+  SELECT
+    *,
+    resp0_num / NULLIF(resp0_den, 0) AS resp0,
+    resp1_num / NULLIF(resp1_den, 0) AS resp1
+  FROM final_folds
+),
+sigma AS (
+  SELECT
+    final_group_id,
+    STDDEV_SAMP(resp0 - resp1) / SQRT(COUNT(*)) AS sigma_se,
+    COUNT(*) AS valid_folds,
+    LIST(struct_pack(
+      fold := __fold,
+      resp0_num := resp0_num,
+      resp0_den := resp0_den,
+      resp1_num := resp1_num,
+      resp1_den := resp1_den
+    )) AS sigma_folds
+  FROM fold_values
+  WHERE resp0 IS NOT NULL AND resp1 IS NOT NULL
+  GROUP BY final_group_id
+)"""
+
+
+def final_rows_pipeline_sql(
+    *,
+    responses: list[dict[str, str]],
+    include_sigma: bool,
+    x_group_kind: str,
+    low_group: str,
+) -> str:
+    enabled, threshold_expr = group_threshold_expression(low_group)
+    if not enabled:
+        return no_group_final_rows_sql(responses, include_sigma)
+    if x_group_kind in {"integer", "numeric", "date", "datetime", "quantile"}:
+        return ordered_group_final_rows_sql(responses, include_sigma, x_group_kind, threshold_expr)
+    return categorical_group_final_rows_sql(responses, include_sigma, threshold_expr)
+
+
+def no_group_final_rows_sql(responses: list[dict[str, str]], include_sigma: bool) -> str:
+    response_selects = final_response_selects("initial_values", responses)
+    sigma_select = sigma_output_select("sigma") if include_sigma else null_sigma_output_select()
+    sigma_join = f"LEFT JOIN sigma ON {group_identity_id('initial_values.x_key', 'initial_values.x_label')} = sigma.final_group_id" if include_sigma else ""
+    sigma_ctes = cte_fragment(final_sigma_ctes(include_sigma, grouped=False))
+    return f""",
+{sigma_ctes + ',' if sigma_ctes else ''}
+final_rows AS (
+  SELECT
+    {group_identity_id('initial_values.x_key', 'initial_values.x_label')} AS final_group_id,
+    initial_values.x_label AS x,
+    initial_values.x_sort,
+    initial_values.original_order,
+    initial_values.volume,
+    initial_values.x_start,
+    initial_values.x_end,
+    FALSE AS is_tail{response_selects}
+    {sigma_select}
+  FROM initial_values
+  {sigma_join}
+)"""
+
+
+def ordered_group_final_rows_sql(
+    responses: list[dict[str, str]],
+    include_sigma: bool,
+    x_group_kind: str,
+    threshold_expr: str,
+) -> str:
+    quantile_missing_filter = "WHERE x_label != 'Missing'" if x_group_kind == "quantile" else ""
+    quantile_missing_union = f"""
+  UNION ALL
+  SELECT
+    {group_identity_id('x_key', 'x_label')} AS source_group_id,
+    x_key AS source_x_key,
+    x_label AS source_x_label,
+    {group_identity_id('x_key', 'x_label')} AS final_group_id,
+    x_label AS final_label,
+    x_sort AS final_x_sort,
+    original_order AS final_original_order,
+    FALSE AS final_is_tail
+  FROM initial_values
+  WHERE x_label = 'Missing'""" if x_group_kind == "quantile" else ""
+    return f""",
+group_totals AS (
+  SELECT
+    COALESCE(SUM(volume), 0) AS total_volume,
+    COUNT(*) AS group_count
+  FROM initial_values
+),
+group_threshold AS (
+  SELECT
+    {threshold_expr} AS threshold_value,
+    total_volume,
+    group_count
+  FROM group_totals
+),
+ordered_candidates AS (
+  SELECT
+    initial_values.*,
+    SUM(volume) OVER (ORDER BY x_sort ASC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS low_cume
+  FROM initial_values
+  {quantile_missing_filter}
+),
+low_marked AS (
+  SELECT
+    *,
+    low_cume <= (SELECT threshold_value FROM group_threshold) AS is_low
+  FROM ordered_candidates
+),
+remaining_candidates AS (
+  SELECT
+    *,
+    SUM(volume) OVER (ORDER BY x_sort DESC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS high_cume
+  FROM low_marked
+  WHERE NOT is_low
+),
+high_marked AS (
+  SELECT
+    low_marked.*,
+    COALESCE(remaining_candidates.high_cume <= (SELECT threshold_value FROM group_threshold), FALSE) AS is_high
+  FROM low_marked
+  LEFT JOIN remaining_candidates
+    ON low_marked.x_key IS NOT DISTINCT FROM remaining_candidates.x_key
+   AND low_marked.x_label = remaining_candidates.x_label
+),
+tail_counts AS (
+  SELECT
+    SUM(CASE WHEN is_low THEN 1 ELSE 0 END) AS low_count,
+    SUM(CASE WHEN is_high THEN 1 ELSE 0 END) AS high_count
+  FROM high_marked
+),
+low_tail_stats AS (
+  SELECT
+    MIN(x_sort) AS x_sort,
+    MIN(original_order) AS original_order
+  FROM high_marked
+  WHERE is_low
+),
+high_tail_stats AS (
+  SELECT
+    MIN(x_sort) AS x_sort,
+    MIN(original_order) AS original_order
+  FROM high_marked
+  WHERE is_high
+),
+group_map AS (
+  SELECT
+    {group_identity_id('x_key', 'x_label')} AS source_group_id,
+    x_key AS source_x_key,
+    x_label AS source_x_label,
+    CASE
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN 'tail:low'
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN 'tail:high'
+      ELSE {group_identity_id('x_key', 'x_label')}
+    END AS final_group_id,
+    CASE
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN 'Low tail'
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN 'High tail'
+      ELSE x_label
+    END AS final_label,
+    CASE
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN (SELECT x_sort FROM low_tail_stats)
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN (SELECT x_sort FROM high_tail_stats)
+      ELSE x_sort
+    END AS final_x_sort,
+    CASE
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN (SELECT original_order FROM low_tail_stats)
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN (SELECT original_order FROM high_tail_stats)
+      ELSE original_order
+    END AS final_original_order,
+    (SELECT group_count FROM group_threshold) >= 3
+      AND ((is_low AND (SELECT low_count FROM tail_counts) > 1) OR (is_high AND (SELECT high_count FROM tail_counts) > 1)) AS final_is_tail
+  FROM high_marked
+  {quantile_missing_union}
+)
+{grouped_final_rows_sql(responses, include_sigma)}"""
+
+
+def categorical_group_final_rows_sql(
+    responses: list[dict[str, str]],
+    include_sigma: bool,
+    threshold_expr: str,
+) -> str:
+    return f""",
+group_totals AS (
+  SELECT
+    COALESCE(SUM(volume), 0) AS total_volume,
+    COUNT(*) AS group_count
+  FROM initial_values
+),
+group_threshold AS (
+  SELECT
+    {threshold_expr} AS threshold_value,
+    total_volume,
+    group_count
+  FROM group_totals
+),
+rare_marked AS (
+  SELECT
+    *,
+    volume <= (SELECT threshold_value FROM group_threshold) AS is_rare
+  FROM initial_values
+),
+rare_counts AS (
+  SELECT
+    SUM(CASE WHEN is_rare THEN 1 ELSE 0 END) AS rare_count
+  FROM rare_marked
+),
+rare_stats AS (
+  SELECT
+    MIN(x_sort) AS x_sort,
+    MIN(original_order) AS original_order
+  FROM rare_marked
+  WHERE is_rare
+),
+group_map AS (
+  SELECT
+    {group_identity_id('x_key', 'x_label')} AS source_group_id,
+    x_key AS source_x_key,
+    x_label AS source_x_label,
+    CASE
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_rare AND (SELECT rare_count FROM rare_counts) > 1 THEN 'tail:other'
+      ELSE {group_identity_id('x_key', 'x_label')}
+    END AS final_group_id,
+    CASE
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_rare AND (SELECT rare_count FROM rare_counts) > 1 THEN 'Other'
+      ELSE x_label
+    END AS final_label,
+    CASE
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_rare AND (SELECT rare_count FROM rare_counts) > 1 THEN (SELECT x_sort FROM rare_stats)
+      ELSE x_sort
+    END AS final_x_sort,
+    CASE
+      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_rare AND (SELECT rare_count FROM rare_counts) > 1 THEN (SELECT original_order FROM rare_stats)
+      ELSE original_order
+    END AS final_original_order,
+    (SELECT group_count FROM group_threshold) >= 3 AND is_rare AND (SELECT rare_count FROM rare_counts) > 1 AS final_is_tail
+  FROM rare_marked
+)
+{grouped_final_rows_sql(responses, include_sigma)}"""
+
+
+def grouped_final_rows_sql(responses: list[dict[str, str]], include_sigma: bool) -> str:
+    response_selects = final_response_aggregate_selects(responses)
+    response_values = final_response_value_selects(responses)
+    sigma_select = sigma_output_select("sigma") if include_sigma else null_sigma_output_select()
+    sigma_join = "LEFT JOIN sigma ON grouped_values.final_group_id = sigma.final_group_id" if include_sigma else ""
+    sigma_ctes = cte_fragment(final_sigma_ctes(include_sigma, grouped=True))
+    return f""",
+{sigma_ctes + ',' if sigma_ctes else ''}
+grouped_final AS (
+  SELECT
+    group_map.final_group_id,
+    MIN(group_map.final_label) AS x,
+    MIN(group_map.final_x_sort) AS x_sort,
+    MIN(group_map.final_original_order) AS original_order,
+    COALESCE(SUM(initial_values.volume), 0) AS volume,
+    CASE WHEN BOOL_OR(group_map.final_is_tail) THEN NULL ELSE MIN(initial_values.x_start) END AS x_start,
+    CASE WHEN BOOL_OR(group_map.final_is_tail) THEN NULL ELSE MAX(initial_values.x_end) END AS x_end,
+    BOOL_OR(group_map.final_is_tail) AS is_tail{response_selects}
+  FROM initial_values
+  INNER JOIN group_map
+    ON initial_values.x_key IS NOT DISTINCT FROM group_map.source_x_key
+   AND initial_values.x_label = group_map.source_x_label
+  GROUP BY group_map.final_group_id
+),
+grouped_values AS (
+  SELECT
+    *{response_values}
+  FROM grouped_final
+),
+final_rows AS (
+  SELECT
+    grouped_values.*{sigma_select}
+  FROM grouped_values
+  {sigma_join}
+)"""
+
+
+def final_response_selects(prefix: str, responses: list[dict[str, str]]) -> str:
+    if not responses:
+        return ""
+    selects: list[str] = []
+    for index, _ in enumerate(responses):
+        selects.append(f"{prefix}.resp{index}_num")
+        selects.append(f"{prefix}.resp{index}_den")
+        selects.append(f"{prefix}.resp{index}")
+    return ",\n    " + ",\n    ".join(selects)
+
+
+def cte_fragment(sql: str) -> str:
+    stripped = sql.strip()
+    if stripped.startswith(","):
+        stripped = stripped[1:].strip()
+    return stripped
+
+
+def final_response_aggregate_selects(responses: list[dict[str, str]]) -> str:
+    if not responses:
+        return ""
+    selects: list[str] = []
+    for index, _ in enumerate(responses):
+        selects.append(f"SUM(initial_values.resp{index}_num) AS resp{index}_num")
+        selects.append(f"SUM(initial_values.resp{index}_den) AS resp{index}_den")
+    return ",\n    " + ",\n    ".join(selects)
+
+
+def final_response_value_selects(responses: list[dict[str, str]]) -> str:
+    if not responses:
+        return ""
+    selects = [
+        f"resp{index}_num / NULLIF(resp{index}_den, 0) AS resp{index}"
+        for index, _ in enumerate(responses)
+    ]
+    return ",\n    " + ",\n    ".join(selects)
+
+
+def sigma_output_select(prefix: str) -> str:
+    return f""",
+    {prefix}.sigma_se,
+    {prefix}.valid_folds,
+    {prefix}.sigma_folds"""
+
+
+def null_sigma_output_select() -> str:
+    return """,
+    NULL AS sigma_se,
+    NULL AS valid_folds,
+    NULL AS sigma_folds"""
+
+
+def group_identity_id(key_sql: str, label_sql: str) -> str:
+    return f"'id:' || COALESCE(CAST({key_sql} AS VARCHAR), '<NULL>') || ':' || COALESCE(CAST({label_sql} AS VARCHAR), '<NULL>')"
+
+
+def shap_medians_cte(sort: str, medians: dict[str, float]) -> str:
+    if sort != "shap":
+        return ""
+    if not medians:
+        return """,
+shap_medians(x, median) AS (
+  SELECT * FROM (VALUES (CAST(NULL AS VARCHAR), CAST(NULL AS DOUBLE))) WHERE FALSE
+)"""
+    values = ",\n    ".join(
+        f"({sql_literal(label)}, {float(value)})"
+        for label, value in medians.items()
+    )
+    return f""",
+shap_medians(x, median) AS (
+  VALUES
+    {values}
+)"""
+
+
+def sort_order_terms(x_kind: str, sort: str) -> str:
+    if x_kind != "categorical":
+        return "x_sort IS NULL, x_sort"
+    if sort == "volume":
+        return "NOT is_tail, volume DESC, LOWER(CAST(x AS VARCHAR))"
+    if sort in {"actual", "response"}:
+        return "resp0 IS NULL, resp0 DESC, LOWER(CAST(x AS VARCHAR))"
+    if sort == "expected":
+        return "resp1 IS NULL, resp1 DESC, LOWER(CAST(x AS VARCHAR))"
+    if sort == "shap":
+        return "is_tail, __shap_median IS NULL, __shap_median DESC, LOWER(CAST(x AS VARCHAR))"
+    return "LOWER(CAST(x AS VARCHAR))"
+
+
+def table_search_condition(search: str, x_kind: str) -> str:
+    if not search:
+        return "TRUE"
+    needle = sql_literal(search.lower())
+    candidates = [
+        f"contains(LOWER(CAST(x AS VARCHAR)), {needle})",
+        f"contains(LOWER(CAST(x_sort AS VARCHAR)), {needle})",
+    ]
+    if x_kind in {"integer", "numeric"}:
+        candidates.extend(
+            [
+                f"contains(LOWER(format('{{:,.12f}}', TRY_CAST(x AS DOUBLE))), {needle})",
+                f"contains(LOWER(format('{{:,.12f}}', TRY_CAST(x_sort AS DOUBLE))), {needle})",
+                f"contains(LOWER(format('{{:,}}', TRY_CAST(x AS BIGINT))), {needle})",
+                f"contains(LOWER(format('{{:,}}', TRY_CAST(x_sort AS BIGINT))), {needle})",
+            ]
+        )
+    return "(" + " OR ".join(candidates) + ")"
+
+
+def transform_metadata_for_result(
+    dataset: Dataset,
+    result: dict[str, Any],
+    transform: str,
+    warnings: list[str],
+) -> dict[str, Any]:
+    averages = {
+        index: json_number(summary.get("value"))
+        for index, summary in enumerate(result["response_summaries"])
+    }
+    base_text = str(result["request"].get("base") or "").strip()
+    metadata: dict[str, Any] = {
+        "mode": transform,
+        "base": base_text,
+        "reference": "overall_average",
+        "base_x": None,
+        "values": [json_number(averages.get(index)) for index, _ in enumerate(result["responses"])],
+    }
+    if transform not in {"zero", "one"} or not base_text:
+        return metadata
+
+    base_row = sql_base_reference_row(dataset, result)
+    if base_row is None:
+        warnings.append(f"Base value {base_text} could not be matched on the x-axis; using overall response averages for the {transform} transform.")
+        return metadata
+
+    values: dict[int, float | None] = {}
+    failed_indexes: list[int] = []
+    for index, _ in enumerate(result["responses"]):
+        reference = json_number(base_row.get(f"resp{index}"))
+        if reference is None or (transform == "one" and reference == 0):
+            values[index] = averages.get(index)
+            failed_indexes.append(index)
+        else:
+            values[index] = float(reference)
+    if failed_indexes:
+        labels = ", ".join(result["responses"][index]["label"] for index in failed_indexes)
+        warnings.append(f"Base value {base_text} has no usable {labels} response reference; using overall response averages for those {transform} transforms.")
+
+    metadata.update(
+        {
+            "reference": "base",
+            "base_x": base_row.get("x"),
+            "values": [json_number(values.get(index)) for index, _ in enumerate(result["responses"])],
+            "fallback_responses": failed_indexes,
+        }
+    )
+    return metadata
+
+
+def sql_base_reference_row(dataset: Dataset, result: dict[str, Any]) -> dict[str, Any] | None:
+    base_text = str(result["request"].get("base") or "").strip()
+    if not base_text or result["x_group_kind"] == "quantile":
+        return None
+    if result["x_group_kind"] in {"integer", "numeric"}:
+        return sql_numeric_base_reference_row(dataset, result, base_text)
+    target = sql_literal(base_text.lower())
+    sql = f"""
+{result['grouped_sql']}
+SELECT *
+FROM sort_ready
+WHERE LOWER(TRIM(CAST(x AS VARCHAR))) = {target}
+LIMIT 1
+"""
+    rows = fetch_dict_rows(dataset, sql)
+    return normalise_grouped_sql_row(rows[0], result["responses"]) if rows else None
+
+
+def sql_numeric_base_reference_row(dataset: Dataset, result: dict[str, Any], base_text: str) -> dict[str, Any] | None:
+    base_number = json_number(base_text)
+    if base_number is None:
+        return None
+    width = parse_positive_float(result["request"].get("bandWidth"))
+    contains_sort = "2"
+    if width:
+        contains_sort = f"CASE WHEN x_sort <= {float(base_number)} AND {float(base_number)} < x_sort + {float(width)} THEN 0 ELSE 2 END"
+    sql = f"""
+{result['grouped_sql']},
+candidates AS (
+  SELECT
+    *,
+    MIN(CASE WHEN NOT is_tail THEN 0 ELSE 1 END) OVER () AS tail_priority
+  FROM sort_ready
+  WHERE TRY_CAST(x_sort AS DOUBLE) IS NOT NULL
+),
+usable_candidates AS (
+  SELECT *
+  FROM candidates
+  WHERE CASE WHEN tail_priority = 0 THEN NOT is_tail ELSE TRUE END
+)
+SELECT *
+FROM usable_candidates
+ORDER BY
+  {contains_sort},
+  CASE WHEN TRY_CAST(x_sort AS DOUBLE) = {float(base_number)} THEN 1 ELSE 2 END,
+  ABS(TRY_CAST(x_sort AS DOUBLE) - {float(base_number)}),
+  TRY_CAST(x_sort AS DOUBLE)
+LIMIT 1
+"""
+    rows = fetch_dict_rows(dataset, sql)
+    return normalise_grouped_sql_row(rows[0], result["responses"]) if rows else None
 
 
 def normalise_positive_int(value: Any, default: int) -> int:
@@ -1603,14 +2508,25 @@ def apply_transform(
     x_kind: str = "",
     base: Any = None,
     band_width: Any = None,
+    transform_metadata: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    reference_source = reference_rows if reference_rows is not None else rows
-    averages: dict[int, float | None] = {}
-    for index, _ in enumerate(responses):
-        num = sum(float(row.get(f"resp{index}_num") or 0) for row in reference_source)
-        den = sum(float(row.get(f"resp{index}_den") or 0) for row in reference_source)
-        averages[index] = num / den if den else None
-    references = transform_references(reference_source, responses, transform, averages, warnings, x_kind=x_kind, base=base, band_width=band_width)
+    if transform_metadata is None:
+        reference_source = reference_rows if reference_rows is not None else rows
+        averages: dict[int, float | None] = {}
+        for index, _ in enumerate(responses):
+            num = sum(float(row.get(f"resp{index}_num") or 0) for row in reference_source)
+            den = sum(float(row.get(f"resp{index}_den") or 0) for row in reference_source)
+            averages[index] = num / den if den else None
+        references = transform_references(reference_source, responses, transform, averages, warnings, x_kind=x_kind, base=base, band_width=band_width)
+    else:
+        raw_values = transform_metadata.get("values") if isinstance(transform_metadata, dict) else []
+        references = {
+            "values": {
+                index: json_number(raw_values[index]) if isinstance(raw_values, list) and index < len(raw_values) else None
+                for index, _ in enumerate(responses)
+            },
+            "metadata": transform_metadata,
+        }
 
     display: list[dict[str, Any]] = []
     invalid_count = 0

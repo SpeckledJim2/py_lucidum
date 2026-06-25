@@ -616,6 +616,35 @@ COPY (
         self.assertEqual(table_payload["table"]["group_count"], 10005)
         self.assertIsInstance(table_payload["timings"]["duckdb_ns"], int)
 
+    def test_line_bar_high_cardinality_chart_and_table_do_not_use_python_group_fallback(self) -> None:
+        data_path = self.root / "many_sql_groups.csv"
+        lines = ["Category,Actual"]
+        lines.extend(f"G{index:05d},{index}" for index in range(50))
+        data_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        dataset = Dataset(data_path)
+        request = {
+            "x": "Category",
+            "bandWidth": "0",
+            "dateBucket": "none",
+            "lowGroup": "0",
+            "sort": "alpha",
+            "sigma": 0,
+            "transform": "none",
+            "filter": "",
+            "denominator": "__none__",
+            "maxGroups": 10,
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+        }
+
+        with patch("py_lucidum.tools.line_bar.query.apply_low_weight_grouping", side_effect=AssertionError("old grouping path")):
+            chart_payload = chart(dataset, request)
+            table_payload = table(dataset, {**request, "tableSearch": "g00049", "tablePage": 1})
+
+        self.assertEqual(chart_payload["group_count"], 50)
+        self.assertEqual(len(chart_payload["rows"]), 10)
+        self.assertEqual([row["x"] for row in table_payload["rows"]], ["G00049"])
+        self.assertEqual(table_payload["table"]["group_count"], 50)
+
     def test_line_bar_table_endpoint_paginates_and_summarises_all_matches(self) -> None:
         data_path = self.root / "paged_categories.csv"
         data_path.write_text(
