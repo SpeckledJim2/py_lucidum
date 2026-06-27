@@ -6341,7 +6341,7 @@ COPY (
                     timeout=10_000,
                 )
 
-            def assert_filter_label_color(selector: str, applied_class: str, applied: bool) -> None:
+            def assert_filter_label_badge(selector: str, applied_class: str, applied: bool) -> None:
                 page.wait_for_function(
                     """
                     ({ selector, appliedClass, applied }) => {
@@ -6349,11 +6349,11 @@ COPY (
                       if (!label || label.classList.contains(appliedClass) !== applied) return false;
                       if (!applied) return label.textContent.includes("no filter");
                       const probe = document.createElement("span");
-                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--danger").trim();
+                      probe.style.backgroundColor = getComputedStyle(document.body).getPropertyValue("--filter-applied-bg").trim();
                       document.body.append(probe);
-                      const danger = getComputedStyle(probe).color;
+                      const expectedBackground = getComputedStyle(probe).backgroundColor;
                       probe.remove();
-                      return getComputedStyle(label).color === danger;
+                      return getComputedStyle(label).backgroundColor === expectedBackground;
                     }
                     """,
                     arg={"selector": selector, "appliedClass": applied_class, "applied": applied},
@@ -6530,7 +6530,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                assert_filter_label_color("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
+                assert_filter_label_badge("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
                 self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
                 self.assertTrue(page.locator("#collapsedFilterIndicator").evaluate("node => node.hidden"))
                 self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
@@ -6562,22 +6562,8 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                assert_filter_label_color("#datasetViewerFilter", "dataset-viewer-filter--applied", True)
-                page.wait_for_function(
-                    """
-                    () => {
-                      const meta = document.querySelector("#filterRowMeta");
-                      if (!meta?.classList.contains("filter-row-meta--applied")) return false;
-                      const probe = document.createElement("span");
-                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--danger").trim();
-                      document.body.append(probe);
-                      const danger = getComputedStyle(probe).color;
-                      probe.remove();
-                      return getComputedStyle(meta).color === danger;
-                    }
-                    """,
-                    timeout=10_000,
-                )
+                assert_filter_label_badge("#datasetViewerFilter", "dataset-viewer-filter--applied", True)
+                assert_filter_label_badge("#filterRowMeta", "filter-row-meta--applied", True)
                 self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function(
@@ -6644,7 +6630,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                assert_filter_label_color("#lineBarFilter", "line-bar-filter--applied", True)
+                assert_filter_label_badge("#lineBarFilter", "line-bar-filter--applied", True)
                 page.locator("#ukMapTool").click()
                 page.wait_for_function(
                     """
@@ -6660,7 +6646,20 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                assert_filter_label_color("#mapControlFilter", "map-filter--applied", True)
+                assert_filter_label_badge("#mapControlFilter", "map-filter--applied", True)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const filter = document.querySelector("#mapControlFilter");
+                      const header = document.querySelector(".map-floating-header");
+                      if (!filter || !header) return false;
+                      const filterWidth = filter.getBoundingClientRect().width;
+                      const headerWidth = header.getBoundingClientRect().width;
+                      return filterWidth > 0 && filterWidth < headerWidth * 0.6;
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#datasetViewerTool").click()
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.wait_for_function(
@@ -6690,10 +6689,10 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
-                assert_filter_label_color("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
-                assert_filter_label_color("#lineBarFilter", "line-bar-filter--applied", False)
-                assert_filter_label_color("#histogramFilter", "histogram-filter--applied", False)
-                assert_filter_label_color("#mapControlFilter", "map-filter--applied", False)
+                assert_filter_label_badge("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
+                assert_filter_label_badge("#lineBarFilter", "line-bar-filter--applied", False)
+                assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", False)
+                assert_filter_label_badge("#mapControlFilter", "map-filter--applied", False)
                 self.assertTrue(page.locator("#collapsedFilterIndicator").evaluate("node => node.hidden"))
                 self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_clear)
@@ -7246,11 +7245,11 @@ COPY (
                       const meta = document.querySelector("#profileFilter");
                       if (!meta?.classList.contains("profile-filter--applied")) return false;
                       const probe = document.createElement("span");
-                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--danger").trim();
+                      probe.style.backgroundColor = getComputedStyle(document.body).getPropertyValue("--filter-applied-bg").trim();
                       document.body.append(probe);
-                      const danger = getComputedStyle(probe).color;
+                      const expectedBackground = getComputedStyle(probe).backgroundColor;
                       probe.remove();
-                      return getComputedStyle(meta).color === danger;
+                      return getComputedStyle(meta).backgroundColor === expectedBackground;
                     }
                     """,
                     timeout=10_000,
@@ -7757,7 +7756,7 @@ COPY (
                         )
                 histogram_filter_payload = json.loads(histogram_filter_request_info.value.post_data or "{}")
                 self.assertEqual(histogram_filter_payload["filter"], "vehicle_age >= 0")
-                assert_filter_label_color("#histogramFilter", "histogram-filter--applied", True)
+                assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", True)
 
                 with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_metric_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):

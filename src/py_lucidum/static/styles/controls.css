@@ -241,8 +241,17 @@
         margin-left: auto;
       }
 
+      .filter-row-meta {
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+
       .filter-row-meta.filter-row-meta--applied {
-        color: var(--danger);
+        background: var(--filter-applied-bg);
+        border-color: var(--filter-applied-border);
+        color: var(--filter-applied-text);
       }
 
       #kpiSelect {
@@ -781,26 +790,26 @@
       #profileFilter,
       #histogramFilter,
       #lineBarFilter {
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
         color: var(--muted);
         font-size: 10px;
         line-height: 1.1;
         max-width: 100%;
         overflow: hidden;
+        padding: 1px 4px;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
       #datasetViewerFilter.dataset-viewer-filter--applied,
-      #profileFilter.profile-filter--applied {
-        color: var(--danger);
-      }
-
-      #lineBarFilter.line-bar-filter--applied {
-        color: var(--danger);
-      }
-
+      #profileFilter.profile-filter--applied,
+      #lineBarFilter.line-bar-filter--applied,
       #histogramFilter.histogram-filter--applied {
-        color: var(--danger);
+        background: var(--filter-applied-bg);
+        border-color: var(--filter-applied-border);
+        color: var(--filter-applied-text);
       }
 
       .table-wrap {

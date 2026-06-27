@@ -267,19 +267,28 @@
       }
 
       .map-floating-header #mapGroupMeta,
-      #lineBarFilter,
       #mapControlFilter {
         color: grey;
       }
 
-      #lineBarFilter.line-bar-filter--applied,
-      #mapControlFilter.map-filter--applied {
-        color: var(--danger);
+      #mapControlFilter {
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        display: block;
+        font-size: 10px;
+        justify-self: start;
+        line-height: 1.1;
+        max-width: 100%;
+        min-width: 0;
+        padding: 1px 4px;
+        width: fit-content;
       }
 
-      #lineBarFilter,
-      #mapControlFilter {
-        font-size: 10px;
+      #mapControlFilter.map-filter--applied {
+        background: var(--filter-applied-bg);
+        border-color: var(--filter-applied-border);
+        color: var(--filter-applied-text);
       }
 
       .map-control-reset {
