@@ -1407,6 +1407,12 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         line_bar_css = self.assert_no_store("/static/styles/line-bar.css")[1].decode("utf-8")
         gbm_css = self.assert_no_store("/static/styles/gbm.css")[1].decode("utf-8")
         dataset_css = self.assert_no_store("/static/styles/dataset-viewer.css")[1].decode("utf-8")
+        self.assertIn(".app {\n        user-select: none;\n        -webkit-user-select: none;\n      }", foundations_css)
+        self.assertIn(
+            ".app input,\n      .app textarea,\n      .app [contenteditable],\n      .app .tabulator-editing,",
+            foundations_css,
+        )
+        self.assertIn(".app .ace_editor,\n      .app .ace_editor *,", foundations_css)
         self.assertIn(".hidden {\n        display: none !important;\n      }", foundations_css)
         self.assertNotRegex(gbm_css, r"(?m)^\s*\.hidden\s*\{\s*display:\s*none")
         self.assertIn(".visual-area.startup-mode {\n        grid-template-columns: minmax(0, 1fr);", line_bar_css)

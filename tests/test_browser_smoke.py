@@ -120,6 +120,76 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_app_text_is_not_drag_selectable_except_inputs(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long\n"
+                "AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1\n"
+                "AB,AB10 1,2,200,20,AB10 1AB,57.2,-2.2\n"
+                "AL,AL1 1,3,300,30,AL1 1AA,51.8,-0.3\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path, tools=["line_bar"])
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                        page.locator("#chartSideControls:not(.hidden) #featureSearch").wait_for(timeout=10_000)
+
+                        def drag_text(selector: str) -> str:
+                            box = page.locator(selector).bounding_box()
+                            self.assertIsNotNone(box)
+                            assert box is not None
+                            y = box["y"] + (box["height"] / 2)
+                            start_x = box["x"] + 2
+                            end_x = box["x"] + max(4, min(box["width"] - 2, 180))
+                            page.evaluate("() => window.getSelection()?.removeAllRanges()")
+                            page.mouse.move(start_x, y)
+                            page.mouse.down()
+                            page.mouse.move(end_x, y, steps=8)
+                            page.mouse.up()
+                            page.wait_for_timeout(50)
+                            return page.evaluate("() => window.getSelection()?.toString() || ''")
+
+                        self.assertEqual(drag_text("#datasetMeta"), "")
+                        self.assertEqual(drag_text("#actualMetricTitle"), "")
+
+                        page.locator("#featureSearch").fill("vehicle_age")
+                        page.locator("#featureSearch").focus()
+                        shortcut = "Meta+A" if sys.platform == "darwin" else "Control+A"
+                        page.keyboard.press(shortcut)
+                        input_selection = page.evaluate(
+                            """
+                            () => {
+                              const input = document.querySelector("#featureSearch");
+                              return {
+                                start: input?.selectionStart ?? -1,
+                                end: input?.selectionEnd ?? -1,
+                                value: input?.value || "",
+                                userSelect: getComputedStyle(input).userSelect,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(input_selection["start"], 0)
+                        self.assertEqual(input_selection["end"], len(input_selection["value"]))
+                        self.assertEqual(input_selection["userSelect"], "text")
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_hidden_cached_visual_tools_refresh_theme_without_api_requests(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"

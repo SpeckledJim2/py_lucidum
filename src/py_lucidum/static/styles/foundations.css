@@ -67,6 +67,24 @@
         color: var(--text);
       }
 
+      .app {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .app input,
+      .app textarea,
+      .app [contenteditable],
+      .app .tabulator-editing,
+      .app .tabulator-editing *,
+      .app .ace_editor,
+      .app .ace_editor *,
+      .app .glm-formula-editor,
+      .app .glm-formula-editor * {
+        user-select: text;
+        -webkit-user-select: text;
+      }
+
       .hidden {
         display: none !important;
       }
