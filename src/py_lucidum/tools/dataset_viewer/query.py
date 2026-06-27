@@ -7,8 +7,8 @@ from typing import Any
 from py_lucidum.core import Dataset, json_number, quote_ident
 
 
-DEFAULT_TABLE_LIMIT = 1000
-MAX_TABLE_LIMIT = 1000
+DEFAULT_TABLE_LIMIT = 100
+MAX_TABLE_LIMIT = 100
 
 
 def table(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:

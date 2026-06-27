@@ -152,7 +152,7 @@ class DatasetViewerToolTests(unittest.TestCase):
         self.assertNotIn("filtered_row_count", payload)
         self.assertNotIn("truncated", payload)
         self.assertEqual(payload["displayed_row_count"], 3)
-        self.assertEqual(payload["max_rows"], 1000)
+        self.assertEqual(payload["max_rows"], 100)
         self.assertFalse(payload["has_more"])
         self.assertEqual([column["name"] for column in payload["columns"]], ["Age", "Segment", "Score", "QuoteDate"])
         self.assertEqual([column["field"] for column in payload["columns"]], ["c0", "c1", "c2", "c3"])
@@ -169,7 +169,7 @@ class DatasetViewerToolTests(unittest.TestCase):
         self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
 
-    def test_table_caps_displayed_rows_at_one_thousand(self) -> None:
+    def test_table_caps_displayed_rows_at_one_hundred(self) -> None:
         large_path = self.root / "large.csv"
         large_path.write_text(
             "Index,Value\n" + "".join(f"{index},v{index}\n" for index in range(1, 1006)),
@@ -181,12 +181,12 @@ class DatasetViewerToolTests(unittest.TestCase):
 
         self.assertNotIn("row_count", payload)
         self.assertNotIn("filtered_row_count", payload)
-        self.assertEqual(payload["displayed_row_count"], 1000)
-        self.assertEqual(payload["max_rows"], 1000)
+        self.assertEqual(payload["displayed_row_count"], 100)
+        self.assertEqual(payload["max_rows"], 100)
         self.assertTrue(payload["has_more"])
         self.assertEqual(payload["rows"][0]["__row_id"], 1)
-        self.assertEqual(payload["rows"][-1]["__row_id"], 1000)
-        self.assertFalse(any("first 1,000" in warning for warning in payload["warnings"]))
+        self.assertEqual(payload["rows"][-1]["__row_id"], 100)
+        self.assertFalse(any("first 100" in warning for warning in payload["warnings"]))
 
     def test_invalid_filter_returns_bad_request(self) -> None:
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)

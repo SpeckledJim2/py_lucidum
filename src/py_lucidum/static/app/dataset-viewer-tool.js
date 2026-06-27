@@ -1,7 +1,7 @@
 import { loadTabulator } from "./shared/tabulator.js";
 
 const TOOL_ID = "dataset_viewer";
-const MAX_ROWS = 1000;
+const MAX_ROWS = 100;
 const STYLESHEET_ID = "datasetViewerStylesheet";
 
 function ensureDatasetViewerStyles() {
@@ -41,6 +41,7 @@ export function createDatasetViewerTool({
   let currentFields = [];
   let currentDatasetRows = [];
   let currentDatasetColumns = [];
+  let currentDatasetColumnByField = new Map();
   let currentVisibleDatasetColumns = [];
   let selectedRowIds = new Set();
   let selectedColumnFields = new Set();
@@ -51,7 +52,6 @@ export function createDatasetViewerTool({
   let renderedSearch = null;
   let renderedTranspose = null;
   let renderedAlphabeticalColumns = null;
-  let transposedHoverRow = null;
   let resizeFrame = null;
   let resizeHard = false;
 
@@ -177,7 +177,6 @@ export function createDatasetViewerTool({
 
   function clearTable({ resetSelection = false } = {}) {
     closeDatasetViewerCellContextMenu();
-    hideTransposedHover();
     if (resizeFrame !== null) {
       cancelAnimationFrame(resizeFrame);
       resizeFrame = null;
@@ -200,6 +199,7 @@ export function createDatasetViewerTool({
     currentFields = [];
     currentDatasetRows = [];
     currentDatasetColumns = [];
+    currentDatasetColumnByField = new Map();
     currentVisibleDatasetColumns = [];
     renderedRequestKey = null;
     renderedSearch = null;
@@ -242,6 +242,7 @@ export function createDatasetViewerTool({
     currentFields = tableData.fields;
     currentDatasetRows = tableData.datasetRows;
     currentDatasetColumns = tableData.datasetColumns;
+    currentDatasetColumnByField = new Map(currentDatasetColumns.map((column) => [column.field, column]));
     currentVisibleDatasetColumns = tableData.visibleDatasetColumns || tableData.datasetColumns;
     state.datasetViewerColumnCount = Array.isArray(data?.columns) ? data.columns.length : null;
     syncDatasetViewerMeta();
@@ -258,8 +259,7 @@ export function createDatasetViewerTool({
     el("datasetViewerGrid").innerHTML = "";
     el("datasetViewerGrid").classList.toggle("dataset-viewer-grid-transposed", Boolean(state.datasetViewerTranspose));
     if (state.datasetViewerTranspose) {
-      renderTransposedGrid();
-      markRendered(requestKey);
+      renderTransposedGrid(token, requestKey);
       return;
     }
     loadTabulator().then((Tabulator) => {
@@ -271,7 +271,7 @@ export function createDatasetViewerTool({
         index: "__row_id",
         autoResize: false,
         height: "100%",
-        layout: "fitDataStretch",
+        layout: "fitData",
         placeholder: "No matching rows",
         reactiveData: false,
         renderHorizontal: "virtual",
@@ -303,53 +303,42 @@ export function createDatasetViewerTool({
     });
   }
 
-  function renderTransposedGrid() {
-    const target = el("datasetViewerGrid");
-    if (!target) return;
-    target.innerHTML = `
-      <div class="dataset-viewer-transposed-scroll">
-        <div class="dataset-viewer-transposed-hover" hidden aria-hidden="true"></div>
-        <table class="dataset-viewer-transposed-table">
-          <thead>
-            <tr>${currentColumns.map((column) => transposedHeaderHtml(column)).join("")}</tr>
-          </thead>
-          <tbody>
-            ${currentRows.map((row) => `
-              <tr data-dataset-viewer-column-field="${escapeHtml(String(row.__column_field || ""))}"${selectedColumnFields.has(row.__column_field) ? ' class="tabulator-selected"' : ""}>
-                ${currentColumns.map((column) => transposedCellHtml(row, column)).join("")}
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </div>`;
-    wireTransposedHover(target);
-  }
-
-  function wireTransposedHover(target) {
-    const scroll = target.querySelector(".dataset-viewer-transposed-scroll");
-    const hover = target.querySelector(".dataset-viewer-transposed-hover");
-    if (!scroll || !hover) return;
-    scroll.addEventListener("pointerover", (event) => {
-      const row = event.target?.closest?.("tbody tr[data-dataset-viewer-column-field]");
-      if (!row || !scroll.contains(row)) return;
-      if (row === transposedHoverRow) return;
-      transposedHoverRow = row;
-      hover.style.width = `${Math.max(scroll.scrollWidth, scroll.clientWidth)}px`;
-      hover.style.height = `${row.offsetHeight}px`;
-      hover.style.transform = `translateY(${row.offsetTop}px)`;
-      hover.hidden = false;
+  function renderTransposedGrid(token, requestKey) {
+    loadTabulator().then((Tabulator) => {
+      if (token !== renderToken) return;
+      const target = el("datasetViewerGrid");
+      if (!target) return;
+      datasetTable = new Tabulator(target, {
+        data: currentRows,
+        index: "__row_id",
+        autoResize: false,
+        height: "100%",
+        layout: "fitData",
+        placeholder: "No matching columns",
+        reactiveData: false,
+        renderHorizontal: "virtual",
+        renderVertical: "virtual",
+        rowHeight: 22,
+        selectableRows: false,
+        columnDefaults: {
+          headerSort: false,
+          resizable: true,
+          formatter: formatTransposedCell,
+        },
+        rowFormatter: formatTransposedRow,
+        columns: currentColumns,
+      });
+      if (typeof datasetTable.on === "function") {
+        datasetTable.on("renderComplete", syncTransposedRenderedSelection);
+        datasetTable.on("dataFiltered", syncTransposedRenderedSelection);
+      }
+      applySearch();
+      syncTransposedRenderedSelection();
+      markRendered(requestKey);
+    }).catch((error) => {
+      if (token !== renderToken) return;
+      renderError(error.message || String(error));
     });
-    scroll.addEventListener("pointerleave", hideTransposedHover);
-    scroll.addEventListener("scroll", () => {
-      if (!transposedHoverRow || !transposedHoverRow.isConnected || hover.hidden) return;
-      hover.style.width = `${Math.max(scroll.scrollWidth, scroll.clientWidth)}px`;
-    });
-  }
-
-  function hideTransposedHover() {
-    const hover = document.querySelector("#datasetViewerGrid .dataset-viewer-transposed-hover");
-    transposedHoverRow = null;
-    if (hover) hover.hidden = true;
   }
 
   function normalTableData(data) {
@@ -361,8 +350,7 @@ export function createDatasetViewerTool({
       name: column.name,
       field: column.field,
       headerTooltip: column.name,
-      minWidth: column.kind === "numeric" || column.kind === "integer" ? 90 : 130,
-      maxInitialWidth: 320,
+      ...datasetViewerColumnWidth(column),
       hozAlign: column.kind === "numeric" || column.kind === "integer" ? "right" : "left",
       headerHozAlign: column.kind === "numeric" || column.kind === "integer" ? "right" : "left",
     }));
@@ -376,46 +364,56 @@ export function createDatasetViewerTool({
     };
   }
 
+  function datasetViewerColumnWidth(column) {
+    const kind = String(column?.kind || "");
+    if (kind === "integer" || kind === "numeric") return { width: 96, minWidth: 72 };
+    if (kind === "date" || kind === "datetime") return { width: 128, minWidth: 104 };
+    return { width: 150, minWidth: 96 };
+  }
+
   function transposedTableData(data) {
     const sourceColumns = orderedDatasetViewerColumns(data);
     const sourceRows = Array.isArray(data?.rows) ? data.rows : [];
-    const query = String(state.datasetViewerSearch || "").trim().toLowerCase();
-    const visibleColumns = query
-      ? sourceColumns.filter((column) => transposedColumnMatchesSearch(column, query))
-      : sourceColumns;
-    const sortedColumns = sortedTransposedColumns(visibleColumns, sourceRows);
-    const rows = sortedColumns.map((column) => {
-      const row = {
-        __row_id: column.field,
-        __column_field: column.field,
-        __field: column.name,
-      };
-      sourceRows.forEach((sourceRow, rowIndex) => {
-        row[`r${rowIndex}`] = sourceRow[column.field];
-      });
-      return row;
-    });
+    const sortedColumns = sortedTransposedColumns(sourceColumns, sourceRows);
+    const rows = sortedColumns.map((column) => ({
+      __row_id: column.field,
+      __column_field: column.field,
+      __field: column.name,
+    }));
     const columns = [
       {
-        title: "Column",
+        title: transposedHeaderHtml({
+          title: "Column",
+          copyTitle: "Column",
+          field: "__field",
+          sortField: "__field",
+        }),
         copyTitle: "Column",
         field: "__field",
-        frozen: true,
-        headerSort: true,
         sortField: "__field",
-        minWidth: 170,
         width: 220,
+        minWidth: 170,
+        headerSort: false,
+        resizable: true,
       },
       ...sourceRows.map((row, index) => ({
-        title: `Row ${index + 1}`,
+        title: transposedHeaderHtml({
+          title: `Row ${index + 1}`,
+          copyTitle: `Row ${index + 1}`,
+          field: `r${index}`,
+          sortField: `r${index}`,
+          datasetRowId: row.__row_id,
+          headerTooltip: row.__row_id ? `Dataset row ${row.__row_id}` : `Row ${index + 1}`,
+        }),
         copyTitle: `Row ${index + 1}`,
         field: `r${index}`,
         sortField: `r${index}`,
         datasetRowId: row.__row_id,
         headerTooltip: row.__row_id ? `Dataset row ${row.__row_id}` : `Row ${index + 1}`,
-        headerSort: true,
-        minWidth: 90,
-        maxInitialWidth: 220,
+        headerSort: false,
+        resizable: true,
+        width: 100,
+        minWidth: 72,
       })),
     ];
     return {
@@ -439,18 +437,37 @@ export function createDatasetViewerTool({
     const label = column.datasetRowId !== undefined
       ? `<button class="dataset-viewer-transposed-header-label" type="button" data-dataset-viewer-row-id="${escapeHtml(String(column.datasetRowId))}" title="${escapeHtml(column.headerTooltip || title)}">${escapeHtml(title)}</button>`
       : `<span class="dataset-viewer-transposed-header-label-static">${escapeHtml(title)}</span>`;
-    return `<th data-dataset-viewer-transposed-field="${escapeHtml(column.sortField || column.field)}" data-sort-dir="${escapeHtml(sortDir)}" aria-sort="${transposedAriaSort(sortDir)}"${selected ? ' class="dataset-viewer-transposed-column-selected"' : ""}>
-      <div class="dataset-viewer-transposed-header-content">
+    return `<div class="dataset-viewer-transposed-header-content" data-dataset-viewer-transposed-field="${escapeHtml(column.sortField || column.field)}" data-sort-dir="${escapeHtml(sortDir)}" aria-sort="${transposedAriaSort(sortDir)}"${selected ? ' data-selected-row="true"' : ""}>
         ${label}
         <button class="dataset-viewer-transposed-sort-button" type="button" data-dataset-viewer-transposed-sort="${escapeHtml(column.sortField || column.field)}" data-sort-dir="${escapeHtml(sortDir)}" aria-label="Sort ${escapeHtml(title)}"></button>
-      </div>
-    </th>`;
+      </div>`;
   }
 
-  function transposedCellHtml(row, column) {
-    const selected = column.datasetRowId !== undefined && selectedRowIds.has(Number(column.datasetRowId));
-    const value = row[column.field];
-    return `<td data-dataset-viewer-cell-field="${escapeHtml(column.field)}"${selected ? ' class="dataset-viewer-transposed-column-selected"' : ""}>${escapeHtml(formatCellValue(value))}</td>`;
+  function formatTransposedRow(row) {
+    const data = typeof row?.getData === "function" ? row.getData() : {};
+    const element = typeof row?.getElement === "function" ? row.getElement() : null;
+    if (!element) return;
+    const field = String(data.__column_field || "");
+    if (field) {
+      element.dataset.datasetViewerColumnField = field;
+    } else {
+      delete element.dataset.datasetViewerColumnField;
+    }
+    element.classList.toggle("tabulator-selected", selectionAxis === "columns" && selectedColumnFields.has(field));
+  }
+
+  function formatTransposedCell(cell) {
+    const rowData = typeof cell?.getData === "function" ? cell.getData() : {};
+    const field = typeof cell?.getField === "function" ? cell.getField() : "";
+    return escapeHtml(formatCellValue(transposedCellValue(rowData, field)));
+  }
+
+  function transposedCellValue(rowData, field, sourceRows = currentDatasetRows) {
+    if (field === "__field") return rowData?.__field;
+    const rowIndex = transposedRowIndexFromField(field);
+    if (rowIndex < 0 || rowIndex >= sourceRows.length) return "";
+    const columnField = rowData?.__column_field;
+    return columnField ? sourceRows[rowIndex]?.[columnField] : "";
   }
 
   function transposedAriaSort(dir) {
@@ -475,10 +492,7 @@ export function createDatasetViewerTool({
   }
 
   function transposedSortValue(column, field, sourceRows = currentDatasetRows) {
-    if (field === "__field") return column?.name;
-    const rowIndex = transposedRowIndexFromField(field);
-    if (rowIndex < 0 || rowIndex >= sourceRows.length) return "";
-    return sourceRows[rowIndex]?.[column.field];
+    return transposedCellValue({ __column_field: column?.field, __field: column?.name }, field, sourceRows);
   }
 
   function transposedRowIndexFromField(field) {
@@ -546,7 +560,7 @@ export function createDatasetViewerTool({
       return;
     }
     if (!state.datasetViewerTranspose) return;
-    const transposedRow = event.target?.closest?.("tbody tr[data-dataset-viewer-column-field]");
+    const transposedRow = event.target?.closest?.(".tabulator-row[data-dataset-viewer-column-field]");
     if (!transposedRow || !grid.contains(transposedRow)) return;
     event.preventDefault();
     toggleColumnSelection(transposedRow.dataset.datasetViewerColumnField || "");
@@ -555,18 +569,21 @@ export function createDatasetViewerTool({
   function handleDatasetViewerGridContextMenu(event) {
     const grid = el("datasetViewerGrid");
     if (!grid || !grid.contains(event.target)) return;
+    const cell = event.target?.closest?.(".tabulator-cell[tabulator-field]");
     const selectionLabel = selectedCopyLabel();
-    if (selectionLabel) {
-      event.preventDefault();
-      event.stopPropagation();
-      openDatasetViewerContextMenu(event, { mode: "selection", label: selectionLabel });
-      return;
+    const actions = [];
+    if (cell && grid.contains(cell)) {
+      actions.push({ mode: "cell", label: "Copy cell to clipboard", value: datasetViewerCellValue(cell) });
     }
-    const cell = event.target?.closest?.(".tabulator-cell[tabulator-field], .dataset-viewer-transposed-table tbody td[data-dataset-viewer-cell-field]");
-    if (!cell || !grid.contains(cell)) return;
+    if (selectionLabel) actions.push({ mode: "selection", label: selectionLabel });
+    actions.push({ mode: "displayed-table", label: "Copy displayed table to clipboard" });
+    if (selectionLabel) {
+      actions.push({ divider: true });
+      actions.push({ mode: "clear-selection", label: "Clear selection" });
+    }
     event.preventDefault();
     event.stopPropagation();
-    openDatasetViewerContextMenu(event, { mode: "cell", label: "Copy to clipboard", value: cell.textContent || "" });
+    openDatasetViewerContextMenu(event, actions);
   }
 
   function cycleTransposedSort(field) {
@@ -607,7 +624,7 @@ export function createDatasetViewerTool({
     }
     selectionAxis = selectedColumnFields.size ? "columns" : "";
     syncNormalColumnSelectionClasses();
-    setTransposedColumnRowSelected(field, selectionAxis === "columns" && selectedColumnFields.has(field));
+    syncTransposedRenderedSelection();
   }
 
   function toggleRowSelection(rowId) {
@@ -620,15 +637,22 @@ export function createDatasetViewerTool({
       selectedRowIds.add(rowId);
     }
     selectionAxis = selectedRowIds.size ? "rows" : "";
-    restoreNormalRowSelection();
-    setTransposedRowColumnSelected(transposedFieldForDatasetRowId(rowId), selectionAxis === "rows" && selectedRowIds.has(rowId));
+    if (state.datasetViewerTranspose) {
+      syncTransposedRenderedSelection();
+    } else {
+      restoreNormalRowSelection();
+    }
   }
 
   function clearRowSelection({ syncTable = false } = {}) {
     const hadRows = selectedRowIds.size > 0;
     selectedRowIds = new Set();
     if (selectionAxis === "rows") selectionAxis = "";
-    if (hadRows && state.datasetViewerTranspose) clearTransposedRowSelectionClasses();
+    if (state.datasetViewerTranspose) {
+      if (hadRows) clearTransposedRowSelectionClasses();
+      syncTransposedRenderedSelection();
+      return;
+    }
     if (!syncTable || !datasetTable || typeof datasetTable.deselectRow !== "function") return;
     suppressRowSelectionSync = true;
     try {
@@ -644,8 +668,17 @@ export function createDatasetViewerTool({
     const hadColumns = selectedColumnFields.size > 0;
     selectedColumnFields = new Set();
     if (selectionAxis === "columns") selectionAxis = "";
-    if (hadColumns && state.datasetViewerTranspose) clearTransposedColumnSelectionClasses();
+    if (state.datasetViewerTranspose) {
+      if (hadColumns) clearTransposedColumnSelectionClasses();
+      syncTransposedRenderedSelection();
+      return;
+    }
     syncNormalColumnSelectionClasses();
+  }
+
+  function clearDatasetViewerSelection() {
+    clearRowSelection({ syncTable: true });
+    clearColumnSelection();
   }
 
   function handleNormalRowSelectionChanged(rows = []) {
@@ -694,29 +727,30 @@ export function createDatasetViewerTool({
     syncNormalColumnSelectionClasses();
   }
 
-  function setTransposedColumnRowSelected(field, selected, grid = document.getElementById("datasetViewerGrid")) {
-    if (!grid || !state.datasetViewerTranspose || !field) return;
-    grid.querySelector(`tbody tr[data-dataset-viewer-column-field="${cssEscape(field)}"]`)?.classList.toggle("tabulator-selected", selected);
+  function syncTransposedRenderedSelection() {
+    const grid = document.getElementById("datasetViewerGrid");
+    if (!grid || !state.datasetViewerTranspose) return;
+    const selectedRows = selectionAxis === "rows" ? selectedRowIds : new Set();
+    const selectedRowFields = new Set(
+      currentColumns
+        .filter((column) => column.datasetRowId !== undefined && selectedRows.has(Number(column.datasetRowId)))
+        .map((column) => column.field),
+    );
+    const selectedColumns = selectionAxis === "columns" ? selectedColumnFields : new Set();
+    grid.querySelectorAll(".tabulator-row[data-dataset-viewer-column-field]").forEach((row) => {
+      const field = row.getAttribute("data-dataset-viewer-column-field") || "";
+      row.classList.toggle("tabulator-selected", selectedColumns.has(field));
+    });
+    grid.querySelectorAll(".tabulator-col[tabulator-field], .tabulator-cell[tabulator-field]").forEach((node) => {
+      const field = node.getAttribute("tabulator-field") || "";
+      node.classList.toggle("dataset-viewer-transposed-column-selected", selectedRowFields.has(field));
+    });
   }
 
   function clearTransposedColumnSelectionClasses(grid = document.getElementById("datasetViewerGrid")) {
     if (!grid || !state.datasetViewerTranspose) return;
-    grid.querySelectorAll("tbody tr.tabulator-selected").forEach((row) => {
+    grid.querySelectorAll(".tabulator-row.tabulator-selected").forEach((row) => {
       row.classList.remove("tabulator-selected");
-    });
-  }
-
-  function transposedFieldForDatasetRowId(rowId) {
-    const column = currentColumns.find((candidate) => candidate.datasetRowId !== undefined && Number(candidate.datasetRowId) === Number(rowId));
-    return column?.field || "";
-  }
-
-  function setTransposedRowColumnSelected(field, selected, grid = document.getElementById("datasetViewerGrid")) {
-    if (!grid || !state.datasetViewerTranspose || !field) return;
-    const escapedField = cssEscape(field);
-    grid.querySelector(`thead th[data-dataset-viewer-transposed-field="${escapedField}"]`)?.classList.toggle("dataset-viewer-transposed-column-selected", selected);
-    grid.querySelectorAll(`tbody td[data-dataset-viewer-cell-field="${escapedField}"]`).forEach((cell) => {
-      cell.classList.toggle("dataset-viewer-transposed-column-selected", selected);
     });
   }
 
@@ -727,16 +761,10 @@ export function createDatasetViewerTool({
     });
   }
 
-  function cssEscape(value) {
-    if (window.CSS?.escape) return window.CSS.escape(String(value));
-    return String(value).replace(/["\\]/g, "\\$&");
-  }
-
   function applySearch() {
     const query = String(state.datasetViewerSearch || "").trim().toLowerCase();
-    if (!datasetTable && state.datasetViewerTranspose) {
-      const cache = toolCache(TOOL_ID);
-      if (cache.data) measureToolRender(TOOL_ID, () => renderData(cache.data, cache.requestKey));
+    if (state.datasetViewerTranspose) {
+      applyTransposedSearch(query);
       return;
     }
     if (!datasetTable) return;
@@ -755,18 +783,93 @@ export function createDatasetViewerTool({
   }
 
   function transposedColumnMatchesSearch(column, query) {
-    return formatCellValue(column?.name).toLowerCase().includes(query);
+    return formatCellValue(column?.__field ?? column?.name).toLowerCase().includes(query);
+  }
+
+  function applyTransposedSearch(query) {
+    if (!datasetTable) return;
+    try {
+      if (!query) {
+        datasetTable.clearFilter();
+        syncTransposedVisibleColumnsFromRows(currentRows);
+      } else {
+        datasetTable.setFilter((row) => transposedColumnMatchesSearch(row, query));
+        syncTransposedVisibleColumnsFromActiveRows();
+      }
+      syncTransposedRenderedSelection();
+      markRendered(toolCache(TOOL_ID).requestKey);
+    } catch (_) {
+      // Search is client-only convenience; stale Tabulator instances can be ignored.
+    }
+  }
+
+  function syncTransposedVisibleColumnsFromActiveRows() {
+    if (!state.datasetViewerTranspose) return;
+    let rows = currentRows;
+    try {
+      if (datasetTable && typeof datasetTable.getData === "function") rows = datasetTable.getData("active");
+    } catch (_) {
+      rows = currentRows;
+    }
+    syncTransposedVisibleColumnsFromRows(rows);
+  }
+
+  function syncTransposedVisibleColumnsFromRows(rows) {
+    currentVisibleDatasetColumns = (rows || [])
+      .map((row) => currentDatasetColumnByField.get(row?.__column_field))
+      .filter(Boolean);
+  }
+
+  function datasetViewerCellValue(cell) {
+    if (!state.datasetViewerTranspose) return cell.textContent || "";
+    const field = cell.getAttribute("tabulator-field") || "";
+    const row = cell.closest(".tabulator-row[data-dataset-viewer-column-field]");
+    const columnField = row?.dataset?.datasetViewerColumnField || "";
+    if (!field || !columnField) return cell.textContent || "";
+    const column = currentDatasetColumnByField.get(columnField);
+    return formatCellValue(transposedCellValue({
+      __column_field: columnField,
+      __field: column?.name || "",
+    }, field));
   }
 
   async function copySelectedRows() {
     if (!selectionAxis) return;
-    const rows = selectionAxis === "columns" ? rowsForColumnCopy() : selectedRowsForCopy();
-    const columns = selectionAxis === "columns" ? selectedColumnsForCopy() : columnsForRowCopy();
-    if (!rows.length || !columns.length) return;
-    const csv = rowsToCsv(rows, columns);
+    const csv = state.datasetViewerTranspose ? transposedSelectionToCsv() : normalSelectionToCsv();
+    if (!csv) return;
     const copied = await copyTextToClipboard(csv);
     const subject = selectionAxis === "columns" ? "columns" : "rows";
     showClipboardToast(copied ? `Selected ${subject} copied` : `Could not copy selected ${subject}`, !copied);
+  }
+
+  function normalSelectionToCsv() {
+    const rows = selectionAxis === "columns" ? rowsForColumnCopy() : selectedRowsForCopy();
+    const columns = selectionAxis === "columns" ? selectedColumnsForCopy() : columnsForRowCopy();
+    if (!rows.length || !columns.length) return "";
+    return rowsToCsv(rows, columns);
+  }
+
+  function transposedSelectionToCsv() {
+    if (selectionAxis === "columns") {
+      const rows = activeTransposedRowsForCopy().filter((row) => selectedColumnFields.has(row.__column_field));
+      return rows.length ? transposedRowsToCsv(rows, currentColumns) : "";
+    }
+    if (selectionAxis === "rows") {
+      const columns = currentColumns.filter((column) => (
+        column.field === "__field"
+        || (column.datasetRowId !== undefined && selectedRowIds.has(Number(column.datasetRowId)))
+      ));
+      return columns.length > 1 ? transposedRowsToCsv(activeTransposedRowsForCopy(), columns) : "";
+    }
+    return "";
+  }
+
+  async function copyDisplayedTable() {
+    const csv = state.datasetViewerTranspose
+      ? transposedRowsToCsv(activeTransposedRowsForCopy(), currentColumns)
+      : rowsToCsv(rowsForColumnCopy(), currentDatasetColumns);
+    const copied = await copyTextToClipboard(csv);
+    showClipboardToast(copied ? "Displayed table copied" : "Could not copy displayed table", !copied);
   }
 
   function selectedRowsForCopy() {
@@ -787,6 +890,7 @@ export function createDatasetViewerTool({
   }
 
   function rowsForColumnCopy() {
+    if (state.datasetViewerTranspose) return currentDatasetRows;
     if (!datasetTable) return currentDatasetRows;
     try {
       if (typeof datasetTable.getRows === "function") {
@@ -805,10 +909,36 @@ export function createDatasetViewerTool({
     return currentDatasetRows;
   }
 
+  function activeTransposedRowsForCopy() {
+    if (!datasetTable) return currentRows;
+    try {
+      if (typeof datasetTable.getRows === "function") {
+        return datasetTable.getRows("active")
+          .map((row) => typeof row.getData === "function" ? row.getData() : null)
+          .filter(Boolean);
+      }
+    } catch (_) {
+      // Fall through to the simpler public data getter.
+    }
+    try {
+      if (typeof datasetTable.getData === "function") return datasetTable.getData("active");
+    } catch (_) {
+      // Ignore stale Tabulator instances.
+    }
+    return currentRows;
+  }
+
   function rowsToCsv(rows, columns) {
     const visibleColumns = columns.filter((column) => column.field && !String(column.field).startsWith("__"));
     const header = visibleColumns.map((column) => csvCell(column.name || column.copyTitle || column.title || column.field)).join(",");
     const body = rows.map((row) => visibleColumns.map((column) => csvCell(row[column.field])).join(","));
+    return [header, ...body].join("\n");
+  }
+
+  function transposedRowsToCsv(rows, columns) {
+    const visibleColumns = columns.filter((column) => column.field);
+    const header = visibleColumns.map((column) => csvCell(column.copyTitle || column.title || column.field)).join(",");
+    const body = rows.map((row) => visibleColumns.map((column) => csvCell(transposedCellValue(row, column.field))).join(","));
     return [header, ...body].join("\n");
   }
 
@@ -830,8 +960,11 @@ export function createDatasetViewerTool({
 
   function selectedCopyLabel() {
     const count = selectedCopyCount();
-    if (selectionAxis === "rows" && count > 0) return `Copy row${count === 1 ? "" : "s"} to clipboard`;
-    if (selectionAxis === "columns" && count > 0) return `Copy column${count === 1 ? "" : "s"} to clipboard`;
+    const screenAxis = state.datasetViewerTranspose
+      ? selectionAxis === "rows" ? "columns" : selectionAxis === "columns" ? "rows" : ""
+      : selectionAxis;
+    if (screenAxis === "rows" && count > 0) return `Copy selected row${count === 1 ? "" : "s"} to clipboard`;
+    if (screenAxis === "columns" && count > 0) return `Copy selected column${count === 1 ? "" : "s"} to clipboard`;
     return "";
   }
 
@@ -843,22 +976,35 @@ export function createDatasetViewerTool({
     menu.className = "dataset-viewer-context-menu";
     menu.hidden = true;
     menu.setAttribute("role", "menu");
-    menu.innerHTML = '<button class="dataset-viewer-context-menu-item" type="button" role="menuitem">Copy to clipboard</button>';
-    menu.querySelector("button")?.addEventListener("click", copyDatasetViewerContextValue);
+    menu.addEventListener("click", copyDatasetViewerContextValue);
     document.body.append(menu);
     return menu;
   }
 
-  function openDatasetViewerContextMenu(event, { mode = "cell", label = "Copy to clipboard", value = "" } = {}) {
+  function openDatasetViewerContextMenu(event, actions = []) {
     closeDatasetViewerCellContextMenu();
+    if (!actions.length) return;
     const menu = datasetViewerCellContextMenu();
-    menu.dataset.copyMode = mode;
-    menu.dataset.copyValue = value;
-    const button = menu.querySelector("button");
-    if (button) button.textContent = label;
+    actions.forEach((action) => {
+      if (action.divider) {
+        const divider = document.createElement("div");
+        divider.className = "dataset-viewer-context-menu-divider";
+        divider.setAttribute("role", "separator");
+        menu.append(divider);
+        return;
+      }
+      const button = document.createElement("button");
+      button.className = "dataset-viewer-context-menu-item";
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      button.dataset.copyMode = action.mode || "cell";
+      button.dataset.copyValue = action.value || "";
+      button.textContent = action.label || "Copy cell to clipboard";
+      menu.append(button);
+    });
     menu.hidden = false;
     positionDatasetViewerContextMenu(menu, event.clientX, event.clientY);
-    button?.focus({ preventScroll: true });
+    menu.querySelector("button")?.focus({ preventScroll: true });
     window.addEventListener("pointerdown", handleDatasetViewerContextPointerDown, true);
     window.addEventListener("keydown", handleDatasetViewerContextKeydown, true);
     window.addEventListener("resize", closeDatasetViewerCellContextMenu, true);
@@ -878,14 +1024,27 @@ export function createDatasetViewerTool({
     menu.style.top = `${top}px`;
   }
 
-  async function copyDatasetViewerContextValue() {
+  async function copyDatasetViewerContextValue(event) {
+    const button = event.target?.closest?.("button[data-copy-mode]");
     const menu = document.getElementById("datasetViewerCellContextMenu");
-    if (menu?.dataset?.copyMode === "selection") {
+    if (!button || !menu?.contains(button)) return;
+    event.preventDefault();
+    if (button.dataset.copyMode === "selection") {
       await copySelectedRows();
       closeDatasetViewerCellContextMenu();
       return;
     }
-    const value = menu?.dataset?.copyValue || "";
+    if (button.dataset.copyMode === "displayed-table") {
+      await copyDisplayedTable();
+      closeDatasetViewerCellContextMenu();
+      return;
+    }
+    if (button.dataset.copyMode === "clear-selection") {
+      clearDatasetViewerSelection();
+      closeDatasetViewerCellContextMenu();
+      return;
+    }
+    const value = button.dataset.copyValue || "";
     const copied = await copyTextToClipboard(value);
     showClipboardToast(copied ? "Cell copied to clipboard" : "Could not copy cell", !copied);
     closeDatasetViewerCellContextMenu();
@@ -907,10 +1066,7 @@ export function createDatasetViewerTool({
     const menu = document.getElementById("datasetViewerCellContextMenu");
     if (menu) {
       menu.hidden = true;
-      menu.dataset.copyMode = "";
-      menu.dataset.copyValue = "";
-      const button = menu.querySelector("button");
-      if (button) button.textContent = "Copy to clipboard";
+      menu.replaceChildren();
     }
     window.removeEventListener("pointerdown", handleDatasetViewerContextPointerDown, true);
     window.removeEventListener("keydown", handleDatasetViewerContextKeydown, true);

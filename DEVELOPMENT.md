@@ -150,7 +150,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 **Dataset Viewer**
 
 - Dataset Viewer is default-enabled but registered after Line/Bar when both tools are enabled. Explicit `--tools` / `create_app(..., tools=...)` selections are exact and include it only when `dataset-viewer` is requested.
-- Requests return readable raw dataset columns and up to 1,000 filtered preview rows, plus `has_more` when another row exists beyond the cap. They deliberately do not compute exact total or filtered row counts.
+- Requests return readable raw dataset columns and up to 100 filtered preview rows, plus `has_more` when another row exists beyond the cap. They deliberately do not compute exact total or filtered row counts.
 - The active footer/saved-filter expression is applied server-side before the display cap.
 - Whole-table search, column sorting, axis-exclusive whole-row or whole-column selection, transpose, optional alphabetical column ordering, right-click cell copy, and right-click selected row/column CSV output are client-side over the loaded display rows only. Header labels select whole columns/rows while compact sort symbols cycle ascending, descending, and unsorted states in both orientations. In transpose mode, search matches only the original column names shown in the first transposed column and keeps every loaded preview row as a `Row n` column; selected preview rows or dataset columns are preserved when toggling transpose.
 - Unreadable dataset columns are omitted from the grid and returned as payload warnings without rendering a table overlay.
