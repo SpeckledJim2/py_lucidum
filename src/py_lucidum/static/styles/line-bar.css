@@ -232,6 +232,13 @@
         max-width: 313px;
       }
 
+      .line-bar-table-search-row .search:focus,
+      .line-bar-table-search-row .search:focus-visible {
+        border-color: var(--line);
+        box-shadow: none;
+        outline: none;
+      }
+
       .line-bar-table-content {
         display: flex;
         flex: 1 1 auto;
@@ -308,6 +315,16 @@
         font-weight: 700;
       }
 
+      .line-bar-table-grid.tabulator .tabulator-row.tabulator-selected:not(.tabulator-calcs),
+      .line-bar-table-grid.tabulator .tabulator-row.tabulator-selected:not(.tabulator-calcs):hover {
+        background: color-mix(in srgb, var(--accent) 16%, var(--panel)) !important;
+      }
+
+      .line-bar-table-grid.tabulator .tabulator-row.tabulator-selected:not(.tabulator-calcs) .tabulator-cell {
+        background: transparent !important;
+        color: var(--text) !important;
+      }
+
       .line-bar-table-grid.tabulator .tabulator-tableholder .tabulator-table .tabulator-row.tabulator-calcs.tabulator-calcs-bottom {
         border-top: 1px solid var(--line);
       }
@@ -345,6 +362,49 @@
         color: var(--muted);
         font-size: 12px;
         font-style: italic;
+      }
+
+      .line-bar-table-context-menu {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        box-shadow: 0 12px 30px rgb(15 23 42 / 18%);
+        min-width: 158px;
+        padding: 3px;
+        position: fixed;
+        z-index: 1100;
+      }
+
+      .line-bar-table-context-menu[hidden] {
+        display: none;
+      }
+
+      .line-bar-table-context-menu-item {
+        background: transparent;
+        border: 0;
+        border-radius: 4px;
+        color: var(--text);
+        cursor: pointer;
+        display: block;
+        font: inherit;
+        font-size: 12px;
+        line-height: 1.2;
+        padding: 6px 8px;
+        text-align: left;
+        white-space: nowrap;
+        width: 100%;
+      }
+
+      .line-bar-table-context-menu-item:hover,
+      .line-bar-table-context-menu-item:focus-visible {
+        background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+        outline: none;
+      }
+
+      .line-bar-table-context-menu-divider {
+        background: var(--line);
+        height: 1px;
+        margin: 4px 3px;
       }
 
       .line-bar-table-state {

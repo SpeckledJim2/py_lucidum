@@ -34,6 +34,10 @@ DEFAULT_TABLE_PAGE_SIZE = 10000
 DATE_BUCKETS = {"hour", "day", "week", "month", "year"}
 
 
+def overlarge_chart_message(max_groups: int) -> str:
+    return f"More than {max_groups:,} x-axis groups; too many to plot. Use Table view to inspect all groups, or choose grouping, banding, or filtering."
+
+
 def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
     with dataset.lock:
         result = build_grouped_result(dataset, request, feature_spec=feature_spec, include_partial_dependence=True)
@@ -41,10 +45,11 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
         chart_rows = chart_result["rows"]
         group_count = chart_result["group_count"]
         max_groups = normalise_positive_int(request.get("maxGroups"), DEFAULT_MAX_GROUPS)
+        chart_too_large = group_count > max_groups
         transform = str(request.get("transform") or "none")
         warnings = list(result["warnings"])
-        if group_count > max_groups:
-            warnings.append(f"Chart showing first {max_groups:,} of {group_count:,} groups. Table search covers all groups.")
+        if chart_too_large:
+            warnings.append(overlarge_chart_message(max_groups))
         transform_metadata = transform_metadata_for_result(dataset, result, transform, warnings)
         display_rows, transform_metadata = apply_transform(
             chart_rows,
@@ -57,7 +62,7 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             band_width=request.get("bandWidth"),
             transform_metadata=transform_metadata,
         )
-        partial_dependence = result["partial_dependence"]
+        partial_dependence = None if chart_too_large else result["partial_dependence"]
         if partial_dependence:
             transform_partial_dependence_overlay(
                 partial_dependence,
@@ -270,7 +275,8 @@ page_rows AS (
     *,
     TRUE AS __has_row
   FROM numbered
-  WHERE __row_index <= {max_groups}
+  WHERE (SELECT group_count FROM group_total) <= {max_groups}
+    AND __row_index <= {max_groups}
 )
 SELECT
   group_total.group_count AS __group_count,
@@ -2537,6 +2543,8 @@ def apply_transform(
             "is_tail": bool(row.get("is_tail")),
             "valid_folds": row.get("valid_folds"),
         }
+        if row.get("x_sort") is not None:
+            out["x_sort"] = row.get("x_sort")
         if row.get("x_start") is not None:
             out["x_start"] = row.get("x_start")
         if row.get("x_end") is not None:

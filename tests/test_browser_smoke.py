@@ -953,7 +953,7 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
-    def test_line_bar_table_search_filters_server_side(self) -> None:
+    def test_line_bar_table_search_filters_complete_table_client_side(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "line_bar_table.csv"
             data_path.write_text(
@@ -980,14 +980,30 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.emulate_media(color_scheme="light")
                     page_errors: list[str] = []
                     chart_requests = 0
+                    table_requests = 0
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
 
                     def count_request(request: object) -> None:
-                        nonlocal chart_requests
+                        nonlocal chart_requests, table_requests
                         if request.url.endswith("/api/chart"):
                             chart_requests += 1
+                        elif request.url.endswith("/api/line-bar/table"):
+                            table_requests += 1
 
                     page.on("request", count_request)
+                    page.add_init_script(
+                        """
+                        window.__lucidumCopiedText = null;
+                        Object.defineProperty(navigator, "clipboard", {
+                            configurable: true,
+                            value: {
+                                writeText: async (text) => {
+                                    window.__lucidumCopiedText = text;
+                                },
+                            },
+                        });
+                        """
+                    )
 
                     def wait_for_total_row_theme(expected_dark: bool) -> dict[str, Any]:
                         page.wait_for_function(
@@ -1058,6 +1074,35 @@ class BrowserSmokeTests(unittest.TestCase):
                     chart_requests_before_search = chart_requests
                     page.locator("#tableTab").click()
                     page.locator("#tableWrap:not(.hidden) #lineBarTableSearch").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => {
+                            const xCells = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']")]
+                              .map((cell) => cell.textContent.trim())
+                              .filter(Boolean);
+                            return xCells.length === 2 && xCells[0] === "ALFA ROMEO" && xCells[1] === "BMW";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    chart_requests_before_sort = chart_requests
+                    table_requests_before_sort = table_requests
+                    page.locator('.segmented[data-control="sort"] button[data-value="actual"]').click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                            const xCells = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']")]
+                              .map((cell) => cell.textContent.trim())
+                              .filter(Boolean);
+                            return xCells.length === 2 && xCells[0] === "BMW" && xCells[1] === "ALFA ROMEO";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_timeout(100)
+                    self.assertEqual(chart_requests, chart_requests_before_sort)
+                    self.assertEqual(table_requests, table_requests_before_sort)
+                    table_requests_before_client_search = table_requests
                     page.locator("#lineBarTableSearch").fill("romeo")
                     page.wait_for_function(
                         """
@@ -1069,8 +1114,9 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    page.wait_for_timeout(100)
+                    page.wait_for_timeout(350)
                     self.assertEqual(chart_requests, chart_requests_before_search)
+                    self.assertEqual(table_requests, table_requests_before_client_search)
                     table_search_state = page.evaluate(
                         """
                         () => {
@@ -1084,6 +1130,7 @@ class BrowserSmokeTests(unittest.TestCase):
                               .map((row) => [
                                 row.querySelector(".tabulator-cell[tabulator-field='x']")?.textContent.trim(),
                                 row.querySelector(".tabulator-cell[tabulator-field='volume']")?.textContent.trim(),
+                                row.querySelector(".tabulator-cell[tabulator-field='resp0']")?.textContent.trim(),
                               ])
                               .filter((row) => row[0]);
                             return {
@@ -1098,6 +1145,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(table_search_state["visibleRows"][0][0], "ALFA ROMEO")
                     self.assertEqual(table_search_state["footerCells"][0], "Total")
                     self.assertEqual(table_search_state["footerCells"][1], table_search_state["visibleRows"][0][1])
+                    self.assertEqual(table_search_state["footerCells"][2], table_search_state["visibleRows"][0][2])
                     self.assertGreaterEqual(table_search_state["search"]["top"], table_search_state["messages"]["bottom"])
                     light_total_theme = wait_for_total_row_theme(False)
                     self.assertEqual(light_total_theme["holderBackground"], light_total_theme["panelColor"])
@@ -1117,12 +1165,123 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(light_total_theme_again["cellColor"], light_total_theme_again["textColor"])
                     self.assertEqual(light_total_theme_again["panelColor"], light_total_theme["panelColor"])
                     self.assertEqual(light_total_theme_again["textColor"], light_total_theme["textColor"])
+                    table_requests_before_clear = table_requests
                     page.locator("#lineBarTableSearchClear").click()
                     page.wait_for_function(
                         """
                         () => document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']").length === 2
                           && document.querySelector("#lineBarTableSearch")?.value === ""
                         """
+                    )
+                    page.wait_for_timeout(350)
+                    self.assertEqual(table_requests, table_requests_before_clear)
+                    clear_state = page.evaluate(
+                        """
+                        () => ({
+                          footerCells: [...document.querySelectorAll("#lineBarTableGrid .tabulator-row.tabulator-calcs .tabulator-cell")]
+                            .map((cell) => cell.textContent.trim()),
+                          xCells: [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']")]
+                            .map((cell) => cell.textContent.trim())
+                            .filter(Boolean),
+                        })
+                        """
+                    )
+                    self.assertEqual(clear_state["footerCells"][0], "Total")
+                    self.assertEqual(clear_state["footerCells"][1], "3")
+                    self.assertEqual(clear_state["footerCells"][2], "200.00")
+                    self.assertEqual(clear_state["xCells"], ["BMW", "ALFA ROMEO"])
+
+                    row_locator = page.locator("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs)")
+                    row_locator.nth(0).click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#lineBarTableGrid .tabulator-row.tabulator-selected:not(.tabulator-calcs)").length === 1
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field="x"]').first.click(button="right")
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy cell to clipboard").wait_for(timeout=10_000)
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy selected row to clipboard").wait_for(timeout=10_000)
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy table to clipboard").wait_for(timeout=10_000)
+                    self.assertNotIn("Copy selected column", page.locator("#lineBarTableContextMenu:not([hidden])").text_content())
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy cell to clipboard").click()
+                    page.wait_for_function("() => window.__lucidumCopiedText === 'BMW'", timeout=10_000)
+
+                    selected_row_csv = page.evaluate(
+                        """
+                        () => {
+                          const fields = ["x", "volume", "resp0"];
+                          const headers = fields.map((field) => document.querySelector(`#lineBarTableGrid .tabulator-col[tabulator-field="${field}"] .tabulator-col-title`)?.textContent.trim() || field);
+                          const row = document.querySelector("#lineBarTableGrid .tabulator-row.tabulator-selected:not(.tabulator-calcs)");
+                          const values = fields.map((field) => row?.querySelector(`.tabulator-cell[tabulator-field="${field}"]`)?.textContent.trim() || "");
+                          return [headers.join(","), values.join(",")].join("\\n");
+                        }
+                        """
+                    )
+                    page.locator('#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field="x"]').first.click(button="right")
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy selected row to clipboard").click()
+                    page.wait_for_function(
+                        "(expected) => window.__lucidumCopiedText === expected",
+                        arg=selected_row_csv,
+                        timeout=10_000,
+                    )
+
+                    row_locator.nth(1).click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#lineBarTableGrid .tabulator-row.tabulator-selected:not(.tabulator-calcs)").length === 2
+                        """,
+                        timeout=10_000,
+                    )
+                    selected_rows_csv = page.evaluate(
+                        """
+                        () => {
+                          const fields = ["x", "volume", "resp0"];
+                          const headers = fields.map((field) => document.querySelector(`#lineBarTableGrid .tabulator-col[tabulator-field="${field}"] .tabulator-col-title`)?.textContent.trim() || field);
+                          const rows = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row.tabulator-selected:not(.tabulator-calcs)")];
+                          const body = rows.map((row) => fields.map((field) => row.querySelector(`.tabulator-cell[tabulator-field="${field}"]`)?.textContent.trim() || "").join(","));
+                          return [headers.join(","), ...body].join("\\n");
+                        }
+                        """
+                    )
+                    page.locator("#lineBarTableGrid").click(button="right")
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy selected rows to clipboard").wait_for(timeout=10_000)
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy selected rows to clipboard").click()
+                    page.wait_for_function(
+                        "(expected) => window.__lucidumCopiedText === expected",
+                        arg=selected_rows_csv,
+                        timeout=10_000,
+                    )
+
+                    full_table_csv = page.evaluate(
+                        """
+                        () => {
+                          const fields = ["x", "volume", "resp0"];
+                          const headers = fields.map((field) => document.querySelector(`#lineBarTableGrid .tabulator-col[tabulator-field="${field}"] .tabulator-col-title`)?.textContent.trim() || field);
+                          const rows = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs)")];
+                          const body = rows.map((row) => fields.map((field) => row.querySelector(`.tabulator-cell[tabulator-field="${field}"]`)?.textContent.trim() || "").join(","));
+                          const footer = fields.map((field) => document.querySelector(`#lineBarTableGrid .tabulator-row.tabulator-calcs .tabulator-cell[tabulator-field="${field}"]`)?.textContent.trim() || "").join(",");
+                          return [headers.join(","), ...body, footer].join("\\n");
+                        }
+                        """
+                    )
+                    page.locator("#lineBarTableGrid").click(button="right")
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy table to clipboard").click()
+                    page.wait_for_function(
+                        "(expected) => window.__lucidumCopiedText === expected",
+                        arg=full_table_csv,
+                        timeout=10_000,
+                    )
+
+                    page.locator("#lineBarTableGrid").click(button="right")
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Clear selection").wait_for(timeout=10_000)
+                    self.assertEqual(page.locator("#lineBarTableContextMenu:not([hidden]) [role='separator']").count(), 1)
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Clear selection").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#lineBarTableGrid .tabulator-row.tabulator-selected:not(.tabulator-calcs)").length === 0
+                        """,
+                        timeout=10_000,
                     )
                     self.assertEqual(page_errors, [])
                     browser.close()
@@ -1289,7 +1448,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.wait_for_function(
                         """
                         () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("10,005 groups")
-                          && document.querySelector("#chartMessage")?.textContent.includes("Table search covers all groups")
+                          && document.querySelector("#chartMessage")?.textContent.includes("Use Table view to inspect all groups")
                         """,
                         timeout=20_000,
                     )
@@ -1313,6 +1472,11 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     self.assertLess(virtual_state["renderedRows"], 500)
                     self.assertIn("1-10,000 of 10,005 groups", virtual_state["pager"])
+                    chart_requests_before_sort = chart_requests
+                    with page.expect_response(lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200, timeout=10_000):
+                        page.locator('.segmented[data-control="sort"] button[data-value="volume"]').click()
+                    self.assertEqual(chart_requests, chart_requests_before_sort)
+                    page.locator("#lineBarTableGrid .tabulator-tableholder").wait_for(timeout=10_000)
                     page.evaluate(
                         """
                         () => {
@@ -1329,7 +1493,9 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=20_000,
                     )
-                    page.locator("#lineBarTableSearch").fill("g10004")
+                    table_requests_before_table_search = table_requests
+                    with page.expect_response(lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200, timeout=10_000):
+                        page.locator("#lineBarTableSearch").fill("g10004")
                     page.wait_for_function(
                         """
                         () => {
@@ -1345,6 +1511,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     page.wait_for_timeout(100)
                     self.assertEqual(chart_requests, chart_requests_before_search)
+                    self.assertGreater(table_requests, table_requests_before_table_search)
                     self.assertGreaterEqual(table_requests, 2)
                     self.assertEqual(page_errors, [])
                     browser.close()

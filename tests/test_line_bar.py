@@ -595,12 +595,13 @@ COPY (
         chart_payload = json.loads(body)
 
         self.assertEqual(status, 200)
-        self.assertEqual(len(chart_payload["rows"]), 10000)
+        self.assertEqual(chart_payload["rows"], [])
         self.assertEqual(chart_payload["group_count"], 10005)
         self.assertEqual(chart_payload["max_groups"], 10000)
         self.assertTrue(chart_payload["groups_truncated"])
-        self.assertIn("Table search covers all groups", " ".join(chart_payload["warnings"]))
-        self.assertNotIn("G10004", {row["x"] for row in chart_payload["rows"]})
+        warning_text = " ".join(chart_payload["warnings"])
+        self.assertIn("More than 10,000 x-axis groups; too many to plot", warning_text)
+        self.assertIn("Use Table view to inspect all groups", warning_text)
 
         table_request = {**request, "tableSearch": "g10004", "tablePage": 1}
         status, _, body = asgi_post_json(app, "/api/line-bar/table", table_request)
@@ -641,7 +642,9 @@ COPY (
             table_payload = table(dataset, {**request, "tableSearch": "g00049", "tablePage": 1})
 
         self.assertEqual(chart_payload["group_count"], 50)
-        self.assertEqual(len(chart_payload["rows"]), 10)
+        self.assertEqual(chart_payload["rows"], [])
+        self.assertTrue(chart_payload["groups_truncated"])
+        self.assertIn("More than 10 x-axis groups", " ".join(chart_payload["warnings"]))
         self.assertEqual([row["x"] for row in table_payload["rows"]], ["G00049"])
         self.assertEqual(table_payload["table"]["group_count"], 50)
 

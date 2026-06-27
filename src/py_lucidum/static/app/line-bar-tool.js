@@ -17,6 +17,7 @@ export function createLineBarTool({
   echartsImpl,
   escapeHtml,
   isModelPredictionColumn,
+  copyTextToClipboard = () => Promise.resolve(false),
   formatNumber,
   formatChartLabel,
   formatLineLabel,
@@ -33,6 +34,7 @@ export function createLineBarTool({
   setGroupMeta,
   applyToolPresentation,
   saveToolPresentation,
+  showClipboardToast = () => {},
   stableRequestKey = (request) => JSON.stringify(request),
   toolCache,
   sourceColumns,
@@ -88,10 +90,16 @@ export function createLineBarTool({
   let tableSearchTimer = null;
   let tableCacheKey = "";
   let tableCacheData = null;
+  let completeTableCacheKey = "";
+  let completeTableCacheData = null;
   let tableRenderToken = 0;
   let lineBarTable = null;
+  let lineBarTableCopyRows = [];
+  let lineBarTableCopyColumns = [];
+  let lineBarTableCopyFooterRow = null;
   let dateXAxisContext = null;
   let dateXAxisRefreshFrame = null;
+  let lineBarChartDirty = false;
 
   function isNumericKind(kind) {
     return kind === "numeric" || kind === "integer";
@@ -1091,6 +1099,11 @@ export function createLineBarTool({
   }
 
   function renderChart(data) {
+    if (data?.groups_truncated && !(data.rows || []).length) {
+      dateXAxisContext = null;
+      chart.clear();
+      return "";
+    }
     const labels = data.rows.map((r) => formatChartXLabel(r, data));
     const labelMode = state.labels;
     const rawXValues = data.rows.map((r) => r.x);
@@ -1494,6 +1507,310 @@ export function createLineBarTool({
       ? "X-axis and chart labels"
       : xLabelsHidden ? "X-axis labels" : "Chart labels";
     return `${labelTarget} hidden as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories.`;
+  }
+
+  function finiteNumberOrNull(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function rawResponseValue(row, index) {
+    const numerator = finiteNumberOrNull(row?.[`resp${index}_num`]);
+    const denominator = finiteNumberOrNull(row?.[`resp${index}_den`]);
+    if (numerator === null || denominator === null || denominator === 0) return null;
+    return numerator / denominator;
+  }
+
+  function compareLineBarLabels(left, right) {
+    const leftLabel = String(left?.x ?? "").toLowerCase();
+    const rightLabel = String(right?.x ?? "").toLowerCase();
+    if (leftLabel < rightLabel) return -1;
+    if (leftLabel > rightLabel) return 1;
+    return 0;
+  }
+
+  function compareNullableDescending(left, right) {
+    if (left === null && right === null) return 0;
+    if (left === null) return 1;
+    if (right === null) return -1;
+    return right - left;
+  }
+
+  function shapMedianMap(data) {
+    const partial = partialDependenceOverlay(data, "shap");
+    const rows = Array.isArray(partial?.rows) ? partial.rows : [];
+    return new Map(rows.map((row) => [String(row.x), finiteNumberOrNull(row.p50)]));
+  }
+
+  function compareLineBarRowsForSort(sort, shapMedians) {
+    return (left, right) => {
+      if (sort === "volume") {
+        const tailCompare = Number(!left?.is_tail) - Number(!right?.is_tail);
+        if (tailCompare) return tailCompare;
+        const volumeCompare = (finiteNumberOrNull(right?.volume) || 0) - (finiteNumberOrNull(left?.volume) || 0);
+        if (volumeCompare) return volumeCompare;
+        return compareLineBarLabels(left, right);
+      }
+      if (sort === "actual" || sort === "response") {
+        const responseCompare = compareNullableDescending(rawResponseValue(left, 0), rawResponseValue(right, 0));
+        if (responseCompare) return responseCompare;
+        return compareLineBarLabels(left, right);
+      }
+      if (sort === "expected") {
+        const responseCompare = compareNullableDescending(rawResponseValue(left, 1), rawResponseValue(right, 1));
+        if (responseCompare) return responseCompare;
+        return compareLineBarLabels(left, right);
+      }
+      if (sort === "shap") {
+        const tailCompare = Number(Boolean(left?.is_tail)) - Number(Boolean(right?.is_tail));
+        if (tailCompare) return tailCompare;
+        const medianCompare = compareNullableDescending(shapMedians.get(String(left?.x)), shapMedians.get(String(right?.x)));
+        if (medianCompare) return medianCompare;
+        return compareLineBarLabels(left, right);
+      }
+      return compareLineBarLabels(left, right);
+    };
+  }
+
+  function orderPartialDependenceRowsForChart(data) {
+    const rowOrder = new Map((data.rows || []).map((row, index) => [String(row.x), index]));
+    function orderRows(partial) {
+      if (!partial || typeof partial !== "object") return;
+      if (partial.overlays && typeof partial.overlays === "object") {
+        Object.values(partial.overlays).forEach(orderRows);
+      }
+      if (!Array.isArray(partial.rows)) return;
+      partial.rows.sort((left, right) => {
+        const leftIndex = rowOrder.get(String(left?.x));
+        const rightIndex = rowOrder.get(String(right?.x));
+        if (leftIndex === undefined && rightIndex === undefined) return 0;
+        if (leftIndex === undefined) return 1;
+        if (rightIndex === undefined) return -1;
+        return leftIndex - rightIndex;
+      });
+    }
+    orderRows(data.partial_dependence);
+  }
+
+  function applyClientLineBarSort(options = {}) {
+    const cache = toolCache("line_bar");
+    const data = state.lastData || cache.data;
+    if (!data || data.x_group_kind !== "categorical") return false;
+    if (!data.groups_truncated) {
+      data.rows = [...(data.rows || [])].sort(compareLineBarRowsForSort(state.sort, shapMedianMap(data)));
+      orderPartialDependenceRowsForChart(data);
+    }
+    const request = buildChartRequest();
+    if (request) {
+      cache.requestKey = stableRequestKey(request);
+      cache.data = data;
+    }
+    state.lastData = data;
+    if (options.render !== false) {
+      measureToolRender("line_bar", () => renderChartData(data, { resetTablePage: true }));
+      lineBarChartDirty = false;
+    } else {
+      lineBarChartDirty = true;
+    }
+    return true;
+  }
+
+  function shapMediansForCompleteTableSort(data) {
+    if (state.sort !== "shap") return new Map();
+    const chartData = state.lastData || toolCache("line_bar").data;
+    if (!chartData || chartData.groups_truncated) return null;
+    const medians = shapMedianMap(chartData);
+    for (const row of data.rows || []) {
+      const median = medians.get(String(row?.x));
+      if (median === null || median === undefined) return null;
+    }
+    return medians;
+  }
+
+  function canSortLineBarTableClientSide(data, shapMedians) {
+    const table = data?.table || {};
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    const pageCount = Number(table.page_count);
+    const matchCount = Number(table.match_count);
+    return data?.x_group_kind === "categorical"
+      && Number.isFinite(pageCount)
+      && pageCount === 1
+      && Number.isFinite(matchCount)
+      && rows.length === matchCount
+      && normaliseLineBarTableSearch(table.search) === normaliseLineBarTableSearch(state.lineBarTableSearch)
+      && (state.sort !== "shap" || shapMedians !== null);
+  }
+
+  function applyClientLineBarTableSort() {
+    const sourceData = completeTableCacheData;
+    const sourceShapMedians = shapMediansForCompleteTableSort(sourceData || {});
+    if (canUseCompleteLineBarTableSource(sourceData) && (state.sort !== "shap" || sourceShapMedians !== null)) {
+      sourceData.rows = [...(sourceData.rows || [])].sort(compareLineBarRowsForSort(state.sort, sourceShapMedians || new Map()));
+      completeTableCacheKey = stableRequestKey(buildCompleteTableSourceRequest());
+      completeTableCacheData = sourceData;
+      return applyClientLineBarTableFilter();
+    }
+    const data = tableCacheData;
+    const shapMedians = shapMediansForCompleteTableSort(data || {});
+    if (!canSortLineBarTableClientSide(data, shapMedians)) return false;
+    data.rows = [...(data.rows || [])].sort(compareLineBarRowsForSort(state.sort, shapMedians || new Map()));
+    const request = buildTableRequest();
+    if (request) tableCacheKey = stableRequestKey(request);
+    tableCacheData = data;
+    rememberCompleteLineBarTableSource(data);
+    measureToolRender("line_bar", () => renderLineBarTableContents(data));
+    return true;
+  }
+
+  function normaliseLineBarTableSearch(value = state.lineBarTableSearch) {
+    return String(value || "").trim();
+  }
+
+  function cloneLineBarTableData(data, rows = data?.rows || []) {
+    return {
+      ...(data || {}),
+      rows: rows.map((row) => ({ ...row })),
+      responses: (data?.responses || []).map((response) => ({ ...response })),
+      denominator: { ...(data?.denominator || {}) },
+      summary: {
+        ...(data?.summary || {}),
+        responses: Array.isArray(data?.summary?.responses) ? [...data.summary.responses] : [],
+      },
+      table: { ...(data?.table || {}) },
+      transform: {
+        ...(data?.transform || {}),
+        values: Array.isArray(data?.transform?.values) ? [...data.transform.values] : data?.transform?.values,
+      },
+      warnings: Array.isArray(data?.warnings) ? [...data.warnings] : data?.warnings,
+    };
+  }
+
+  function buildCompleteTableSourceRequest() {
+    const request = buildChartRequest();
+    if (!request) return null;
+    return {
+      ...request,
+      tableSearch: "",
+      tablePage: 1,
+      tablePageSize: TABLE_PAGE_SIZE,
+    };
+  }
+
+  function lineBarTableComplete(data) {
+    const table = data?.table || {};
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    const pageCount = Number(table.page_count);
+    const matchCount = Number(table.match_count);
+    const page = Number(table.page);
+    return Number.isFinite(pageCount)
+      && pageCount === 1
+      && Number.isFinite(matchCount)
+      && rows.length === matchCount
+      && (!Number.isFinite(page) || page === 1);
+  }
+
+  function rememberCompleteLineBarTableSource(data, request = null) {
+    const table = data?.table || {};
+    if (!lineBarTableComplete(data)) return;
+    if (normaliseLineBarTableSearch(table.search) !== "") return;
+    const sourceRequest = request
+      ? { ...request, tableSearch: "", tablePage: 1, tablePageSize: TABLE_PAGE_SIZE }
+      : buildCompleteTableSourceRequest();
+    if (!sourceRequest) return;
+    completeTableCacheKey = stableRequestKey(sourceRequest);
+    completeTableCacheData = cloneLineBarTableData(data);
+  }
+
+  function canUseCompleteLineBarTableSource(data = completeTableCacheData) {
+    const sourceRequest = buildCompleteTableSourceRequest();
+    if (!sourceRequest || !data || !completeTableCacheKey || !lineBarTableComplete(data)) return false;
+    return completeTableCacheKey === stableRequestKey(sourceRequest)
+      && normaliseLineBarTableSearch(data.table?.search) === "";
+  }
+
+  function formatLineBarTableNumericSearchLabel(value) {
+    const number = finiteNumberOrNull(value);
+    if (number === null) return null;
+    if (Number.isInteger(number)) {
+      return number.toLocaleString("en-US", { maximumFractionDigits: 0 });
+    }
+    let formatted = number.toLocaleString("en-US", {
+      minimumFractionDigits: 12,
+      maximumFractionDigits: 12,
+    }).replace(/(\.\d*?)0+$/, "$1");
+    if (formatted.endsWith(".")) formatted = formatted.slice(0, -1);
+    return formatted === "-0" ? "0" : formatted;
+  }
+
+  function lineBarTableRowMatchesSearch(row, search, xKind) {
+    const needle = normaliseLineBarTableSearch(search).toLowerCase();
+    if (!needle) return true;
+    const rawCandidates = [row?.x, row?.x_sort];
+    const candidates = [...rawCandidates];
+    if (xKind === "integer" || xKind === "numeric") {
+      rawCandidates.forEach((value) => candidates.push(formatLineBarTableNumericSearchLabel(value)));
+    }
+    return candidates.some((value) => value !== null && value !== undefined && String(value).toLowerCase().includes(needle));
+  }
+
+  function transformLineBarTableSummaryValue(value, data, responseIndex) {
+    const number = finiteNumberOrNull(value);
+    if (number === null) return null;
+    const transform = String(data?.transform?.mode || state.transform || "none");
+    const references = Array.isArray(data?.transform?.values) ? data.transform.values : [];
+    const reference = finiteNumberOrNull(references[responseIndex]);
+    if (transform === "log") return number > 0 ? Math.log(number) : null;
+    if (transform === "exp") {
+      const transformed = Math.exp(number);
+      return Number.isFinite(transformed) ? transformed : null;
+    }
+    if (transform === "logit") return number > 0 && number < 1 ? Math.log(number / (1 - number)) : null;
+    if (transform === "zero") return reference !== null ? number - reference : null;
+    if (transform === "one") return reference !== null && reference !== 0 ? number / reference : null;
+    return number;
+  }
+
+  function buildClientLineBarTableSummary(rows, data) {
+    const responseCount = Array.isArray(data?.responses) ? data.responses.length : 0;
+    const summary = {
+      volume: rows.reduce((total, row) => total + (finiteNumberOrNull(row?.volume) || 0), 0),
+      responses: [],
+    };
+    for (let responseIndex = 0; responseIndex < responseCount; responseIndex += 1) {
+      const numerator = rows.reduce((total, row) => total + (finiteNumberOrNull(row?.[`resp${responseIndex}_num`]) || 0), 0);
+      const denominator = rows.reduce((total, row) => total + (finiteNumberOrNull(row?.[`resp${responseIndex}_den`]) || 0), 0);
+      const average = denominator ? numerator / denominator : null;
+      summary.responses.push(transformLineBarTableSummaryValue(average, data, responseIndex));
+    }
+    return summary;
+  }
+
+  function filteredLineBarTableDataFromSource(sourceData, search) {
+    const tableSearch = normaliseLineBarTableSearch(search);
+    const rows = (sourceData.rows || []).filter((row) => lineBarTableRowMatchesSearch(row, tableSearch, sourceData.x_kind));
+    const data = cloneLineBarTableData(sourceData, rows);
+    data.summary = buildClientLineBarTableSummary(rows, sourceData);
+    data.table = {
+      ...(sourceData.table || {}),
+      search: tableSearch,
+      page: 1,
+      page_count: 1,
+      match_count: rows.length,
+    };
+    return data;
+  }
+
+  function applyClientLineBarTableFilter(options = {}) {
+    if (!canUseCompleteLineBarTableSource()) return false;
+    const request = buildTableRequest();
+    if (!request) return false;
+    const data = filteredLineBarTableDataFromSource(completeTableCacheData, state.lineBarTableSearch);
+    tableCacheKey = options.requestKey || stableRequestKey(request);
+    tableCacheData = data;
+    state.tablePage = 1;
+    measureToolRender("line_bar", () => renderLineBarTableContents(data));
+    return true;
   }
 
   function selectedFeatureBase() {
@@ -2052,6 +2369,8 @@ export function createLineBarTool({
     tableRenderToken += 1;
     tableCacheKey = "";
     tableCacheData = null;
+    completeTableCacheKey = "";
+    completeTableCacheData = null;
     clearLineBarTable();
     if (tableSearchTimer) {
       window.clearTimeout(tableSearchTimer);
@@ -2074,6 +2393,7 @@ export function createLineBarTool({
     if (tableSearchTimer) window.clearTimeout(tableSearchTimer);
     tableSearchTimer = window.setTimeout(() => {
       tableSearchTimer = null;
+      if (applyClientLineBarTableFilter()) return;
       refreshLineBarTable({ force: true });
     }, TABLE_SEARCH_DEBOUNCE_MS);
   }
@@ -2105,6 +2425,10 @@ export function createLineBarTool({
         state.lineBarTableSearch = "";
         searchInput.value = "";
         state.tablePage = 1;
+        if (applyClientLineBarTableFilter()) {
+          searchInput.focus();
+          return;
+        }
         refreshLineBarTable({ force: true });
       }
       searchInput.focus();
@@ -2112,6 +2436,10 @@ export function createLineBarTool({
   }
 
   function clearLineBarTable() {
+    closeLineBarTableContextMenu();
+    lineBarTableCopyRows = [];
+    lineBarTableCopyColumns = [];
+    lineBarTableCopyFooterRow = null;
     if (!lineBarTable) return;
     try {
       lineBarTable.destroy();
@@ -2119,6 +2447,180 @@ export function createLineBarTool({
       // Tabulator may already have been removed by a stale render.
     }
     lineBarTable = null;
+  }
+
+  function lineBarCsvCell(value) {
+    const text = value === null || value === undefined ? "" : String(value);
+    return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  }
+
+  function lineBarRowsToCsv(rows, options = {}) {
+    if (!lineBarTableCopyColumns.length) return "";
+    const header = lineBarTableCopyColumns.map((column) => lineBarCsvCell(column.title)).join(",");
+    const body = rows.map((row) => lineBarTableCopyColumns.map((column) => lineBarCsvCell(row[column.field])).join(","));
+    if (options.includeFooter && lineBarTableCopyFooterRow) {
+      body.push(lineBarTableCopyColumns.map((column) => lineBarCsvCell(lineBarTableCopyFooterRow[column.field])).join(","));
+    }
+    return [header, ...body].join("\n");
+  }
+
+  function selectedLineBarTableRowsForCopy() {
+    if (!lineBarTable) return [];
+    let selectedRows = [];
+    try {
+      selectedRows = typeof lineBarTable.getSelectedData === "function" ? lineBarTable.getSelectedData() : [];
+    } catch (_) {
+      selectedRows = [];
+    }
+    const selectedIds = new Set(selectedRows.map((row) => row?.__id).filter(Boolean));
+    if (!selectedIds.size) return [];
+    return lineBarTableCopyRows.filter((row) => selectedIds.has(row.__id));
+  }
+
+  function selectedLineBarTableCopyLabel() {
+    const count = selectedLineBarTableRowsForCopy().length;
+    if (!count) return "";
+    return count === 1 ? "Copy selected row to clipboard" : "Copy selected rows to clipboard";
+  }
+
+  function handleLineBarTableContextMenu(event) {
+    const grid = document.getElementById("lineBarTableGrid");
+    if (!grid || !grid.contains(event.target)) return;
+    const cell = event.target?.closest?.(".tabulator-cell[tabulator-field]");
+    const selectionLabel = selectedLineBarTableCopyLabel();
+    const actions = [];
+    if (cell && grid.contains(cell)) {
+      actions.push({ mode: "cell", label: "Copy cell to clipboard", value: cell.textContent || "" });
+    }
+    if (selectionLabel) actions.push({ mode: "selection", label: selectionLabel });
+    actions.push({ mode: "table", label: "Copy table to clipboard" });
+    if (selectionLabel) {
+      actions.push({ divider: true });
+      actions.push({ mode: "clear-selection", label: "Clear selection" });
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    openLineBarTableContextMenu(event, actions);
+  }
+
+  function lineBarTableContextMenu() {
+    let menu = document.getElementById("lineBarTableContextMenu");
+    if (menu) return menu;
+    menu = document.createElement("div");
+    menu.id = "lineBarTableContextMenu";
+    menu.className = "line-bar-table-context-menu";
+    menu.hidden = true;
+    menu.setAttribute("role", "menu");
+    menu.addEventListener("click", copyLineBarTableContextValue);
+    document.body.append(menu);
+    return menu;
+  }
+
+  function openLineBarTableContextMenu(event, actions = []) {
+    closeLineBarTableContextMenu();
+    if (!actions.length) return;
+    const menu = lineBarTableContextMenu();
+    actions.forEach((action) => {
+      if (action.divider) {
+        const divider = document.createElement("div");
+        divider.className = "line-bar-table-context-menu-divider";
+        divider.setAttribute("role", "separator");
+        menu.append(divider);
+        return;
+      }
+      const button = document.createElement("button");
+      button.className = "line-bar-table-context-menu-item";
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      button.dataset.copyMode = action.mode || "cell";
+      button.dataset.copyValue = action.value || "";
+      button.textContent = action.label || "Copy cell to clipboard";
+      menu.append(button);
+    });
+    menu.hidden = false;
+    positionLineBarTableContextMenu(menu, event.clientX, event.clientY);
+    menu.querySelector("button")?.focus({ preventScroll: true });
+    window.addEventListener("pointerdown", handleLineBarTableContextPointerDown, true);
+    window.addEventListener("keydown", handleLineBarTableContextKeydown, true);
+    window.addEventListener("resize", closeLineBarTableContextMenu, true);
+    window.addEventListener("scroll", closeLineBarTableContextMenu, true);
+  }
+
+  function positionLineBarTableContextMenu(menu, clientX, clientY) {
+    const margin = 8;
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const rect = menu.getBoundingClientRect();
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    const left = Math.min(Math.max(margin, clientX || margin), maxLeft);
+    const top = Math.min(Math.max(margin, clientY || margin), maxTop);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+
+  async function copyLineBarTableContextValue(event) {
+    const button = event.target?.closest?.("button[data-copy-mode]");
+    const menu = document.getElementById("lineBarTableContextMenu");
+    if (!button || !menu?.contains(button)) return;
+    event.preventDefault();
+    const mode = button.dataset.copyMode || "cell";
+    if (mode === "selection") {
+      const rows = selectedLineBarTableRowsForCopy();
+      const csv = lineBarRowsToCsv(rows);
+      const copied = csv ? await copyTextToClipboard(csv) : false;
+      showClipboardToast(copied ? `Selected row${rows.length === 1 ? "" : "s"} copied` : "Could not copy selected rows", !copied);
+      closeLineBarTableContextMenu();
+      return;
+    }
+    if (mode === "table") {
+      const csv = lineBarRowsToCsv(lineBarTableCopyRows, { includeFooter: true });
+      const copied = csv ? await copyTextToClipboard(csv) : false;
+      showClipboardToast(copied ? "Table copied" : "Could not copy table", !copied);
+      closeLineBarTableContextMenu();
+      return;
+    }
+    if (mode === "clear-selection") {
+      clearLineBarTableSelection();
+      closeLineBarTableContextMenu();
+      return;
+    }
+    const value = button.dataset.copyValue || "";
+    const copied = await copyTextToClipboard(value);
+    showClipboardToast(copied ? "Cell copied to clipboard" : "Could not copy cell", !copied);
+    closeLineBarTableContextMenu();
+  }
+
+  function clearLineBarTableSelection() {
+    try {
+      lineBarTable?.deselectRow?.();
+    } catch (_) {
+      // Ignore stale Tabulator instances.
+    }
+  }
+
+  function handleLineBarTableContextPointerDown(event) {
+    const menu = document.getElementById("lineBarTableContextMenu");
+    if (!menu || menu.hidden || menu.contains(event.target)) return;
+    closeLineBarTableContextMenu();
+  }
+
+  function handleLineBarTableContextKeydown(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeLineBarTableContextMenu();
+  }
+
+  function closeLineBarTableContextMenu() {
+    const menu = document.getElementById("lineBarTableContextMenu");
+    if (menu) {
+      menu.hidden = true;
+      menu.replaceChildren();
+    }
+    window.removeEventListener("pointerdown", handleLineBarTableContextPointerDown, true);
+    window.removeEventListener("keydown", handleLineBarTableContextKeydown, true);
+    window.removeEventListener("resize", closeLineBarTableContextMenu, true);
+    window.removeEventListener("scroll", closeLineBarTableContextMenu, true);
   }
 
   function renderLineBarTableLoading() {
@@ -2147,6 +2649,7 @@ export function createLineBarTool({
       measureToolRender("line_bar", () => renderLineBarTableContents(tableCacheData));
       return tableCacheData;
     }
+    if (applyClientLineBarTableFilter({ requestKey })) return tableCacheData;
     const requestSeq = tableRequestSeq + 1;
     tableRequestSeq = requestSeq;
     renderLineBarTableLoading();
@@ -2155,6 +2658,7 @@ export function createLineBarTool({
       if (requestSeq !== tableRequestSeq) return null;
       tableCacheKey = requestKey;
       tableCacheData = data;
+      rememberCompleteLineBarTableSource(data, request);
       syncDuckDbTimingFromData("line_bar", data);
       syncClientTimingFromData("line_bar", data);
       measureToolRender("line_bar", () => renderLineBarTableContents(data));
@@ -2213,6 +2717,19 @@ export function createLineBarTool({
       });
       return displayRow;
     });
+    lineBarTableCopyRows = tableRows.map((row) => ({ ...row }));
+    lineBarTableCopyColumns = [
+      { title: data.x, field: "x" },
+      { title: weightLabel, field: "volume" },
+      ...data.responses.map((response, responseIndex) => ({ title: response.label, field: `resp${responseIndex}` })),
+    ];
+    lineBarTableCopyFooterRow = {
+      x: "Total",
+      volume: formatNumber(summaryVolume),
+    };
+    data.responses.forEach((_, responseIndex) => {
+      lineBarTableCopyFooterRow[`resp${responseIndex}`] = formatResponseValue(summaryResponses[responseIndex]);
+    });
     const columns = [
       {
         title: data.x,
@@ -2256,7 +2773,7 @@ export function createLineBarTool({
         layout: "fitColumns",
         placeholder: "No matching rows",
         reactiveData: false,
-        selectable: false,
+        selectableRows: true,
         renderVertical: "virtual",
         rowHeight: 22,
         columnDefaults: {
@@ -2266,6 +2783,7 @@ export function createLineBarTool({
         },
         columns,
       });
+      target.addEventListener("contextmenu", handleLineBarTableContextMenu);
     }).catch((error) => {
       if (renderToken !== tableRenderToken) return;
       renderLineBarTableError(error.message || String(error));
@@ -2283,6 +2801,11 @@ export function createLineBarTool({
     el("mapLegend").classList.add("hidden");
     el("chartMessage").classList.toggle("hidden", view !== "chart" || !el("chartMessage").textContent);
     if (view === "chart") {
+      if (lineBarChartDirty) {
+        lineBarChartDirty = false;
+        if (!applyClientLineBarSort()) refreshChart();
+        return;
+      }
       chart.resize();
       refreshDateXAxisLabelsForCurrentZoom();
     } else {
@@ -2314,6 +2837,16 @@ export function createLineBarTool({
         if (group.dataset.control === "expectedSort") {
           renderExpectedNumerators();
           return;
+        }
+        if (group.dataset.control === "sort") {
+          state.tablePage = 1;
+          if (state.view === "table") {
+            if (!applyClientLineBarSort({ render: false })) lineBarChartDirty = true;
+            if (applyClientLineBarTableSort()) return;
+            refreshLineBarTable({ force: true });
+            return;
+          }
+          if (applyClientLineBarSort()) return;
         }
         if (group.dataset.control === "bandWidth") {
           clearPendingBandSuggestion();
