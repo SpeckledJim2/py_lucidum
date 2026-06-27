@@ -55,6 +55,7 @@ DEFAULT_KEYS = {
     "latitude",
     "longitude",
     "source",
+    "line_bar_favourite",
 }
 TOOL_BUTTON_RE = re.compile(r'<button\b[^>]*\bdata-tool="([^"]+)"[^>]*>')
 MODEL_SIDEBAR_PANEL_RE = re.compile(r'<section\b[^>]*\bid="(gbmSidebarPanel|glmSidebarPanel)"[^>]*>')
@@ -173,6 +174,7 @@ def create_app(
     features_path: str | Path | None = None,
     use_features: bool = True,
     no_features: bool = False,
+    line_bar_favourites_path: str | Path | None = None,
     header_buttons: bool = False,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
@@ -214,6 +216,9 @@ def create_app(
     app.state.use_features = features_enabled
     app.state.resolved_features_path = resolve_features_path(selected_features_path, use_features=features_enabled)
     app.state.feature_spec = load_features(selected_features_path, use_features=features_enabled, missing_ok=allow_missing_spec_paths)
+    app.state.line_bar_favourites_path = (
+        Path(line_bar_favourites_path).expanduser().resolve() if line_bar_favourites_path else None
+    )
     app.state.enabled_tools = enabled_tools
     app.state.header_buttons = bool(header_buttons)
     app.state.defaults = {

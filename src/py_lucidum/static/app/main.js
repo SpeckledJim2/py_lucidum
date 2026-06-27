@@ -22,7 +22,7 @@
 
       function paramsFromLocation() {
         const standardParams = new URLSearchParams(location.search);
-        const expectedKeys = ["token", "tool", "source", "x", "xSource", "actual", "expected", "expected2", "denominator", "postcode_area", "postcode_sector", "postcode_unit", "latitude", "longitude"];
+        const expectedKeys = ["token", "tool", "source", "x", "xSource", "actual", "expected", "expected2", "denominator", "line_bar_favourite", "postcode_area", "postcode_sector", "postcode_unit", "latitude", "longitude"];
         if (expectedKeys.some((key) => standardParams.has(key))) return standardParams;
         const rawSearch = location.search.startsWith("?") ? location.search.slice(1) : location.search;
         try {
@@ -97,6 +97,7 @@
         collapsedSavedFilterThemes: new Set(),
         savedFilterThemesInitialised: false,
         activeFilter: "",
+        activeLineBarFavouriteId: "",
         filterRowCountMeta: null,
         datasetViewerSearch: "",
         datasetViewerTranspose: false,
@@ -298,6 +299,9 @@
         getCss,
         bandSteps: BAND_STEPS,
         refreshLineBar,
+        captureLineBarFavouriteView,
+        applyLineBarFavouriteView,
+        startupLineBarFavourite: () => requestedDefault("line_bar_favourite"),
       });
       const histogramTool = createHistogramTool({
         api,
@@ -1137,6 +1141,7 @@
       }
 
       function chooseDefaultTool() {
+        if (requestedDefault("line_bar_favourite") && toolEnabled("line_bar")) return "line_bar";
         const requested = locationParams.get("tool");
         if (requested && toolEnabled(requested)) return requested;
         if (toolEnabled("line_bar")) return "line_bar";
@@ -2425,6 +2430,141 @@
         applyFilter();
       }
 
+      function currentKpiSnapshot() {
+        const kpi = selectedKpiForCurrentMetric();
+        return kpi
+          ? {
+              group: kpi.group,
+              name: kpi.name,
+              actual: kpi.actual,
+              denominator: kpi.denominator,
+            }
+          : null;
+      }
+
+      function captureLineBarFavouriteView() {
+        const actualOption = el("actualNumerator").selectedOptions[0];
+        return {
+          version: 1,
+          source: state.source || "dataset",
+          x: state.x || "",
+          xSource: state.xSource || "",
+          view: state.view === "table" ? "table" : "chart",
+          sort: state.sort,
+          lowGroup: state.lowGroup,
+          labels: state.labels,
+          bandWidth: state.bandWidth,
+          quantileMode: state.quantileMode,
+          dateBucket: state.dateBucket,
+          transform: state.transform,
+          sigma: state.sigma,
+          partialDependence: state.partialDependence,
+          featureSort: state.featureSort,
+          expectedSort: state.expectedSort,
+          actual: {
+            value: el("actualNumerator").value,
+            sourceId: actualOption?.dataset.sourceId || state.source || "dataset",
+            metricKind: actualOption?.dataset.metricKind || "metric",
+          },
+          denominator: el("denominator").value || "__none__",
+          expectedSelections: expectedSelectionsSnapshot(),
+          kpi: currentKpiSnapshot(),
+          filter: state.activeFilter || "",
+          filterSelectionMode: state.filterSelectionMode,
+          filterOperator: state.filterOperator,
+          savedFilterRows: selectedSavedFilterRows(),
+        };
+      }
+
+      function syncFilterOperatorControl() {
+        const group = document.querySelector('.segmented[data-control="filterOperator"]');
+        group?.querySelectorAll("button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.value === state.filterOperator);
+        });
+      }
+
+      function restoreSavedFilterRows(rows) {
+        const selectedRows = Array.isArray(rows) ? rows.filter((row) => row && typeof row === "object") : [];
+        const selectedThemes = new Set(selectedRows.map((row) => row.theme || "General"));
+        selectedThemes.forEach((theme) => state.collapsedSavedFilterThemes.delete(theme));
+        renderSavedFilters();
+        const selectedKeys = new Set(selectedRows.map(savedFilterRowKey));
+        el("savedFilterSelect").querySelectorAll(".saved-filter-option").forEach((button) => {
+          const active = selectedKeys.has(savedFilterButtonKey(button));
+          button.setAttribute("aria-selected", String(active));
+          button.classList.toggle("active", active);
+        });
+        syncSavedFilterThemeSelectionState();
+      }
+
+      function setLineBarManualGroupingKeys() {
+        const sourceId = state.xSource || state.source || "dataset";
+        const feature = state.x || "";
+        state.bandFeature = JSON.stringify([sourceId, feature]);
+        state.dateBucketFeature = JSON.stringify([sourceId, feature, state.activeFilter || ""]);
+        state.dateBucketManualKey = state.dateBucketFeature;
+        state.bandSuggestionPendingKey = null;
+        state.dateBucketSuggestionPendingKey = null;
+      }
+
+      async function applyLineBarFavouriteView(favourite, options = {}) {
+        const validation = favourite?.validation || {};
+        if (Array.isArray(validation.errors) && validation.errors.length) {
+          throw new Error(validation.errors.join(" "));
+        }
+        const view = favourite?.view || {};
+        state.activeLineBarFavouriteId = favourite?.id || "";
+        state.source = String(view.source || "dataset");
+        state.x = String(view.x || state.x || "");
+        state.xSource = String(view.xSource || state.source || "dataset");
+        state.view = view.view === "table" ? "table" : "chart";
+        state.sort = String(view.sort || "alpha");
+        state.lowGroup = String(view.lowGroup || "0");
+        state.labels = String(view.labels || "none");
+        state.bandWidth = String(view.bandWidth ?? "0");
+        state.quantileMode = view.quantileMode === "quantile" ? "quantile" : "off";
+        state.dateBucket = String(view.dateBucket || "none");
+        state.transform = String(view.transform || "none");
+        state.sigma = String(view.sigma ?? "0");
+        state.partialDependence = String(view.partialDependence || "none");
+        state.featureSort = String(view.featureSort || "alpha");
+        state.expectedSort = String(view.expectedSort || "alpha");
+        state.filterSelectionMode = String(view.filterSelectionMode || "single");
+        state.filterOperator = String(view.filterOperator || "and");
+        state.activeFilter = String(view.filter || "").trim();
+        el("filterInput").value = state.activeFilter;
+        setFilterSelectionMode(state.filterSelectionMode, { apply: false });
+        syncFilterOperatorControl();
+        restoreSavedFilterRows(view.savedFilterRows);
+        fillMetricSelect(el("actualNumerator"));
+        fillMetricSelect(el("expectedNumerator"), true);
+        fillDenominatorSelect(el("denominator"));
+        const actual = view.actual && typeof view.actual === "object" ? view.actual : {};
+        if (!setActualSelection(actual.value, actual.sourceId)) {
+          chooseFirstActualSelection();
+        }
+        const expectedSelections = Array.isArray(view.expectedSelections) ? view.expectedSelections : [];
+        setExpectedSelections(expectedSelections, { allowAnySource: true });
+        const denominator = String(view.denominator || "__none__");
+        el("denominator").value = numericColumnExists(denominator) ? denominator : "__none__";
+        syncKpiSelectionFromMetrics();
+        syncLineBarXFallback();
+        setLineBarManualGroupingKeys();
+        invalidateLineBarDateBucketSuggestion();
+        setLineBarManualGroupingKeys();
+        clearProfileDetailCache();
+        syncActiveFilterLabels();
+        lineBarTool.renderExpectedNumerators();
+        lineBarTool.renderFeatures();
+        lineBarTool.updateAxisControls();
+        lineBarTool.setView(state.view);
+        await refreshFilterRowCountMeta();
+        if (options.refresh !== false) {
+          await refreshMetricSummary({ force: true });
+          await refreshLineBar({ force: true });
+        }
+      }
+
       function chooseDefaults() {
         const requestedSource = requestedDefault("source");
         const availableSources = state.schema.data_sources || [];
@@ -2975,6 +3115,7 @@
           lineBarTool.renderExpectedNumerators();
           lineBarTool.renderFeatures();
           lineBarTool.updateAxisControls();
+          await lineBarTool.refreshFavourites();
           setTool(state.tool, false);
           setSidebarVisible(previousSidebarVisible);
           await refreshMetricSummary({ force: true });
@@ -3036,15 +3177,18 @@
           renderDatasetMeta(fileMeta);
           refreshDatasetGlmCount();
           refreshDatasetGbmCount();
-          state.tool = chooseDefaultTool();
           renderSavedFilters();
           lineBarTool.renderExpectedNumerators();
           lineBarTool.renderFeatures();
           lineBarTool.updateAxisControls();
+          await lineBarTool.refreshFavourites();
+          state.tool = chooseDefaultTool();
           setTool(state.tool, false);
+          const startupFavouriteError = await lineBarTool.applyStartupFavourite();
           setStartupProgress("Loading initial dataset");
           await refreshMetricSummary({ force: true });
           await refreshActiveTool({ force: true });
+          if (startupFavouriteError) setStatus(startupFavouriteError, true);
           setStartupProgress("Ready", "ready");
           startServerHeartbeat();
         } catch (error) {

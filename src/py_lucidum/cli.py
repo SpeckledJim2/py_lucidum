@@ -31,6 +31,7 @@ DEFAULT_URL_KEYS = {
     "latitude",
     "longitude",
     "source",
+    "line_bar_favourite",
 }
 
 DEFAULT_SPEC_CANDIDATES = {
@@ -260,6 +261,8 @@ def serve(
     expected: str | None = None,
     expected2: str | None = None,
     denominator: str | None = None,
+    line_bar_favourite: str | None = None,
+    line_bar_favourites_path: str | Path | None = None,
     postcode_area: str | None = None,
     postcode_sector: str | None = None,
     postcode_unit: str | None = None,
@@ -295,6 +298,7 @@ def serve(
         "expected": expected,
         "expected2": expected2,
         "denominator": denominator,
+        "line_bar_favourite": line_bar_favourite,
         "postcode_area": postcode_area,
         "postcode_sector": postcode_sector,
         "postcode_unit": postcode_unit,
@@ -312,6 +316,7 @@ def serve(
         use_kpis=kpis_enabled,
         features_path=selected_features_path,
         use_features=features_enabled,
+        line_bar_favourites_path=line_bar_favourites_path,
         header_buttons=buttons,
     )
     url = _display_url_for_app(app, host, selected_port)
@@ -337,6 +342,8 @@ def serve_line_bar(
     expected: str | None = None,
     expected2: str | None = None,
     denominator: str | None = None,
+    line_bar_favourite: str | None = None,
+    line_bar_favourites_path: str | Path | None = None,
     postcode_area: str | None = None,
     postcode_sector: str | None = None,
     postcode_unit: str | None = None,
@@ -365,6 +372,8 @@ def serve_line_bar(
         expected=expected,
         expected2=expected2,
         denominator=denominator,
+        line_bar_favourite=line_bar_favourite,
+        line_bar_favourites_path=line_bar_favourites_path,
         postcode_area=postcode_area,
         postcode_sector=postcode_sector,
         postcode_unit=postcode_unit,
@@ -448,6 +457,8 @@ def main() -> int:
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
     parser.add_argument("--expected2", default=None, help="Initial second Expected / line 3 numeric feature. Defaults to None.")
     parser.add_argument("--denominator", default=None, help="Initial Weight column. Defaults to Average row value.")
+    parser.add_argument("--line-bar-favourite", default=None, help="Initial Line/Bar favourite view name or id.")
+    parser.add_argument("--line-bar-favourites", default=None, help="Path to the Line/Bar favourites JSON file to read and edit.")
     parser.add_argument("--postcode-area", default=None, help="Postcode area column for UK mapping. Defaults to PostcodeArea.")
     parser.add_argument("--postcode-sector", default=None, help="Postcode sector column for UK mapping. Defaults to PostcodeSector.")
     parser.add_argument("--postcode-unit", default=None, help="Postcode unit column for UK mapping points. Defaults to PostcodeUnit.")
@@ -510,6 +521,8 @@ def main() -> int:
             expected=args.expected,
             expected2=args.expected2,
             denominator=args.denominator,
+            line_bar_favourite=args.line_bar_favourite,
+            line_bar_favourites_path=args.line_bar_favourites,
             postcode_area=args.postcode_area,
             postcode_sector=args.postcode_sector,
             postcode_unit=args.postcode_unit,

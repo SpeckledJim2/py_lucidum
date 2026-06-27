@@ -24,6 +24,7 @@ from py_lucidum.tools.gbm.sources import GbmSourceProvider
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
+from py_lucidum.tools.line_bar.favourites import LineBarFavouriteStore
 from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count, table
 
@@ -130,6 +131,37 @@ def asgi_get(app: Any, path: str) -> tuple[int, dict[str, str], bytes]:
     return start["status"], headers, response_body
 
 
+def asgi_request_json(app: Any, method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, str], bytes]:
+    messages: list[dict[str, Any]] = []
+    body = json.dumps(payload or {}).encode("utf-8")
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
+    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in start["headers"]}
+    return start["status"], headers, response_body
+
+
 class LineBarToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
@@ -179,6 +211,38 @@ class LineBarToolTests(unittest.TestCase):
                 {"label": "Expected", "numerator": "Expected"},
             ],
         }
+
+    def favourite_view(self, **overrides: Any) -> dict[str, Any]:
+        view: dict[str, Any] = {
+            "version": 1,
+            "source": "dataset",
+            "x": "UseofVan",
+            "xSource": "dataset",
+            "view": "chart",
+            "sort": "alpha",
+            "lowGroup": "0",
+            "labels": "none",
+            "bandWidth": "0",
+            "quantileMode": "off",
+            "dateBucket": "none",
+            "transform": "none",
+            "sigma": "0",
+            "partialDependence": "none",
+            "featureSort": "alpha",
+            "expectedSort": "alpha",
+            "actual": {"value": "Actual", "sourceId": "dataset", "metricKind": "metric"},
+            "denominator": "Weight",
+            "expectedSelections": [{"value": "Expected", "sourceId": "dataset", "metricKind": "metric"}],
+            "kpi": {"group": "Pricing", "name": "Actual average", "actual": "Actual", "denominator": "__none__"},
+            "filter": "YoungestDriverAge > 40",
+            "filterSelectionMode": "single",
+            "filterOperator": "and",
+            "savedFilterRows": [
+                {"theme": "Driver age", "name": "Older drivers", "expression": "YoungestDriverAge > 40"},
+            ],
+        }
+        view.update(overrides)
+        return view
 
     def write_simple_gbm_prediction_model(
         self,
@@ -535,6 +599,9 @@ COPY (
         self.assertIn("/api/chart", paths)
         self.assertIn("/api/line-bar/chart", paths)
         self.assertIn("/api/line-bar/table", paths)
+        self.assertIn("/api/line-bar/favourites", paths)
+        self.assertIn("/api/line-bar/favourites/{favourite_id}", paths)
+        self.assertIn("/api/line-bar/favourites/order", paths)
         self.assertNotIn("/api/column-profile/summary", paths)
         self.assertIn("/api/schema", paths)
         self.assertIn("/api/shutdown", paths)
@@ -554,6 +621,231 @@ COPY (
             app.state.feature_spec["scenarios"],
             [{"name": "scenario1", "features": ["YoungestDriverAge"]}],
         )
+
+    def test_line_bar_favourite_store_crud_and_dataset_level_sidecar(self) -> None:
+        dataset = Dataset(self.data_path)
+        store = LineBarFavouriteStore(self.data_path, dataset)
+        filters = load_saved_filters(self.filters_path)
+        kpis = load_kpis(self.kpis_path)
+
+        first = store.create_favourite("Older drivers", self.favourite_view(), saved_filters=filters, kpis=kpis)
+        self.assertEqual(first["name"], "Older drivers")
+        self.assertTrue(first["validation"]["valid"])
+        self.assertEqual(
+            store.path,
+            self.data_path.resolve().parent / ".lucidum" / "datasets" / "sample.csv" / "line_bar" / "favourites.json",
+        )
+        with self.assertRaises(ValueError):
+            store.create_favourite("older DRIVERS", self.favourite_view(), saved_filters=filters, kpis=kpis)
+
+        renamed = store.rename_favourite(first["id"], "Older driver chart", saved_filters=filters, kpis=kpis)
+        self.assertEqual(renamed["name"], "Older driver chart")
+        second = store.create_favourite("Business", self.favourite_view(filter="UseofVan = 'Business'"), saved_filters=filters, kpis=kpis)
+        reordered = store.reorder_favourites([second["id"], first["id"]], saved_filters=filters, kpis=kpis)
+        self.assertEqual([item["id"] for item in reordered], [second["id"], first["id"]])
+        deleted = store.delete_favourite(second["id"])
+        self.assertEqual(deleted["id"], second["id"])
+        self.assertEqual([item["id"] for item in store.list_favourites(saved_filters=filters, kpis=kpis)], [first["id"]])
+
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,Actual,Weight\n"
+            "70,Social,500,50\n",
+            encoding="utf-8",
+        )
+        replacement_store = LineBarFavouriteStore(self.data_path, Dataset(self.data_path))
+        persisted = replacement_store.list_favourites(saved_filters=filters, kpis=kpis)
+        self.assertEqual(len(persisted), 1)
+        self.assertFalse(persisted[0]["validation"]["valid"])
+        self.assertIn("Expected", " ".join(persisted[0]["validation"]["errors"]))
+
+    def test_line_bar_favourite_store_rejects_stale_columns_on_create(self) -> None:
+        store = LineBarFavouriteStore(self.data_path, Dataset(self.data_path))
+
+        with self.assertRaises(ValueError) as context:
+            store.create_favourite("Broken", self.favourite_view(x="MissingColumn"))
+
+        self.assertIn("missing x-axis feature column", str(context.exception))
+
+    def test_line_bar_favourite_store_uses_explicit_json_path(self) -> None:
+        dataset = Dataset(self.data_path)
+        explicit_path = self.root / "config" / "monthly_favourites.json"
+        store = LineBarFavouriteStore(self.data_path, dataset, favourites_path=explicit_path)
+
+        self.assertEqual(store.path, explicit_path.resolve())
+        self.assertEqual(store.list_favourites(), [])
+        created = store.create_favourite("Portable", self.favourite_view())
+
+        self.assertTrue(explicit_path.exists())
+        self.assertFalse((self.root / ".lucidum").exists())
+        payload = json.loads(explicit_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["favourites"][0]["id"], created["id"])
+
+    def test_line_bar_favourite_store_reports_malformed_json_without_overwriting(self) -> None:
+        explicit_path = self.root / "config" / "bad_favourites.json"
+        explicit_path.parent.mkdir(parents=True)
+        explicit_path.write_text("{not json", encoding="utf-8")
+        store = LineBarFavouriteStore(self.data_path, Dataset(self.data_path), favourites_path=explicit_path)
+
+        with self.assertRaises(ValueError) as context:
+            store.list_favourites()
+
+        self.assertIn("not valid JSON", str(context.exception))
+        self.assertEqual(explicit_path.read_text(encoding="utf-8"), "{not json")
+
+    def test_line_bar_favourites_api_crud(self) -> None:
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["line_bar"],
+            filters_path=self.filters_path,
+            kpis_path=self.kpis_path,
+        )
+
+        status, _, body = asgi_get(app, "/api/line-bar/favourites")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["favourites"], [])
+        self.assertTrue(payload["storage"]["path"].endswith(".lucidum/datasets/sample.csv/line_bar/favourites.json"))
+
+        status, _, body = asgi_request_json(
+            app,
+            "POST",
+            "/api/line-bar/favourites",
+            {"name": "Older drivers", "view": self.favourite_view()},
+        )
+        created = json.loads(body)["favourite"]
+        self.assertEqual(status, 200)
+        self.assertEqual(created["name"], "Older drivers")
+        self.assertTrue(created["validation"]["valid"])
+
+        status, _, _ = asgi_request_json(
+            app,
+            "POST",
+            "/api/line-bar/favourites",
+            {"name": "older drivers", "view": self.favourite_view()},
+        )
+        self.assertEqual(status, 400)
+
+        status, _, body = asgi_request_json(
+            app,
+            "PATCH",
+            f"/api/line-bar/favourites/{created['id']}",
+            {"name": "Renamed"},
+        )
+        renamed = json.loads(body)["favourite"]
+        self.assertEqual(status, 200)
+        self.assertEqual(renamed["name"], "Renamed")
+
+        status, _, body = asgi_request_json(
+            app,
+            "POST",
+            "/api/line-bar/favourites",
+            {"name": "Business", "view": self.favourite_view(filter="UseofVan = 'Business'")},
+        )
+        second = json.loads(body)["favourite"]
+        self.assertEqual(status, 200)
+
+        status, _, body = asgi_request_json(
+            app,
+            "PUT",
+            "/api/line-bar/favourites/order",
+            {"ids": [second["id"], created["id"]]},
+        )
+        ordered = json.loads(body)["favourites"]
+        self.assertEqual(status, 200)
+        self.assertEqual([item["id"] for item in ordered], [second["id"], created["id"]])
+
+        status, _, body = asgi_request_json(app, "DELETE", f"/api/line-bar/favourites/{created['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["deleted_favourite_id"], created["id"])
+
+    def test_line_bar_favourites_api_uses_explicit_json_path(self) -> None:
+        explicit_path = self.root / "config" / "favourites.json"
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["line_bar"],
+            filters_path=self.filters_path,
+            kpis_path=self.kpis_path,
+            line_bar_favourites_path=explicit_path,
+        )
+
+        status, _, body = asgi_get(app, "/api/line-bar/favourites")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["favourites"], [])
+        self.assertEqual(Path(payload["storage"]["path"]), explicit_path.resolve())
+
+        status, _, body = asgi_request_json(
+            app,
+            "POST",
+            "/api/line-bar/favourites",
+            {"name": "Portable", "view": self.favourite_view()},
+        )
+        created = json.loads(body)["favourite"]
+        self.assertEqual(status, 200)
+        self.assertTrue(explicit_path.exists())
+
+        status, _, body = asgi_request_json(
+            app,
+            "PATCH",
+            f"/api/line-bar/favourites/{created['id']}",
+            {"name": "Portable renamed"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["favourite"]["name"], "Portable renamed")
+
+        status, _, body = asgi_request_json(
+            app,
+            "POST",
+            "/api/line-bar/favourites",
+            {"name": "Business", "view": self.favourite_view(filter="UseofVan = 'Business'")},
+        )
+        second = json.loads(body)["favourite"]
+        self.assertEqual(status, 200)
+
+        status, _, body = asgi_request_json(
+            app,
+            "PUT",
+            "/api/line-bar/favourites/order",
+            {"ids": [second["id"], created["id"]]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual([item["id"] for item in json.loads(body)["favourites"]], [second["id"], created["id"]])
+
+        status, _, body = asgi_request_json(app, "DELETE", f"/api/line-bar/favourites/{created['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["deleted_favourite_id"], created["id"])
+
+        payload = json.loads(explicit_path.read_text(encoding="utf-8"))
+        self.assertEqual([item["id"] for item in payload["favourites"]], [second["id"]])
+
+    def test_line_bar_favourites_api_reports_malformed_explicit_json(self) -> None:
+        explicit_path = self.root / "bad_favourites.json"
+        explicit_path.write_text("{not json", encoding="utf-8")
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+            line_bar_favourites_path=explicit_path,
+        )
+
+        status, _, body = asgi_get(app, "/api/line-bar/favourites")
+        self.assertEqual(status, 400)
+        self.assertIn("not valid JSON", json.loads(body)["detail"])
+        self.assertEqual(explicit_path.read_text(encoding="utf-8"), "{not json")
+
+        status, _, body = asgi_request_json(
+            app,
+            "POST",
+            "/api/line-bar/favourites",
+            {"name": "Should not overwrite", "view": self.favourite_view()},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("not valid JSON", json.loads(body)["detail"])
+        self.assertEqual(explicit_path.read_text(encoding="utf-8"), "{not json")
 
     def test_chart_endpoint_includes_duckdb_timing(self) -> None:
         app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)

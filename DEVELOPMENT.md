@@ -47,7 +47,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `lucidum path/to/data.parquet`
   - `lucidum path/to/data.csv`
   - `lucidum path/to/parquet-folder/`
-  - common options include `--open`, `--host`, `--port`, `--no-token`, `--buttons`, `--x`, `--actual`, `--expected`, `--expected2`, `--denominator`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
+  - common options include `--open`, `--host`, `--port`, `--no-token`, `--buttons`, `--x`, `--actual`, `--expected`, `--expected2`, `--denominator`, `--line-bar-favourite`, `--line-bar-favourites`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
 - Python:
   - `py_lucidum.serve(...)`
   - `py_lucidum.serve_line_bar(...)`
@@ -69,6 +69,11 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `POST /api/chart`
   - `POST /api/line-bar/chart`
   - `POST /api/line-bar/table`
+  - `GET /api/line-bar/favourites`
+  - `POST /api/line-bar/favourites`
+  - `PATCH /api/line-bar/favourites/{favourite_id}`
+  - `PUT /api/line-bar/favourites/order`
+  - `DELETE /api/line-bar/favourites/{favourite_id}`
   - `POST /api/histogram/chart`
   - `POST /api/uk-map/summary`
   - `GET /api/glm/summary`
@@ -127,7 +132,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 **Defaults, saved filters, KPIs, and feature specs**
 
 - Without explicit defaults, the x-axis starts with the first dataset column, Actual starts with the first numeric column, and Expected starts as none.
-- CLI options, programmatic defaults, and URL parameters can override initial selections.
+- CLI options, programmatic defaults, and URL parameters can override initial selections. `line_bar_favourite` / `--line-bar-favourite` selects a saved Line/Bar Favourite by id or case-insensitive name and makes Line/Bar the startup tool when available. `line_bar_favourites_path` is accepted by `serve(...)`, `serve_line_bar(...)`, and `create_app(...)`; the CLI equivalent is `--line-bar-favourites`. It is the server-side JSON storage path for favourites and must not be added to generated URLs or browser query parameters.
 - Line/Bar feature and Expected picker lists default to A-Z ordering. The Expected picker section starts collapsed on every app launch and can be reopened for the current browser session with the splitter chevron; its open/closed state is not persisted.
 - Saved filters load from an explicit `--filters` path, otherwise `./filter_spec.csv`, otherwise `./specs/filter_spec.csv`.
 - `lucidum --demo` falls back to packaged demo filter, KPI, and feature specs when a spec kind has no explicit path, no `--no-*` flag, and no current-working-directory default spec file.
@@ -166,6 +171,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 **Line and bar chart**
 
 - Line/Bar is default-enabled, registered first when enabled, and opens on startup for ordinary launches unless a valid `?tool=` URL parameter requests another enabled tool.
+- Line/Bar Favourites persist under `.lucidum/datasets/<dataset-slug>/line_bar/favourites.json`, outside the exact signature workspace, so replacing a dataset at the same path keeps saved views. `line_bar_favourites_path` / `--line-bar-favourites` overrides that path completely for the running server and reads/writes exactly the supplied JSON file, creating its parent directory on first write. Malformed favourites JSON must return a clear unavailable/error response and must not be overwritten during that request. Each view stores the chart/table controls, Actual, Weight, up to two Expected selections, KPI identity, raw filter expression, saved FILTER mode/operator, and selected saved FILTER rows. Restoring validates the saved source, columns, numeric response/weight fields, and filter SQL against the current dataset; blocking validation errors prevent restore and non-blocking missing KPI/FILTER rows are reported as warnings while preserving the raw valid filter expression.
 - X-axis features can be integer, numeric, string/categorical, date, or datetime.
 - The x-axis feature list has `Imp`, `Original`, and `A-Z` sort modes. `Imp` appears only when an active GBM or GLM has saved feature-level importances, lists raw dataset features grouped as GBM, GLM, and `Not used`, and selects dataset features only. GBM importance prefers saved mean absolute SHAP when present and otherwise uses LightGBM Gain. GLM importance uses the persisted weighted mean absolute centered feature contribution on the GLM linear-predictor scale.
 - When both active GBM and GLM prediction sources exist, Line/Bar exposes an x-axis-only virtual numeric feature `gbm_to_glm_ratio` from a `model_ratio` data source. It is computed as `gbm_prediction / glm_prediction` joined by `__lucidum_row_id`; null or zero GLM predictions produce a null ratio and use the normal missing x-axis group.

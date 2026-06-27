@@ -2348,6 +2348,52 @@ COPY (
                 thread.join(timeout=5)
                 stop_persistent_glm_fit_worker()
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_favourites_ui_flow(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            data_path.write_text(
+                "vehicle_age,segment,price,expected,value\n"
+                "1,A,100,90,10\n"
+                "2,A,200,210,20\n"
+                "3,B,300,290,30\n"
+                "4,B,400,410,40\n",
+                encoding="utf-8",
+            )
+            filters_path = root / "filter_spec.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "AGE,Older,vehicle_age >= 3\n",
+                encoding="utf-8",
+            )
+            kpis_path = root / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "PRICE,Weighted price,price,value,1,number\n",
+                encoding="utf-8",
+            )
+            favourites_path = root / "config" / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path,
+                filters_path=filters_path,
+                use_saved_filters=True,
+                kpis_path=kpis_path,
+                use_kpis=True,
+                line_bar_favourites_path=favourites_path,
+                defaults={"x": "vehicle_age"},
+                tools=["line_bar"],
+            )
+            try:
+                self.exercise_line_bar_favourites(base_url)
+                self.assertTrue(favourites_path.exists())
+                self.assertFalse((root / ".lucidum").exists())
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
     @staticmethod
     def start_app(
         data_path: Path,
@@ -2358,6 +2404,7 @@ COPY (
         use_kpis: bool = False,
         features_path: Path | None = None,
         use_features: bool = True,
+        line_bar_favourites_path: Path | None = None,
         token: str | None = None,
         defaults: dict[str, str] | None = None,
         tools: list[str] | None = None,
@@ -2379,6 +2426,7 @@ COPY (
             use_kpis=use_kpis,
             features_path=features_path,
             use_features=use_features,
+            line_bar_favourites_path=line_bar_favourites_path,
             token=token,
             tools=tools,
             header_buttons=buttons,
@@ -2765,6 +2813,8 @@ COPY (
                     page.get_by_role("menuitem", name=name).click()
 
                 page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#glmTool:not(.hidden)").wait_for(timeout=10_000)
                 page.locator("#glmTool").click()
                 page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
                 page.get_by_role("button", name="Tabulations").click()
@@ -7813,7 +7863,7 @@ COPY (
                 self.assertEqual(page_errors, [])
                 self.assertEqual(profile_requests, 6)
                 self.assertEqual(profile_detail_requests, 7)
-                self.assertEqual(chart_requests, 4)
+                self.assertEqual(chart_requests, 3)
                 self.assertEqual(histogram_requests, 6)
                 self.assertEqual(map_requests, 9)
             finally:
@@ -10256,6 +10306,188 @@ COPY (
                 self.assertTrue(driver_rows.first.is_visible())
                 self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
                 self.assertEqual(page.locator("#filterInput").input_value(), "DRIVER_AGE < 30")
+                self.assertEqual(page_errors, [])
+            finally:
+                browser.close()
+
+    def exercise_line_bar_favourites(self, base_url: str) -> None:
+        assert sync_playwright is not None
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page_errors: list[str] = []
+            dialogs: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.accept()))
+            try:
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.locator("#lineBarFavouriteAddBtn").wait_for(timeout=10_000)
+
+                page.locator("#filterCollapseBtn").click()
+                age_heading = page.locator('.saved-filter-theme[data-filter-theme="AGE"]')
+                age_row = page.locator('.saved-filter-option[data-filter-theme="AGE"]')
+                if age_heading.get_attribute("aria-expanded") == "false":
+                    age_heading.click()
+                age_row.click()
+                self.assertEqual(page.locator("#filterInput").input_value(), "vehicle_age >= 3")
+
+                if page.locator("#expectedSideSection").get_attribute("aria-hidden") == "true":
+                    page.locator("#chartExpectedToggle").click()
+                page.locator("#expectedSearch").fill("expected")
+                page.locator('#expectedList .feature[data-value="expected"]').click()
+                self.assertEqual(page.locator("#denominator").input_value(), "value")
+                self.assertEqual(page.locator('.kpi-option[data-kpi-group="PRICE"]').get_attribute("aria-selected"), "true")
+
+                chart_box_before = page.locator("#chart").bounding_box()
+                self.assertIsNotNone(chart_box_before)
+                page.locator("#lineBarFavouriteAddBtn").click()
+                page.locator("#lineBarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                chart_box_after = page.locator("#chart").bounding_box()
+                self.assertIsNotNone(chart_box_after)
+                assert chart_box_before is not None and chart_box_after is not None
+                self.assertLessEqual(abs(chart_box_after["y"] - chart_box_before["y"]), 1)
+                page.locator("#lineBarFavouriteNameInput").fill("Older view")
+                page.locator('[data-favourite-action="save-add"]').click()
+                page.wait_for_function(
+                    """() => document.querySelector("#lineBarFavouriteSelect")?.selectedOptions[0]?.textContent.trim() === "Older view" """,
+                    timeout=10_000,
+                )
+                older_id = page.eval_on_selector(
+                    "#lineBarFavouriteSelect",
+                    """select => {
+                      const option = [...select.options].find((item) => item.textContent.trim() === "Older view");
+                      return option ? option.value : "";
+                    }""",
+                )
+                self.assertTrue(older_id)
+
+                page.locator("#filterSidebarClearBtn").click()
+                page.locator("#expectedSearch").fill("expected")
+                page.locator('#expectedList .feature[data-value="expected"]').click()
+                self.assertEqual(page.locator("#filterInput").input_value(), "")
+                page.locator("#lineBarFavouriteSelect").select_option(older_id)
+                page.wait_for_function(
+                    """() => document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
+                      && document.querySelector('.saved-filter-option[data-filter-theme="AGE"]')?.getAttribute("aria-selected") === "true"
+                      && document.querySelector('#expectedList .feature[data-value="expected"]')?.getAttribute("aria-pressed") === "true"
+                      && document.querySelector('.kpi-option[data-kpi-group="PRICE"]')?.getAttribute("aria-selected") === "true" """,
+                    timeout=10_000,
+                )
+
+                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.locator("#lineBarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.wait_for_function(
+                    """() => document.querySelector("#lineBarFavouritePopover")?.hidden === true""",
+                    timeout=10_000,
+                )
+                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.locator("#lineBarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                self.assertTrue(page.locator('[data-favourite-action="move-up"]').is_disabled())
+                self.assertTrue(page.locator('[data-favourite-action="move-down"]').is_disabled())
+                first_row = page.locator(".line-bar-favourite-row").first
+                rename_button = first_row.locator('[data-favourite-action="rename"]')
+                self.assertTrue(rename_button.is_disabled())
+                first_row.locator("input").fill("Renamed view")
+                page.wait_for_function(
+                    """() => {
+                      const button = document.querySelector('.line-bar-favourite-row [data-favourite-action="rename"]');
+                      return Boolean(button && !button.disabled && button.classList.contains("active"));
+                    }""",
+                    timeout=10_000,
+                )
+                rename_button.click()
+                page.wait_for_function(
+                    """() => [...document.querySelectorAll("#lineBarFavouriteSelect option")]
+                      .some((option) => option.textContent.trim() === "Renamed view")""",
+                    timeout=10_000,
+                )
+
+                page.locator("#lineBarFavouriteAddBtn").click()
+                page.locator("#lineBarFavouriteNameInput").fill("Second view")
+                page.locator('[data-favourite-action="save-add"]').click()
+                page.wait_for_function(
+                    """() => [...document.querySelectorAll("#lineBarFavouriteSelect option")]
+                      .some((option) => option.textContent.trim() === "Second view")""",
+                    timeout=10_000,
+                )
+                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.locator("#lineBarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                move_up = page.locator('[data-favourite-action="move-up"]')
+                move_down = page.locator('[data-favourite-action="move-down"]')
+                self.assertTrue(move_up.is_disabled())
+                self.assertTrue(move_down.is_disabled())
+                page.locator(".line-bar-favourite-row").first.locator("input").click()
+                page.wait_for_function(
+                    """() => {
+                      const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
+                      const up = document.querySelector('[data-favourite-action="move-up"]');
+                      const down = document.querySelector('[data-favourite-action="move-down"]');
+                      return rows[0]?.classList.contains("selected") && up?.disabled && down && !down.disabled;
+                    }""",
+                    timeout=10_000,
+                )
+                move_down.click()
+                page.wait_for_function(
+                    """() => {
+                      const labels = [...document.querySelectorAll("#lineBarFavouriteSelect option")].map((option) => option.textContent.trim());
+                      const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
+                      const up = document.querySelector('[data-favourite-action="move-up"]');
+                      const down = document.querySelector('[data-favourite-action="move-down"]');
+                      return labels[1] === "Second view" &&
+                        labels[2] === "Renamed view" &&
+                        rows[1]?.classList.contains("selected") &&
+                        rows[1]?.querySelector("input") === document.activeElement &&
+                        up && !up.disabled &&
+                        down?.disabled;
+                    }""",
+                    timeout=10_000,
+                )
+                move_up.click()
+                page.wait_for_function(
+                    """() => {
+                      const labels = [...document.querySelectorAll("#lineBarFavouriteSelect option")].map((option) => option.textContent.trim());
+                      const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
+                      const up = document.querySelector('[data-favourite-action="move-up"]');
+                      const down = document.querySelector('[data-favourite-action="move-down"]');
+                      return labels[1] === "Renamed view" &&
+                        labels[2] === "Second view" &&
+                        rows[0]?.classList.contains("selected") &&
+                        rows[0]?.querySelector("input") === document.activeElement &&
+                        up?.disabled &&
+                        down && !down.disabled;
+                    }""",
+                    timeout=10_000,
+                )
+                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.wait_for_function(
+                    """() => document.querySelector("#lineBarFavouritePopover")?.hidden === true""",
+                    timeout=10_000,
+                )
+
+                startup_page = browser.new_page(viewport={"width": 1280, "height": 800})
+                startup_errors: list[str] = []
+                startup_page.on("pageerror", lambda error: startup_errors.append(str(error)))
+                startup_page.goto(f"{base_url}?line_bar_favourite=Renamed%20view", wait_until="domcontentloaded")
+                startup_page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                startup_page.wait_for_function(
+                    """() => document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
+                      && document.querySelector('.saved-filter-option[data-filter-theme="AGE"]')?.getAttribute("aria-selected") === "true"
+                      && document.querySelector('#expectedList .feature[data-value="expected"]')?.getAttribute("aria-pressed") === "true" """,
+                    timeout=10_000,
+                )
+                self.assertEqual(startup_errors, [])
+                startup_page.close()
+
+                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.locator('.line-bar-favourite-row [data-favourite-action="delete"]').first.click()
+                page.wait_for_function(
+                    """() => [...document.querySelectorAll("#lineBarFavouriteSelect option")]
+                      .filter((option) => option.value).length === 1""",
+                    timeout=10_000,
+                )
+                self.assertEqual(dialogs, [])
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()

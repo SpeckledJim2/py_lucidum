@@ -8,7 +8,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
 - **Dataset Viewer**: inspect a fast filtered preview of dataset rows in a sortable Tabulator grid, capped at 100 displayed rows, with client-side whole-table search, axis-exclusive whole-row or whole-column selection, transpose mode where search matches original column-name rows while keeping all preview row columns, optional alphabetical column ordering, three-state sort icons in both orientations, right-click cell copy, and right-click CSV copy for selected rows or columns.
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
-- **Line and Bar**: plot grouped Actual and up to two optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, server-backed searchable/paginated tables, A-Z picker defaults, a launch-collapsed Expected picker with a quick toggle, Base-aware transforms, sigma bars, optional active-GBM SHAP ribbons, active-GLM overlay lines, an active GBM/GLM prediction-ratio x-axis feature, and x-axis feature ordering by saved GBM/GLM feature importance.
+- **Line and Bar**: plot grouped Actual and up to two optional Expected response values over any feature, with shared Weight, lazily estimated numeric banding, date buckets, server-backed searchable/paginated tables, A-Z picker defaults, a launch-collapsed Expected picker with a quick toggle, saved Favourites views, Base-aware transforms, sigma bars, optional active-GBM SHAP ribbons, active-GLM overlay lines, an active GBM/GLM prediction-ratio x-axis feature, and x-axis feature ordering by saved GBM/GLM feature importance.
 
   ![lucidum line and bar tool](docs/assets/line_and_bar.png)
 
@@ -141,6 +141,16 @@ The dataset slug comes from the CSV or Parquet filename. The dataset signature i
 
 If a dataset file is replaced or edited, it gets a new signature workspace. Existing GLM/GBM models from the previous version remain on disk but are not shown or used; rebuild models after changing the source file. Older root-level `.lucidum/models/` folders are ignored by current Lucidum versions. Parquet folder inputs do not create or read GLM/GBM workspaces because modelling tools require a single source Parquet.
 
+By default, Line/Bar Favourites are saved beside those workspaces but one level above the dataset signature:
+
+```text
+.lucidum/datasets/<dataset-slug>/line_bar/favourites.json
+```
+
+They persist across replacements of the dataset at the same path. For server deployments, `--line-bar-favourites path/to/favourites.json` overrides that default and makes Lucidum read and write exactly that JSON file instead; the parent folder is created on first save if needed. If the configured JSON is malformed, favourites are reported as unavailable and Lucidum does not overwrite the bad file during that request.
+
+When a saved view references a column, data source, filter expression, KPI row, or saved FILTER row that is no longer valid, Lucidum validates the view against the current dataset before restoring it and reports the stale fields in the browser.
+
 ## Common Options
 
 ```bash
@@ -148,6 +158,10 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 .venv/bin/lucidum --demo --host 0.0.0.0 --port 8000
 .venv/bin/lucidum --demo --no-token
 .venv/bin/lucidum --demo --x DRIVER_AGE --actual PREMIUM --denominator ANNUAL_MILEAGE
+.venv/bin/lucidum --demo --line-bar-favourite "Loss curve"
+.venv/bin/lucidum datasets/monthly \
+  --line-bar-favourites config/monthly_favourites.json \
+  --line-bar-favourite "Postcode view"
 .venv/bin/lucidum --demo --filters specs/filter_spec.csv
 .venv/bin/lucidum --demo --no-filters
 .venv/bin/lucidum --demo --kpis specs/kpi_spec.csv
@@ -165,6 +179,8 @@ If a dataset file is replaced or edited, it gets a new signature workspace. Exis
 - `--no-token` disables URL/API token protection for local-only use.
 - `--buttons` shows the `Stop app` and `Open monitor` buttons in the browser header. Without it, those header buttons are hidden; stop terminal launches with `Ctrl+C`, and open the monitor directly at `/monitor?token=...` when needed.
 - `--x`, `--actual`, `--expected`, `--expected2`, and `--denominator` set initial Line/Bar selections.
+- `--line-bar-favourite` opens Line/Bar on a saved Favourites view by name or id. URL query parameter `line_bar_favourite` provides the same startup selection and overrides the default supplied by Python or the CLI.
+- `--line-bar-favourites` points Lucidum at the JSON file used to store Line/Bar Favourites. It is a server-side file path, not a URL query parameter.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
@@ -201,6 +217,11 @@ py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
 py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
 py_lucidum.serve("path/to/monthly_parquets/", port=8000, open_browser=True)
 py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, buttons=True)
+py_lucidum.serve(
+    "datasets/monthly",
+    line_bar_favourites_path="config/monthly_favourites.json",
+    line_bar_favourite="Postcode view",
+)
 ```
 
 In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.
@@ -214,10 +235,12 @@ from py_lucidum.app import create_app
 app = create_app(
     py_lucidum.demo_dataset_path(),
     token="dev-token",
+    line_bar_favourites_path="config/monthly_favourites.json",
     defaults={
         "x": "DRIVER_AGE",
         "actual": "PREMIUM",
         "denominator": "ANNUAL_MILEAGE",
+        "line_bar_favourite": "Loss curve",
     },
     filters_path="specs/filter_spec.csv",
     kpis_path="specs/kpi_spec.csv",

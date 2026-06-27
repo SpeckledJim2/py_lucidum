@@ -6,11 +6,25 @@ from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
 
+from .favourites import LineBarFavouriteError, LineBarFavouriteStore
 from .importance import feature_importance_payload
 from .query import chart, table
 
 
 def register(app: FastAPI, context: AppContext) -> None:
+    def favourite_store() -> LineBarFavouriteStore:
+        return LineBarFavouriteStore(
+            context.dataset.path,
+            context.dataset,
+            favourites_path=getattr(app.state, "line_bar_favourites_path", None),
+        )
+
+    def saved_filters() -> list[dict]:
+        return getattr(app.state, "saved_filters", [])
+
+    def kpis() -> list[dict]:
+        return getattr(app.state, "kpis", [])
+
     async def chart_endpoint(request: Request) -> dict:
         context.check_token(request)
         payload = await request.json()
@@ -54,3 +68,68 @@ def register(app: FastAPI, context: AppContext) -> None:
             gbm_store=getattr(app.state, "gbm_store", None),
             glm_store=getattr(app.state, "glm_store", None),
         )
+
+    @app.get("/api/line-bar/favourites")
+    async def favourites_endpoint(request: Request) -> dict:
+        context.check_token(request)
+        store = favourite_store()
+        try:
+            return {
+                "favourites": store.list_favourites(saved_filters=saved_filters(), kpis=kpis()),
+                "storage": {"path": str(store.path)},
+            }
+        except LineBarFavouriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/line-bar/favourites")
+    async def create_favourite_endpoint(request: Request) -> dict:
+        context.check_token(request)
+        payload = await request.json()
+        try:
+            favourite = favourite_store().create_favourite(
+                payload.get("name"),
+                payload.get("view"),
+                saved_filters=saved_filters(),
+                kpis=kpis(),
+            )
+        except LineBarFavouriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"favourite": favourite}
+
+    @app.patch("/api/line-bar/favourites/{favourite_id}")
+    async def rename_favourite_endpoint(favourite_id: str, request: Request) -> dict:
+        context.check_token(request)
+        payload = await request.json()
+        try:
+            favourite = favourite_store().rename_favourite(
+                favourite_id,
+                payload.get("name"),
+                saved_filters=saved_filters(),
+                kpis=kpis(),
+            )
+        except LineBarFavouriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"favourite": favourite}
+
+    @app.put("/api/line-bar/favourites/order")
+    async def reorder_favourites_endpoint(request: Request) -> dict:
+        context.check_token(request)
+        payload = await request.json()
+        try:
+            favourites = favourite_store().reorder_favourites(
+                payload.get("ids"),
+                saved_filters=saved_filters(),
+                kpis=kpis(),
+            )
+        except LineBarFavouriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"favourites": favourites}
+
+    @app.delete("/api/line-bar/favourites/{favourite_id}")
+    async def delete_favourite_endpoint(favourite_id: str, request: Request) -> dict:
+        context.check_token(request)
+        try:
+            deleted = favourite_store().delete_favourite(favourite_id)
+        except LineBarFavouriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"deleted_favourite_id": deleted.get("id"), "favourite": deleted}

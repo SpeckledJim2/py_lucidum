@@ -94,10 +94,12 @@ class CliRuntimeTests(unittest.TestCase):
                     "expected": "Expected1",
                     "expected2": "Expected2",
                     "denominator": "Exposure",
+                    "line_bar_favourite": "Loss curve",
                     "postcode_area": "Area",
                     "postcode_unit": "Unit",
                     "latitude": "lat_col",
                     "longitude": "long_col",
+                    "line_bar_favourites_path": "config/favourites.json",
                     "unused": "ignored",
                 },
             )
@@ -107,8 +109,9 @@ class CliRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             url,
-            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&expected=Expected1&expected2=Expected2&denominator=Exposure&postcode_area=Area&postcode_unit=Unit&latitude=lat_col&longitude=long_col",
+            "http://127.0.0.1:8000/?token=dev-token&x=Driver+Age&actual=AvgPrice1_5&expected=Expected1&expected2=Expected2&denominator=Exposure&line_bar_favourite=Loss+curve&postcode_area=Area&postcode_unit=Unit&latitude=lat_col&longitude=long_col",
         )
+        self.assertNotIn("line_bar_favourites", url)
 
     def test_display_url_for_wildcard_bind_uses_localhost_and_lan_hint(self) -> None:
         app = SimpleNamespace(
@@ -260,6 +263,7 @@ class CliRuntimeTests(unittest.TestCase):
     def test_serve_passes_unit_point_defaults(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
+            favourites_path = Path(tmp_dir) / "favourites.json"
             data_path.write_text("x,y\n1,2\n", encoding="utf-8")
             app = SimpleNamespace(state=SimpleNamespace(token="", defaults={}))
             stdout = io.StringIO()
@@ -275,12 +279,16 @@ class CliRuntimeTests(unittest.TestCase):
                     postcode_unit="Unit",
                     latitude="lat_col",
                     longitude="long_col",
+                    line_bar_favourite="Loss curve",
+                    line_bar_favourites_path=favourites_path,
                 )
 
         defaults = create_app_mock.call_args.kwargs["defaults"]
         self.assertEqual(defaults["postcode_unit"], "Unit")
         self.assertEqual(defaults["latitude"], "lat_col")
         self.assertEqual(defaults["longitude"], "long_col")
+        self.assertEqual(defaults["line_bar_favourite"], "Loss curve")
+        self.assertEqual(create_app_mock.call_args.kwargs["line_bar_favourites_path"], favourites_path)
         start_server_mock.assert_called_once()
 
     def test_serve_passes_kpi_options_and_reports_status(self) -> None:
@@ -700,6 +708,10 @@ class CliRuntimeTests(unittest.TestCase):
                     "EXPECTED_PREMIUM_2",
                     "--denominator",
                     "ANNUAL_MILEAGE",
+                    "--line-bar-favourite",
+                    "Loss curve",
+                    "--line-bar-favourites",
+                    "config/favourites.json",
                 ],
                 {
                     "path": demo_path,
@@ -708,6 +720,8 @@ class CliRuntimeTests(unittest.TestCase):
                     "expected": "EXPECTED_PREMIUM",
                     "expected2": "EXPECTED_PREMIUM_2",
                     "denominator": "ANNUAL_MILEAGE",
+                    "line_bar_favourite": "Loss curve",
+                    "line_bar_favourites_path": "config/favourites.json",
                 },
                 True,
             ),
