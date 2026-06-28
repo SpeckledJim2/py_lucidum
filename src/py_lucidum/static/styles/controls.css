@@ -65,6 +65,39 @@
         font-size: 12px;
       }
 
+      .app input:not([type]):focus,
+      .app input:not([type]):focus-visible,
+      .app input[type="date"]:focus,
+      .app input[type="date"]:focus-visible,
+      .app input[type="datetime-local"]:focus,
+      .app input[type="datetime-local"]:focus-visible,
+      .app input[type="email"]:focus,
+      .app input[type="email"]:focus-visible,
+      .app input[type="month"]:focus,
+      .app input[type="month"]:focus-visible,
+      .app input[type="number"]:focus,
+      .app input[type="number"]:focus-visible,
+      .app input[type="password"]:focus,
+      .app input[type="password"]:focus-visible,
+      .app input[type="search"]:focus,
+      .app input[type="search"]:focus-visible,
+      .app input[type="tel"]:focus,
+      .app input[type="tel"]:focus-visible,
+      .app input[type="text"]:focus,
+      .app input[type="text"]:focus-visible,
+      .app input[type="time"]:focus,
+      .app input[type="time"]:focus-visible,
+      .app input[type="url"]:focus,
+      .app input[type="url"]:focus-visible,
+      .app input[type="week"]:focus,
+      .app input[type="week"]:focus-visible,
+      .app textarea:focus,
+      .app textarea:focus-visible {
+        border-color: var(--line) !important;
+        box-shadow: none !important;
+        outline: none !important;
+      }
+
       .feature-section {
         flex: 1;
         display: flex;

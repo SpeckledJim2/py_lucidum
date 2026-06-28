@@ -568,6 +568,96 @@ class BrowserSmokeTests(unittest.TestCase):
                         initial_split_state["featureHeight"],
                         initial_split_state["controlsHeight"] - 36,
                     )
+                    page.locator("#featureSearch").focus()
+                    feature_focus_state = page.evaluate(
+                        """
+                        () => {
+                          const style = getComputedStyle(document.querySelector("#featureSearch"));
+                          return {
+                            boxShadow: style.boxShadow,
+                            outlineStyle: style.outlineStyle,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(feature_focus_state["boxShadow"], "none")
+                    self.assertEqual(feature_focus_state["outlineStyle"], "none")
+
+                    page.locator("#filterFooterToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const footer = document.querySelector("#filterFooter");
+                          const controls = document.querySelector("#chartSideControls");
+                          const resizer = document.querySelector("#chartControlHeightResizer");
+                          const filterInput = document.querySelector("#filterInput");
+                          const timing = document.querySelector("#actionTimingMonitor");
+                          const footerRect = footer?.getBoundingClientRect();
+                          const controlsRect = controls?.getBoundingClientRect();
+                          const resizerRect = resizer?.getBoundingClientRect();
+                          const filterRect = filterInput?.getBoundingClientRect();
+                          const timingRect = timing?.getBoundingClientRect();
+                          return footer?.getAttribute("aria-hidden") === "false"
+                            && footerRect
+                            && controlsRect
+                            && resizerRect
+                            && filterRect
+                            && timingRect
+                            && resizerRect.bottom <= footerRect.top + 1
+                            && Math.abs(controlsRect.bottom - resizerRect.bottom) <= 1
+                            && Math.abs(timingRect.left - filterRect.right - 10) <= 2;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    footer_open_split_state = page.evaluate(
+                        """
+                        () => {
+                          const footer = document.querySelector("#filterFooter");
+                          const controls = document.querySelector("#chartSideControls");
+                          const feature = document.querySelector(".feature-section");
+                          const resizer = document.querySelector("#chartControlHeightResizer");
+                          const filterInput = document.querySelector("#filterInput");
+                          const timing = document.querySelector("#actionTimingMonitor");
+                          const footerRect = footer?.getBoundingClientRect();
+                          const controlsRect = controls?.getBoundingClientRect();
+                          const resizerRect = resizer?.getBoundingClientRect();
+                          const filterRect = filterInput?.getBoundingClientRect();
+                          const timingRect = timing?.getBoundingClientRect();
+                          return {
+                            collapsed: controls?.classList.contains("chart-expected-collapsed") || false,
+                            footerVisible: footer?.getAttribute("aria-hidden") === "false",
+                            controlsHeight: controlsRect?.height || 0,
+                            featureHeight: feature?.getBoundingClientRect().height || 0,
+                            filterTimingGap: filterRect && timingRect ? timingRect.left - filterRect.right : -999,
+                            filterWidth: filterRect?.width || 0,
+                            resizerBottomDelta: controlsRect && resizerRect
+                              ? Math.abs(controlsRect.bottom - resizerRect.bottom)
+                              : 999,
+                            resizerFooterGap: footerRect && resizerRect
+                              ? footerRect.top - resizerRect.bottom
+                              : -999,
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(footer_open_split_state["collapsed"])
+                    self.assertTrue(footer_open_split_state["footerVisible"])
+                    self.assertLessEqual(footer_open_split_state["resizerBottomDelta"], 1)
+                    self.assertGreaterEqual(footer_open_split_state["resizerFooterGap"], -1)
+                    self.assertGreater(footer_open_split_state["filterWidth"], 500)
+                    self.assertAlmostEqual(footer_open_split_state["filterTimingGap"], 10, delta=2)
+                    self.assertGreaterEqual(
+                        footer_open_split_state["featureHeight"],
+                        footer_open_split_state["controlsHeight"] - 36,
+                    )
+                    page.locator("#filterFooterToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#filterFooter")?.getAttribute("aria-hidden") === "true"
+                        """,
+                        timeout=10_000,
+                    )
 
                     page.locator("#chartExpectedToggle").click()
                     page.wait_for_function(
@@ -617,6 +707,20 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(expanded_split_state["toggleLabel"], "Hide Expected controls")
                     self.assertNotEqual(expanded_split_state["iconTransform"], initial_split_state["iconTransform"])
                     self.assertGreater(expanded_split_state["expectedHeight"], 96)
+                    page.locator("#expectedSearch").focus()
+                    expected_focus_state = page.evaluate(
+                        """
+                        () => {
+                          const style = getComputedStyle(document.querySelector("#expectedSearch"));
+                          return {
+                            boxShadow: style.boxShadow,
+                            outlineStyle: style.outlineStyle,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(expected_focus_state["boxShadow"], "none")
+                    self.assertEqual(expected_focus_state["outlineStyle"], "none")
 
                     page.locator("#chartExpectedToggle").click()
                     page.wait_for_function(

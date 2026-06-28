@@ -1514,6 +1514,7 @@
         } else if (state.tool === "specs") {
           specificationsTool.resize();
         } else {
+          syncChartControlHeightToAvailableSpace();
           lineBarTool.resize();
         }
       }
@@ -2965,6 +2966,17 @@
         toggle.title = label;
       }
 
+      function syncChartControlHeightToAvailableSpace() {
+        const controls = document.querySelector(".chart-side-controls");
+        if (!controls || controls.classList.contains("hidden")) return;
+        const firstPanel = controls.querySelector(".chart-side-section");
+        if (controls.classList.contains("chart-expected-collapsed")) {
+          setChartFeatureControlsHeight(CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
+        } else if (firstPanel) {
+          setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height, { allowCollapse: false });
+        }
+      }
+
       function setChartFeatureControlsHeight(rawHeight, options = {}) {
         const controls = document.querySelector(".chart-side-controls");
         const availableHeight = controls?.getBoundingClientRect().height || window.innerHeight;
@@ -3125,12 +3137,7 @@
           if (state.tool === "line_bar") {
             const controls = document.querySelector(".chart-side-controls");
             if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);
-            const firstPanel = controls?.querySelector(".chart-side-section");
-            if (controls?.classList.contains("chart-expected-collapsed")) {
-              setChartFeatureControlsHeight(CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
-            } else if (firstPanel) {
-              setChartFeatureControlsHeight(firstPanel.getBoundingClientRect().height, { allowCollapse: false });
-            }
+            syncChartControlHeightToAvailableSpace();
             lineBarTool.resize();
           } else if (state.tool === "histogram") {
             histogramTool.resize();
