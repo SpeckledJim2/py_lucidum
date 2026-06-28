@@ -65,6 +65,7 @@
         lowGroup: "0",
         labels: "none",
         sidebarVisible: true,
+        lineBarFocusMode: false,
         bandWidth: "0",
         quantileMode: "off",
         previousBandWidthsByFeature: {},
@@ -313,6 +314,7 @@
         captureLineBarFavouriteView,
         applyLineBarFavouriteView,
         startupLineBarFavourite: () => requestedDefault("line_bar_favourite"),
+        toggleLineBarFocusMode,
       });
       const histogramTool = createHistogramTool({
         api,
@@ -1369,6 +1371,7 @@
       function setTool(tool, refresh = true) {
         if (!toolEnabled(tool)) return;
         const previousTool = state.tool;
+        if (state.lineBarFocusMode && tool !== "line_bar") setLineBarFocusMode(false);
         if (previousTool === "uk_map" && tool !== "uk_map") ukMapTool.captureView("tool-switch");
         if (previousTool === "column_profile" && tool !== "column_profile") columnProfileTool.closeMenus();
         if (previousTool === "specs" && tool !== "specs") specificationsTool.closeMenus();
@@ -1396,6 +1399,7 @@
         el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
         el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
+        syncLineBarFocusMode();
         el("datasetViewerGroupMeta").classList.toggle("hidden", tool !== "dataset_viewer");
         el("datasetViewerFilter").classList.toggle("hidden", tool !== "dataset_viewer");
         el("profileGroupMeta").classList.toggle("hidden", tool !== "column_profile");
@@ -1545,6 +1549,41 @@
         el("appSidebar").removeAttribute("aria-hidden");
         syncSidebarToggleButton();
         scheduleActiveToolResize({ hard: true });
+      }
+
+      function toggleLineBarFocusMode() {
+        setLineBarFocusMode(!state.lineBarFocusMode);
+      }
+
+      function setLineBarFocusMode(focused) {
+        const nextFocused = Boolean(focused) && state.tool === "line_bar";
+        if (state.lineBarFocusMode === nextFocused) {
+          syncLineBarFocusMode();
+          scheduleLineBarFocusResize();
+          return;
+        }
+        state.lineBarFocusMode = nextFocused;
+        syncLineBarFocusMode();
+        scheduleLineBarFocusResize();
+      }
+
+      function syncLineBarFocusMode() {
+        const focused = state.tool === "line_bar" && state.lineBarFocusMode;
+        document.body.classList.toggle("line-bar-focus-mode", focused);
+        const button = el("lineBarExpandBtn");
+        if (!button) return;
+        const label = focused ? "Restore chart controls" : "Focus chart";
+        button.classList.remove("active");
+        button.setAttribute("aria-pressed", String(focused));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
+      function scheduleLineBarFocusResize() {
+        requestAnimationFrame(() => {
+          syncChartControlHeightToAvailableSpace();
+          lineBarTool.resize();
+        });
       }
 
       function syncSidebarToggleButton() {

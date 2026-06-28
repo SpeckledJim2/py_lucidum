@@ -53,6 +53,7 @@ export function createLineBarTool({
   captureLineBarFavouriteView = () => ({}),
   applyLineBarFavouriteView = () => Promise.resolve(),
   startupLineBarFavourite = () => "",
+  toggleLineBarFocusMode = () => {},
 }) {
   const TABLE_PAGE_SIZE = 10000;
   const TABLE_SEARCH_DEBOUNCE_MS = 250;
@@ -2826,6 +2827,126 @@ export function createLineBarTool({
     return [header, ...body].join("\n");
   }
 
+  function visibleLineBarCopyContextItems(options = {}) {
+    const includeMessage = Boolean(options.includeMessage);
+    const ids = includeMessage
+      ? ["lineBarGroupMeta", "lineBarFilter", "chartMessage"]
+      : ["lineBarGroupMeta", "lineBarFilter"];
+    return ids.map((id) => {
+      const node = el(id);
+      const text = String(node?.textContent || "").trim();
+      if (!node || !text || node.classList.contains("hidden")) return null;
+      const style = window.getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") return null;
+      return { text, color: style.color || getCss("--muted") || "#64748b" };
+    }).filter(Boolean);
+  }
+
+  function visibleLineBarCopyContextText(options = {}) {
+    return visibleLineBarCopyContextItems(options).map((item) => item.text).join("\n");
+  }
+
+  async function copyVisibleLineBarView() {
+    if (state.view === "table") {
+      await copyVisibleLineBarTable();
+      return;
+    }
+    await copyVisibleLineBarChart();
+  }
+
+  async function copyVisibleLineBarTable() {
+    const csv = lineBarRowsToCsv(lineBarTableCopyRows, { includeFooter: true });
+    const context = visibleLineBarCopyContextText();
+    const text = [context, csv].filter(Boolean).join("\n\n");
+    const copied = text ? await copyTextToClipboard(text) : false;
+    showClipboardToast(copied ? "Table copied" : "Could not copy table", !copied);
+  }
+
+  async function copyVisibleLineBarChart() {
+    if (!navigator.clipboard?.write || typeof window.ClipboardItem !== "function") {
+      showClipboardToast("Could not copy chart image", true);
+      return;
+    }
+    try {
+      const dataUrl = chart.getDataURL({
+        type: "png",
+        pixelRatio: 2,
+        backgroundColor: getCss("--panel") || "#fff",
+      });
+      const blobPromise = lineBarChartClipboardBlob(dataUrl);
+      await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blobPromise })]);
+      showClipboardToast("Chart image copied");
+    } catch (_) {
+      showClipboardToast("Could not copy chart image", true);
+    }
+  }
+
+  async function lineBarChartClipboardBlob(dataUrl) {
+    const image = await loadLineBarCopyImage(dataUrl);
+    const chartNode = el("chart");
+    const scale = Math.max(1, image.naturalWidth / Math.max(1, chartNode?.clientWidth || image.naturalWidth));
+    const contextItems = visibleLineBarCopyContextItems({ includeMessage: true });
+    const canvas = document.createElement("canvas");
+    const drawContext = canvas.getContext("2d");
+    if (!drawContext) throw new Error("Canvas is unavailable");
+    const padding = Math.round(12 * scale);
+    const fontSize = Math.round(10 * scale);
+    const lineHeight = Math.round(15 * scale);
+    drawContext.font = `${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    const maxTextWidth = Math.max(1, image.naturalWidth - padding * 2);
+    const textLines = contextItems.flatMap((item) => (
+      wrapLineBarCanvasText(drawContext, item.text, maxTextWidth).map((text) => ({ text, color: item.color }))
+    ));
+    const headerHeight = textLines.length ? padding * 2 + textLines.length * lineHeight : 0;
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight + headerHeight;
+    drawContext.fillStyle = getCss("--panel") || "#fff";
+    drawContext.fillRect(0, 0, canvas.width, canvas.height);
+    if (textLines.length) {
+      drawContext.font = `${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      drawContext.textAlign = "right";
+      drawContext.textBaseline = "top";
+      textLines.forEach((line, index) => {
+        drawContext.fillStyle = line.color || getCss("--muted") || "#64748b";
+        drawContext.fillText(line.text, canvas.width - padding, padding + index * lineHeight);
+      });
+    }
+    drawContext.drawImage(image, 0, headerHeight);
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("PNG export failed"));
+      }, "image/png");
+    });
+  }
+
+  function loadLineBarCopyImage(src) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Chart image export failed"));
+      image.src = src;
+    });
+  }
+
+  function wrapLineBarCanvasText(context, text, maxWidth) {
+    const words = String(text || "").split(/\s+/).filter(Boolean);
+    if (!words.length) return [];
+    const lines = [];
+    let line = "";
+    words.forEach((word) => {
+      const nextLine = line ? `${line} ${word}` : word;
+      if (line && context.measureText(nextLine).width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = nextLine;
+      }
+    });
+    if (line) lines.push(line);
+    return lines;
+  }
+
   function selectedLineBarTableRowsForCopy() {
     if (!lineBarTable) return [];
     let selectedRows = [];
@@ -3269,6 +3390,8 @@ export function createLineBarTool({
     bindLineBarPickerKeyboard("featureSearch", "featureList");
     el("expectedSearchClear").addEventListener("click", () => clearSearchInput("expectedSearch", renderExpectedNumerators));
     el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));
+    el("lineBarExpandBtn")?.addEventListener("click", toggleLineBarFocusMode);
+    el("lineBarCopyBtn")?.addEventListener("click", copyVisibleLineBarView);
     el("chartTab").addEventListener("click", () => setView("chart"));
     el("tableTab").addEventListener("click", () => setView("table"));
     bindFavouriteControls();

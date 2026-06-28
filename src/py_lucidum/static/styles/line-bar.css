@@ -14,6 +14,16 @@
         grid-template-columns: minmax(0, 1fr);
       }
 
+      body.line-bar-focus-mode #lineBarToolbar,
+      body.line-bar-focus-mode #chartSideControls,
+      body.line-bar-focus-mode #chartControlsResizer {
+        display: none !important;
+      }
+
+      body.line-bar-focus-mode .visual-area {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       .visual-area.profile-mode {
         grid-template-columns: minmax(0, 1fr);
       }
@@ -394,6 +404,65 @@
       .visual-area .workspace {
         height: 100%;
         min-width: 0;
+      }
+
+      .line-bar-icon-tab {
+        align-items: center;
+        display: inline-grid;
+        height: 24px;
+        justify-content: center;
+        min-width: 28px;
+        padding: 0;
+        width: 28px;
+      }
+
+      .line-bar-tab-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
+      }
+
+      .line-bar-focus-icon-exit {
+        display: none;
+      }
+
+      body.line-bar-focus-mode #lineBarTabs {
+        left: 10px;
+        top: 10px;
+        z-index: 8;
+      }
+
+      body.line-bar-focus-mode #lineBarCopyBtn {
+        order: 2;
+      }
+
+      body.line-bar-focus-mode #lineBarExpandBtn {
+        order: 1;
+      }
+
+      body.line-bar-focus-mode #chartTab {
+        order: 3;
+      }
+
+      body.line-bar-focus-mode #tableTab {
+        order: 4;
+      }
+
+      body.line-bar-focus-mode #lineBarExpandBtn .line-bar-focus-icon-enter {
+        display: none;
+      }
+
+      body.line-bar-focus-mode #lineBarExpandBtn .line-bar-focus-icon-exit {
+        display: block;
+      }
+
+      body.line-bar-focus-mode #tableWrap {
+        padding-top: 42px;
       }
 
       #chart {

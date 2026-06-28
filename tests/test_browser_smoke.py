@@ -1190,9 +1190,19 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.add_init_script(
                         """
                         window.__lucidumCopiedText = null;
+                        window.__lucidumCopiedImage = null;
                         Object.defineProperty(navigator, "clipboard", {
                             configurable: true,
                             value: {
+                                write: async (items) => {
+                                    const item = items?.[0];
+                                    const blob = item ? await item.getType("image/png") : null;
+                                    window.__lucidumCopiedImage = {
+                                        types: item ? Array.from(item.types || []) : [],
+                                        type: blob?.type || "",
+                                        size: blob?.size || 0,
+                                    };
+                                },
                                 writeText: async (text) => {
                                     window.__lucidumCopiedText = text;
                                 },
@@ -1266,6 +1276,142 @@ class BrowserSmokeTests(unittest.TestCase):
                         () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("2 groups")
                         """
                     )
+                    initial_focus_state = page.evaluate(
+                        """
+                        () => {
+                          const rootStyle = getComputedStyle(document.documentElement);
+                          const displayFor = (selector) => getComputedStyle(document.querySelector(selector)).display;
+                          const chartRect = document.querySelector("#chart").getBoundingClientRect();
+                          return {
+                            sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
+                            chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
+                            sidebarExpanded: document.querySelector("#sidebarToggleBtn").getAttribute("aria-expanded"),
+                            chartWidth: chartRect.width,
+                            toolbarDisplay: displayFor("#lineBarToolbar"),
+                            controlsDisplay: displayFor("#chartSideControls"),
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(initial_focus_state["sidebarExpanded"], "true")
+                    self.assertNotEqual(initial_focus_state["toolbarDisplay"], "none")
+                    self.assertNotEqual(initial_focus_state["controlsDisplay"], "none")
+                    page.locator("#lineBarCopyBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => window.__lucidumCopiedImage
+                          && window.__lucidumCopiedImage.types.includes("image/png")
+                          && window.__lucidumCopiedImage.type === "image/png"
+                          && window.__lucidumCopiedImage.size > 0
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarExpandBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.body.classList.contains("line-bar-focus-mode")
+                          && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display === "none"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display === "none"
+                          && getComputedStyle(document.querySelector("#chartControlsResizer")).display === "none"
+                          && getComputedStyle(document.querySelector("#chartTab")).display !== "none"
+                          && getComputedStyle(document.querySelector("#tableTab")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarCopyBtn")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarExpandBtn")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    focused_state = page.evaluate(
+                        """
+                        () => {
+                          const rootStyle = getComputedStyle(document.documentElement);
+                          const chartRect = document.querySelector("#chart").getBoundingClientRect();
+                          return {
+                            sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
+                            chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
+                            chartWidth: chartRect.width,
+                            expandPressed: document.querySelector("#lineBarExpandBtn").getAttribute("aria-pressed"),
+                            expandActive: document.querySelector("#lineBarExpandBtn").classList.contains("active"),
+                            enterIconDisplay: getComputedStyle(document.querySelector(".line-bar-focus-icon-enter")).display,
+                            exitIconDisplay: getComputedStyle(document.querySelector(".line-bar-focus-icon-exit")).display,
+                            expandRight: document.querySelector("#lineBarExpandBtn").getBoundingClientRect().right,
+                            copyLeft: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().left,
+                            copyRight: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().right,
+                            chartLeft: document.querySelector("#chartTab").getBoundingClientRect().left,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(focused_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
+                    self.assertEqual(focused_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
+                    self.assertEqual(focused_state["expandPressed"], "true")
+                    self.assertFalse(focused_state["expandActive"])
+                    self.assertEqual(focused_state["enterIconDisplay"], "none")
+                    self.assertNotEqual(focused_state["exitIconDisplay"], "none")
+                    self.assertLessEqual(focused_state["expandRight"], focused_state["copyLeft"])
+                    self.assertLessEqual(focused_state["copyRight"], focused_state["chartLeft"])
+                    self.assertGreater(focused_state["chartWidth"], initial_focus_state["chartWidth"] + 100)
+                    page.locator("#lineBarExpandBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => !document.body.classList.contains("line-bar-focus-mode")
+                          && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                          && getComputedStyle(document.querySelector("#chartTab")).display !== "none"
+                          && getComputedStyle(document.querySelector("#tableTab")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarCopyBtn")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    restored_focus_state = page.evaluate(
+                        """
+                        () => {
+                          const rootStyle = getComputedStyle(document.documentElement);
+                          const chartRect = document.querySelector("#chart").getBoundingClientRect();
+                          return {
+                            sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
+                            chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
+                            chartWidth: chartRect.width,
+                            expandPressed: document.querySelector("#lineBarExpandBtn").getAttribute("aria-pressed"),
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(restored_focus_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
+                    self.assertEqual(restored_focus_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
+                    self.assertEqual(restored_focus_state["expandPressed"], "false")
+                    self.assertLess(restored_focus_state["chartWidth"], focused_state["chartWidth"] - 100)
+                    page.locator("#sidebarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarExpandBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.body.classList.contains("line-bar-focus-mode")
+                          && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarExpandBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => !document.body.classList.contains("line-bar-focus-mode")
+                          && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#sidebarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                        """,
+                        timeout=10_000,
+                    )
                     chart_requests_before_search = chart_requests
                     page.locator("#tableTab").click()
                     page.locator("#tableWrap:not(.hidden) #lineBarTableSearch").wait_for(timeout=10_000)
@@ -1280,6 +1426,38 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
+                    page.locator("#lineBarExpandBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.body.classList.contains("line-bar-focus-mode")
+                          && getComputedStyle(document.querySelector("#chartTab")).display !== "none"
+                          && getComputedStyle(document.querySelector("#tableTab")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarCopyBtn")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarExpandBtn")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    focused_table_spacing = page.evaluate(
+                        """
+                        () => {
+                          const tabs = document.querySelector("#lineBarTabs").getBoundingClientRect();
+                          const grid = document.querySelector("#lineBarTableGrid").getBoundingClientRect();
+                          return {
+                            tabsBottom: tabs.bottom,
+                            gridTop: grid.top,
+                            paddingTop: getComputedStyle(document.querySelector("#tableWrap")).paddingTop,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(focused_table_spacing["paddingTop"], "42px")
+                    self.assertGreaterEqual(focused_table_spacing["gridTop"], focused_table_spacing["tabsBottom"])
+                    page.locator("#chartTab").click()
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#tableTab").click()
+                    page.locator("#tableWrap:not(.hidden) #lineBarTableGrid").wait_for(timeout=10_000)
+                    page.locator("#lineBarExpandBtn").click()
+                    page.wait_for_function("() => !document.body.classList.contains('line-bar-focus-mode')", timeout=10_000)
                     chart_requests_before_sort = chart_requests
                     table_requests_before_sort = table_requests
                     page.locator('.segmented[data-control="sort"] button[data-value="actual"]').click()
@@ -1465,6 +1643,20 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.wait_for_function(
                         "(expected) => window.__lucidumCopiedText === expected",
                         arg=full_table_csv,
+                        timeout=10_000,
+                    )
+                    table_copy_context = page.evaluate(
+                        """
+                        () => [
+                          document.querySelector("#lineBarGroupMeta")?.textContent.trim() || "",
+                          document.querySelector("#lineBarFilter")?.textContent.trim() || "",
+                        ].filter(Boolean).join("\\n")
+                        """
+                    )
+                    page.locator("#lineBarCopyBtn").click()
+                    page.wait_for_function(
+                        "(expected) => window.__lucidumCopiedText === expected",
+                        arg=f"{table_copy_context}\n\n{full_table_csv}",
                         timeout=10_000,
                     )
 
