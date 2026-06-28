@@ -288,6 +288,9 @@ syncLineBarXFallback();
 if (state.x !== "Segment" || state.xSource !== "dataset") {
   throw new Error(`expected any-source feature preservation, got ${state.x} from ${state.xSource}`);
 }
+if (state.source !== "dataset") {
+  throw new Error(`expected dataset source reset, got ${state.source}`);
+}
 
 state.source = "dataset";
 state.x = "Missing";
@@ -406,9 +409,138 @@ if (sourceColumns(schema, "dataset").length !== 1) throw new Error("sourceColumn
 if (!toolEnabled(schema, "line_bar")) throw new Error("toolEnabled failed");
 if (!isModelTool("gbm") || !isModelTool("glm") || isModelTool("line_bar")) throw new Error("isModelTool failed");
 if (!isModelPredictionColumn({{ name: "gbm_prediction" }}) || !isModelPredictionColumn({{ name: "gbm_prediction_rate" }}) || !isModelPredictionColumn({{ name: "gbm_tabulated_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction" }}) || !isModelPredictionColumn({{ name: "glm_prediction_rate" }}) || !isModelPredictionColumn({{ name: "glm_tabulated_prediction" }})) throw new Error("isModelPredictionColumn failed");
-if (preferredStartupSource(schema.data_sources, "missing") !== "gbm:one:predictions") throw new Error("preferredStartupSource failed");
+if (preferredStartupSource(schema.data_sources, "gbm:one:predictions") !== "gbm:one:predictions") throw new Error("preferredStartupSource explicit source failed");
+if (preferredStartupSource(schema.data_sources, "missing") !== "dataset") throw new Error("preferredStartupSource should fall back to dataset");
 schema.data_sources[1].active = false;
-if (preferredStartupSource(schema.data_sources, "missing") !== "glm:one:predictions") throw new Error("preferredStartupSource GLM fallback failed");
+if (preferredStartupSource(schema.data_sources, "") !== "dataset") throw new Error("preferredStartupSource should ignore active models by default");
+"""
+        self.run_node_script(script)
+
+    def test_line_bar_feature_columns_keep_dataset_fields_on_dataset_source(self) -> None:
+        js = self.assert_no_store("/static/app/main.js")[1].decode("utf-8")
+        helper = self.js_function_source(js, "lineBarFeatureColumns")
+        script = helper + """
+const LINE_BAR_RATIO_COLUMN = "gbm_to_glm_ratio";
+const state = { source: "gbm:model:predictions" };
+function currentDataSource() { return { kind: "gbm_predictions" }; }
+function dataSourceColumns(sourceId) {
+  if (sourceId !== "dataset") throw new Error(`unexpected dataset source ${sourceId}`);
+  return [
+    { name: "PostcodeArea", kind: "categorical" },
+    { name: "PostcodeSector", kind: "categorical" },
+    { name: "Actual", kind: "numeric" },
+  ];
+}
+function sourceColumns() {
+  return [
+    { name: "PostcodeArea", kind: "categorical" },
+    { name: "Actual", kind: "numeric" },
+    { name: "gbm_prediction", kind: "numeric" },
+  ];
+}
+function isModelPredictionColumn(column) {
+  return ["gbm_prediction", "glm_prediction"].includes(String(column?.name || ""));
+}
+function isGbmShapValueColumn(column) { return column?.source_role === "gbm_shap_value"; }
+function activeModelRatioColumns() { return []; }
+function activePredictionColumns() {
+  return [{ name: "gbm_prediction", kind: "numeric", source_id: "gbm:model:predictions" }];
+}
+const columns = lineBarFeatureColumns();
+const postcodeArea = columns.find((column) => column.name === "PostcodeArea");
+if (!postcodeArea || postcodeArea.source_id !== "dataset") {
+  throw new Error(`expected PostcodeArea to stay on dataset, got ${postcodeArea?.source_id}`);
+}
+if (columns.some((column) => column.name === "PostcodeArea" && column.source_id === "gbm:model:predictions")) {
+  throw new Error("raw dataset feature leaked onto model source");
+}
+const prediction = columns.find((column) => column.name === "gbm_prediction");
+if (!prediction || prediction.source_id !== "gbm:model:predictions") {
+  throw new Error("model prediction column lost its model source");
+}
+"""
+        self.run_node_script(script)
+
+    def test_line_bar_actual_prediction_does_not_switch_global_source(self) -> None:
+        js = self.assert_no_store("/static/app/main.js")[1].decode("utf-8")
+        helper = "\n".join(
+            [
+                self.js_function_source(js, "actualSelectionSourceId"),
+                self.js_function_source(js, "syncActualSourceFromSelection"),
+            ]
+        )
+        script = helper + """
+const state = { source: "dataset" };
+let invalidated = false;
+let selectedOption = { dataset: { sourceId: "gbm:model:predictions", metricKind: "prediction" } };
+function el(id) {
+  if (id !== "actualNumerator") throw new Error(id);
+  return { selectedOptions: [selectedOption] };
+}
+function invalidateLineBarDateBucketSuggestion() { invalidated = true; }
+if (syncActualSourceFromSelection()) throw new Error("prediction actual should not switch global source");
+if (state.source !== "dataset" || invalidated) throw new Error("prediction actual mutated source state");
+
+selectedOption = { dataset: { sourceId: "gbm:model:shap_long", metricKind: "shap" } };
+if (!syncActualSourceFromSelection()) throw new Error("SHAP actual should switch to SHAP source");
+if (state.source !== "gbm:model:shap_long" || !invalidated) throw new Error("SHAP source switch failed");
+"""
+        self.run_node_script(script)
+
+    def test_line_bar_chart_request_keeps_dataset_base_for_prediction_response(self) -> None:
+        js = self.assert_no_store("/static/app/line-bar-tool.js")[1].decode("utf-8")
+        helper = self.js_function_source(js, "buildChartRequest")
+        script = helper + """
+const state = {
+  schema: {},
+  source: "dataset",
+  xSource: "dataset",
+  x: "PostcodeArea",
+  sort: "alpha",
+  lowGroup: "0",
+  bandWidth: "0",
+  quantileMode: "off",
+  dateBucket: "none",
+  transform: "none",
+  partialDependence: "none",
+  activeFilter: "",
+  sigma: "0",
+};
+let selected = { name: "PostcodeArea", kind: "categorical", source_id: "dataset" };
+function selectedColumn() { return selected; }
+function isNumericKind(kind) { return kind === "numeric" || kind === "integer"; }
+function isModelPredictionColumn(column) {
+  return ["gbm_prediction", "glm_prediction"].includes(String(column?.name || ""));
+}
+function currentBandFeatureKey() { return "band"; }
+function normalizeBandWidthForQuantiles() { throw new Error("unexpected quantile normalization"); }
+function requestBandSuggestionForSelectedColumn() { throw new Error("unexpected banding request"); }
+function currentDateBucketFeatureKey() { return "date"; }
+function requestDateBucketSuggestionForSelectedColumn() { throw new Error("unexpected date bucket request"); }
+function setGroupMeta() { throw new Error("unexpected pending state"); }
+function selectedPartialDependenceMode() { return "none"; }
+function selectedFeatureBase() { return ""; }
+function currentResponses() {
+  return [{ label: "gbm_prediction", numerator: "gbm_prediction", source: "gbm:model:predictions" }];
+}
+function el(id) {
+  if (id !== "denominator") throw new Error(id);
+  return { value: "__none__" };
+}
+let request = buildChartRequest();
+if (request.source !== "dataset") throw new Error(`expected dataset base source, got ${request.source}`);
+if ("xSource" in request) throw new Error(`dataset x-axis should not carry xSource: ${request.xSource}`);
+if (request.responses[0].source !== "gbm:model:predictions") throw new Error("prediction response source was not retained");
+
+selected = { name: "gbm_prediction", kind: "numeric", source_id: "gbm:model:predictions" };
+state.x = "gbm_prediction";
+state.xSource = "gbm:model:predictions";
+state.bandWidth = "1";
+state.bandFeature = "band";
+request = buildChartRequest();
+if (request.source !== "dataset" || request.xSource !== "gbm:model:predictions") {
+  throw new Error("model x-axis field should retain model xSource while keeping dataset base");
+}
 """
         self.run_node_script(script)
 
@@ -2799,7 +2931,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("function orderedLineBarSpecialColumns(columns)", js)
         self.assertIn("function lineBarSpecialColumnOrder(column)", js)
         self.assertIn("function activeModelRatioColumns()", js)
-        self.assertIn("for (const column of [...activeModelRatioColumns(), ...activePredictionColumns()])", js)
+        self.assertIn("for (const column of [...currentModelColumns, ...activeModelRatioColumns(), ...activePredictionColumns()])", js)
         self.assertIn("const ratioColumns = orderedLineBarSpecialColumns([...sourceColumns()]).filter", js)
         self.assertIn('const xSource = column && (isModelPredictionColumn(column) || sourceId !== (state.source || "dataset")) ? sourceId : "";', js)
         self.assertIn('if (state.expectedSort === "alpha") {', js)
@@ -2812,6 +2944,7 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn('scroll.className = "line-bar-scroll-region";', js)
         self.assertIn("button.dataset.sourceId = sourceId;", js)
         self.assertIn("function addLineBarFeatureButton(list, col, extraClass = \"\")", js)
+        self.assertIn('if (isRawDatasetFeature) state.source = "dataset";', js)
         self.assertIn("addLineBarFeatureButton(scroll, col);", js)
         self.assertIn("button.dataset.value = value;", js)
         self.assertIn("button.dataset.value = label;", js)
@@ -2824,8 +2957,8 @@ if (button.textContent !== "Build GLM") throw new Error(`cleared button text ${b
         self.assertIn("for (const col of specialColumns)", js)
         self.assertIn("for (const col of otherColumns)", js)
         self.assertIn("function preferredStartupSource(availableSources, requestedSource)", js)
-        self.assertIn('const activePredictionSource = availableSources.find((source) => ["glm_predictions", "gbm_predictions"].includes(source.kind) && source.active);', js)
-        self.assertIn('const predictionSource = availableSources.find((source) => ["glm_predictions", "gbm_predictions"].includes(source.kind));', js)
+        self.assertIn('const requested = String(requestedSource || "").trim();', js)
+        self.assertIn('return "dataset";', js)
         self.assertIn("state.source = preferredStartupSource(availableSources, requestedSource);", js)
         self.assertIn('source: state.source || "dataset"', js)
         self.assertIn("const previousExpectedSelections = expectedSelectionsSnapshot();", js)

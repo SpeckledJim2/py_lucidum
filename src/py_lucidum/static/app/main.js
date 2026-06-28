@@ -758,13 +758,22 @@
       function lineBarFeatureColumns() {
         const currentSource = state.source || "dataset";
         const currentKind = currentDataSource()?.kind || "";
-        const columns = sourceColumns().map((column) => ({
+        const columns = dataSourceColumns("dataset").map((column) => ({
           ...column,
-          source_id: column.source_id || currentSource,
+          source_id: "dataset",
         }));
-        if (currentKind === "gbm_shap_long") return columns;
-        const seen = new Set(columns.map((column) => `${column.source_id || currentSource}\u0000${column.name}`));
-        for (const column of [...activeModelRatioColumns(), ...activePredictionColumns()]) {
+        const currentModelColumns = sourceColumns()
+          .filter((column) => (
+            isModelPredictionColumn(column)
+            || isGbmShapValueColumn(column)
+            || (currentKind === "model_ratio" && String(column?.name || "") === LINE_BAR_RATIO_COLUMN)
+          ))
+          .map((column) => ({
+            ...column,
+            source_id: column.source_id || currentSource,
+          }));
+        const seen = new Set(columns.map((column) => `${column.source_id || "dataset"}\u0000${column.name}`));
+        for (const column of [...currentModelColumns, ...activeModelRatioColumns(), ...activePredictionColumns()]) {
           const sourceId = column.source_id || "";
           const key = `${sourceId}\u0000${column.name}`;
           if (!sourceId || seen.has(key)) continue;
@@ -812,12 +821,14 @@
           const preservedSource = lineBarFeatureSourceForName(currentFeature, currentSource)
             || lineBarFeatureSourceForName(currentFeature);
           if (preservedSource) {
+            if (preservedSource === "dataset") state.source = "dataset";
             state.x = currentFeature;
             state.xSource = preservedSource;
             return;
           }
         }
         const first = lineBarFeatureColumns()[0] || null;
+        if (first && lineBarColumnSourceId(first) === "dataset") state.source = "dataset";
         state.x = first?.name || null;
         state.xSource = first ? lineBarColumnSourceId(first) : "";
       }
@@ -945,8 +956,9 @@
       function metricSummaryRequest() {
         const actual = el("actualNumerator")?.value || "";
         if (!state.schema || !actual) return null;
+        const actualOption = el("actualNumerator")?.selectedOptions?.[0] || null;
         return {
-          source: state.source || "dataset",
+          source: actualOption?.dataset.sourceId || state.source || "dataset",
           actual,
           denominator: el("denominator")?.value || "__none__",
           filter: state.activeFilter || "",
@@ -1772,11 +1784,11 @@
 
       function expectedColumns() {
         const predictionColumns = expectedPredictionColumns();
-        const currentSourceColumns = numericColumns()
+        const currentSourceColumns = numericColumnsForSource("dataset")
           .filter((column) => column.source_role !== "gbm_shap_value" && !isModelPredictionColumn(column))
           .map((column) => ({
             ...column,
-            source_id: state.source || "dataset",
+            source_id: "dataset",
           }));
         return [...predictionColumns, ...currentSourceColumns];
       }
@@ -2032,6 +2044,8 @@
       }
 
       function syncActualSourceFromSelection() {
+        const option = el("actualNumerator").selectedOptions[0];
+        if (option?.dataset.metricKind === "prediction") return false;
         const targetSource = actualSelectionSourceId();
         if (!targetSource || targetSource === state.source) return false;
         state.source = targetSource;

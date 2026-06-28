@@ -4812,10 +4812,11 @@ COPY (
                 )
 
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as segment_feature_info:
-                    page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Segment").click()
+                    page.locator('#featureList .feature[data-source-id="dataset"]', has_text="Segment").click()
                 segment_feature_body = json.loads(segment_feature_info.value.post_data or "{}")
-                self.assertEqual(segment_feature_body["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(segment_feature_body["source"], "dataset")
                 self.assertEqual(segment_feature_body["x"], "Segment")
+                self.assertNotIn("xSource", segment_feature_body)
                 self.assertEqual(segment_feature_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
                 self.assertEqual(segment_feature_body["responses"][2]["source"], "gbm:browser-smoke-model-2:predictions")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
@@ -4825,8 +4826,9 @@ COPY (
                     page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm-2"]').click()
                 glm_to_glm_body = json.loads(glm_to_glm_info.value.post_data or "{}")
                 page.locator("#glmModelSelectedMeta", has_text="Second smoke GLM").wait_for(timeout=10_000)
-                self.assertEqual(glm_to_glm_body["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(glm_to_glm_body["source"], "dataset")
                 self.assertEqual(glm_to_glm_body["x"], "Segment")
+                self.assertNotIn("xSource", glm_to_glm_body)
                 self.assertEqual(glm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(glm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(glm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
@@ -4839,8 +4841,9 @@ COPY (
                     page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model"]').click()
                 glm_to_gbm_body = json.loads(glm_to_gbm_info.value.post_data or "{}")
                 page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
-                self.assertEqual(glm_to_gbm_body["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(glm_to_gbm_body["source"], "dataset")
                 self.assertEqual(glm_to_gbm_body["x"], "Segment")
+                self.assertNotIn("xSource", glm_to_gbm_body)
                 self.assertEqual(glm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(glm_to_gbm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(glm_to_gbm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
@@ -4853,8 +4856,9 @@ COPY (
                     page.locator('#gbmModelSelect [data-gbm-model-id="browser-smoke-model-2"]').click()
                 gbm_to_gbm_body = json.loads(gbm_to_gbm_info.value.post_data or "{}")
                 page.locator("#gbmModelSelectedMeta", has_text="Second smoke model").wait_for(timeout=10_000)
-                self.assertEqual(gbm_to_gbm_body["source"], "glm:browser-smoke-glm-2:predictions")
+                self.assertEqual(gbm_to_gbm_body["source"], "dataset")
                 self.assertEqual(gbm_to_gbm_body["x"], "Segment")
+                self.assertNotIn("xSource", gbm_to_gbm_body)
                 self.assertEqual(gbm_to_gbm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_to_gbm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(gbm_to_gbm_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
@@ -4867,8 +4871,9 @@ COPY (
                     page.locator('#glmModelSelect [data-glm-model-id="browser-smoke-glm"]').click()
                 gbm_to_glm_body = json.loads(gbm_to_glm_info.value.post_data or "{}")
                 page.locator("#glmModelSelectedMeta", has_text="Browser smoke GLM").wait_for(timeout=10_000)
-                self.assertEqual(gbm_to_glm_body["source"], "glm:browser-smoke-glm:predictions")
+                self.assertEqual(gbm_to_glm_body["source"], "dataset")
                 self.assertEqual(gbm_to_glm_body["x"], "Segment")
+                self.assertNotIn("xSource", gbm_to_glm_body)
                 self.assertEqual(gbm_to_glm_body["responses"][0]["numerator"], "actualNumerator")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(gbm_to_glm_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
@@ -4876,7 +4881,7 @@ COPY (
                 self.assertEqual(gbm_to_glm_body["responses"][2]["source"], "gbm:browser-smoke-model-2:predictions")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
-                page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Age").click()
+                page.locator('#featureList .feature[data-source-id="dataset"]', has_text="Age").click()
                 page.wait_for_function(
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                     timeout=10_000,
@@ -4937,7 +4942,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Segment").click()
+                page.locator('#featureList .feature[data-source-id="dataset"]', has_text="Segment").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -4952,7 +4957,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator('#featureList .feature[data-source-id="glm:browser-smoke-glm:predictions"]', has_text="Age").click()
+                page.locator('#featureList .feature[data-source-id="dataset"]', has_text="Age").click()
                 page.wait_for_function(
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                     timeout=10_000,

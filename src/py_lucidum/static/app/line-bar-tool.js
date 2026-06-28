@@ -702,6 +702,7 @@ export function createLineBarTool({
   function addLineBarFeatureButton(list, col, extraClass = "") {
     const sourceId = col.source_id || state.source || "dataset";
     const active = col.name === state.x && (!state.xSource || state.xSource === sourceId);
+    const isRawDatasetFeature = sourceId === "dataset" && !isModelPredictionColumn(col) && !isGbmGlmRatioColumn(col);
     addFeatureButton(list, {
       label: col.name,
       detail: col.kind,
@@ -711,6 +712,7 @@ export function createLineBarTool({
       onClick: () => {
         const previousDateBucketKey = currentDateBucketFeatureKey();
         const changed = state.x !== col.name || state.xSource !== sourceId;
+        if (isRawDatasetFeature) state.source = "dataset";
         state.x = col.name;
         state.xSource = sourceId;
         resetDateBucketSuggestionIfKeyChanged(previousDateBucketKey);
