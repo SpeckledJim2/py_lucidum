@@ -4356,7 +4356,7 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         shared_controls = [
             "<h3>Group low weights</h3>",
             "<h3>Labels</h3>",
-            "<h3>Partial dependancies</h3>",
+            "<h3>Partial dependence</h3>",
             "<h3>Response transform</h3>",
             "<h3>Sigma bars</h3>",
         ]
@@ -4388,15 +4388,15 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         html = html_body.decode("utf-8")
         js = self.app_js_contract()
 
-        self.assertIn("<h3>Partial dependancies</h3>", html)
+        self.assertIn("<h3>Partial dependence</h3>", html)
         self.assertIn('<div class="segmented" data-control="partialDependence">', html)
         self.assertIn('<button data-value="none" class="active">None</button>', html)
         self.assertIn('<button data-value="shap">SHAP</button>', html)
         self.assertIn('<button data-value="glm">GLM</button>', html)
         self.assertIn('<button data-value="both">Both</button>', html)
         self.assertIn('id="shapSortButton" data-value="shap" class="hidden"', html)
-        self.assertLess(html.index("<h3>Labels</h3>"), html.index("<h3>Partial dependancies</h3>"))
-        self.assertLess(html.index("<h3>Partial dependancies</h3>"), html.index('id="bandControl"'))
+        self.assertLess(html.index("<h3>Labels</h3>"), html.index("<h3>Partial dependence</h3>"))
+        self.assertLess(html.index("<h3>Partial dependence</h3>"), html.index('id="bandControl"'))
         self.assertIn('partialDependence: "none"', js)
         self.assertIn('function selectedPartialDependenceMode()', js)
         self.assertIn('function shapPartialDependenceVisible()', js)
