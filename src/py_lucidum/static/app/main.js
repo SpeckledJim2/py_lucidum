@@ -658,7 +658,6 @@
         el("lineBarFilter").classList.toggle("line-bar-filter--applied", applied);
         el("histogramFilter").classList.toggle("histogram-filter--applied", applied);
         el("mapControlFilter").classList.toggle("map-filter--applied", applied);
-        el("collapsedFilterIndicator").hidden = !applied;
       }
 
       function setFilterRowMeta(rowCount, filteredRowCount = rowCount) {
@@ -1215,10 +1214,13 @@
 
       function renderSidebarVersion() {
         const target = el("sidebarVersion");
-        if (!target) return;
+        const collapsedTarget = el("collapsedSidebarVersion");
+        if (!target || !collapsedTarget) return;
         const version = String(state.schema?.app_version || "").trim();
         target.textContent = version ? `lucidum v${version}` : "";
+        collapsedTarget.textContent = version ? `v${version}` : "";
         target.hidden = !version;
+        collapsedTarget.hidden = !version;
       }
 
       function renderDatasetPostcodeMeta(target) {

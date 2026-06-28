@@ -277,22 +277,18 @@
         display: none;
       }
 
-      .collapsed-filter-indicator {
+      .collapsed-sidebar-version {
         display: none;
         margin-top: auto;
-        color: var(--danger);
-        font-size: 8px;
-        font-weight: 700;
-        line-height: 1;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.1;
         text-align: center;
         letter-spacing: 0;
+        white-space: nowrap;
       }
 
-      body.sidebar-collapsed .collapsed-filter-indicator:not([hidden]) {
-        display: block;
-      }
-
-      .collapsed-filter-indicator span {
+      body.sidebar-collapsed .collapsed-sidebar-version:not([hidden]) {
         display: block;
       }
 

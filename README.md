@@ -94,6 +94,8 @@ Launch the bundled synthetic demo dataset:
 
 Open the printed URL in your browser. Stop the server with `Ctrl+C` in the terminal. Pass `--buttons` when you want the browser header to show `Stop app` and `Open monitor` buttons.
 
+The sidebar footer shows the installed Lucidum package version as `lucidum v<version>` when expanded and `v<version>` when collapsed. Both labels are populated from the running app's schema metadata.
+
 Run your own data:
 
 ```bash

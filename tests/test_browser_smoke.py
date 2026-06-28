@@ -6636,8 +6636,8 @@ COPY (
                 )
                 assert_filter_label_badge("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
                 self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
-                self.assertTrue(page.locator("#collapsedFilterIndicator").evaluate("node => node.hidden"))
-                self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
+                self.assertEqual(page.locator("#collapsedSidebarVersion").inner_text().strip(), f"v{__version__}")
+                self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
                 dataset_requests_before_filter = dataset_viewer_requests
                 page.evaluate(
                     """
@@ -6668,30 +6668,30 @@ COPY (
                 )
                 assert_filter_label_badge("#datasetViewerFilter", "dataset-viewer-filter--applied", True)
                 assert_filter_label_badge("#filterRowMeta", "filter-row-meta--applied", True)
-                self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
+                self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function(
                     """
-                    () => {
+                    (expectedText) => {
                       if (document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") !== "false") return false;
-                      const marker = document.querySelector("#collapsedFilterIndicator");
-                      const markerText = [...marker?.querySelectorAll("span") || []].map((node) => node.textContent.trim()).join(" ");
-                      if (!marker || marker.hidden || markerText !== "FILTER ACTIVE" || marker.offsetParent === null) return false;
+                      const marker = document.querySelector("#collapsedSidebarVersion");
+                      if (!marker || marker.hidden || marker.textContent.trim() !== expectedText || marker.offsetParent === null) return false;
                       const probe = document.createElement("span");
-                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--danger").trim();
+                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--muted").trim();
                       document.body.append(probe);
-                      const danger = getComputedStyle(probe).color;
+                      const muted = getComputedStyle(probe).color;
                       probe.remove();
-                      return getComputedStyle(marker).color === danger;
+                      return getComputedStyle(marker).color === muted;
                     }
                     """,
+                    arg=f"v{__version__}",
                     timeout=10_000,
                 )
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
-                      && document.querySelector("#collapsedFilterIndicator")?.offsetParent === null
+                      && document.querySelector("#collapsedSidebarVersion")?.offsetParent === null
                     """,
                     timeout=10_000,
                 )
@@ -6797,8 +6797,7 @@ COPY (
                 assert_filter_label_badge("#lineBarFilter", "line-bar-filter--applied", False)
                 assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", False)
                 assert_filter_label_badge("#mapControlFilter", "map-filter--applied", False)
-                self.assertTrue(page.locator("#collapsedFilterIndicator").evaluate("node => node.hidden"))
-                self.assertFalse(page.locator("#collapsedFilterIndicator").is_visible())
+                self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_clear)
                 normal_resize = resize_tabulator_column('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]')
                 self.assertAlmostEqual(normal_resize["before"], 150, delta=4)
@@ -7467,6 +7466,8 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertEqual(page.locator("#sidebarVersion").inner_text().strip(), f"lucidum v{__version__}")
+                self.assertEqual(page.locator("#collapsedSidebarVersion").inner_text().strip(), f"v{__version__}")
+                self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
                 self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))
@@ -7479,6 +7480,8 @@ COPY (
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#sidebarVersion").is_visible())
+                self.assertTrue(page.locator("#collapsedSidebarVersion").is_visible())
+                self.assertEqual(page.locator("#collapsedSidebarVersion").inner_text().strip(), f"v{__version__}")
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
 
                 page.locator("#reloadBtn").click()
@@ -7492,6 +7495,8 @@ COPY (
                 self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#sidebarVersion").is_visible())
+                self.assertTrue(page.locator("#collapsedSidebarVersion").is_visible())
+                self.assertEqual(page.locator("#collapsedSidebarVersion").inner_text().strip(), f"v{__version__}")
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
 
                 page.locator('.dataset-meta-uk-map-link[data-map-level="area"]').click()
