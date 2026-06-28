@@ -1149,6 +1149,130 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_focus_chart_stays_inside_viewport_with_long_header(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / (
+                "line_bar_zoom_overflow_regression_dataset_with_a_long_unbroken_name_for_header_truncation.csv"
+            )
+            columns = ["PostcodeArea", "PostcodeSector", "PostcodeUnit", "vehicle_age", "price", "value"]
+            columns.extend(f"feature_{index:03d}" for index in range(1, 31))
+            rows = [",".join(columns)]
+            for row_index in range(1, 8):
+                values = [
+                    "AB",
+                    "AB10 1",
+                    "AB10 1AA",
+                    str(row_index),
+                    str(100 + row_index * 12),
+                    str(10 + row_index),
+                ]
+                values.extend(str((row_index * column_index) % 97) for column_index in range(1, 31))
+                rows.append(",".join(values))
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "vehicle_age",
+                    "actual": "price",
+                    "denominator": "value",
+                },
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 760, "height": 720})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("line_bar_zoom_overflow_regression_dataset").wait_for(
+                        timeout=10_000
+                    )
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const chartNode = document.querySelector("#chart");
+                          const chart = window.echarts?.getInstanceByDom(chartNode);
+                          return Boolean(chart && chart.getWidth() > 0 && chartNode.querySelector("canvas"));
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#sidebarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarExpandBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.body.classList.contains("line-bar-focus-mode")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_timeout(250)
+                    layout = page.evaluate(
+                        """
+                        () => {
+                          const rectFor = (selector) => {
+                            const node = document.querySelector(selector);
+                            if (!node) return null;
+                            const rect = node.getBoundingClientRect();
+                            return {
+                              left: rect.left,
+                              right: rect.right,
+                              width: rect.width,
+                              clientWidth: node.clientWidth,
+                              scrollWidth: node.scrollWidth,
+                            };
+                          };
+                          const canvas = document.querySelector("#chart canvas");
+                          const canvasRect = canvas?.getBoundingClientRect();
+                          const chartNode = document.querySelector("#chart");
+                          const chart = window.echarts?.getInstanceByDom(chartNode);
+                          return {
+                            innerWidth: window.innerWidth,
+                            app: rectFor(".app"),
+                            meta: rectFor("#datasetMeta"),
+                            rects: {
+                              header: rectFor("header"),
+                              shell: rectFor(".shell"),
+                              visualArea: rectFor("#visualArea"),
+                              workspace: rectFor(".workspace"),
+                              chart: rectFor("#chart"),
+                            },
+                            canvas: canvasRect ? {
+                              left: canvasRect.left,
+                              right: canvasRect.right,
+                              width: canvasRect.width,
+                            } : null,
+                            chartWidth: chart?.getWidth?.() || 0,
+                          };
+                        }
+                        """
+                    )
+                    self.assertIsNotNone(layout["app"])
+                    self.assertIsNotNone(layout["meta"])
+                    self.assertIsNotNone(layout["canvas"])
+                    self.assertGreater(layout["chartWidth"], 0)
+                    self.assertGreater(layout["meta"]["scrollWidth"], layout["meta"]["clientWidth"])
+                    self.assertLessEqual(layout["app"]["scrollWidth"], layout["innerWidth"] + 1)
+                    for selector, rect in layout["rects"].items():
+                        self.assertIsNotNone(rect, selector)
+                        self.assertGreaterEqual(rect["left"], -1, selector)
+                        self.assertLessEqual(rect["right"], layout["innerWidth"] + 1, selector)
+                    self.assertLessEqual(layout["canvas"]["right"], layout["innerWidth"] + 1)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_table_search_filters_complete_table_client_side(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "line_bar_table.csv"
