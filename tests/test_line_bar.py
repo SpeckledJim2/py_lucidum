@@ -1271,6 +1271,137 @@ COPY (
         self.assertAlmostEqual(rows["2"]["resp0"], 100.0)
         self.assertAlmostEqual(rows["4"]["resp0"], 400.0)
 
+    def test_gbm_to_glm_ratio_banding_uses_mixed_relation_for_dataset_filters(self) -> None:
+        self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 500.0])
+        self.write_simple_glm_prediction_model([10.0, 10.0, 10.0, 100.0])
+        app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        status, _, body = asgi_get(app, "/api/schema")
+        schema = json.loads(body)
+        ratio_source = next(source for source in schema["data_sources"] if source.get("kind") == RATIO_KIND)
+        ratio_source_id = ratio_source["id"]
+        gbm_source_id = "gbm:ratio-gbm:predictions"
+        glm_source_id = "glm:ratio-glm:predictions"
+
+        band_status, _, band_body = asgi_post_json(
+            app,
+            "/api/banding/suggestion",
+            {
+                "source": glm_source_id,
+                "xSource": ratio_source_id,
+                "feature": RATIO_COLUMN,
+                "filter": "UseofVan = 'Business'",
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "GLM", "numerator": "glm_prediction", "source": glm_source_id},
+                    {"label": "GBM", "numerator": "gbm_prediction", "source": gbm_source_id},
+                ],
+            },
+        )
+        band_payload = json.loads(band_body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(band_status, 200)
+        self.assertEqual(band_payload["source"], ratio_source_id)
+        self.assertEqual(band_payload["feature"], RATIO_COLUMN)
+        self.assertGreater(band_payload["band_suggestion"], 0)
+        self.assertNotEqual(band_payload["band_suggestion"], 1)
+
+    def test_saved_model_favourite_sources_validate_against_active_models(self) -> None:
+        self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0], model_id="saved-gbm", active=False)
+        self.write_simple_gbm_prediction_model([11.0, 22.0, 33.0, 44.0], model_id="active-gbm", active=True)
+        self.write_simple_glm_prediction_model([10.0, 0.0, None, 100.0], model_id="saved-glm", active=False)
+        self.write_simple_glm_prediction_model([5.0, 11.0, 22.0, 44.0], model_id="active-glm", active=True)
+        app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        status, _, body = asgi_get(app, "/api/schema")
+        schema = json.loads(body)
+        active_ratio_source_id = "model_ratio:gbm_to_glm_ratio:active-gbm:active-glm"
+        saved_ratio_source_id = "model_ratio:gbm_to_glm_ratio:saved-gbm:saved-glm"
+        saved_gbm_source_id = "gbm:saved-gbm:predictions"
+        saved_glm_source_id = "glm:saved-glm:predictions"
+        active_gbm_source_id = "gbm:active-gbm:predictions"
+        active_glm_source_id = "glm:active-glm:predictions"
+        store = LineBarFavouriteStore(self.data_path, app.state.dataset)
+        favourite = self.favourite_view(
+            source="dataset",
+            x=RATIO_COLUMN,
+            xSource=saved_ratio_source_id,
+            denominator="__none__",
+            expectedSelections=[
+                {"value": "glm_prediction", "sourceId": saved_glm_source_id, "metricKind": "prediction"},
+                {"value": "gbm_prediction", "sourceId": saved_gbm_source_id, "metricKind": "prediction"},
+            ],
+            filter="",
+            savedFilterRows=[],
+        )
+        validation = store.validate_view(favourite, saved_filters=[], kpis=[])
+
+        band_status, _, band_body = asgi_post_json(
+            app,
+            "/api/banding/suggestion",
+            {"source": "dataset", "xSource": active_ratio_source_id, "feature": RATIO_COLUMN},
+        )
+        band_payload = json.loads(band_body)
+        chart_request = self.request()
+        chart_request.update(
+            {
+                "source": "dataset",
+                "x": RATIO_COLUMN,
+                "xSource": active_ratio_source_id,
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "GLM", "numerator": "glm_prediction", "source": active_glm_source_id},
+                    {"label": "GBM", "numerator": "gbm_prediction", "source": active_gbm_source_id},
+                ],
+                "bandWidth": "1",
+            }
+        )
+        chart_status, _, chart_body = asgi_post_json(app, "/api/chart", chart_request)
+        chart_payload = json.loads(chart_body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            [source["id"] for source in schema["data_sources"] if source.get("kind") == RATIO_KIND],
+            [active_ratio_source_id],
+        )
+        with self.assertRaisesRegex(ValueError, "valid data source"):
+            app.state.dataset.normalise_source(saved_ratio_source_id)
+        self.assertTrue(validation["valid"], validation)
+        self.assertEqual(validation["errors"], [])
+        self.assertEqual(band_status, 200)
+        self.assertEqual(band_payload["source"], active_ratio_source_id)
+        self.assertEqual(chart_status, 200)
+        self.assertEqual(chart_payload["field_sources"]["x"], active_ratio_source_id)
+        self.assertEqual(chart_payload["field_sources"]["responses"], ["dataset", active_glm_source_id, active_gbm_source_id])
+        rows = {row["x"]: row for row in chart_payload["rows"]}
+        self.assertIn("1", rows)
+        self.assertIn("2", rows)
+        self.assertAlmostEqual(rows["1"]["resp0"], 350.0)
+        self.assertAlmostEqual(rows["1"]["resp1"], 33.0)
+        self.assertAlmostEqual(rows["1"]["resp2"], 38.5)
+
+    def test_saved_model_favourite_reports_missing_active_model_outputs(self) -> None:
+        self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0], model_id="saved-gbm", active=True)
+        app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        store = LineBarFavouriteStore(self.data_path, app.state.dataset)
+        favourite = self.favourite_view(
+            source="dataset",
+            x=RATIO_COLUMN,
+            xSource="model_ratio:gbm_to_glm_ratio:saved-gbm:missing-glm",
+            denominator="__none__",
+            expectedSelections=[
+                {"value": "glm_prediction", "sourceId": "glm:missing-glm:predictions", "metricKind": "prediction"},
+                {"value": "gbm_prediction", "sourceId": "gbm:saved-gbm:predictions", "metricKind": "prediction"},
+            ],
+            filter="",
+            savedFilterRows=[],
+        )
+
+        validation = store.validate_view(favourite, saved_filters=[], kpis=[])
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("Favourite uses GBM / GLM ratio but no active GBM and GLM prediction sources are available.", validation["errors"])
+        self.assertIn("Favourite uses GLM model output but no active GLM prediction source is available.", validation["errors"])
+
     def test_schema_does_not_calculate_eager_band_suggestions(self) -> None:
         app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
 
@@ -2261,6 +2392,8 @@ COPY (
   SELECT 2, 202.0
   UNION ALL
   SELECT 3, 303.0
+  UNION ALL
+  SELECT 4, 606.0
 ) TO {sql_literal(str(glm_path))} (FORMAT PARQUET)
 """
             )
@@ -2272,6 +2405,8 @@ COPY (
   SELECT 2, 20.0
   UNION ALL
   SELECT 3, 30.0
+  UNION ALL
+  SELECT 4, 40.0
 ) TO {sql_literal(str(gbm_path))} (FORMAT PARQUET)
 """
             )
@@ -2304,6 +2439,11 @@ COPY (
                 "source": "gbm:m1:predictions",
                 "xSource": "glm:m1:predictions",
                 "feature": "glm_prediction",
+                "filter": "UseofVan = 'Business'",
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "GBM", "numerator": "gbm_prediction", "source": "gbm:m1:predictions"},
+                ],
             },
         )
         payload = json.loads(body)
@@ -2312,6 +2452,7 @@ COPY (
         self.assertEqual(payload["source"], "glm:m1:predictions")
         self.assertEqual(payload["feature"], "glm_prediction")
         self.assertGreater(payload["band_suggestion"], 0)
+        self.assertNotEqual(payload["band_suggestion"], 1)
 
     def test_default_saved_filters_fall_back_to_specs_directory(self) -> None:
         self.filters_path.unlink()

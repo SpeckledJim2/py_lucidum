@@ -374,22 +374,16 @@ def create_app(
         started = time.perf_counter()
         dataset = app.state.dataset
         try:
-            with dataset.lock:
-                source = dataset.normalise_source(payload.get("xSource") or payload.get("source"))
-                feature = str(payload.get("feature") or "").strip()
-                filter_sql = dataset.normalise_filter(payload.get("filter"), source_id=source)
-                suggestion = dataset.band_suggestion_for_column(source, feature, filter_sql)
+            from py_lucidum.tools.line_bar.query import banding_suggestion as line_bar_banding_suggestion
+
+            result = line_bar_banding_suggestion(dataset, payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except duckdb.Error as exc:
             raise HTTPException(status_code=400, detail=duckdb_error_message(exc)) from exc
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
-        return {
-            "feature": feature,
-            "source": source,
-            "band_suggestion": suggestion,
-            "timings": {"duckdb_ms": elapsed_ms},
-        }
+        result["timings"] = {"duckdb_ms": elapsed_ms}
+        return result
 
     @app.post("/api/date-bucket/suggestion")
     def date_bucket_suggestion(request: Request, payload: dict[str, Any]) -> dict[str, Any]:

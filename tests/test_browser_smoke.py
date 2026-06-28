@@ -2779,6 +2779,225 @@ COPY (
                 thread.join(timeout=5)
                 stop_persistent_glm_fit_worker()
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_favourite_restores_model_outputs_against_active_models(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            row_count = 60
+            data_rows = ["actualNumerator,denominator,Age,Segment,SAMPLE"]
+            for index in range(1, row_count + 1):
+                segment = "B" if index % 2 == 0 else "A"
+                sample = "validation" if segment == "B" else "training"
+                data_rows.append(f"{100 + index},{1000 + index},{20 + index % 40},{segment},{sample}")
+            data_path.write_text("\n".join(data_rows) + "\n", encoding="utf-8")
+            active_glm_predictions = [100.0 + index for index in range(1, row_count + 1)]
+            saved_glm_predictions = [90.0 + index for index in range(1, row_count + 1)]
+            active_gbm_predictions = [
+                active_glm_predictions[index - 1] * (1.1 + index / 1000)
+                for index in range(1, row_count + 1)
+            ]
+            saved_gbm_predictions = [
+                active_glm_predictions[index - 1] * (1.5 + index / 1000)
+                for index in range(1, row_count + 1)
+            ]
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "saved-gbm",
+                "Saved GBM",
+                "2026-05-25T00:00:00Z",
+                saved_gbm_predictions,
+            )
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "active-gbm",
+                "Active GBM",
+                "2026-05-25T00:00:01Z",
+                active_gbm_predictions,
+            )
+            gbm_store.activate_model("active-gbm")
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "saved-glm",
+                "Saved GLM",
+                "2026-05-25T00:00:02Z",
+                saved_glm_predictions,
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "active-glm",
+                "Active GLM",
+                "2026-05-25T00:00:03Z",
+                active_glm_predictions,
+            )
+            glm_store.activate_model("active-glm")
+            saved_ratio_source = "model_ratio:gbm_to_glm_ratio:saved-gbm:saved-glm"
+            activated_saved_ratio_source = "model_ratio:gbm_to_glm_ratio:saved-gbm:active-glm"
+            saved_gbm_source = "gbm:saved-gbm:predictions"
+            saved_glm_source = "glm:saved-glm:predictions"
+            active_ratio_source = "model_ratio:gbm_to_glm_ratio:active-gbm:active-glm"
+            active_gbm_source = "gbm:active-gbm:predictions"
+            active_glm_source = "glm:active-glm:predictions"
+            favourites_path = root / "config" / "favourites.json"
+            favourites_path.parent.mkdir(parents=True)
+            favourites_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "favourites": [
+                            {
+                                "id": "saved-ratio-view",
+                                "name": "Saved ratio view",
+                                "created_at": "2026-06-28T00:00:00Z",
+                                "updated_at": "2026-06-28T00:00:00Z",
+                                "view": {
+                                    "version": 1,
+                                    "source": "dataset",
+                                    "x": "gbm_to_glm_ratio",
+                                    "xSource": saved_ratio_source,
+                                    "view": "chart",
+                                    "sort": "alpha",
+                                    "lowGroup": "0",
+                                    "labels": "none",
+                                    "bandWidth": "1",
+                                    "quantileMode": "off",
+                                    "dateBucket": "none",
+                                    "transform": "none",
+                                    "sigma": "0",
+                                    "partialDependence": "none",
+                                    "featureSort": "alpha",
+                                    "expectedSort": "alpha",
+                                    "actual": {"value": "actualNumerator", "sourceId": "dataset", "metricKind": "dataset"},
+                                    "denominator": "__none__",
+                                    "expectedSelections": [
+                                        {"value": "glm_prediction", "sourceId": saved_glm_source, "metricKind": "prediction"},
+                                        {"value": "gbm_prediction", "sourceId": saved_gbm_source, "metricKind": "prediction"},
+                                    ],
+                                    "filter": "Segment = 'B'",
+                                    "filterSelectionMode": "single",
+                                    "filterOperator": "and",
+                                    "savedFilterRows": [],
+                                },
+                            },
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                line_bar_favourites_path=favourites_path,
+                tools=["line_bar", "gbm", "glm"],
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "__none__"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    chart_requests: list[dict[str, Any]] = []
+                    page.on(
+                        "request",
+                        lambda request: chart_requests.append(json.loads(request.post_data or "{}"))
+                        if request.url.endswith("/api/chart") and request.method == "POST"
+                        else None,
+                    )
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+                        page.locator("#lineBarFavouriteSelect").wait_for(timeout=10_000)
+                        with page.expect_request(
+                            lambda request: request.url.endswith("/api/chart") and "gbm_to_glm_ratio" in (request.post_data or ""),
+                            timeout=10_000,
+                        ) as chart_request_info:
+                            page.locator("#lineBarFavouriteSelect").select_option("saved-ratio-view")
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector('#featureList .feature.active')?.dataset.sourceId === 'model_ratio:gbm_to_glm_ratio:active-gbm:active-glm'
+                            """,
+                            timeout=10_000,
+                        )
+                        request_body = json.loads(chart_request_info.value.post_data or "{}")
+                        expected_state = page.evaluate(
+                            """
+                            () => [...document.querySelectorAll("#expectedList .feature.active")]
+                              .map((button) => ({
+                                value: button.dataset.value || "",
+                                source: button.dataset.sourceId || "",
+                              }))
+                            """
+                        )
+                        status_text = page.locator("#status").text_content(timeout=10_000) or ""
+
+                        self.assertEqual(request_body["x"], "gbm_to_glm_ratio")
+                        self.assertEqual(request_body["xSource"], active_ratio_source)
+                        self.assertEqual(request_body["responses"][1]["source"], active_glm_source)
+                        self.assertEqual(request_body["responses"][2]["source"], active_gbm_source)
+                        self.assertIn({"value": "glm_prediction", "source": active_glm_source}, expected_state)
+                        self.assertIn({"value": "gbm_prediction", "source": active_gbm_source}, expected_state)
+                        self.assertNotIn("missing x-axis source", status_text)
+                        self.assertNotIn("cannot be used", status_text)
+
+                        page.locator("#gbmTool").click()
+                        page.locator('[data-gbm-tab="models"]').click(timeout=10_000)
+                        page.locator("#gbmModelGrid .tabulator-row").filter(has_text="Saved GBM").click(timeout=10_000)
+                        page.locator("#gbmActivateModelBtn").click(timeout=10_000)
+                        with page.expect_response(
+                            lambda response: (
+                                response.url.endswith("/api/banding/suggestion")
+                                and response.status == 200
+                                and activated_saved_ratio_source in (response.request.post_data or "")
+                            ),
+                            timeout=10_000,
+                        ) as banding_response_info:
+                            page.locator("#lineBarTool").click()
+                        banding_payload = banding_response_info.value.json()
+                        page.wait_for_function(
+                            """
+                            ([sourceId]) => {
+                              const active = document.querySelector('#featureList .feature.active');
+                              const bandValue = document.querySelector('#bandValue')?.textContent || '';
+                              return active?.dataset.sourceId === sourceId && bandValue && bandValue !== '(1)';
+                            }
+                            """,
+                            arg=[activated_saved_ratio_source],
+                            timeout=10_000,
+                        )
+                        activated_chart_request = next(
+                            request for request in reversed(chart_requests)
+                            if request.get("xSource") == activated_saved_ratio_source
+                        )
+                        status_text = page.locator("#status").text_content(timeout=10_000) or ""
+
+                        self.assertEqual(banding_payload["source"], activated_saved_ratio_source)
+                        self.assertGreater(banding_payload["band_suggestion"], 0)
+                        self.assertNotEqual(banding_payload["band_suggestion"], 1)
+                        self.assertEqual(activated_chart_request["x"], "gbm_to_glm_ratio")
+                        self.assertEqual(activated_chart_request["xSource"], activated_saved_ratio_source)
+                        self.assertEqual(activated_chart_request["filter"], "Segment = 'B'")
+                        self.assertGreater(activated_chart_request["bandWidth"], 0)
+                        self.assertNotEqual(activated_chart_request["bandWidth"], 1)
+                        self.assertEqual(activated_chart_request["responses"][1]["source"], active_glm_source)
+                        self.assertEqual(activated_chart_request["responses"][2]["source"], saved_gbm_source)
+                        self.assertNotIn("Banding estimate failed", status_text)
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
     @staticmethod
     def start_app(
         data_path: Path,
@@ -4476,7 +4695,11 @@ COPY (
                 ).wait_for(timeout=10_000)
 
                 with page.expect_response(
-                    lambda response: response.url.endswith("/api/banding/suggestion") and response.status == 200,
+                    lambda response: (
+                        response.url.endswith("/api/banding/suggestion")
+                        and response.status == 200
+                        and ratio_source_id in (response.request.post_data or "")
+                    ),
                     timeout=10_000,
                 ) as ratio_banding_info:
                     with page.expect_request(
@@ -4488,9 +4711,10 @@ COPY (
                         ).click()
                 ratio_banding_body = json.loads(ratio_banding_info.value.request.post_data or "{}")
                 ratio_chart_body = json.loads(ratio_chart_info.value.post_data or "{}")
-                self.assertEqual(ratio_banding_body["source"], ratio_source_id)
+                self.assertEqual(ratio_banding_body["source"], "glm:browser-smoke-glm:predictions")
                 self.assertEqual(ratio_banding_body["xSource"], ratio_source_id)
                 self.assertEqual(ratio_banding_body["feature"], "gbm_to_glm_ratio")
+                self.assertEqual(ratio_banding_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
                 self.assertEqual(ratio_chart_body["x"], "gbm_to_glm_ratio")
                 self.assertEqual(ratio_chart_body["xSource"], ratio_source_id)
 
@@ -10906,6 +11130,35 @@ COPY (
                 page.wait_for_function(
                     """() => [...document.querySelectorAll("#lineBarFavouriteSelect option")]
                       .filter((option) => option.value).length === 1""",
+                    timeout=10_000,
+                )
+                remaining_favourite = page.eval_on_selector(
+                    "#lineBarFavouriteSelect",
+                    """select => {
+                      const option = [...select.options].find((item) => item.value);
+                      return option ? { id: option.value, name: option.textContent.trim() } : { id: "", name: "" };
+                    }""",
+                )
+                self.assertTrue(remaining_favourite["id"])
+                page.locator("#lineBarFavouriteSelect").select_option(remaining_favourite["id"])
+                page.wait_for_function(
+                    """([id]) => document.querySelector("#lineBarFavouriteSelect")?.value === id""",
+                    arg=[remaining_favourite["id"]],
+                    timeout=10_000,
+                )
+                page.locator('.segmented[data-control="labels"] button[data-value="bar"]').click()
+                page.wait_for_function(
+                    """() => {
+                      const select = document.querySelector("#lineBarFavouriteSelect");
+                      return select?.value === "" && select.selectedOptions[0]?.textContent.trim() === "Choose";
+                    }""",
+                    timeout=10_000,
+                )
+                page.locator("#lineBarFavouriteSelect").select_option(remaining_favourite["id"])
+                page.wait_for_function(
+                    """([id]) => document.querySelector("#lineBarFavouriteSelect")?.value === id
+                      && document.querySelector('.segmented[data-control="labels"] button[data-value="none"]')?.classList.contains("active")""",
+                    arg=[remaining_favourite["id"]],
                     timeout=10_000,
                 )
                 self.assertEqual(dialogs, [])

@@ -57,6 +57,12 @@
       };
       const TOOL_IDS = Object.keys(TOOL_BUTTON_IDS);
       const CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED = "collapsed";
+      const LINE_BAR_RATIO_COLUMN = "gbm_to_glm_ratio";
+      const GLM_PREDICTION_COLUMNS = ["glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"];
+      const GBM_PREDICTION_COLUMNS = ["gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction"];
+      const MODEL_RATIO_SOURCE_RE = /^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/;
+      const GLM_PREDICTION_SOURCE_RE = /^glm:[A-Za-z0-9_.-]+:predictions$/;
+      const GBM_PREDICTION_SOURCE_RE = /^gbm:[A-Za-z0-9_.-]+:predictions$/;
       const state = {
         schema: null,
         x: null,
@@ -743,6 +749,10 @@
 
       function selectedColumn() {
         return sourceColumns().find((c) => c.name === state.x);
+      }
+
+      function isModelRatioSourceId(sourceId) {
+        return MODEL_RATIO_SOURCE_RE.test(String(sourceId || ""));
       }
 
       function lineBarFeatureColumns() {
@@ -1851,6 +1861,30 @@
         };
       }
 
+      function modelKindForPredictionColumn(columnName = "") {
+        const name = String(columnName || "");
+        if (GLM_PREDICTION_COLUMNS.includes(name)) return "glm";
+        if (GBM_PREDICTION_COLUMNS.includes(name)) return "gbm";
+        return "";
+      }
+
+      function modelKindForPredictionSource(sourceId = "") {
+        const source = String(sourceId || "");
+        if (GLM_PREDICTION_SOURCE_RE.test(source)) return "glm";
+        if (GBM_PREDICTION_SOURCE_RE.test(source)) return "gbm";
+        return "";
+      }
+
+      function resolveFavouriteSourceId(columnName = "", sourceId = "") {
+        const source = String(sourceId || "");
+        if (String(columnName || "") === LINE_BAR_RATIO_COLUMN || isModelRatioSourceId(source)) {
+          return activeModelSource("model_ratio")?.id || source;
+        }
+        const modelKind = modelKindForPredictionColumn(columnName) || modelKindForPredictionSource(source);
+        if (modelKind) return activePredictionSourceForModelKind(modelKind)?.id || source;
+        return source;
+      }
+
       function normaliseExpectedSelections(selections = [], options = {}) {
         const allowAnySource = options.allowAnySource !== false;
         const seen = new Set();
@@ -1858,7 +1892,9 @@
         for (const selection of selections) {
           const value = String(selection?.value || selection?.column || "");
           if (!value) continue;
-          const option = expectedOptionForSelection(value, selection?.sourceId || selection?.source || "", { allowAnySource });
+          const requestedSource = String(selection?.sourceId || selection?.source || "");
+          const targetSource = typeof resolveFavouriteSourceId === "function" ? resolveFavouriteSourceId(value, requestedSource) : requestedSource;
+          const option = expectedOptionForSelection(value, targetSource, { allowAnySource });
           const next = expectedSelectionFromOption(option);
           if (!next) continue;
           const key = expectedSelectionKey(next);
@@ -2265,6 +2301,7 @@
         renderKpis();
         refreshMetricSummary();
         if (changed) {
+          lineBarTool.clearActiveFavouriteSelection();
           refreshActiveToolForMetricChange();
         }
       }
@@ -2566,9 +2603,9 @@
         }
         const view = favourite?.view || {};
         state.activeLineBarFavouriteId = favourite?.id || "";
-        state.source = String(view.source || "dataset");
+        state.source = resolveFavouriteSourceId("", view.source || "dataset") || "dataset";
         state.x = String(view.x || state.x || "");
-        state.xSource = String(view.xSource || state.source || "dataset");
+        state.xSource = resolveFavouriteSourceId(state.x, view.xSource || state.source || "dataset") || state.source || "dataset";
         state.view = view.view === "table" ? "table" : "chart";
         state.sort = String(view.sort || "alpha");
         state.lowGroup = String(view.lowGroup || "0");
@@ -2592,7 +2629,8 @@
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
         const actual = view.actual && typeof view.actual === "object" ? view.actual : {};
-        if (!setActualSelection(actual.value, actual.sourceId)) {
+        const actualSource = resolveFavouriteSourceId(actual.value, actual.sourceId || state.source || "dataset");
+        if (!setActualSelection(actual.value, actualSource)) {
           chooseFirstActualSelection();
         }
         const expectedSelections = Array.isArray(view.expectedSelections) ? view.expectedSelections : [];
@@ -2666,6 +2704,7 @@
           return;
         }
         state.activeFilter = nextFilter;
+        lineBarTool.clearActiveFavouriteSelection();
         invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
@@ -2689,6 +2728,7 @@
           return;
         }
         state.activeFilter = "";
+        lineBarTool.clearActiveFavouriteSelection();
         invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
@@ -3081,7 +3121,9 @@
             if (event.target.tagName !== "BUTTON") return;
             group.querySelectorAll("button").forEach((button) => button.classList.remove("active"));
             event.target.classList.add("active");
+            const previousValue = state[group.dataset.control];
             state[group.dataset.control] = event.target.dataset.value;
+            if (state[group.dataset.control] !== previousValue) lineBarTool.clearActiveFavouriteSelection();
             if (group.dataset.control === "filterOperator") {
               applySavedFilters();
               return;
@@ -3099,11 +3141,13 @@
             syncControlsForSourceChange({ actualValue, actualSource });
           }
           syncKpiSelectionFromMetrics();
+          lineBarTool.clearActiveFavouriteSelection();
           refreshMetricSummary();
           refreshActiveToolForMetricChange();
         });
         el("denominator").addEventListener("change", () => {
           syncKpiSelectionFromMetrics();
+          lineBarTool.clearActiveFavouriteSelection();
           refreshMetricSummary();
           refreshActiveToolForMetricChange();
         });

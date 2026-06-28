@@ -371,14 +371,19 @@ export function createLineBarTool({
     syncBandingControl();
     try {
       const sourceId = selectedColumn()?.source_id || state.xSource || state.source || "dataset";
+      const baseSource = state.source || "dataset";
+      const requestPayload = {
+        source: baseSource,
+        feature: state.x,
+        filter: state.activeFilter,
+        responses: currentResponses(),
+      };
+      if (sourceId && (sourceId !== baseSource || isModelPredictionColumn(column))) {
+        requestPayload.xSource = sourceId;
+      }
       const data = await api("/api/banding/suggestion", {
         method: "POST",
-        body: JSON.stringify({
-          source: sourceId,
-          xSource: sourceId,
-          feature: state.x,
-          filter: state.activeFilter,
-        }),
+        body: JSON.stringify(requestPayload),
       });
       if (requestSeq !== state.bandSuggestionRequestSeq || state.bandSuggestionPendingKey !== bandFeatureKey) return;
       if (currentBandFeatureKey() !== bandFeatureKey) return;
@@ -623,6 +628,7 @@ export function createLineBarTool({
           renderExpectedNumerators({ preserveScroll: true });
           updateAxisControls();
         }
+        clearActiveFavouriteSelection();
         refreshChart({ force: sourceChanged });
         if (event.isTrusted) {
           const remainingSelection = expectedButtonSelection(value, sourceId);
@@ -704,11 +710,13 @@ export function createLineBarTool({
       active,
       onClick: () => {
         const previousDateBucketKey = currentDateBucketFeatureKey();
+        const changed = state.x !== col.name || state.xSource !== sourceId;
         state.x = col.name;
         state.xSource = sourceId;
         resetDateBucketSuggestionIfKeyChanged(previousDateBucketKey);
         renderFeatures({ preserveScroll: true });
         updateAxisControls();
+        if (changed) clearActiveFavouriteSelection();
         refreshChart();
       },
     });
@@ -1030,6 +1038,13 @@ export function createLineBarTool({
     select.value = favouriteById(state.activeLineBarFavouriteId)?.id || "";
     select.disabled = Boolean(errorMessage) || !favourites.length;
     el("lineBarFavouriteMenuBtn").disabled = !favouritesLoaded;
+  }
+
+  function clearActiveFavouriteSelection() {
+    if (!state.activeLineBarFavouriteId) return false;
+    state.activeLineBarFavouriteId = "";
+    renderFavouriteControl();
+    return true;
   }
 
   async function applyFavourite(favourite, options = {}) {
@@ -3307,12 +3322,14 @@ export function createLineBarTool({
         if (event.target.tagName !== "BUTTON") return;
         if (group.dataset.control === "bandWidth" && event.target.dataset.action) {
           stepBandWidth(event.target.dataset.action === "band-down" ? -1 : 1);
+          clearActiveFavouriteSelection();
           return;
         }
         group.querySelectorAll("button").forEach((button) => button.classList.remove("active"));
         event.target.classList.add("active");
         const previousControlValue = state[group.dataset.control];
         state[group.dataset.control] = event.target.dataset.value;
+        if (state[group.dataset.control] !== previousControlValue) clearActiveFavouriteSelection();
         if (group.dataset.control === "featureSort") {
           renderFeatures();
           return;
@@ -3382,6 +3399,7 @@ export function createLineBarTool({
         renderExpectedNumerators();
         updateAxisControls();
       }
+      clearActiveFavouriteSelection();
       refreshChart({ force: sourceChanged });
     });
     el("expectedSearch").addEventListener("input", renderExpectedNumerators);
@@ -3392,8 +3410,16 @@ export function createLineBarTool({
     el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));
     el("lineBarExpandBtn")?.addEventListener("click", toggleLineBarFocusMode);
     el("lineBarCopyBtn")?.addEventListener("click", copyVisibleLineBarView);
-    el("chartTab").addEventListener("click", () => setView("chart"));
-    el("tableTab").addEventListener("click", () => setView("table"));
+    el("chartTab").addEventListener("click", () => {
+      const changed = state.view !== "chart";
+      setView("chart");
+      if (changed) clearActiveFavouriteSelection();
+    });
+    el("tableTab").addEventListener("click", () => {
+      const changed = state.view !== "table";
+      setView("table");
+      if (changed) clearActiveFavouriteSelection();
+    });
     bindFavouriteControls();
   }
 
@@ -3420,6 +3446,7 @@ export function createLineBarTool({
     updateAxisControls,
     refreshFavourites,
     applyStartupFavourite,
+    clearActiveFavouriteSelection,
     canNavigateToFeature: canNavigateToLineBarFeature,
     navigateToFeature: navigateToLineBarFeature,
   };

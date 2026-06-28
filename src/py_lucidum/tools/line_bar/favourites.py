@@ -10,11 +10,17 @@ from uuid import uuid4
 import duckdb
 
 from py_lucidum.core import Dataset, dataset_slug, dataset_workspace_metadata, is_numeric_kind
+from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 
 
 FAVOURITES_VERSION = 1
 FAVOURITES_FILENAME = "favourites.json"
 FAVOURITE_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
+GLM_PREDICTION_COLUMNS = {"glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"}
+GBM_PREDICTION_COLUMNS = {"gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction"}
+GLM_SOURCE_RE = re.compile(r"^glm:[A-Za-z0-9_.-]+:predictions$")
+GBM_SOURCE_RE = re.compile(r"^gbm:[A-Za-z0-9_.-]+:predictions$")
+RATIO_SOURCE_RE = re.compile(r"^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
 
 
 class LineBarFavouriteError(ValueError):
@@ -182,11 +188,11 @@ class LineBarFavouriteStore:
     ) -> dict[str, Any]:
         errors: list[str] = []
         warnings: list[str] = []
-        source = self.validate_source(view.get("source"), errors, label="data source")
-        x_source = self.validate_source(view.get("xSource") or source, errors, label="x-axis source")
+        source = self.validate_favourite_source(view.get("source"), "", errors, label="data source")
+        x_source = self.validate_favourite_source(view.get("xSource") or source, view.get("x"), errors, label="x-axis source")
         self.validate_column(x_source, view.get("x"), errors, label="x-axis feature")
         actual = view.get("actual") if isinstance(view.get("actual"), dict) else {}
-        actual_source = self.validate_source(actual.get("sourceId") or source, errors, label="Actual source")
+        actual_source = self.validate_favourite_source(actual.get("sourceId") or source, actual.get("value"), errors, label="Actual source")
         self.validate_column(actual_source, actual.get("value"), errors, label="Actual", numeric=True)
         denominator = str(view.get("denominator") or "__none__").strip() or "__none__"
         if denominator != "__none__":
@@ -196,7 +202,7 @@ class LineBarFavouriteStore:
             for index, selection in enumerate(expected[:2], start=1):
                 if not isinstance(selection, dict):
                     continue
-                expected_source = self.validate_source(selection.get("sourceId") or source, errors, label=f"Expected {index} source")
+                expected_source = self.validate_favourite_source(selection.get("sourceId") or source, selection.get("value"), errors, label=f"Expected {index} source")
                 self.validate_column(expected_source, selection.get("value"), errors, label=f"Expected {index}", numeric=True)
         filter_sql = str(view.get("filter") or "").strip()
         if filter_sql and source:
@@ -231,6 +237,30 @@ class LineBarFavouriteStore:
         except ValueError:
             errors.append(f"Favourite uses a missing {label}: {raw}")
             return raw
+
+    def validate_favourite_source(self, raw_source: Any, column_name: Any, errors: list[str], *, label: str) -> str:
+        raw = str(raw_source or "dataset").strip() or "dataset"
+        source_kind = favourite_model_source_kind(raw, column_name)
+        if not source_kind:
+            return self.validate_source(raw, errors, label=label)
+        active_source = self.active_source_for_kind(source_kind)
+        if active_source:
+            return active_source
+        if source_kind == RATIO_KIND:
+            errors.append("Favourite uses GBM / GLM ratio but no active GBM and GLM prediction sources are available.")
+        elif source_kind == "glm_predictions":
+            errors.append("Favourite uses GLM model output but no active GLM prediction source is available.")
+        elif source_kind == "gbm_predictions":
+            errors.append("Favourite uses GBM model output but no active GBM prediction source is available.")
+        return raw
+
+    def active_source_for_kind(self, source_kind: str) -> str:
+        for source in active_dataset(self.dataset_path, self.dataset).data_sources():
+            if source.get("kind") == source_kind and source.get("active"):
+                source_id = str(source.get("id") or "").strip()
+                if source_id:
+                    return source_id
+        return ""
 
     def validate_column(
         self,
@@ -299,6 +329,18 @@ class LineBarFavouriteStore:
 
 def active_dataset(dataset_path: Path, dataset: Dataset | None) -> Dataset:
     return dataset if dataset is not None else Dataset(dataset_path)
+
+
+def favourite_model_source_kind(raw_source: Any, column_name: Any) -> str:
+    source = str(raw_source or "").strip()
+    column = str(column_name or "").strip()
+    if column == RATIO_COLUMN or RATIO_SOURCE_RE.fullmatch(source):
+        return RATIO_KIND
+    if column in GLM_PREDICTION_COLUMNS or GLM_SOURCE_RE.fullmatch(source):
+        return "glm_predictions"
+    if column in GBM_PREDICTION_COLUMNS or GBM_SOURCE_RE.fullmatch(source):
+        return "gbm_predictions"
+    return ""
 
 
 def timestamp() -> str:

@@ -967,6 +967,8 @@ for (const value of [4, 7, 12]) {
         self.assertIn('/api/line-bar/favourites', line_bar_js)
         self.assertIn("placeFavouritePopover", line_bar_js)
         self.assertIn("updateFavouriteRenameButton", line_bar_js)
+        self.assertIn("function clearActiveFavouriteSelection()", line_bar_js)
+        self.assertIn("clearActiveFavouriteSelection,", line_bar_js)
         self.assertIn("line-bar-favourite-action-button", line_bar_js)
         self.assertIn('data-favourite-action="move-up"', line_bar_js)
         self.assertIn('data-favourite-action="move-down"', line_bar_js)

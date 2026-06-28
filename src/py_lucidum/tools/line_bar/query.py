@@ -21,6 +21,7 @@ from py_lucidum.core import (
     response_summary,
     sql_literal,
     summarize_denominator,
+    suggested_band_width,
     weighted_value_sql,
 )
 from py_lucidum.tools.gbm.shap import FLAME_PERCENTILES as SHAP_RIBBON_PERCENTILES
@@ -170,6 +171,77 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
                 "group_count": table_result["group_count"],
             },
         }
+
+
+def banding_suggestion(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
+    with dataset.lock:
+        feature = str(request.get("feature") or "").strip()
+        if not feature:
+            raise ValueError("Choose a numeric feature")
+        if uses_field_sources(request):
+            context_request = {**request, "x": feature}
+            context = chart_context(dataset, context_request)
+            x_source = str((context.get("field_sources") or {}).get("x") or context["source_id"])
+            filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), context["relation"])
+            suggestion = relation_band_suggestion_for_column(
+                dataset,
+                context["relation"],
+                context["columns"],
+                feature,
+                filter_sql,
+            )
+            return {
+                "feature": feature,
+                "source": x_source,
+                "band_suggestion": suggestion,
+            }
+        source = dataset.normalise_source(request.get("xSource") or request.get("source"))
+        filter_sql = dataset.normalise_filter(request.get("filter"), source_id=source)
+        suggestion = dataset.band_suggestion_for_column(source, feature, filter_sql)
+        return {
+            "feature": feature,
+            "source": source,
+            "band_suggestion": suggestion,
+        }
+
+
+def relation_band_suggestion_for_column(
+    dataset: Dataset,
+    relation: str,
+    columns: dict[str, ColumnInfo],
+    feature: str,
+    filter_sql: str = "",
+    sample_limit: int = 100_000,
+) -> float | int | None:
+    column = columns.get(feature)
+    if column is None:
+        raise ValueError("Choose a valid feature for the selected data source")
+    if not is_numeric_kind(column.kind):
+        raise ValueError("Choose a numeric feature for banding")
+    limit = max(1, min(int(sample_limit), 100_000))
+    where_sql = f"WHERE ({filter_sql})" if filter_sql else ""
+    raw = quote_ident(column.name)
+    sql = f"""
+WITH sample AS (
+  SELECT TRY_CAST({raw} AS DOUBLE) AS value
+  FROM {relation}
+  {where_sql}
+  LIMIT {limit}
+)
+SELECT
+  STDDEV_SAMP(value) AS std,
+  MIN(value) AS min_value,
+  MAX(value) AS max_value
+FROM sample
+"""
+    row = dataset.con.execute(sql).fetchone()
+    if not row:
+        return None
+    stddev, min_value, max_value = row
+    if column.kind == "integer" and min_value is not None and max_value is not None:
+        if max_value - min_value < 120:
+            return 1
+    return suggested_band_width(stddev)
 
 
 def build_grouped_result(
