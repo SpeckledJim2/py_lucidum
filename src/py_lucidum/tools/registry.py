@@ -92,28 +92,28 @@ def normalise_tools(tools: str | Sequence[str] | None) -> list[str]:
 
     requested_keys = [name.lower() for name in requested]
     if requested_keys == ["all"]:
-        enabled = set(definitions)
+        enabled = list(definitions)
     else:
-        enabled: set[str] = set()
+        enabled = []
+        seen: set[str] = set()
         for name, key in zip(requested, requested_keys, strict=True):
             canonical = aliases.get(key)
             if not canonical:
                 supported = ", ".join(sorted([*aliases, *SPECIAL_TOOL_ALIASES]))
                 raise ValueError(f"Unknown tool '{name}'. Supported tools: {supported}")
-            enabled.add(canonical)
+            if canonical not in seen:
+                enabled.append(canonical)
+                seen.add(canonical)
 
+    enabled_set = set(enabled)
     for tool_id, required_ids in TOOL_REQUIRED_IDS.items():
-        if tool_id in enabled:
+        if tool_id in enabled_set:
             for required_id in required_ids:
-                if required_id not in enabled:
+                if required_id not in enabled_set:
                     requirement = definitions[required_id].aliases[0]
                     requested_name = aliases.get(tool_id, tool_id)
                     raise ValueError(f"Tool '{requested_name}' requires '{requirement}'. Use --tools {requested_name},{requirement}")
-    return [
-        definition.id
-        for definition in definitions.values()
-        if definition.id in enabled
-    ]
+    return enabled
 
 
 def tool_payload(enabled_tools: Sequence[str]) -> list[dict[str, Any]]:

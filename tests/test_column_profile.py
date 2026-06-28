@@ -98,10 +98,11 @@ class ColumnProfileToolTests(unittest.TestCase):
     def test_default_tools_include_line_bar_first(self) -> None:
         self.assertEqual(normalise_tools(None), ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
         self.assertEqual(normalise_tools("all"), ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "glm", "gbm", "specs"])
-        self.assertEqual(normalise_tools("profile,line-bar"), ["line_bar", "column_profile"])
-        self.assertEqual(normalise_tools("glm,line-bar"), ["line_bar", "glm"])
-        self.assertEqual(normalise_tools("gbm,line-bar,map"), ["line_bar", "uk_map", "gbm"])
-        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["line_bar", "dataset_viewer"])
+        self.assertEqual(normalise_tools("profile,line-bar"), ["column_profile", "line_bar"])
+        self.assertEqual(normalise_tools("glm,line-bar"), ["glm", "line_bar"])
+        self.assertEqual(normalise_tools("gbm,line-bar,map"), ["gbm", "line_bar", "uk_map"])
+        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["dataset_viewer", "line_bar"])
+        self.assertEqual(normalise_tools(["line-bar", "line_bar", "profile"]), ["line_bar", "column_profile"])
         with self.assertRaisesRegex(ValueError, "Tool 'glm' requires 'line-bar'"):
             normalise_tools("glm")
         with self.assertRaisesRegex(ValueError, "Tool 'gbm' requires 'line-bar'"):
@@ -150,10 +151,14 @@ class ColumnProfileToolTests(unittest.TestCase):
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 
-        self.assertEqual(app.state.enabled_tools, ["line_bar", "gbm"])
+        self.assertEqual(app.state.enabled_tools, ["gbm", "line_bar"])
         self.assertIn("/api/chart", paths)
         self.assertNotIn("/api/glm/summary", paths)
         self.assertIn("/api/gbm/summary", paths)
+        status, _, body = asgi_get(app, "/api/schema")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual([tool["id"] for tool in payload["tools"]], ["gbm", "line_bar"])
 
     def test_column_profile_can_be_enabled_without_dataset_viewer(self) -> None:
         app = create_app(self.data_path, token="", tools=["column-profile"], use_saved_filters=False, use_kpis=False)

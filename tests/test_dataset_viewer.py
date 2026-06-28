@@ -76,8 +76,8 @@ class DatasetViewerToolTests(unittest.TestCase):
     def test_line_bar_is_first_default_tool(self) -> None:
         self.assertEqual(normalise_tools(None), ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
         self.assertEqual(normalise_tools("line-bar"), ["line_bar"])
-        self.assertEqual(normalise_tools("gbm,line-bar"), ["line_bar", "gbm"])
-        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["line_bar", "dataset_viewer"])
+        self.assertEqual(normalise_tools("gbm,line-bar"), ["gbm", "line_bar"])
+        self.assertEqual(normalise_tools("dataset-viewer,line-bar"), ["dataset_viewer", "line_bar"])
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
         paths = {route.path for route in app.routes}
 

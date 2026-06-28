@@ -142,6 +142,29 @@ class BrowserSmokeTests(unittest.TestCase):
                         page.goto(base_url, wait_until="domcontentloaded")
                         page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                         page.locator("#chartSideControls:not(.hidden) #featureSearch").wait_for(timeout=10_000)
+                        self.assertFalse(page.locator("#toolSelectorSection").is_visible())
+                        self.assertEqual(page.locator("#toolSelectorSection .tool-option:not(.hidden)").count(), 0)
+                        self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                        sidebar_box = page.locator("#appSidebar").bounding_box()
+                        metric_box = page.locator(".sidebar-metric-section").bounding_box()
+                        self.assertIsNotNone(sidebar_box)
+                        self.assertIsNotNone(metric_box)
+                        assert sidebar_box is not None
+                        assert metric_box is not None
+                        self.assertLessEqual(metric_box["y"] - sidebar_box["y"], 12)
+                        page.locator("#sidebarToggleBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.body.classList.contains("single-tool-mode")
+                              && document.body.classList.contains("sidebar-collapsed")
+                              && document.querySelector("#appSidebar")
+                              && getComputedStyle(document.querySelector("#appSidebar")).display === "none"
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertFalse(page.locator("#sidebarResizer").is_visible())
+                        page.locator("#sidebarToggleBtn").click()
+                        page.locator(".sidebar-metric-section").wait_for(timeout=10_000)
 
                         def drag_text(selector: str) -> str:
                             box = page.locator(selector).bounding_box()
@@ -506,7 +529,6 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     page.goto(base_url, wait_until="domcontentloaded")
                     page.locator("#datasetMeta").get_by_text("many_columns.csv").wait_for(timeout=10_000)
-                    page.locator("#lineBarTool").click()
                     page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                     page.locator("#featureList .line-bar-scroll-region").wait_for(timeout=10_000)
                     page.locator("#expectedList .line-bar-scroll-region").wait_for(state="attached", timeout=10_000)
@@ -1238,7 +1260,6 @@ class BrowserSmokeTests(unittest.TestCase):
 
                     page.goto(base_url, wait_until="domcontentloaded")
                     page.locator("#datasetMeta").get_by_text("line_bar_table.csv").wait_for(timeout=10_000)
-                    page.locator("#lineBarTool").click()
                     page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                     page.wait_for_function(
                         """
@@ -1618,7 +1639,6 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.on("request", count_request)
                     page.goto(base_url, wait_until="domcontentloaded")
                     page.locator("#datasetMeta").get_by_text("many_line_bar_groups.csv").wait_for(timeout=10_000)
-                    page.locator("#lineBarTool").click()
                     page.wait_for_function(
                         """
                         () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("10,005 groups")
@@ -1806,7 +1826,6 @@ class BrowserSmokeTests(unittest.TestCase):
                         page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill(value)
                         page.keyboard.press("Enter")
 
-                    page.locator("#specsTool:not(.hidden)").click()
                     page.locator("#specFilePath", has_text="Save target:").wait_for(timeout=10_000)
                     page.locator("#specFilePath", has_text=re.compile(r"\((new file|existing file ignored by --no-features)\)")).wait_for(timeout=10_000)
                     page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
@@ -2494,7 +2513,7 @@ COPY (
             )
             base_url, server, thread = self.start_app(
                 data_path,
-                tools=["column_profile", "glm", "line_bar"],
+                tools=["line_bar", "column_profile", "glm"],
                 features_path=features_path,
                 defaults={"x": "Age", "actual": "actualNumerator", "denominator": "__none__"},
             )
@@ -3246,10 +3265,27 @@ COPY (
                     )
                 )
 
+            def assert_tool_order(expected_order: str) -> None:
+                page.wait_for_function(
+                    """
+                    (expected) => [...document.querySelectorAll(".tool-option:not(.hidden)")]
+                      .map((button) => button.dataset.tool)
+                      .join("|") === expected
+                    """,
+                    arg=expected_order,
+                    timeout=10_000,
+                )
+
             try:
-                page.goto(f"{base_url}?tool=column_profile", wait_until="domcontentloaded")
+                page.goto(f"{base_url}?tool=line_bar", wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                assert_tool_order("column_profile|line_bar|uk_map|glm|gbm")
+
+                page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.locator("#profileTool.active").wait_for(timeout=10_000)
+                assert_tool_order("column_profile|line_bar|uk_map|glm|gbm")
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#gbmSidebarPanel").wait_for(timeout=10_000)
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
@@ -6361,7 +6397,12 @@ COPY (
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#lineBarTool")?.classList.contains("active")
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#profileTool").wait_for(state="hidden", timeout=10_000)
                 page.wait_for_function(
                     """
@@ -10499,7 +10540,12 @@ COPY (
             page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.accept()))
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
-                page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#lineBarTool")?.classList.contains("active")
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#lineBarFavouriteAddBtn").wait_for(timeout=10_000)
 
                 page.locator("#filterCollapseBtn").click()
@@ -10648,7 +10694,12 @@ COPY (
                 startup_errors: list[str] = []
                 startup_page.on("pageerror", lambda error: startup_errors.append(str(error)))
                 startup_page.goto(f"{base_url}?line_bar_favourite=Renamed%20view", wait_until="domcontentloaded")
-                startup_page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                startup_page.wait_for_function(
+                    """
+                    () => document.querySelector("#lineBarTool")?.classList.contains("active")
+                    """,
+                    timeout=10_000,
+                )
                 startup_page.wait_for_function(
                     """() => document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
                       && document.querySelector('.saved-filter-option[data-filter-theme="AGE"]')?.getAttribute("aria-selected") === "true"

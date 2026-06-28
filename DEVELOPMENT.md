@@ -154,7 +154,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **Dataset Viewer**
 
-- Dataset Viewer is default-enabled but registered after Line/Bar when both tools are enabled. Explicit `--tools` / `create_app(..., tools=...)` selections are exact and include it only when `dataset-viewer` is requested.
+- Dataset Viewer is default-enabled after Line/Bar in the built-in registry order. Explicit `--tools` / `create_app(..., tools=...)` selections preserve the caller's order exactly after alias normalization and include Dataset Viewer only when `dataset-viewer` is requested.
 - Requests return readable raw dataset columns and up to 100 filtered preview rows, plus `has_more` when another row exists beyond the cap. They deliberately do not compute exact total or filtered row counts.
 - The active footer/saved-filter expression is applied server-side before the display cap.
 - Whole-table search, column sorting, axis-exclusive whole-row or whole-column selection, transpose, optional alphabetical column ordering, right-click cell copy, and right-click selected row/column CSV output are client-side over the loaded display rows only. Header labels select whole columns/rows while compact sort symbols cycle ascending, descending, and unsorted states in both orientations. In transpose mode, search matches only the original column names shown in the first transposed column and keeps every loaded preview row as a `Row n` column; selected preview rows or dataset columns are preserved when toggling transpose.
@@ -162,7 +162,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **Column profile**
 
-- Column profile is default-enabled but not mandatory: explicit `--tools` and `create_app(..., tools=...)` selections include it only when requested. It appears after Line/Bar and Dataset Viewer when all three tools are enabled.
+- Column profile is default-enabled but not mandatory: explicit `--tools` and `create_app(..., tools=...)` selections include it only when requested and preserve the caller's order. It appears after Line/Bar and Dataset Viewer in the built-in default/`all` registry order.
 - Summary requests return every readable dataset column with inferred kind, DuckDB type, filtered missing count, distinct count, and min/max for numeric/date-like columns. Auto-mode summaries are exact when `filtered rows * readable columns <= 10,000,000`; larger summaries use the first 100,000 filtered readable rows and include `calculation` metadata plus a UI action to recalculate all rows exactly. Passing `mode: "full"` to `/api/column-profile/summary` forces exact all-row summary stats.
 - Unreadable columns are omitted from profile summaries and returned through `skipped_columns` with sanitized errors.
 - Detail requests return value counts for categorical columns and histogram/stat tables for numeric/date-like columns.
@@ -212,7 +212,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **GLM and GBM**
 
-- GLM and GBM are opt-in tools and are not part of the default user-facing tool set. `--tools all` enables them with every other tool. Explicit modelling selections must also include `line-bar` because GLM/GBM context-menu actions open Line/Bar charts. GLM and GBM do not imply each other; request both when cross-model tabulation or comparison workflows are needed.
+- GLM and GBM are opt-in tools and are not part of the default user-facing tool set. `--tools all` enables them with every other tool in the built-in registry order. Explicit modelling selections preserve the supplied order and must also include `line-bar` because GLM/GBM context-menu actions open Line/Bar charts. GLM and GBM do not imply each other; request both when cross-model tabulation or comparison workflows are needed.
 - GLM and GBM artifacts are scoped to the exact dataset version under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/{glm,gbm}/`. The slug is derived from the dataset filename. The signature is derived from file size, modification time, row count, and schema fingerprint. Startup scans only the current signature workspace; root-level `.lucidum/models/` folders and other dataset-version workspaces are ignored and must never break raw dataset startup.
 - GLM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
 - GLM training imports `glum`, pandas, and numpy lazily through the `glm` optional extra. These packages must not become base install dependencies. Build routes should report missing GLM dependencies as an actionable install-extra error, not a server 500.

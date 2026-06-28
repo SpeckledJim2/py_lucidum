@@ -98,6 +98,18 @@ class StaticAssetTests(unittest.TestCase):
                 classes = set(class_match.group(1).split())
                 self.assertEqual("hidden" not in classes, tool_id in expected_visible_tools)
 
+    def assert_tool_selector_visibility(self, html: str, expected_visible: bool) -> None:
+        match = re.search(r'<section\b[^>]*\bid="toolSelectorSection"[^>]*>', html)
+        self.assertIsNotNone(match)
+        class_match = re.search(r'\bclass="([^"]*)"', match.group(0))
+        self.assertIsNotNone(class_match)
+        classes = set(class_match.group(1).split())
+        self.assertEqual("hidden" not in classes, expected_visible)
+
+    def assert_tool_button_order(self, html: str, expected_order: list[str]) -> None:
+        positions = [html.index(f'data-tool="{tool_id}"') for tool_id in expected_order]
+        self.assertEqual(positions, sorted(positions))
+
     def assert_model_sidebar_panel_visibility(self, html: str, expected_visible_tools: set[str]) -> None:
         panels = {"gbm": "gbmSidebarPanel", "glm": "glmSidebarPanel"}
         for tool_id, panel_id in panels.items():
@@ -1315,16 +1327,24 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
     def test_initial_tool_buttons_match_enabled_tools(self) -> None:
         cases = [
-            (None, {"dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"}),
-            (["line-bar"], {"line_bar"}),
-            (["gbm", "line-bar"], {"line_bar", "gbm"}),
-            (["specs"], {"specs"}),
-            (["dataset-viewer", "line-bar"], {"dataset_viewer", "line_bar"}),
+            (
+                None,
+                {"dataset_viewer", "column_profile", "line_bar", "histogram", "uk_map", "specs"},
+                True,
+                ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"],
+            ),
+            (["line-bar"], set(), False, []),
+            (["gbm", "line-bar"], {"gbm", "line_bar"}, True, ["gbm", "line_bar"]),
+            (["specs"], set(), False, []),
+            (["dataset-viewer", "line-bar"], {"dataset_viewer", "line_bar"}, True, ["dataset_viewer", "line_bar"]),
         ]
-        for tools, expected_visible_tools in cases:
+        for tools, expected_visible_tools, selector_visible, expected_order in cases:
             with self.subTest(tools=tools):
                 html = self.root_html_for_tools(tools)
                 self.assert_tool_button_visibility(html, expected_visible_tools)
+                self.assert_tool_selector_visibility(html, selector_visible)
+                if expected_order:
+                    self.assert_tool_button_order(html, expected_order)
 
     def test_header_buttons_are_opt_in(self) -> None:
         hidden_html = self.root_html_for_tools(None)
@@ -4476,7 +4496,9 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         self.assertIn("body.sidebar-collapsed .sidebar-toggle-icon::before {\n        background: transparent;", css)
         self.assertNotIn("left: 6px;", css)
         self.assertIn("body.sidebar-collapsed .shell {\n        grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);", css)
+        self.assertIn("body.single-tool-mode.sidebar-collapsed .shell {\n        grid-template-columns: minmax(0, 1fr);", css)
         self.assertIn("body.sidebar-collapsed .sidebar-resizer {\n        display: none;", css)
+        self.assertIn("body.single-tool-mode.sidebar-collapsed #appSidebar {\n        display: none;", css)
         self.assertIn("body.sidebar-collapsed #appSidebar {\n        align-items: center;", css)
         self.assertIn("body.sidebar-collapsed #appSidebar > .section:not(#toolSelectorSection) {\n        display: none;", css)
         self.assertIn("#appSidebar {\n        background: var(--sidebar-bg);", css)
@@ -4489,6 +4511,7 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         self.assertIn("body.sidebar-collapsed .tool-label {\n        position: absolute;", css)
         self.assertNotIn("body.sidebar-collapsed aside,\n      body.sidebar-collapsed .sidebar-resizer", css)
         self.assertIn("sidebarVisible: true", js)
+        self.assertIn('document.body.classList.toggle("single-tool-mode", enabledTools.length === 1);', js)
         self.assertIn('document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible)', js)
         self.assertIn('el("appSidebar").removeAttribute("aria-hidden");', js)
         self.assertNotIn('el("appSidebar").setAttribute("aria-hidden", String(!state.sidebarVisible));', js)
@@ -4534,8 +4557,12 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         self.assertIn("export function createDatasetViewerTool", js)
         self.assertIn('dataset_viewer: "Dataset render"', js)
         self.assertIn('tool: ""', js)
-        self.assertIn('if (toolEnabled("line_bar")) return "line_bar";', js)
-        self.assertIn('if (toolEnabled("dataset_viewer")) return "dataset_viewer";', js)
+        self.assertIn("function enabledToolIds()", js)
+        self.assertIn('const requested = locationParams.get("tool");', js)
+        self.assertIn('if (requested && toolEnabled(requested)) return requested;', js)
+        self.assertIn('if (requestedDefault("line_bar_favourite") && toolEnabled("line_bar")) return "line_bar";', js)
+        self.assertIn('const firstEnabled = enabledToolIds()[0] || "";', js)
+        self.assertIn("if (firstEnabled && toolEnabled(firstEnabled)) return firstEnabled;", js)
         self.assertIn('api("/api/dataset-viewer/table"', js)
         self.assertIn('id="datasetViewerWrap" class="dataset-viewer-wrap hidden"', html)
         self.assertIn('id="datasetViewerSearch"', js)
@@ -4819,8 +4846,8 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         self.assertIn("closeProfileColumnContextMenu();", js)
         self.assertIn("ensureSelectedProfileColumn(columns);", js)
         self.assertIn('aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}"', js)
-        self.assertIn('if (toolEnabled("dataset_viewer")) return "dataset_viewer";', js)
-        self.assertIn('if (toolEnabled("column_profile")) return "column_profile";', js)
+        self.assertIn("function enabledToolIds()", js)
+        self.assertIn("if (firstEnabled && toolEnabled(firstEnabled)) return firstEnabled;", js)
         self.assertIn("const skippedColumns = Array.isArray(data.skipped_columns) ? data.skipped_columns : [];", js)
         self.assertIn("const totalColumnCount = columns.length + skippedCount;", js)
         self.assertIn("columns profiled", js)

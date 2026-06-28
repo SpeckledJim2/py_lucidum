@@ -58,6 +58,8 @@ DEFAULT_KEYS = {
     "line_bar_favourite",
 }
 TOOL_BUTTON_RE = re.compile(r'<button\b[^>]*\bdata-tool="([^"]+)"[^>]*>')
+TOOL_BUTTON_BLOCK_RE = re.compile(r'\s*<button\b[^>]*\bdata-tool="([^"]+)"[^>]*>.*?</button>', re.DOTALL)
+TOOL_SELECTOR_SECTION_RE = re.compile(r'<section\b[^>]*\bid="toolSelectorSection"[^>]*>')
 MODEL_SIDEBAR_PANEL_RE = re.compile(r'<section\b[^>]*\bid="(gbmSidebarPanel|glmSidebarPanel)"[^>]*>')
 HEADER_BUTTON_RE = re.compile(r'<(?:a|button)\b[^>]*\bid="(monitorLink|stopAppBtn)"[^>]*>')
 CLASS_ATTR_RE = re.compile(r'\bclass="([^"]*)"')
@@ -76,7 +78,9 @@ def favicon_media_type(path: Path) -> str:
 
 
 def render_initial_tool_visibility(html_text: str, enabled_tools: Sequence[str]) -> str:
-    enabled = {str(tool) for tool in enabled_tools}
+    ordered_enabled = list(dict.fromkeys(str(tool) for tool in enabled_tools))
+    enabled = set(ordered_enabled)
+    show_tool_selector = len(ordered_enabled) > 1
 
     def set_hidden_state(tag: str, hidden: bool, *, hide_interaction: bool = False) -> str:
         class_match = CLASS_ATTR_RE.search(tag)
@@ -98,7 +102,10 @@ def render_initial_tool_visibility(html_text: str, enabled_tools: Sequence[str])
     def replace_tool_button(match: re.Match[str]) -> str:
         tag = match.group(0)
         tool_id = match.group(1)
-        return set_hidden_state(tag, tool_id not in enabled)
+        return set_hidden_state(tag, tool_id not in enabled or not show_tool_selector)
+
+    def replace_tool_selector_section(match: re.Match[str]) -> str:
+        return set_hidden_state(match.group(0), not show_tool_selector)
 
     def replace_model_sidebar_panel(match: re.Match[str]) -> str:
         tag = match.group(0)
@@ -107,6 +114,16 @@ def render_initial_tool_visibility(html_text: str, enabled_tools: Sequence[str])
         return set_hidden_state(tag, tool_id not in enabled, hide_interaction=True)
 
     html_text = TOOL_BUTTON_RE.sub(replace_tool_button, html_text)
+    block_matches = list(TOOL_BUTTON_BLOCK_RE.finditer(html_text))
+    if block_matches:
+        blocks_by_tool = {match.group(1): match.group(0) for match in block_matches}
+        ordered_tools = [
+            *[tool_id for tool_id in ordered_enabled if tool_id in blocks_by_tool],
+            *[match.group(1) for match in block_matches if match.group(1) not in enabled],
+        ]
+        replacement = "".join(blocks_by_tool[tool_id] for tool_id in ordered_tools)
+        html_text = f"{html_text[:block_matches[0].start()]}{replacement}{html_text[block_matches[-1].end():]}"
+    html_text = TOOL_SELECTOR_SECTION_RE.sub(replace_tool_selector_section, html_text)
     return MODEL_SIDEBAR_PANEL_RE.sub(replace_model_sidebar_panel, html_text)
 
 

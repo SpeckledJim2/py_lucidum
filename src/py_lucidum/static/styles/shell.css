@@ -242,7 +242,15 @@
         grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);
       }
 
+      body.single-tool-mode.sidebar-collapsed .shell {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       body.sidebar-collapsed .sidebar-resizer {
+        display: none;
+      }
+
+      body.single-tool-mode.sidebar-collapsed #appSidebar {
         display: none;
       }
 

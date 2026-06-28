@@ -45,6 +45,17 @@
         gbm: "GBM render",
         specs: "Specs render",
       };
+      const TOOL_BUTTON_IDS = {
+        line_bar: "lineBarTool",
+        dataset_viewer: "datasetViewerTool",
+        column_profile: "profileTool",
+        histogram: "histogramTool",
+        uk_map: "ukMapTool",
+        glm: "glmTool",
+        gbm: "gbmTool",
+        specs: "specsTool",
+      };
+      const TOOL_IDS = Object.keys(TOOL_BUTTON_IDS);
       const CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED = "collapsed";
       const state = {
         schema: null,
@@ -833,6 +844,12 @@
         return schemaToolEnabled(state.schema, id);
       }
 
+      function enabledToolIds() {
+        return (state.schema?.tools || [])
+          .map((tool) => String(tool?.id || ""))
+          .filter((toolId) => toolId && Object.prototype.hasOwnProperty.call(TOOL_BUTTON_IDS, toolId));
+      }
+
       function freshProfileCache() {
         return { requestKey: null, data: null, presentation: null, themeKey: null, details: new Map() };
       }
@@ -1140,17 +1157,14 @@
       }
 
       function chooseDefaultTool() {
-        if (requestedDefault("line_bar_favourite") && toolEnabled("line_bar")) return "line_bar";
         const requested = locationParams.get("tool");
         if (requested && toolEnabled(requested)) return requested;
-        if (toolEnabled("line_bar")) return "line_bar";
-        if (toolEnabled("dataset_viewer")) return "dataset_viewer";
-        if (toolEnabled("column_profile")) return "column_profile";
-        if (toolEnabled("histogram")) return "histogram";
-        if (toolEnabled("uk_map")) return "uk_map";
-        if (toolEnabled("glm")) return "glm";
-        if (toolEnabled("gbm")) return "gbm";
-        if (toolEnabled("specs")) return "specs";
+        if (requestedDefault("line_bar_favourite") && toolEnabled("line_bar")) return "line_bar";
+        const firstEnabled = enabledToolIds()[0] || "";
+        if (firstEnabled && toolEnabled(firstEnabled)) return firstEnabled;
+        for (const toolId of TOOL_IDS) {
+          if (toolEnabled(toolId)) return toolId;
+        }
         return "column_profile";
       }
 
@@ -1167,31 +1181,27 @@
       }
 
       function renderToolSelector() {
-        const datasetViewerEnabled = toolEnabled("dataset_viewer");
-        const profileEnabled = toolEnabled("column_profile");
-        const lineBarEnabled = toolEnabled("line_bar");
-        const histogramEnabled = toolEnabled("histogram");
-        const ukMapEnabled = toolEnabled("uk_map");
-        const glmEnabled = toolEnabled("glm");
-        const gbmEnabled = toolEnabled("gbm");
-        const specsEnabled = toolEnabled("specs");
-        el("datasetViewerTool").disabled = !datasetViewerEnabled;
-        el("profileTool").disabled = !profileEnabled;
-        el("lineBarTool").disabled = !lineBarEnabled;
-        el("histogramTool").disabled = !histogramEnabled;
-        el("ukMapTool").disabled = !ukMapEnabled;
-        el("glmTool").disabled = !glmEnabled;
-        el("gbmTool").disabled = !gbmEnabled;
-        el("specsTool").disabled = !specsEnabled;
-        el("datasetViewerTool").classList.toggle("hidden", !datasetViewerEnabled);
-        el("profileTool").classList.toggle("hidden", !profileEnabled);
-        el("lineBarTool").classList.toggle("hidden", !lineBarEnabled);
-        el("histogramTool").classList.toggle("hidden", !histogramEnabled);
-        el("ukMapTool").classList.toggle("hidden", !ukMapEnabled);
-        el("glmTool").classList.toggle("hidden", !glmEnabled);
-        el("gbmTool").classList.toggle("hidden", !gbmEnabled);
-        el("specsTool").classList.toggle("hidden", !specsEnabled);
-        el("toolSelectorSection").classList.toggle("hidden", !(datasetViewerEnabled || profileEnabled || lineBarEnabled || histogramEnabled || ukMapEnabled || glmEnabled || gbmEnabled || specsEnabled));
+        const enabledTools = enabledToolIds();
+        const enabledSet = new Set(enabledTools);
+        const selector = document.querySelector("#toolSelectorSection .tool-selector");
+        if (selector) {
+          [...enabledTools, ...TOOL_IDS.filter((toolId) => !enabledSet.has(toolId))].forEach((toolId) => {
+            const button = el(TOOL_BUTTON_IDS[toolId]);
+            if (button) selector.append(button);
+          });
+        }
+        const showSelector = enabledTools.length > 1;
+        document.body.classList.toggle("single-tool-mode", enabledTools.length === 1);
+        TOOL_IDS.forEach((toolId) => {
+          const button = el(TOOL_BUTTON_IDS[toolId]);
+          const enabled = enabledSet.has(toolId);
+          if (!button) return;
+          button.disabled = !enabled;
+          button.classList.toggle("hidden", !showSelector || !enabled);
+        });
+        el("toolSelectorSection").classList.toggle("hidden", !showSelector);
+        const glmEnabled = enabledSet.has("glm");
+        const gbmEnabled = enabledSet.has("gbm");
         setModelSidebarPanelVisibility("gbmSidebarPanel", gbmEnabled);
         setModelSidebarPanelVisibility("glmSidebarPanel", glmEnabled);
         if ((state.openSidebarSection === "gbm" && !gbmEnabled) || (state.openSidebarSection === "glm" && !glmEnabled)) {
