@@ -17,7 +17,7 @@ from unittest.mock import patch
 import duckdb
 
 from py_lucidum.app import create_app
-from py_lucidum.core import Dataset, ModelPredictionSource, load_kpis, load_saved_filters, sql_literal
+from py_lucidum.core import Dataset, ModelPredictionSource, ModelSourceBinding, load_kpis, load_saved_filters, sql_literal
 from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
 from py_lucidum.tools.gbm.sources import GbmSourceProvider
@@ -26,7 +26,7 @@ from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
 from py_lucidum.tools.line_bar.favourites import LineBarFavouriteStore
 from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
-from py_lucidum.tools.line_bar.query import apply_transform, chart, normalise_quantile_count, table
+from py_lucidum.tools.line_bar.query import apply_transform, chart, mixed_relation_sql, normalise_quantile_count, table
 
 
 class PredictionSidecarProvider:
@@ -313,6 +313,16 @@ COPY (
             )
         finally:
             con.close()
+
+    def prediction_binding(self, path: Path, column: str) -> ModelSourceBinding:
+        stat = path.stat()
+        path_sql = sql_literal(str(path))
+        return ModelSourceBinding(
+            relation_sql=f"(SELECT {column} FROM read_parquet({path_sql}))",
+            columns=(column,),
+            identity_sqls=(f"(SELECT __lucidum_row_id FROM read_parquet({path_sql}))",),
+            cache_key=(str(path), int(stat.st_size), int(stat.st_mtime_ns)),
+        )
 
     def write_date_bucket_dataset(
         self,
@@ -1236,6 +1246,7 @@ COPY (
         schema = json.loads(body)
         ratio_source = next(source for source in schema["data_sources"] if source.get("kind") == RATIO_KIND)
         ratio_source_id = ratio_source["id"]
+        ratio_prediction_source = app.state.dataset.model_prediction_source(ratio_source_id)
 
         band_status, _, band_body = asgi_post_json(
             app,
@@ -1257,6 +1268,9 @@ COPY (
         chart_payload = json.loads(chart_body)
 
         self.assertEqual(status, 200)
+        self.assertIsNotNone(ratio_prediction_source)
+        self.assertIsNotNone(ratio_prediction_source.binding)
+        self.assertIn("POSITIONAL JOIN", mixed_relation_sql(app.state.dataset, [ratio_prediction_source]))
         self.assertEqual(band_status, 200)
         self.assertEqual(band_payload["source"], ratio_source_id)
         self.assertEqual(band_payload["feature"], RATIO_COLUMN)
@@ -1786,6 +1800,106 @@ COPY (
         self.assertIsNone(rate_by_x["1"]["resp1"])
         self.assertAlmostEqual(rate_by_x["3"]["resp0"], 300)
         self.assertAlmostEqual(rate_by_x["3"]["resp1"], 0.3)
+
+    def test_chart_uses_positional_binding_for_full_ordered_prediction_sidecar(self) -> None:
+        gbm_path = self.root / "gbm_full_predictions.parquet"
+        self.write_prediction_parquet(gbm_path, "gbm_prediction", [10.0, 20.0, 30.0, 40.0])
+        binding = self.prediction_binding(gbm_path, "gbm_prediction")
+        source = ModelPredictionSource(
+            source_id="gbm:m1:predictions",
+            column="gbm_prediction",
+            relation_sql=f"read_parquet({sql_literal(str(gbm_path))})",
+            active=True,
+            binding=binding,
+            bindings={"gbm_prediction": binding},
+        )
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(PredictionSidecarProvider({"gbm:m1:predictions": source}))
+
+        relation_sql = mixed_relation_sql(dataset, [source])
+        result = chart(
+            dataset,
+            {
+                "source": "dataset",
+                "x": "UseofVan",
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "GBM", "numerator": "gbm_prediction", "source": "gbm:m1:predictions"},
+                ],
+                "denominator": "__none__",
+                "filter": "",
+                "bandWidth": 0,
+                "dateBucket": "none",
+                "lowGroup": "0",
+                "sort": "alpha",
+                "sigma": 0,
+                "transform": "none",
+            },
+        )
+
+        self.assertIn("POSITIONAL JOIN", relation_sql)
+        by_x = {row["x"]: row for row in result["rows"]}
+        self.assertAlmostEqual(by_x["Social"]["resp0"], 150.0)
+        self.assertAlmostEqual(by_x["Social"]["resp1"], 15.0)
+        self.assertAlmostEqual(by_x["Business"]["resp0"], 350.0)
+        self.assertAlmostEqual(by_x["Business"]["resp1"], 35.0)
+
+    def test_chart_falls_back_when_prediction_sidecar_order_is_not_dataset_order(self) -> None:
+        gbm_path = self.root / "gbm_misaligned_predictions.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 10.0 AS gbm_prediction
+  UNION ALL
+  SELECT 3, 30.0
+  UNION ALL
+  SELECT 2, 20.0
+  UNION ALL
+  SELECT 4, 40.0
+) TO {sql_literal(str(gbm_path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        binding = self.prediction_binding(gbm_path, "gbm_prediction")
+        source = ModelPredictionSource(
+            source_id="gbm:m1:predictions",
+            column="gbm_prediction",
+            relation_sql=f"read_parquet({sql_literal(str(gbm_path))})",
+            active=True,
+            binding=binding,
+            bindings={"gbm_prediction": binding},
+        )
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(PredictionSidecarProvider({"gbm:m1:predictions": source}))
+
+        relation_sql = mixed_relation_sql(dataset, [source])
+        result = chart(
+            dataset,
+            {
+                "source": "dataset",
+                "x": "UseofVan",
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "GBM", "numerator": "gbm_prediction", "source": "gbm:m1:predictions"},
+                ],
+                "denominator": "__none__",
+                "filter": "",
+                "bandWidth": 0,
+                "dateBucket": "none",
+                "lowGroup": "0",
+                "sort": "alpha",
+                "sigma": 0,
+                "transform": "none",
+            },
+        )
+
+        self.assertNotIn("POSITIONAL JOIN", relation_sql)
+        by_x = {row["x"]: row for row in result["rows"]}
+        self.assertAlmostEqual(by_x["Social"]["resp1"], 15.0)
+        self.assertAlmostEqual(by_x["Business"]["resp1"], 35.0)
 
     def test_chart_adds_active_gbm_shap_ribbons_scaled_to_fitted_values(self) -> None:
         dataset = self.dataset_with_gbm_ribbons()

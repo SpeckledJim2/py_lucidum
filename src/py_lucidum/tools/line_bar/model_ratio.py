@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from py_lucidum.core import Dataset, ModelPredictionSource, quote_ident
+from py_lucidum.core import Dataset, ModelPredictionSource, ModelSourceBinding, quote_ident
 
 
 RATIO_COLUMN = "gbm_to_glm_ratio"
@@ -58,11 +58,15 @@ INNER JOIN {glm_relation} glm USING (__lucidum_row_id)
     def prediction_source(self, source_id: str) -> ModelPredictionSource | None:
         if not self.has_source(source_id):
             return None
+        context = self._source_context(source_id)
+        binding = self._ratio_binding(context) if context else None
         return ModelPredictionSource(
             source_id=source_id,
             column=RATIO_COLUMN,
             relation_sql=self.relation_sql(source_id),
             active=True,
+            binding=binding,
+            bindings={RATIO_COLUMN: binding} if binding is not None else {},
         )
 
     def data_sources(self, dataset: Dataset) -> list[dict[str, Any]]:
@@ -115,6 +119,38 @@ INNER JOIN {glm_relation} glm USING (__lucidum_row_id)
         from py_lucidum.tools.glm.store import GlmSourceProvider
 
         return GlmSourceProvider(self.glm_store).prediction_source(source_id)
+
+    def _ratio_binding(self, context: dict[str, str]) -> ModelSourceBinding | None:
+        gbm_source = self._gbm_prediction_source(context["gbm_source_id"])
+        glm_source = self._glm_prediction_source(context["glm_source_id"])
+        if gbm_source is None or glm_source is None:
+            return None
+        gbm_binding = gbm_source.bindings.get("gbm_prediction") or gbm_source.binding
+        glm_binding = glm_source.bindings.get("glm_prediction") or glm_source.binding
+        if gbm_binding is None or glm_binding is None:
+            return None
+        if gbm_binding.base_where_sql != glm_binding.base_where_sql:
+            return None
+        if gbm_binding.base_columns != glm_binding.base_columns:
+            return None
+        ratio_sql = quote_ident(RATIO_COLUMN)
+        return ModelSourceBinding(
+            relation_sql=f"""(
+SELECT
+  CASE
+    WHEN TRY_CAST(glm.glm_prediction AS DOUBLE) IS NULL THEN NULL
+    WHEN TRY_CAST(glm.glm_prediction AS DOUBLE) = 0 THEN NULL
+    ELSE TRY_CAST(gbm.gbm_prediction AS DOUBLE) / TRY_CAST(glm.glm_prediction AS DOUBLE)
+  END AS {ratio_sql}
+FROM {gbm_binding.relation_sql} gbm
+POSITIONAL JOIN {glm_binding.relation_sql} glm
+)""",
+            columns=(RATIO_COLUMN,),
+            identity_sqls=(*gbm_binding.identity_sqls, *glm_binding.identity_sqls),
+            base_where_sql=gbm_binding.base_where_sql,
+            base_columns=gbm_binding.base_columns,
+            cache_key=("ratio", gbm_binding.cache_key, glm_binding.cache_key),
+        )
 
 
 def register_model_ratio_source_provider(app: FastAPI, dataset: Dataset) -> None:

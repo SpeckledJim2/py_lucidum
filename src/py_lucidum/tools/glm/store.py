@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import duckdb
 
-from py_lucidum.core import Dataset, ModelPredictionSource, dataset_workspace_metadata, quote_ident, sql_literal
+from py_lucidum.core import Dataset, ModelPredictionSource, ModelSourceBinding, dataset_workspace_metadata, quote_ident, sql_literal
 
 from .validation import denominator_valid_sql, dataset_relation_sql
 
@@ -82,6 +82,11 @@ def parquet_columns(path: Path) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
+def path_cache_key(path: Path) -> tuple[str, int, int]:
+    stat = path.stat()
+    return (str(path), int(stat.st_size), int(stat.st_mtime_ns))
+
+
 def source_columns_with_denominator(source_columns: list[str], denominator_col: str) -> list[str]:
     if not denominator_col or denominator_col in source_columns:
         return source_columns
@@ -119,6 +124,19 @@ def prediction_source_select_sql(
     if include_tabulated:
         parts.append("tabulated.glm_tabulated_prediction")
     return ",\n  ".join(parts)
+
+
+def artifact_identity_sql(path: Path) -> str:
+    return f"(SELECT __lucidum_row_id FROM read_parquet({sql_literal(str(path))}))"
+
+
+def artifact_column_relation_sql(path: Path, columns: list[str]) -> str:
+    select_sql = ",\n  ".join(quote_ident(column) for column in columns)
+    return f"""(
+SELECT
+  {select_sql}
+FROM read_parquet({sql_literal(str(path))})
+)"""
 
 
 class GlmModelStore:
@@ -432,6 +450,33 @@ class GlmSourceProvider:
         denominator_col = str(manifest.get("denominator_column") or "").strip()
         prediction_has_rate = "glm_prediction_rate" in parquet_columns(source_path)
         tabulated_path = self.store.artifact_path(ref.model_id, "tabulated_predictions")
+        bindings: dict[str, ModelSourceBinding] = {}
+        if not manifest.get("offset_terms"):
+            base_where_sql = denominator_valid_sql(denominator_col) if denominator_col else ""
+            base_columns = (denominator_col,) if denominator_col else ()
+            prediction_columns = ["glm_prediction"]
+            if prediction_has_rate:
+                prediction_columns.append("glm_prediction_rate")
+            prediction_binding = ModelSourceBinding(
+                relation_sql=artifact_column_relation_sql(source_path, prediction_columns),
+                columns=tuple(prediction_columns),
+                identity_sqls=(artifact_identity_sql(source_path),),
+                base_where_sql=base_where_sql,
+                base_columns=base_columns,
+                cache_key=("glm", ref.model_id, "predictions", path_cache_key(source_path)),
+            )
+            bindings["glm_prediction"] = prediction_binding
+            if prediction_has_rate:
+                bindings["glm_prediction_rate"] = prediction_binding
+            if tabulated_path.exists():
+                bindings["glm_tabulated_prediction"] = ModelSourceBinding(
+                    relation_sql=artifact_column_relation_sql(tabulated_path, ["glm_tabulated_prediction"]),
+                    columns=("glm_tabulated_prediction",),
+                    identity_sqls=(artifact_identity_sql(tabulated_path),),
+                    base_where_sql=base_where_sql,
+                    base_columns=base_columns,
+                    cache_key=("glm", ref.model_id, "tabulated_predictions", path_cache_key(tabulated_path)),
+                )
         rate_select_sql = f",\n  {glm_prediction_rate_sql(denominator_col, artifact_has_rate=prediction_has_rate)}" if denominator_col else ""
         base_join_sql = ""
         if denominator_col and not prediction_has_rate:
@@ -465,6 +510,8 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
             column="glm_prediction",
             relation_sql=relation_sql,
             active=self.store.active_model_id() == ref.model_id,
+            binding=bindings.get("glm_prediction"),
+            bindings=bindings,
         )
 
     def data_sources(self, dataset: Dataset) -> list[dict[str, Any]]:

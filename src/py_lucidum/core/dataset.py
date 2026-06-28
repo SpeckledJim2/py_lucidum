@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import stat as stat_module
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -13,11 +13,23 @@ from .sql import quote_ident, sql_literal
 
 
 @dataclass(frozen=True)
+class ModelSourceBinding:
+    relation_sql: str
+    columns: tuple[str, ...]
+    identity_sqls: tuple[str, ...]
+    base_where_sql: str = ""
+    base_columns: tuple[str, ...] = ()
+    cache_key: tuple[Any, ...] = ()
+
+
+@dataclass(frozen=True)
 class ModelPredictionSource:
     source_id: str
     column: str
     relation_sql: str
     active: bool = False
+    binding: ModelSourceBinding | None = None
+    bindings: dict[str, ModelSourceBinding] = field(default_factory=dict)
 
 
 ParquetFolderManifest = tuple[tuple[Path, int, int], ...]
@@ -39,6 +51,7 @@ class Dataset:
         self._row_count: int | None = None
         self._band_suggestions: dict[str, float | int | None] | None = None
         self._source_band_suggestions: dict[str, dict[str, float | int | None]] = {}
+        self._model_binding_cache: dict[tuple[Any, ...], bool] = {}
         self._lock = threading.RLock()
         self._source_providers: list[Any] = []
 
@@ -203,6 +216,64 @@ class Dataset:
                 )
         return None
 
+    def model_source_binding_eligible(self, binding: ModelSourceBinding | None) -> bool:
+        if binding is None or not binding.relation_sql or not binding.columns or not binding.identity_sqls:
+            return False
+        cache_key = (
+            self.source_kind,
+            self.relation_sql(),
+            binding.base_where_sql,
+            binding.base_columns,
+            binding.identity_sqls,
+            binding.cache_key,
+        )
+        if cache_key not in self._model_binding_cache:
+            self._model_binding_cache[cache_key] = self._check_model_source_binding(binding)
+        return self._model_binding_cache[cache_key]
+
+    def _check_model_source_binding(self, binding: ModelSourceBinding) -> bool:
+        base_where_sql = f"\nWHERE {binding.base_where_sql}" if binding.base_where_sql else ""
+        base_column_sql = ",\n    ".join(quote_ident(name) for name in binding.base_columns)
+        base_column_suffix = f",\n    {base_column_sql}" if base_column_sql else ""
+        base_identity_sql = f"""(
+SELECT
+  __lucidum_row_id,
+  ROW_NUMBER() OVER () AS __bind_pos
+FROM (
+  SELECT
+    ROW_NUMBER() OVER () AS __lucidum_row_id{base_column_suffix}
+  FROM {self.relation_sql()}
+) dataset_rows{base_where_sql}
+)"""
+        for identity_sql in binding.identity_sqls:
+            sql = f"""
+WITH base_rows AS (
+  SELECT __lucidum_row_id, __bind_pos
+  FROM {base_identity_sql}
+),
+artifact_rows AS (
+  SELECT
+    TRY_CAST(__lucidum_row_id AS BIGINT) AS __lucidum_row_id,
+    ROW_NUMBER() OVER () AS __bind_pos
+  FROM {identity_sql}
+),
+mismatches AS (
+  SELECT COUNT(*) AS mismatch_count
+  FROM base_rows
+  FULL OUTER JOIN artifact_rows USING (__bind_pos)
+  WHERE base_rows.__lucidum_row_id IS DISTINCT FROM artifact_rows.__lucidum_row_id
+)
+SELECT mismatch_count
+FROM mismatches
+"""
+            try:
+                mismatch_count = self.con.execute(sql).fetchone()[0]
+            except duckdb.Error:
+                return False
+            if int(mismatch_count or 0) != 0:
+                return False
+        return True
+
     def data_sources(self) -> list[dict[str, Any]]:
         with self._lock:
             schema = self.schema()
@@ -249,6 +320,7 @@ class Dataset:
         self._row_count = None
         self._band_suggestions = None
         self._source_band_suggestions = {}
+        self._model_binding_cache = {}
 
     def schema(self) -> dict[str, Any]:
         with self._lock:

@@ -4000,6 +4000,63 @@ ORDER BY __lucidum_row_id
         self.assertAlmostEqual(shap_result["rows"][0]["resp0"], 0.2)
         self.assertAlmostEqual(shap_result["rows"][0]["resp1"], 11.5)
 
+    def test_shap_source_uses_positional_relation_for_full_ordered_shap_artifact(self) -> None:
+        store = GbmModelStore(self.data_path)
+        model_id = "full-shap"
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": "Full SHAP",
+                "created_at": "2026-06-28T00:00:00Z",
+                "response_column": "actualNumerator",
+            },
+        )
+        write_gbm_feature_config(store, model_id, features=["Age", "Segment"])
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 11.0 AS gbm_prediction
+  UNION ALL
+  SELECT 2, 22.0
+  UNION ALL
+  SELECT 3, 33.0
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 0.1 AS Age, -0.1 AS Segment
+  UNION ALL
+  SELECT 2, 0.2, -0.2
+  UNION ALL
+  SELECT 3, 0.3, -0.3
+) TO {sql_literal(str(model_dir / "shap_values.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(GbmSourceProvider(GbmModelStore(self.data_path, dataset=dataset)))
+
+        relation_sql = dataset.relation_sql_for_source(f"gbm:{model_id}:shap_long")
+        rows = dataset.con.execute(
+            f"""
+SELECT Segment, SHAP__Age, gbm_prediction
+FROM {relation_sql}
+ORDER BY Segment
+"""
+        ).fetchall()
+
+        self.assertIn("POSITIONAL JOIN", relation_sql)
+        self.assertEqual([row[0] for row in rows], ["A", "B", "C"])
+        self.assertEqual([float(row[1]) for row in rows], [0.1, 0.2, 0.3])
+        self.assertEqual([float(row[2]) for row in rows], [11.0, 22.0, 33.0])
+
     def test_prediction_source_relation_uses_safe_explicit_projection(self) -> None:
         store = self.write_model_artifacts()
         original_probe = Dataset.probe_column_readable

@@ -1373,6 +1373,8 @@ def add_field_column(
                 column=column_name,
                 relation_sql=prediction_source.relation_sql,
                 active=prediction_source.active,
+                binding=prediction_source.bindings.get(column_name),
+                bindings=prediction_source.bindings,
             )
             columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
             return
@@ -1387,6 +1389,53 @@ def add_field_column(
 
 
 def mixed_relation_sql(dataset: Dataset, prediction_sources: list[ModelPredictionSource]) -> str:
+    positional_sql = positional_mixed_relation_sql(dataset, prediction_sources)
+    if positional_sql:
+        return positional_sql
+    return keyed_mixed_relation_sql(dataset, prediction_sources)
+
+
+def positional_mixed_relation_sql(dataset: Dataset, prediction_sources: list[ModelPredictionSource]) -> str:
+    if not prediction_sources:
+        return ""
+    bindings = []
+    for source in prediction_sources:
+        binding = source.binding
+        if binding is None or source.column not in binding.columns:
+            return ""
+        if not dataset.model_source_binding_eligible(binding):
+            return ""
+        bindings.append(binding)
+    base_where_sql = bindings[0].base_where_sql
+    if any(binding.base_where_sql != base_where_sql for binding in bindings):
+        return ""
+
+    dataset_columns = [column.name for column in dataset.valid_schema_columns()]
+    source_column_sql = ",\n    ".join(quote_ident(name) for name in dataset_columns)
+    source_column_suffix = f",\n    {source_column_sql}" if source_column_sql else ""
+    where_sql = f"\n  WHERE {base_where_sql}" if base_where_sql else ""
+    joins: list[str] = []
+    selects = [f"base.{quote_ident(name)}" for name in dataset_columns]
+    for index, source in enumerate(prediction_sources):
+        alias = f"prediction_{index}"
+        joins.append(f"POSITIONAL JOIN {source.binding.relation_sql} {alias}")
+        selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+    select_sql = ",\n  ".join(selects) if selects else "*"
+    join_sql = "\n".join(joins)
+    return f"""(
+SELECT
+  {select_sql}
+FROM (
+  SELECT
+    ROW_NUMBER() OVER () AS __lucidum_row_id{source_column_suffix}
+  FROM {dataset.relation_sql()}
+  {where_sql}
+) base
+{join_sql}
+)"""
+
+
+def keyed_mixed_relation_sql(dataset: Dataset, prediction_sources: list[ModelPredictionSource]) -> str:
     dataset_columns = [column.name for column in dataset.valid_schema_columns()]
     source_column_sql = ",\n    ".join(quote_ident(name) for name in dataset_columns)
     source_column_suffix = f",\n    {source_column_sql}" if source_column_sql else ""
