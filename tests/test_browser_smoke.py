@@ -2905,6 +2905,203 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_favourite_keeps_chart_format_while_next_view_loads(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            data_path.write_text(
+                "segment,price,ratio,value\n"
+                "A,100,0.10,10\n"
+                "A,120,0.20,20\n"
+                "B,200,0.30,30\n"
+                "B,240,0.40,40\n"
+                "C,300,0.50,50\n"
+                "C,360,0.60,60\n",
+                encoding="utf-8",
+            )
+            kpis_path = root / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "FIN,Price,price,__none__,2,currency\n"
+                "RATIO,Ratio,ratio,__none__,1,percent\n",
+                encoding="utf-8",
+            )
+            base_view = {
+                "version": 1,
+                "source": "dataset",
+                "x": "segment",
+                "xSource": "dataset",
+                "view": "chart",
+                "sort": "alpha",
+                "lowGroup": "0",
+                "labels": "line",
+                "bandWidth": "0",
+                "quantileMode": "off",
+                "dateBucket": "none",
+                "transform": "none",
+                "sigma": "0",
+                "partialDependence": "none",
+                "featureSort": "alpha",
+                "expectedSort": "alpha",
+                "denominator": "__none__",
+                "expectedSelections": [],
+                "filter": "",
+                "filterSelectionMode": "single",
+                "filterOperator": "and",
+                "savedFilterRows": [],
+            }
+            favourites_path = root / "favourites.json"
+            favourites_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "favourites": [
+                            {
+                                "id": "ratio-view",
+                                "name": "Ratio view",
+                                "created_at": "2026-06-29T00:00:00Z",
+                                "updated_at": "2026-06-29T00:00:00Z",
+                                "view": {
+                                    **base_view,
+                                    "actual": {"value": "ratio", "sourceId": "dataset", "metricKind": "dataset"},
+                                },
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                kpis_path=kpis_path,
+                use_kpis=True,
+                line_bar_favourites_path=favourites_path,
+                defaults={"x": "segment", "actual": "price", "denominator": "__none__"},
+                tools=["line_bar"],
+            )
+            held_chart_routes: list[Any] = []
+
+            def release_held_chart_routes() -> None:
+                while held_chart_routes:
+                    held_chart_routes.pop(0).continue_()
+
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+                        page.locator('.segmented[data-control="labels"] button[data-value="line"]').click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                              const labels = chart?.getZr?.().storage.getDisplayList()
+                                .map((item) => item.style?.text || "") || [];
+                              return labels.includes("£110.00") && labels.includes("£220.00") && labels.includes("£330.00");
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+
+                        def handle_chart_route(route: Any) -> None:
+                            if route.request.method == "POST":
+                                held_chart_routes.append(route)
+                                return
+                            route.continue_()
+
+                        page.route("**/api/chart", handle_chart_route)
+                        page.locator("#lineBarFavouriteSelect").select_option("ratio-view")
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#actualNumerator")?.value === "ratio"
+                              && document.querySelector("#kpiSelectedMeta")?.textContent === "Ratio"
+                            """,
+                            timeout=10_000,
+                        )
+                        for _ in range(50):
+                            if held_chart_routes:
+                                break
+                            page.wait_for_timeout(100)
+                        self.assertTrue(held_chart_routes)
+                        page.wait_for_timeout(250)
+
+                        pending_state = page.evaluate(
+                            """
+                            () => {
+                              const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                              const option = chart?.getOption?.() || {};
+                              const line = option.series?.find((series) => series.type === "line");
+                              const yFormatter = option.yAxis?.[0]?.axisLabel?.formatter;
+                              const labelFormatter = line?.label?.formatter;
+                              const visibleLabels = chart?.getZr?.().storage.getDisplayList()
+                                .map((item) => item.style?.text || "")
+                                .filter(Boolean) || [];
+                              return {
+                                actual: document.querySelector("#actualNumerator")?.value || "",
+                                groupMeta: document.querySelector("#lineBarGroupMeta")?.textContent || "",
+                                data: line?.data || [],
+                                ySample: typeof yFormatter === "function" ? yFormatter(1.23) : "",
+                                labelSample: typeof labelFormatter === "function" ? labelFormatter({ value: 123.456 }) : "",
+                                visibleLabels,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(pending_state["actual"], "ratio")
+                        self.assertEqual(pending_state["groupMeta"], "Computing...")
+                        self.assertEqual(pending_state["data"], [110, 220, 330])
+                        self.assertEqual(pending_state["ySample"], "£1.23")
+                        self.assertEqual(pending_state["labelSample"], "£123.46")
+                        self.assertIn("£110.00", pending_state["visibleLabels"])
+                        self.assertNotIn("11,000.0%", pending_state["visibleLabels"])
+
+                        release_held_chart_routes()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                              && echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.()
+                                .series?.find((series) => series.type === "line")?.data
+                                ?.every((value) => Number(value) < 1)
+                            """,
+                            timeout=10_000,
+                        )
+                        loaded_state = page.evaluate(
+                            """
+                            () => {
+                              const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                              const labels = chart?.getZr?.().storage.getDisplayList()
+                                .map((item) => item.style?.text || "")
+                                .filter(Boolean) || [];
+                              return {
+                                labels,
+                                data: chart?.getOption?.().series?.find((series) => series.type === "line")?.data || [],
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(loaded_state["data"], [0.15000000000000002, 0.35, 0.55])
+                        self.assertIn("15.0%", loaded_state["labels"])
+                        self.assertIn("35.0%", loaded_state["labels"])
+                        self.assertIn("55.0%", loaded_state["labels"])
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        release_held_chart_routes()
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_favourite_restores_model_outputs_against_active_models(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

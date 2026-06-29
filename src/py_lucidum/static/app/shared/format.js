@@ -30,11 +30,10 @@ export function createFormatters({ getActiveKpiFormat }) {
     return formatLineValue(value);
   }
 
-  function formatLineValue(value) {
+  function formatLineValueForFormat(value, activeKpiFormat = null) {
     if (value === null || value === undefined || Number.isNaN(value)) return "";
     const number = Number(value);
     if (!Number.isFinite(number)) return "";
-    const activeKpiFormat = getActiveKpiFormat?.();
     if (activeKpiFormat) {
       const decimals = Number(activeKpiFormat.decimals);
       const fractionDigits = Number.isInteger(decimals) ? Math.max(0, Math.min(12, decimals)) : 2;
@@ -57,6 +56,10 @@ export function createFormatters({ getActiveKpiFormat }) {
       minimumFractionDigits: fractionDigits,
       maximumFractionDigits: fractionDigits,
     });
+  }
+
+  function formatLineValue(value) {
+    return formatLineValueForFormat(value, getActiveKpiFormat?.());
   }
 
   function formatWeightValue(value) {
@@ -119,6 +122,7 @@ export function createFormatters({ getActiveKpiFormat }) {
     formatChartLabel,
     formatLineLabel,
     formatLineValue,
+    formatLineValueForFormat,
     formatWeightValue,
     formatFileSize,
     formatXLabel,

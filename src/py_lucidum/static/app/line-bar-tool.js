@@ -22,6 +22,7 @@ export function createLineBarTool({
   formatChartLabel,
   formatLineLabel,
   formatLineValue,
+  formatLineValueForFormat = formatLineValue,
   formatXLabel,
   formatRowMeta,
   measureToolRender,
@@ -103,6 +104,7 @@ export function createLineBarTool({
   let lineBarTableCopyFooterRow = null;
   let dateXAxisContext = null;
   let dateXAxisRefreshFrame = null;
+  let chartRenderTransform = "none";
   let lineBarChartDirty = false;
   let favourites = [];
   let favouritesLoaded = false;
@@ -1486,6 +1488,8 @@ export function createLineBarTool({
     }
     const labels = data.rows.map((r) => formatChartXLabel(r, data));
     const labelMode = state.labels;
+    const renderTransform = String(state.transform || "none");
+    const formatChartResponseValue = chartResponseFormatter(renderTransform);
     const rawXValues = data.rows.map((r) => r.x);
     const dateBucket = normaliseDateBucket(data.date_bucket);
     const displayKind = data.x_group_kind || data.x_kind;
@@ -1515,7 +1519,7 @@ export function createLineBarTool({
     ];
     const mainLegendSelection = matchingLegendSelection(previousOption, legendData);
     const overlayLegendSelection = matchingLegendSelection(previousOption, overlayLegendData);
-    const responseAxis = responseAxisOptions(data, { ...mainLegendSelection, ...overlayLegendSelection });
+    const responseAxis = responseAxisOptions(data, { ...mainLegendSelection, ...overlayLegendSelection }, renderTransform);
     const barSeries = {
       name: weightLabel,
       type: "bar",
@@ -1550,9 +1554,9 @@ export function createLineBarTool({
       itemStyle: { color: responseColors[index] || actualColor },
       data: data.rows.map((r) => r[`resp${index}`]),
       showAllSymbol: true,
-      label: { show: showLineLabels, fontSize: 10, formatter: formatResponseLabel },
+      label: { show: showLineLabels, fontSize: 10, formatter: (params) => formatResponseLabel(params, formatChartResponseValue) },
     }));
-    const upliftBaseline = upliftBaselineSeries(data);
+    const upliftBaseline = upliftBaselineSeries(data, renderTransform);
 
     const customSeries = [];
     if (Number(state.sigma) > 0 && data.responses.length >= 2) {
@@ -1595,7 +1599,7 @@ export function createLineBarTool({
         color: [actualColor, expectedColor, secondExpectedColor, nColor],
         tooltip: {
           trigger: "axis",
-          formatter: (params) => formatChartTooltip(params, weightLabel),
+          formatter: (params) => formatChartTooltip(params, weightLabel, formatChartResponseValue),
         },
         legend: lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection),
         grid: { left: 72, right: 76, top: hasOverlaySeries ? 82 : 56, bottom: xLabelPolicy.bottom, containLabel: false },
@@ -1621,7 +1625,7 @@ export function createLineBarTool({
           axisLine: { lineStyle: { color: getCss("--line") } },
         },
         yAxis: [
-          { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatResponseValue(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
+          { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatChartResponseValue(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
           { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
         ],
         dataZoom: xLabelPolicy.dataZoomEnabled ? lineBarDataZoomOptions() : [],
@@ -1629,6 +1633,7 @@ export function createLineBarTool({
       },
       true,
     );
+    chartRenderTransform = renderTransform;
     requestAnimationFrame(() => {
       chart.resize();
       refreshDateXAxisLabelsForCurrentZoom();
@@ -2235,13 +2240,13 @@ export function createLineBarTool({
     return formatNumber(value);
   }
 
-  function formatChartTooltip(params, weightLabel) {
+  function formatChartTooltip(params, weightLabel, responseValueFormatter = formatResponseValue) {
     const items = Array.isArray(params) ? params : [params];
     if (!items.length) return "";
     const lines = [escapeHtml(items[0].axisValueLabel ?? items[0].name ?? "")];
     items.forEach((item) => {
       const value = Array.isArray(item.value) ? item.value[1] : item.value;
-      const formatter = item.seriesName === weightLabel ? formatNumber : formatResponseValue;
+      const formatter = item.seriesName === weightLabel ? formatNumber : responseValueFormatter;
       lines.push(`${item.marker || ""}${escapeHtml(item.seriesName)}: ${escapeHtml(formatter(value))}`);
     });
     return lines.join("<br/>");
@@ -2258,25 +2263,40 @@ export function createLineBarTool({
     el("expectedMetricTitle").append(valueSpan);
   }
 
-  function formatResponseLabel(params) {
+  function formatResponseLabel(params, responseValueFormatter = formatResponseValue) {
     const value = Array.isArray(params.value) ? params.value[1] : params.value;
-    return formatResponseValue(value);
+    return responseValueFormatter(value);
   }
 
   function formatResponseValue(value) {
     return isUpliftTransform() ? formatUpliftPercent(value) : formatLineValue(value);
   }
 
-  function isUpliftTransform() {
-    return String(state.transform || "none") === "one";
+  function chartResponseFormatter(transform = state.transform, kpiFormat = state.activeKpiFormat) {
+    const renderTransform = String(transform || "none");
+    const renderKpiFormat = kpiFormat
+      ? {
+          decimals: Number(kpiFormat.decimals),
+          format: String(kpiFormat.format || "number").toLowerCase(),
+        }
+      : null;
+    return (value) => (
+      isUpliftTransform(renderTransform)
+        ? formatUpliftPercent(value)
+        : formatLineValueForFormat(value, renderKpiFormat)
+    );
   }
 
-  function isBaseReferenceTransform() {
-    return ["zero", "one"].includes(String(state.transform || "none"));
+  function isUpliftTransform(transform = state.transform) {
+    return String(transform || "none") === "one";
   }
 
-  function isBaseWeightBar(data, row) {
-    if (!isBaseReferenceTransform()) return false;
+  function isBaseReferenceTransform(transform = state.transform) {
+    return ["zero", "one"].includes(String(transform || "none"));
+  }
+
+  function isBaseWeightBar(data, row, transform = state.transform) {
+    if (!isBaseReferenceTransform(transform)) return false;
     if (String(data?.transform?.reference || "") !== "base") return false;
     const baseX = data?.transform?.base_x;
     if (baseX === null || baseX === undefined) return false;
@@ -2288,8 +2308,8 @@ export function createLineBarTool({
     return isBaseWeightBar(data, row) ? getCss("--base-bar") : getCss("--bar");
   }
 
-  function upliftBaselineSeries(data) {
-    if (!isUpliftTransform()) return null;
+  function upliftBaselineSeries(data, transform = state.transform) {
+    if (!isUpliftTransform(transform)) return null;
     return {
       name: "0% uplift baseline",
       type: "line",
@@ -2335,16 +2355,17 @@ export function createLineBarTool({
     return `${sign}${formatted}%`;
   }
 
-  function responseAxisOptions(data, selected = null) {
+  function responseAxisOptions(data, selected = null, transform = state.transform) {
     const extent = withUpliftBaselineExtent(
       responseAxisExtent(data.rows, data.responses, data.partial_dependence, selected)
         || responseAxisExtent(data.rows, data.responses, data.partial_dependence),
+      transform,
     );
     return responseAxisBounds(extent) || {};
   }
 
-  function withUpliftBaselineExtent(extent) {
-    if (!extent || !isUpliftTransform()) return extent;
+  function withUpliftBaselineExtent(extent, transform = state.transform) {
+    if (!extent || !isUpliftTransform(transform)) return extent;
     return {
       min: Math.min(Number(extent.min), 1),
       max: Math.max(Number(extent.max), 1),
@@ -2410,7 +2431,7 @@ export function createLineBarTool({
 
   function updateResponseAxisForLegendSelection() {
     if (!state.lastData) return;
-    const responseAxis = responseAxisOptions(state.lastData, legendSelectionFromOption(chart.getOption()));
+    const responseAxis = responseAxisOptions(state.lastData, legendSelectionFromOption(chart.getOption()), chartRenderTransform);
     chart.setOption({
       yAxis: [{
         min: responseAxis.min,
