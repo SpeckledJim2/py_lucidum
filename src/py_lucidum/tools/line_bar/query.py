@@ -2059,13 +2059,12 @@ def build_shap_partial_dependence_overlay(
     responses: list[dict[str, str]],
     denominator: dict[str, str | None],
 ) -> dict[str, Any]:
-    source = active_gbm_shap_source(dataset)
+    source = active_gbm_shap_overlay_source(dataset)
     if source is None:
         return empty_shap_partial_dependence_warning("No active GBM SHAP values are available.")
     model_id = str(source.get("model_id") or "")
     shap_source_id = str(source.get("id") or "")
-    prediction_source = active_gbm_prediction_source(dataset, model_id)
-    if not model_id or not shap_source_id or prediction_source is None:
+    if not model_id or not shap_source_id or not source.get("has_prediction"):
         return empty_shap_partial_dependence_warning("The active GBM needs both SHAP values and predictions for SHAP ribbons.")
 
     shap_column = shap_value_column_for_feature(source, x_col)
@@ -2081,7 +2080,8 @@ def build_shap_partial_dependence_overlay(
     overlay_denominator = normalise_overlay_denominator(denominator, shap_source_columns)
     shap_relation = dataset.relation_sql_for_source(shap_source_id)
     filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), shap_relation)
-    shap_expr = shap_response_sql(str(source.get("objective") or prediction_source.get("objective") or ""), quote_ident(shap_column))
+    objective = str(source.get("objective") or "")
+    shap_expr = shap_response_sql(objective, quote_ident(shap_column))
     initial_sql = build_partial_dependence_sql(
         shap_relation,
         x_sql,
@@ -2096,7 +2096,9 @@ def build_shap_partial_dependence_overlay(
     ]
     initial_rows = normalise_partial_dependence_rows(initial_raw_rows)
     group_mapping = partial_low_weight_group_mapping(initial_rows, x_group_kind, str(request.get("lowGroup") or "0"))
-    if group_mapping:
+    if partial_group_mapping_is_identity(group_mapping):
+        rows = initial_rows
+    elif group_mapping:
         final_sql = build_partial_dependence_sql(
             shap_relation,
             x_sql,
@@ -2115,7 +2117,7 @@ def build_shap_partial_dependence_overlay(
         rows = []
     if x_group_kind == "numeric":
         clean_partial_numeric_labels(rows, request.get("bandWidth"))
-    scale = scale_partial_dependence_rows(rows, objective=str(source.get("objective") or prediction_source.get("objective") or ""))
+    scale = scale_partial_dependence_rows(rows, objective=objective)
     warnings: list[str] = []
     if not rows:
         warnings.append("No SHAP ribbon rows matched the current chart selection.")
@@ -2132,6 +2134,17 @@ def build_shap_partial_dependence_overlay(
         "scale": {key: value for key, value in scale.items() if key != "warning"},
         "transform": {"mode": str(request.get("transform") or "none")},
     }
+
+
+def active_gbm_shap_overlay_source(dataset: Dataset) -> dict[str, Any] | None:
+    for provider in getattr(dataset, "_source_providers", []):
+        active_source = getattr(provider, "active_shap_overlay_source", None)
+        if not callable(active_source):
+            continue
+        source = active_source(dataset)
+        if isinstance(source, dict) and source.get("active"):
+            return source
+    return None
 
 
 def partial_dependence_mode(raw: Any) -> str:
@@ -2158,25 +2171,6 @@ def empty_shap_partial_dependence_warning(message: str) -> dict[str, Any]:
     }
 
 
-def active_gbm_shap_source(dataset: Dataset) -> dict[str, Any] | None:
-    sources = dataset.data_sources()
-    return next((source for source in sources if source.get("kind") == "gbm_shap_long" and source.get("active")), None)
-
-
-def active_gbm_prediction_source(dataset: Dataset, model_id: str) -> dict[str, Any] | None:
-    sources = dataset.data_sources()
-    return next(
-        (
-            source
-            for source in sources
-            if source.get("kind") == "gbm_predictions"
-            and source.get("active")
-            and str(source.get("model_id") or "") == model_id
-        ),
-        None,
-    )
-
-
 def shap_value_column_for_feature(source: dict[str, Any], feature: str) -> str:
     for column in source.get("columns") or []:
         if not isinstance(column, dict):
@@ -2186,6 +2180,19 @@ def shap_value_column_for_feature(source: dict[str, Any], feature: str) -> str:
         if str(column.get("artifact_column") or column.get("label") or "") == feature:
             return str(column.get("name") or "")
     return ""
+
+
+def partial_group_mapping_is_identity(group_mapping: list[dict[str, Any]]) -> bool:
+    if not group_mapping:
+        return False
+    for row in group_mapping:
+        source_x = "" if row.get("source_x") is None else str(row.get("source_x"))
+        final_x = "" if row.get("final_x") is None else str(row.get("final_x"))
+        if source_x != final_x:
+            return False
+        if row.get("final_is_tail"):
+            return False
+    return True
 
 
 def normalise_overlay_denominator(

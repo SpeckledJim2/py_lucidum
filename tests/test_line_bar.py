@@ -24,6 +24,7 @@ from py_lucidum.tools.gbm.sources import GbmSourceProvider
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
+from py_lucidum.tools.line_bar import query as line_bar_query
 from py_lucidum.tools.line_bar.favourites import LineBarFavouriteStore
 from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 from py_lucidum.tools.line_bar.query import apply_transform, chart, mixed_relation_sql, normalise_quantile_count, table
@@ -1917,6 +1918,31 @@ COPY (
         by_x = {row["x"]: row for row in partial["rows"]}
         self.assertAlmostEqual(by_x["Social"]["p50"], 250.0 / ((1.0 + math.exp(1.0)) / 2.0))
         self.assertAlmostEqual(by_x["Business"]["p50"], math.exp(1.0) * by_x["Social"]["p50"])
+
+    def test_chart_shap_ribbons_use_provider_metadata_without_rebuilding_data_sources(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons()
+        request = self.request()
+        request["partialDependence"] = {"mode": "shap"}
+
+        with patch.object(dataset, "data_sources", side_effect=AssertionError("data_sources should not be called")):
+            result = chart(dataset, request)
+
+        self.assertEqual(result["partial_dependence"]["mode"], "shap")
+        self.assertGreater(len(result["partial_dependence"]["rows"]), 0)
+
+    def test_chart_shap_ribbons_reuse_initial_rows_for_identity_low_grouping(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons()
+        request = self.request()
+        request.update({"lowGroup": "0", "partialDependence": {"mode": "shap"}})
+
+        with patch(
+            "py_lucidum.tools.line_bar.query.build_partial_dependence_sql",
+            wraps=line_bar_query.build_partial_dependence_sql,
+        ) as sql_builder:
+            result = chart(dataset, request)
+
+        self.assertEqual(sql_builder.call_count, 1)
+        self.assertGreater(len(result["partial_dependence"]["rows"]), 0)
 
     def test_chart_shap_ribbons_respect_filter_weight_and_numeric_banding(self) -> None:
         dataset = self.dataset_with_gbm_ribbons()
