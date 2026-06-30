@@ -72,6 +72,7 @@ export function createLineBarTool({
   const QUANTILE_AXIS_ROTATIONS = [0, 45, 65, 75];
   const QUANTILE_AXIS_LABEL_WIDTH_FACTOR = 0.54;
   const QUANTILE_AXIS_LABEL_PADDING = 8;
+  const CATEGORICAL_AXIS_LABEL_PADDING = 8;
   const DATE_BUCKET_VALUES = new Set(["none", "hour", "day", "week", "month", "year"]);
   const RESPONSE_AXIS_PADDING = 0.08;
   const RESPONSE_AXIS_TARGET_INTERVALS = 15;
@@ -2505,9 +2506,12 @@ export function createLineBarTool({
         hiddenReason: `as >${LABEL_DENSITY_LIMIT.toLocaleString()} categories`,
       };
     }
-    const rotate = labels.length > 30 || maxLength > 10 ? 65 : 0;
     const fontSize = labels.length > 50 ? 8 : 10;
     const estimatedTextWidth = maxLength * fontSize * 0.5;
+    const plotWidth = dateXAxisPlotWidth(chartWidth);
+    const slotWidth = plotWidth / Math.max(1, labels.length);
+    const horizontalFootprint = estimatedTextWidth + CATEGORICAL_AXIS_LABEL_PADDING;
+    const rotate = labels.length > 30 || maxLength > 10 || horizontalFootprint > slotWidth ? 65 : 0;
     const rotatedHeight = estimatedTextWidth * Math.sin((rotate * Math.PI) / 180) + fontSize * Math.cos((rotate * Math.PI) / 180);
     const labelSpace = rotate ? Math.min(140, Math.max(58, Math.ceil(rotatedHeight) + 18)) : 38;
     const titleGap = rotate ? Math.max(26, labelSpace - 10) : 26;

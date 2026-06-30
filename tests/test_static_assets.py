@@ -4212,21 +4212,30 @@ if (zoomedPolicy.rotate !== 0) throw new Error("zoomed fewer-than-10 labels shou
         self.assertIn("if (!Number.isFinite(number)) return text;", js)
         self.assertIn("return number.toLocaleString(undefined, { maximumFractionDigits: 12 });", js)
         self.assertIn('if (kind !== "integer") return String(value);', js)
-        self.assertIn("const rotate = labels.length > 30 || maxLength > 10 ? 65 : 0;", js)
+        self.assertIn("const CATEGORICAL_AXIS_LABEL_PADDING = 8;", js)
+        self.assertIn("const plotWidth = dateXAxisPlotWidth(chartWidth);", js)
+        self.assertIn("const slotWidth = plotWidth / Math.max(1, labels.length);", js)
+        self.assertIn("const horizontalFootprint = estimatedTextWidth + CATEGORICAL_AXIS_LABEL_PADDING;", js)
+        self.assertIn("const rotate = labels.length > 30 || maxLength > 10 || horizontalFootprint > slotWidth ? 65 : 0;", js)
 
         line_bar_js = self.assert_no_store("/static/app/line-bar-tool.js")[1].decode("utf-8")
         script = "\n".join([
             "const LABEL_DENSITY_LIMIT = 200;",
+            "const CATEGORICAL_AXIS_LABEL_PADDING = 8;",
             "function isDateKind() { return false; }",
+            self.js_function_source(line_bar_js, "dateXAxisPlotWidth"),
             self.js_function_source(line_bar_js, "getXAxisLabelPolicy"),
             """
 const labels30 = Array.from({ length: 30 }, (_, index) => String(index));
 const labels31 = Array.from({ length: 31 }, (_, index) => String(index));
-const policy30 = getXAxisLabelPolicy(labels30, "integer");
-const policy31 = getXAxisLabelPolicy(labels31, "integer");
+const policy30 = getXAxisLabelPolicy(labels30, "integer", labels30, "none", 900);
+const policy31 = getXAxisLabelPolicy(labels31, "integer", labels31, "none", 900);
 if (policy30.rotate !== 0) throw new Error(`30 short labels should stay horizontal, got ${policy30.rotate}`);
 if (policy31.rotate !== 65) throw new Error(`31 short labels should rotate, got ${policy31.rotate}`);
-const longPolicy = getXAxisLabelPolicy(["short", "long-label-x"], "categorical");
+const isoDates23 = Array.from({ length: 23 }, (_, index) => `2026-06-${String(index + 6).padStart(2, "0")}`);
+const denseIsoPolicy = getXAxisLabelPolicy(isoDates23, "categorical", isoDates23, "none", 900);
+if (denseIsoPolicy.rotate !== 65) throw new Error(`dense 10-character categorical labels should rotate, got ${denseIsoPolicy.rotate}`);
+const longPolicy = getXAxisLabelPolicy(["short", "long-label-x"], "categorical", ["short", "long-label-x"], "none", 900);
 if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate");
 """,
         ])

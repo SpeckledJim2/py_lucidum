@@ -1802,6 +1802,75 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_dense_categorical_iso_date_labels_rotate(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "dense_quote_dates.parquet"
+            selects = [
+                f"SELECT {sql_literal(f'2026-06-{day:02d}')}::VARCHAR AS quote_date, 1 AS sold"
+                for day in range(6, 29)
+            ]
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  {" UNION ALL ".join(selects)}
+) TO {sql_literal(str(data_path))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "quote_date",
+                    "actual": "sold",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page.emulate_media(color_scheme="light")
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("dense_quote_dates.parquet").wait_for(timeout=10_000)
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("23 groups")
+                        """,
+                        timeout=10_000,
+                    )
+                    axis_state = page.evaluate(
+                        """
+                        () => {
+                          const chart = window.echarts?.getInstanceByDom(document.querySelector("#chart"));
+                          const axis = chart?.getOption?.()?.xAxis?.[0] || {};
+                          return {
+                            labels: axis.data || [],
+                            rotate: axis.axisLabel?.rotate,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(axis_state["labels"][0], "2026-06-06")
+                    self.assertEqual(axis_state["labels"][-1], "2026-06-28")
+                    self.assertEqual(len(axis_state["labels"]), 23)
+                    self.assertEqual(axis_state["rotate"], 65)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_quantile_ranges_and_band_restore(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "line_bar_quantiles.csv"
