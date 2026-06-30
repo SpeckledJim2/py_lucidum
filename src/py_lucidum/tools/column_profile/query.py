@@ -17,6 +17,26 @@ PROFILE_DETAIL_HISTOGRAM_BINS = 20
 PROFILE_DETAIL_EXACT_LEVEL_BIN_LIMIT = 100
 PROFILE_FULL_CELL_LIMIT = 10_000_000
 PROFILE_PREVIEW_ROW_LIMIT = 100_000
+NUMERIC_DETAIL_PERCENTILES = (
+    ("p1", 0.01),
+    ("p5", 0.05),
+    ("p25", 0.25),
+    ("median", 0.5),
+    ("p75", 0.75),
+    ("p95", 0.95),
+    ("p99", 0.99),
+)
+TEMPORAL_DETAIL_PERCENTILES = (
+    ("p25", 0.25),
+    ("median", 0.5),
+    ("p75", 0.75),
+)
+NUMERIC_DETAIL_PERCENTILE_VALUES_SQL = (
+    "[" + ", ".join(str(percentile) for _, percentile in NUMERIC_DETAIL_PERCENTILES) + "]"
+)
+TEMPORAL_DETAIL_PERCENTILE_VALUES_SQL = (
+    "[" + ", ".join(str(percentile) for _, percentile in TEMPORAL_DETAIL_PERCENTILES) + "]"
+)
 
 
 def profile(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
@@ -468,21 +488,19 @@ def numeric_detail_stats(dataset: Dataset, column: ColumnInfo, filter_sql: str) 
 WITH {base_cte(dataset, filter_sql)}
 SELECT
     MIN({column_sql}) AS min,
-    QUANTILE_CONT({value_sql}, 0.01) AS p1,
-    QUANTILE_CONT({value_sql}, 0.05) AS p5,
-    QUANTILE_CONT({value_sql}, 0.25) AS p25,
-    QUANTILE_CONT({value_sql}, 0.5) AS median,
+    QUANTILE_CONT({value_sql}, {NUMERIC_DETAIL_PERCENTILE_VALUES_SQL}) AS percentiles,
     AVG({value_sql}) AS mean,
-    QUANTILE_CONT({value_sql}, 0.75) AS p75,
-    QUANTILE_CONT({value_sql}, 0.95) AS p95,
-    QUANTILE_CONT({value_sql}, 0.99) AS p99,
     MAX({column_sql}) AS max,
     STDDEV_SAMP({value_sql}) AS sd
 FROM base
 WHERE {column_sql} IS NOT NULL
 """
     row = one_row_dict(dataset, sql)
-    return {key: json_value(row.get(key)) for key in ("min", "p1", "p5", "p25", "median", "mean", "p75", "p95", "p99", "max", "sd")}
+    stats = percentile_stats(row, NUMERIC_DETAIL_PERCENTILES)
+    return {
+        key: stats.get(key)
+        for key in ("min", "p1", "p5", "p25", "median", "mean", "p75", "p95", "p99", "max", "sd")
+    }
 
 
 def temporal_detail_stats(dataset: Dataset, column: ColumnInfo, filter_sql: str) -> dict[str, Any]:
@@ -491,15 +509,24 @@ def temporal_detail_stats(dataset: Dataset, column: ColumnInfo, filter_sql: str)
 WITH {base_cte(dataset, filter_sql)}
 SELECT
     MIN({column_sql}) AS min,
-    QUANTILE_CONT({column_sql}, 0.25) AS p25,
-    QUANTILE_CONT({column_sql}, 0.5) AS median,
-    QUANTILE_CONT({column_sql}, 0.75) AS p75,
+    QUANTILE_CONT({column_sql}, {TEMPORAL_DETAIL_PERCENTILE_VALUES_SQL}) AS percentiles,
     MAX({column_sql}) AS max
 FROM base
 WHERE {column_sql} IS NOT NULL
 """
     row = one_row_dict(dataset, sql)
-    return {key: json_value(row.get(key)) for key in ("min", "p25", "median", "p75", "max")}
+    stats = percentile_stats(row, TEMPORAL_DETAIL_PERCENTILES)
+    return {key: stats.get(key) for key in ("min", "p25", "median", "p75", "max")}
+
+
+def percentile_stats(row: dict[str, Any], percentile_keys: tuple[tuple[str, float], ...]) -> dict[str, Any]:
+    values = row.get("percentiles")
+    if not isinstance(values, (list, tuple)):
+        values = []
+    stats = {key: json_value(row.get(key)) for key in ("min", "mean", "max", "sd")}
+    for index, (key, _) in enumerate(percentile_keys):
+        stats[key] = json_value(values[index] if index < len(values) else None)
+    return stats
 
 
 def temporal_distribution(

@@ -395,8 +395,14 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(sum(bin["count"] for bin in payload["histogram"]), 2)
         self.assertEqual([(bin["lower"], bin["upper"]) for bin in payload["histogram"]], [(1, 1), (2, 2)])
         self.assertEqual(payload["stats"]["min"], 1)
+        self.assertAlmostEqual(payload["stats"]["p1"], 1.01)
+        self.assertAlmostEqual(payload["stats"]["p5"], 1.05)
+        self.assertAlmostEqual(payload["stats"]["p25"], 1.25)
         self.assertEqual(payload["stats"]["median"], 1.5)
         self.assertEqual(payload["stats"]["mean"], 1.5)
+        self.assertAlmostEqual(payload["stats"]["p75"], 1.75)
+        self.assertAlmostEqual(payload["stats"]["p95"], 1.95)
+        self.assertAlmostEqual(payload["stats"]["p99"], 1.99)
         self.assertEqual(payload["stats"]["max"], 2)
         self.assertEqual(payload["zero_count"], 0)
 
@@ -431,7 +437,9 @@ class ColumnProfileToolTests(unittest.TestCase):
         self.assertEqual(len(payload["histogram"]), 20)
         self.assertEqual(sum(bin["count"] for bin in payload["histogram"]), 3)
         self.assertEqual(payload["stats"]["min"], "2024-01-01")
+        self.assertEqual(payload["stats"]["p25"], "2024-01-01T12:00:00")
         self.assertEqual(payload["stats"]["median"], "2024-01-02T00:00:00")
+        self.assertEqual(payload["stats"]["p75"], "2024-01-03T00:00:00")
         self.assertEqual(payload["stats"]["max"], "2024-01-04")
 
     def test_profile_detail_returns_categorical_blank_count(self) -> None:

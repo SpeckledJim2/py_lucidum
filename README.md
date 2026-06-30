@@ -12,7 +12,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
   ![lucidum line and bar tool](docs/assets/line_and_bar.png)
 
-- **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution with configurable bins, integer-aware bins for discrete numeric Actuals, cumulative/probability modes, log axes, mean/median reference lines, and a compact metrics table.
+- **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution with configurable bins, integer-aware bins for discrete numeric Actuals, sampled 100k previews or exact all-row mode, cumulative/probability modes, log axes, mean/median reference lines, and a compact metrics table.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, including optional sector neighbour smoothing, or postcode units when unit and coordinate columns are available.
 
   ![UK Postcode Area mapping tool](docs/assets/postcode_area.png)

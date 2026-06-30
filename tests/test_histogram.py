@@ -9,6 +9,7 @@ from typing import Any
 
 from py_lucidum.app import create_app, normalise_tools
 from py_lucidum.core import Dataset
+from py_lucidum.tools.histogram import query as histogram_query
 from py_lucidum.tools.histogram.query import histogram
 
 
@@ -143,6 +144,54 @@ class HistogramToolTests(unittest.TestCase):
         self.assertEqual(empty["valid_count"], 0)
         self.assertEqual(empty["rows"], [])
         self.assertTrue(any("No valid histogram values" in warning for warning in empty["warnings"]))
+
+    def test_sampled_mode_samples_distribution_stats_and_warns(self) -> None:
+        sample_path = Path(self.tmp.name) / "many_values.csv"
+        sample_path.write_text("Actual\n" + "\n".join(str(value) for value in range(1, 11)) + "\n", encoding="utf-8")
+
+        original_limit = histogram_query.SAMPLE_LIMIT
+        histogram_query.SAMPLE_LIMIT = 1
+        try:
+            result = histogram(Dataset(sample_path), self.request(actual="Actual", bins="auto", sampleMode="100k"))
+        finally:
+            histogram_query.SAMPLE_LIMIT = original_limit
+
+        self.assertFalse(result["stats_exact"])
+        self.assertEqual(result["valid_count"], 10)
+        self.assertEqual(result["stats_sampled_count"], 1)
+        self.assertEqual(result["sampled_valid_count"], 1)
+        self.assertEqual(next(row["value"] for row in result["stats"] if row["statistic"] == "Numeric count"), 10)
+        self.assertIsNone(next(row["value"] for row in result["stats"] if row["statistic"] == "Std deviation"))
+        warnings = " ".join(result["warnings"])
+        self.assertIn("bars and distribution statistics", warnings)
+        self.assertIn("row counts and exclusions are exact", warnings)
+        self.assertNotIn("statistics are exact", warnings)
+
+    def test_all_mode_keeps_exact_distribution_stats(self) -> None:
+        sample_path = Path(self.tmp.name) / "many_values_all.csv"
+        sample_path.write_text("Actual\n" + "\n".join(str(value) for value in range(1, 11)) + "\n", encoding="utf-8")
+
+        original_limit = histogram_query.SAMPLE_LIMIT
+        histogram_query.SAMPLE_LIMIT = 1
+        try:
+            result = histogram(Dataset(sample_path), self.request(actual="Actual", bins="auto", sampleMode="all"))
+        finally:
+            histogram_query.SAMPLE_LIMIT = original_limit
+
+        self.assertTrue(result["stats_exact"])
+        self.assertEqual(result["stats_sampled_count"], 10)
+        self.assertEqual(result["sampled_valid_count"], 10)
+        self.assertAlmostEqual(next(row["value"] for row in result["stats"] if row["statistic"] == "Std deviation"), 3.0276503540974917)
+        self.assertFalse(any("distribution statistics use" in warning for warning in result["warnings"]))
+
+    def test_exact_percentiles_preserve_expected_values(self) -> None:
+        result = histogram(Dataset(self.data_path), self.request())
+
+        self.assertTrue(result["stats_exact"])
+        self.assertEqual(result["stats_sampled_count"], 7)
+        self.assertEqual(next(row["value"] for row in result["stats"] if row["statistic"] == "Median"), 4)
+        self.assertEqual(next(row["value"] for row in result["stats"] if row["statistic"] == "25th percentile"), 2.5)
+        self.assertEqual(next(row["value"] for row in result["stats"] if row["statistic"] == "75th percentile"), 5.5)
 
     def test_integer_actual_uses_one_touching_bin_per_level_when_requested_bins_are_high(self) -> None:
         age_path = Path(self.tmp.name) / "age_levels.csv"

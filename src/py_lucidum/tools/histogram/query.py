@@ -10,6 +10,7 @@ AUTO_MIN_BINS = 10
 AUTO_MAX_BINS = 200
 MAX_EXPLICIT_BINS = 10_000
 SAMPLE_LIMIT = 100_000
+SAMPLE_SEED = 2026
 PERCENTILES = (
     ("0.1st percentile", 0.001),
     ("0.5th percentile", 0.005),
@@ -25,6 +26,7 @@ PERCENTILES = (
     ("99.5th percentile", 0.995),
     ("99.9th percentile", 0.999),
 )
+PERCENTILE_VALUES_SQL = "[" + ", ".join(str(percentile) for _, percentile in PERCENTILES) + "]"
 
 
 def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
@@ -41,12 +43,23 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
 
         row_count = dataset.row_count_for_source(source_id)
-        filtered_row_count = relation_count(dataset, relation, filter_sql)
         counts = validity_counts(dataset, relation, actual, denominator, filter_sql, log_scale)
         valid_count = int(counts.get("valid_count") or 0)
-        bins_requested = normalise_bins(request.get("bins"), valid_count)
-        stats = stats_rows(dataset, relation, actual, denominator, filter_sql, log_scale, counts)
-        warnings = histogram_warnings(denominator, counts, log_scale, sample_mode, valid_count)
+        filtered_row_count = int(counts.get("filtered_count") or 0)
+        sample_values = should_sample_values(sample_mode, valid_count)
+        stats, extent, stats_sampled_count = stats_and_extent_rows(
+            dataset,
+            relation,
+            actual,
+            denominator,
+            filter_sql,
+            log_scale,
+            counts,
+            sample_values,
+        )
+        bins_count = stats_sampled_count if sample_values else valid_count
+        bins_requested = normalise_bins(request.get("bins"), bins_count)
+        warnings = histogram_warnings(denominator, counts, log_scale, sample_values, stats_sampled_count)
 
         if valid_count <= 0:
             warnings.append("No valid histogram values were found after filtering.")
@@ -55,7 +68,6 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             bins_used = 0
             binning = continuous_binning_metadata(actual)
         else:
-            extent = value_extent(dataset, relation, actual, denominator, filter_sql, log_scale)
             if extent is None:
                 rows = []
                 sampled_valid_count = 0
@@ -76,7 +88,7 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
                         distribution,
                         y_axis,
                         integer_plan,
-                        sample_mode,
+                        sample_values,
                     )
                 else:
                     bins_used = bin_count_for_extent(bins_requested, extent)
@@ -92,7 +104,7 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
                         y_axis,
                         bins_used,
                         extent,
-                        sample_mode,
+                        sample_values,
                     )
 
         return {
@@ -109,6 +121,8 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             "y_axis": y_axis,
             "log_scale": log_scale,
             "sample_mode": sample_mode,
+            "stats_exact": not sample_values,
+            "stats_sampled_count": stats_sampled_count,
             "binning": binning,
             "response": {
                 "label": actual["label"],
@@ -172,6 +186,10 @@ def normalise_bins(value: Any, valid_count: int) -> int:
     except ValueError:
         return max(AUTO_MIN_BINS, min(AUTO_MAX_BINS, int(round(math.sqrt(max(valid_count, 1))))))
     return max(1, min(MAX_EXPLICIT_BINS, parsed))
+
+
+def should_sample_values(sample_mode: str, valid_count: int) -> bool:
+    return sample_mode == "100k" and valid_count > SAMPLE_LIMIT
 
 
 def bin_count_for_extent(requested: int, extent: dict[str, Any]) -> int:
@@ -266,9 +284,43 @@ def valid_condition(actual: dict[str, str], denominator: dict[str, str | None], 
     return " AND ".join(checks)
 
 
-def relation_count(dataset: Dataset, relation: str, filter_sql: str = "") -> int:
-    where_sql = f" WHERE ({filter_sql})" if filter_sql else ""
-    return int(dataset.con.execute(f"SELECT COUNT(*) FROM {relation}{where_sql}").fetchone()[0])
+def value_ctes_sql(
+    relation: str,
+    actual: dict[str, str],
+    denominator: dict[str, str | None],
+    filter_sql: str,
+    log_scale: str,
+    sample_values: bool,
+) -> str:
+    value_expr = value_sql(actual, denominator)
+    bin_value = f"LOG10({value_expr})" if log_scale in {"x", "both"} else value_expr
+    weight_expr = weight_sql(denominator)
+    valid = valid_condition(actual, denominator, log_scale)
+    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    sampled_cte = (
+        f""",
+sampled AS (
+  SELECT * FROM valid_values
+  USING SAMPLE reservoir({SAMPLE_LIMIT} ROWS) REPEATABLE ({SAMPLE_SEED})
+)"""
+        if sample_values
+        else ""
+    )
+    return f"""filtered AS (
+  SELECT * FROM {relation}{where_sql}
+),
+valid_values AS (
+  SELECT
+    {value_expr} AS value,
+    {bin_value} AS bin_value,
+    {weight_expr} AS weight_value
+  FROM filtered
+  WHERE {valid}
+){sampled_cte}"""
+
+
+def value_source_name(sample_values: bool) -> str:
+    return "sampled" if sample_values else "valid_values"
 
 
 def validity_counts(
@@ -308,6 +360,7 @@ SELECT
     SUM(CASE WHEN {actual_expr} IS NULL THEN 1 ELSE 0 END) AS missing_actual_count,
     {weight_counts}
     SUM(CASE WHEN {valid} THEN 1 ELSE 0 END) AS valid_count,
+    SUM(CASE WHEN {valid} AND {value_expr} = 0 THEN 1 ELSE 0 END) AS zero_count,
     SUM(CASE WHEN {valid} THEN {weight_expr} ELSE NULL END) AS weight_sum,
     {nonpositive_sql} AS nonpositive_count
 FROM filtered
@@ -317,43 +370,7 @@ FROM filtered
     return dict(zip([d[0] for d in cursor.description], fetched or []))
 
 
-def value_extent(
-    dataset: Dataset,
-    relation: str,
-    actual: dict[str, str],
-    denominator: dict[str, str | None],
-    filter_sql: str,
-    log_scale: str,
-) -> dict[str, Any] | None:
-    value_expr = value_sql(actual, denominator)
-    bin_value = f"LOG10({value_expr})" if log_scale in {"x", "both"} else value_expr
-    valid = valid_condition(actual, denominator, log_scale)
-    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
-    sql = f"""
-WITH filtered AS (
-  SELECT * FROM {relation}{where_sql}
-),
-valid_values AS (
-  SELECT
-    {value_expr} AS value,
-    {bin_value} AS bin_value
-  FROM filtered
-  WHERE {valid}
-)
-SELECT
-    MIN(value) AS value_min,
-    MAX(value) AS value_max,
-    MIN(bin_value) AS bin_min,
-    MAX(bin_value) AS bin_max,
-    SUM(CASE WHEN value = FLOOR(value) THEN 0 ELSE 1 END) AS non_integral_count
-FROM valid_values
-"""
-    cursor = dataset.con.execute(sql)
-    row = dict(zip([d[0] for d in cursor.description], cursor.fetchone() or []))
-    return row if json_number(row.get("bin_min")) is not None and json_number(row.get("bin_max")) is not None else None
-
-
-def stats_rows(
+def stats_and_extent_rows(
     dataset: Dataset,
     relation: str,
     actual: dict[str, str],
@@ -361,57 +378,59 @@ def stats_rows(
     filter_sql: str,
     log_scale: str,
     counts: dict[str, Any],
-) -> list[dict[str, Any]]:
-    value_expr = value_sql(actual, denominator)
-    weight_expr = weight_sql(denominator)
-    valid = valid_condition(actual, denominator, log_scale)
-    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
-    percentile_selects = ",\n    ".join(
-        f"quantile_cont(value, {percentile}) AS p{index}"
-        for index, (_, percentile) in enumerate(PERCENTILES)
-    )
-    if percentile_selects:
-        percentile_selects = ",\n    " + percentile_selects
+    sample_values: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, int]:
+    value_source = value_source_name(sample_values)
     sql = f"""
-WITH filtered AS (
-  SELECT * FROM {relation}{where_sql}
-),
-valid_values AS (
-  SELECT
-    {value_expr} AS value,
-    {weight_expr} AS weight_value
-  FROM filtered
-  WHERE {valid}
-)
+WITH {value_ctes_sql(relation, actual, denominator, filter_sql, log_scale, sample_values)}
 SELECT
     COUNT(*) AS numeric_count,
-    SUM(CASE WHEN value = 0 THEN 1 ELSE 0 END) AS zero_count,
     AVG(value) AS mean,
     SUM(value * weight_value) / NULLIF(SUM(weight_value), 0) AS weighted_mean,
     STDDEV_SAMP(value) AS stddev,
     MIN(value) AS minimum,
     MAX(value) AS maximum,
-    SUM(weight_value) AS weight_sum
-    {percentile_selects}
-FROM valid_values
+    quantile_cont(value, {PERCENTILE_VALUES_SQL}) AS percentiles,
+    MIN(bin_value) AS bin_min,
+    MAX(bin_value) AS bin_max,
+    SUM(CASE WHEN value = FLOOR(value) THEN 0 ELSE 1 END) AS non_integral_count
+FROM {value_source}
 """
     cursor = dataset.con.execute(sql)
     row = dict(zip([d[0] for d in cursor.description], cursor.fetchone() or []))
+    stats_sampled_count = int(row.get("numeric_count") or 0)
+    extent = {
+        "value_min": row.get("minimum"),
+        "value_max": row.get("maximum"),
+        "bin_min": row.get("bin_min"),
+        "bin_max": row.get("bin_max"),
+        "non_integral_count": row.get("non_integral_count"),
+    }
+    if json_number(extent.get("bin_min")) is None or json_number(extent.get("bin_max")) is None:
+        extent = None
+    return stats_rows_from_summary(row, counts), extent, stats_sampled_count
+
+
+def stats_rows_from_summary(row: dict[str, Any], counts: dict[str, Any]) -> list[dict[str, Any]]:
+    percentiles = row.get("percentiles")
+    if not isinstance(percentiles, (list, tuple)):
+        percentiles = []
+    valid_count = int(counts.get("valid_count") or 0)
     stats = [
-        {"statistic": "Numeric count", "value": json_number(row.get("numeric_count")) or 0},
-        {"statistic": "NA count", "value": max(0, int(counts.get("filtered_count") or 0) - int(row.get("numeric_count") or 0))},
-        {"statistic": "Zero count", "value": json_number(row.get("zero_count")) or 0},
+        {"statistic": "Numeric count", "value": valid_count},
+        {"statistic": "NA count", "value": max(0, int(counts.get("filtered_count") or 0) - valid_count)},
+        {"statistic": "Zero count", "value": json_number(counts.get("zero_count")) or 0},
         {"statistic": "Mean", "value": json_number(row.get("mean"))},
         {"statistic": "Weighted mean", "value": json_number(row.get("weighted_mean"))},
         {"statistic": "Std deviation", "value": json_number(row.get("stddev"))},
         {"statistic": "Minimum", "value": json_number(row.get("minimum"))},
     ]
     stats.extend(
-        {"statistic": label, "value": json_number(row.get(f"p{index}"))}
+        {"statistic": label, "value": json_number(percentiles[index] if index < len(percentiles) else None)}
         for index, (label, _) in enumerate(PERCENTILES)
     )
     stats.append({"statistic": "Maximum", "value": json_number(row.get("maximum"))})
-    stats.append({"statistic": "Weight sum", "value": json_number(row.get("weight_sum"))})
+    stats.append({"statistic": "Weight sum", "value": json_number(counts.get("weight_sum"))})
     return stats
 
 
@@ -425,33 +444,15 @@ def integer_histogram_rows(
     distribution: str,
     y_axis: str,
     plan: dict[str, int],
-    sample_mode: str,
+    sample_values: bool,
 ) -> tuple[list[dict[str, Any]], int]:
-    value_expr = value_sql(actual, denominator)
-    weight_expr = weight_sql(denominator)
-    valid = valid_condition(actual, denominator, log_scale)
-    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
-    sample_limit_sql = f"ORDER BY hash(__rownum) LIMIT {SAMPLE_LIMIT}" if sample_mode == "100k" else ""
+    value_source = value_source_name(sample_values)
     min_int = int(plan["min"])
     max_int = int(plan["max"])
     step = max(1, int(plan["step"]))
     bins = max(1, int(plan["bins"]))
     sql = f"""
-WITH filtered AS (
-  SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}{where_sql}
-),
-valid_values AS (
-  SELECT
-    __rownum,
-    {value_expr} AS value,
-    {weight_expr} AS weight_value
-  FROM filtered
-  WHERE {valid}
-),
-sampled AS (
-  SELECT * FROM valid_values
-  {sample_limit_sql}
-),
+WITH {value_ctes_sql(relation, actual, denominator, filter_sql, log_scale, sample_values)},
 params AS (
   SELECT
     {min_int}::BIGINT AS min_level,
@@ -463,10 +464,10 @@ indexed AS (
   SELECT
     LEAST(
       params.bin_count - 1,
-      GREATEST(0, FLOOR((sampled.value - params.min_level) / params.step)::INTEGER)
+      GREATEST(0, FLOOR((source_values.value - params.min_level) / params.step)::INTEGER)
     ) AS bin_index,
-    sampled.weight_value
-  FROM sampled, params
+    source_values.weight_value
+  FROM {value_source} source_values, params
 ),
 agg AS (
   SELECT
@@ -546,40 +547,21 @@ def histogram_rows(
     y_axis: str,
     bins: int,
     extent: dict[str, Any],
-    sample_mode: str,
+    sample_values: bool,
 ) -> tuple[list[dict[str, Any]], int]:
-    value_expr = value_sql(actual, denominator)
-    weight_expr = weight_sql(denominator)
-    valid = valid_condition(actual, denominator, log_scale)
-    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
+    value_source = value_source_name(sample_values)
     bin_min = float(extent["bin_min"])
     bin_max = float(extent["bin_max"])
     value_min = float(extent["value_min"])
     value_max = float(extent["value_max"])
     if bins <= 1 or bin_min == bin_max:
-        return single_bin_row(dataset, relation, actual, denominator, filter_sql, log_scale, distribution, y_axis, extent, sample_mode)
-    sample_limit_sql = f"ORDER BY hash(__rownum) LIMIT {SAMPLE_LIMIT}" if sample_mode == "100k" else ""
+        return single_bin_row(dataset, relation, actual, denominator, filter_sql, log_scale, distribution, y_axis, extent, sample_values)
     bin_width = (bin_max - bin_min) / bins
     lower_expr = "POWER(10, params.bin_min + bins.bin_index * params.bin_width)" if log_scale in {"x", "both"} else "params.bin_min + bins.bin_index * params.bin_width"
     upper_expr = "POWER(10, params.bin_min + (bins.bin_index + 1) * params.bin_width)" if log_scale in {"x", "both"} else "params.bin_min + (bins.bin_index + 1) * params.bin_width"
     mid_expr = "SQRT(bin_lower * bin_upper)" if log_scale in {"x", "both"} else "(bin_lower + bin_upper) / 2"
     sql = f"""
-WITH filtered AS (
-  SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}{where_sql}
-),
-valid_values AS (
-  SELECT
-    __rownum,
-    {value_expr} AS value,
-    {"LOG10(" + value_expr + ")" if log_scale in {"x", "both"} else value_expr} AS bin_value,
-    {weight_expr} AS weight_value
-  FROM filtered
-  WHERE {valid}
-),
-sampled AS (
-  SELECT * FROM valid_values
-  {sample_limit_sql}
-),
+WITH {value_ctes_sql(relation, actual, denominator, filter_sql, log_scale, sample_values)},
 params AS (
   SELECT
     {bin_min}::DOUBLE AS bin_min,
@@ -590,12 +572,12 @@ params AS (
 indexed AS (
   SELECT
     CASE
-      WHEN sampled.bin_value = params.bin_max THEN params.bin_count - 1
-      ELSE LEAST(params.bin_count - 1, GREATEST(0, FLOOR((sampled.bin_value - params.bin_min) / params.bin_width)::INTEGER))
+      WHEN source_values.bin_value = params.bin_max THEN params.bin_count - 1
+      ELSE LEAST(params.bin_count - 1, GREATEST(0, FLOOR((source_values.bin_value - params.bin_min) / params.bin_width)::INTEGER))
     END AS bin_index,
-    sampled.value,
-    sampled.weight_value
-  FROM sampled, params
+    source_values.value,
+    source_values.weight_value
+  FROM {value_source} source_values, params
 ),
 agg AS (
   SELECT
@@ -663,13 +645,9 @@ def single_bin_row(
     distribution: str,
     y_axis: str,
     extent: dict[str, Any],
-    sample_mode: str,
+    sample_values: bool,
 ) -> tuple[list[dict[str, Any]], int]:
-    value_expr = value_sql(actual, denominator)
-    weight_expr = weight_sql(denominator)
-    valid = valid_condition(actual, denominator, log_scale)
-    where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
-    sample_limit_sql = f"ORDER BY hash(__rownum) LIMIT {SAMPLE_LIMIT}" if sample_mode == "100k" else ""
+    value_source = value_source_name(sample_values)
     value = float(extent["value_min"])
     pad = max(abs(value) * 0.005, 0.5)
     if log_scale in {"x", "both"}:
@@ -679,23 +657,9 @@ def single_bin_row(
         lower = value - pad
         upper = value + pad
     sql = f"""
-WITH filtered AS (
-  SELECT ROW_NUMBER() OVER () AS __rownum, * FROM {relation}{where_sql}
-),
-valid_values AS (
-  SELECT
-    __rownum,
-    {value_expr} AS value,
-    {weight_expr} AS weight_value
-  FROM filtered
-  WHERE {valid}
-),
-sampled AS (
-  SELECT * FROM valid_values
-  {sample_limit_sql}
-),
+WITH {value_ctes_sql(relation, actual, denominator, filter_sql, log_scale, sample_values)},
 agg AS (
-  SELECT COUNT(*) AS row_count, COALESCE(SUM(weight_value), 0) AS volume FROM sampled
+  SELECT COUNT(*) AS row_count, COALESCE(SUM(weight_value), 0) AS volume FROM {value_source}
 )
 SELECT
     0 AS bin_index,
@@ -777,8 +741,8 @@ def histogram_warnings(
     denominator: dict[str, str | None],
     counts: dict[str, Any],
     log_scale: str,
-    sample_mode: str,
-    valid_count: int,
+    sample_values: bool,
+    stats_sampled_count: int,
 ) -> list[str]:
     warnings: list[str] = []
     missing_actual = int(counts.get("missing_actual_count") or 0)
@@ -798,8 +762,11 @@ def histogram_warnings(
     nonpositive = int(counts.get("nonpositive_count") or 0)
     if log_scale in {"x", "both"} and nonpositive:
         warnings.append(f"{nonpositive:,} nonpositive values excluded for log x-scale.")
-    if sample_mode == "100k" and valid_count > SAMPLE_LIMIT:
-        warnings.append(f"Histogram bars use a deterministic {SAMPLE_LIMIT:,}-row sample; statistics are exact.")
+    if sample_values:
+        warnings.append(
+            f"Histogram bars and distribution statistics use a deterministic {stats_sampled_count:,}-row sample; "
+            "row counts and exclusions are exact. Use all for exact distribution statistics."
+        )
     return warnings
 
 
