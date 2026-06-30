@@ -111,7 +111,7 @@
         gbmModelGroupsInitialised: false,
         filterOperator: "and",
         filterFooterCollapsed: true,
-        filterSelectionMode: "single",
+        filterSelectionMode: "grouped",
         collapsedSavedFilterThemes: new Set(),
         savedFilterThemesInitialised: false,
         activeFilter: "",
@@ -2634,7 +2634,7 @@
         state.partialDependence = String(view.partialDependence || "none");
         state.featureSort = String(view.featureSort || "alpha");
         state.expectedSort = String(view.expectedSort || "alpha");
-        state.filterSelectionMode = String(view.filterSelectionMode || "single");
+        state.filterSelectionMode = String(view.filterSelectionMode || "grouped");
         state.filterOperator = String(view.filterOperator || "and");
         state.activeFilter = String(view.filter || "").trim();
         el("filterInput").value = state.activeFilter;

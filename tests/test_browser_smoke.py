@@ -11131,7 +11131,7 @@ COPY (
                 self.assertTrue(driver_rows.first.is_visible())
                 self.assertTrue(postcode_rows.first.is_visible())
 
-                self.assertTrue(page.locator('.filter-selection-mode button[data-value="single"]').evaluate("node => node.classList.contains('active')"))
+                self.assertTrue(page.locator('.filter-selection-mode button[data-value="grouped"]').evaluate("node => node.classList.contains('active')"))
                 page.locator('.filter-selection-mode button[data-value="multi"]').click()
                 driver_rows.first.click()
                 postcode_rows.first.click()
