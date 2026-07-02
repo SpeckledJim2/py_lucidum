@@ -159,11 +159,16 @@
           </section>
 
           <section class="section sidebar-filter-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="filter">
-            <button id="filterCollapseBtn" class="filter-header sidebar-section-header" type="button" aria-label="Expand FILTER" aria-expanded="false" title="Expand FILTER">
-              <span class="filter-collapse-icon" aria-hidden="true"></span>
-              <span class="sidebar-section-title">FILTER</span>
-              <span id="filterRowMeta" class="filter-row-meta"></span>
-            </button>
+            <div class="filter-header">
+              <button id="filterCollapseBtn" class="filter-collapse-button sidebar-section-header" type="button" aria-label="Expand FILTER" aria-expanded="false" title="Expand FILTER">
+                <span class="filter-collapse-icon" aria-hidden="true"></span>
+                <span class="sidebar-section-title">FILTER</span>
+              </button>
+              <span id="filterRowMeta" class="filter-row-meta">
+                <button id="filterRowClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button>
+                <span id="filterRowMetaText" class="filter-badge-text"></span>
+              </span>
+            </div>
             <div class="sidebar-section-body">
               <div class="filter-controls-row">
                 <div class="filter-controls-primary">
@@ -172,7 +177,6 @@
                     <button data-value="grouped" class="active" type="button">Grouped</button>
                     <button data-value="multi" type="button">Multi</button>
                   </div>
-                  <button id="filterSidebarClearBtn" class="filter-action filter-sidebar-clear" type="button" title="Clear filter" aria-label="Clear filter">&times;</button>
                 </div>
                 <div class="segmented filter-operator" data-control="filterOperator" aria-label="Saved filter operator">
                   <button data-value="and" class="active" type="button">All</button>
@@ -395,13 +399,13 @@
               </div>
               <div class="workspace-messages">
                 <div id="datasetViewerGroupMeta" class="workspace-meta hidden"></div>
-                <div id="datasetViewerFilter" class="hidden">no filter</div>
+                <div id="datasetViewerFilter" class="hidden"><button id="datasetViewerFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="datasetViewerFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="profileGroupMeta" class="workspace-meta"></div>
-                <div id="profileFilter" class="hidden">no filter</div>
+                <div id="profileFilter" class="hidden"><button id="profileFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="profileFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="lineBarGroupMeta" class="workspace-meta hidden"></div>
-                <div id="lineBarFilter" class="hidden">no filter</div>
+                <div id="lineBarFilter" class="hidden"><button id="lineBarFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="lineBarFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="histogramGroupMeta" class="workspace-meta hidden"></div>
-                <div id="histogramFilter" class="hidden">no filter</div>
+                <div id="histogramFilter" class="hidden"><button id="histogramFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="histogramFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="modelToolGroupMeta" class="workspace-meta hidden"></div>
                 <div id="modelToolFilter" class="hidden">no filter</div>
                 <div id="chartMessage" class="chart-message hidden"></div>
@@ -425,7 +429,7 @@
                 <div class="map-floating-header">
                   <strong id="mapControlMetric">Actual</strong>
                   <div id="mapGroupMeta" class="workspace-meta"></div>
-                  <span id="mapControlFilter">no filter</span>
+                  <span id="mapControlFilter"><button id="mapControlFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="mapControlFilterText" class="filter-badge-text">no filter</span></span>
                   <button id="mapControlReset" class="map-control-reset" type="button" title="Collapse map controls" aria-label="Collapse map controls" aria-controls="mapFloatingControl" aria-expanded="true">
                     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 17 17 7"></path><path d="M10 7h7v7"></path></svg>
                   </button>

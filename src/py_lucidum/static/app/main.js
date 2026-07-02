@@ -659,12 +659,12 @@
 
       function syncActiveFilterLabels() {
         const label = activeFilterLabel();
-        el("datasetViewerFilter").textContent = label;
-        el("profileFilter").textContent = label;
-        el("lineBarFilter").textContent = label;
-        el("histogramFilter").textContent = label;
+        el("datasetViewerFilterText").textContent = label;
+        el("profileFilterText").textContent = label;
+        el("lineBarFilterText").textContent = label;
+        el("histogramFilterText").textContent = label;
         el("modelToolFilter").textContent = label;
-        el("mapControlFilter").textContent = label;
+        el("mapControlFilterText").textContent = label;
       }
 
       function filterIsApplied() {
@@ -673,6 +673,12 @@
 
       function syncActiveFilterIndicator() {
         const applied = filterIsApplied();
+        el("filterRowClearBtn").hidden = !applied;
+        el("datasetViewerFilterClearBtn").hidden = !applied;
+        el("profileFilterClearBtn").hidden = !applied;
+        el("lineBarFilterClearBtn").hidden = !applied;
+        el("histogramFilterClearBtn").hidden = !applied;
+        el("mapControlFilterClearBtn").hidden = !applied;
         el("filterRowMeta").classList.toggle("filter-row-meta--applied", applied);
         el("datasetViewerFilter").classList.toggle("dataset-viewer-filter--applied", applied);
         el("profileFilter").classList.toggle("profile-filter--applied", applied);
@@ -689,7 +695,7 @@
           filteredRowCount,
           filter: state.activeFilter || "",
         };
-        if (meta) el("filterRowMeta").textContent = meta;
+        el("filterRowMetaText").textContent = meta || "";
         syncActiveFilterIndicator();
         syncDatasetViewerMeta();
       }
@@ -699,7 +705,7 @@
           text: message || "",
           filter: state.activeFilter || "",
         };
-        el("filterRowMeta").textContent = message || "";
+        el("filterRowMetaText").textContent = message || "";
         syncActiveFilterIndicator();
         syncDatasetViewerMeta();
       }
@@ -3189,7 +3195,12 @@
         el("glmModelCollapseBtn").addEventListener("click", () => toggleSidebarSection("glm"));
         el("gbmModelCollapseBtn").addEventListener("click", () => toggleSidebarSection("gbm"));
         el("filterCollapseBtn").addEventListener("click", () => toggleSidebarSection("filter"));
-        el("filterSidebarClearBtn").addEventListener("click", clearFilter);
+        el("filterRowClearBtn").addEventListener("click", clearFilter);
+        el("datasetViewerFilterClearBtn").addEventListener("click", clearFilter);
+        el("profileFilterClearBtn").addEventListener("click", clearFilter);
+        el("lineBarFilterClearBtn").addEventListener("click", clearFilter);
+        el("histogramFilterClearBtn").addEventListener("click", clearFilter);
+        el("mapControlFilterClearBtn").addEventListener("click", clearFilter);
         el("stopAppBtn")?.addEventListener("click", stopApp);
         el("themeBtn").addEventListener("click", () => {
           document.body.classList.toggle("dark");

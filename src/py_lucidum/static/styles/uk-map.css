@@ -275,7 +275,9 @@
         background: transparent;
         border: 1px solid transparent;
         border-radius: 4px;
-        display: block;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
         font-size: 10px;
         justify-self: start;
         line-height: 1.1;
@@ -283,6 +285,11 @@
         min-width: 0;
         padding: 1px 4px;
         width: fit-content;
+      }
+
+      #mapControlFilter .filter-badge-text {
+        font-size: inherit;
+        line-height: inherit;
       }
 
       #mapControlFilter.map-filter--applied {

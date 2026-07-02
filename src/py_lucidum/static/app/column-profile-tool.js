@@ -322,11 +322,12 @@ export function createColumnProfileTool({
 
   function setProfileFilterMeta(data, calculationMeta = profileCalculationMeta(data)) {
     const filterLabel = activeFilterLabel();
+    const filterText = el("profileFilterText");
     if (!calculationMeta) {
-      el("profileFilter").textContent = filterLabel;
+      filterText.textContent = filterLabel;
       return;
     }
-    el("profileFilter").innerHTML = `<span class="profile-warning-meta">${escapeHtml(calculationMeta)}</span> · ${escapeHtml(filterLabel)}`;
+    filterText.innerHTML = `<span class="profile-warning-meta">${escapeHtml(calculationMeta)}</span> · ${escapeHtml(filterLabel)}`;
   }
 
   function profileSkippedLabel(count) {

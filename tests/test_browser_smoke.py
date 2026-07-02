@@ -7316,6 +7316,41 @@ COPY (
                     timeout=10_000,
                 )
 
+            def assert_filter_badge_clear(clear_selector: str, text_selector: str, visible: bool) -> None:
+                page.wait_for_function(
+                    """
+                    ({ clearSelector, visible }) => {
+                      const clear = document.querySelector(clearSelector);
+                      if (!clear) return false;
+                      return visible
+                        ? !clear.hidden && clear.offsetParent !== null
+                        : clear.hidden || clear.offsetParent === null;
+                    }
+                    """,
+                    arg={"clearSelector": clear_selector, "visible": visible},
+                    timeout=10_000,
+                )
+                if not visible:
+                    return
+                layout = page.evaluate(
+                    """
+                    ({ clearSelector, textSelector }) => {
+                      const clear = document.querySelector(clearSelector).getBoundingClientRect();
+                      const text = document.querySelector(textSelector).getBoundingClientRect();
+                      return {
+                        clearLeft: clear.left,
+                        clearRight: clear.right,
+                        textLeft: text.left,
+                        textRight: text.right,
+                      };
+                    }
+                    """,
+                    arg={"clearSelector": clear_selector, "textSelector": text_selector},
+                )
+                self.assertLessEqual(layout["clearLeft"], layout["textLeft"])
+                self.assertLessEqual(layout["clearRight"], layout["textLeft"] + 1)
+                self.assertGreater(layout["textRight"], layout["textLeft"])
+
             def unit_point_alpha_pixels() -> int:
                 return page.evaluate(
                     """
@@ -7476,7 +7511,7 @@ COPY (
                 self.assertIsNotNone(dataset_viewer_meta_position)
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "4 rows"
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "4 rows"
                     """,
                     timeout=10_000,
                 )
@@ -7487,6 +7522,7 @@ COPY (
                     timeout=10_000,
                 )
                 assert_filter_label_badge("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
+                assert_filter_badge_clear("#datasetViewerFilterClearBtn", "#datasetViewerFilterText", False)
                 self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
                 self.assertEqual(page.locator("#collapsedSidebarVersion").inner_text().strip(), f"v{__version__}")
                 self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
@@ -7507,7 +7543,7 @@ COPY (
                 )
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "2 / 4 rows"
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "2 / 4 rows"
                     """,
                     timeout=10_000,
                 )
@@ -7520,6 +7556,8 @@ COPY (
                 )
                 assert_filter_label_badge("#datasetViewerFilter", "dataset-viewer-filter--applied", True)
                 assert_filter_label_badge("#filterRowMeta", "filter-row-meta--applied", True)
+                assert_filter_badge_clear("#datasetViewerFilterClearBtn", "#datasetViewerFilterText", True)
+                assert_filter_badge_clear("#filterRowClearBtn", "#filterRowMetaText", True)
                 self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function(
@@ -7565,7 +7603,7 @@ COPY (
                 )
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "3 / 4 rows"
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "3 / 4 rows"
                     """,
                     timeout=10_000,
                 )
@@ -7582,11 +7620,36 @@ COPY (
                 assert_dataset_viewer_hidden()
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "3 / 4 rows"
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "3 / 4 rows"
                     """,
                     timeout=10_000,
                 )
                 assert_filter_label_badge("#lineBarFilter", "line-bar-filter--applied", True)
+                assert_filter_badge_clear("#lineBarFilterClearBtn", "#lineBarFilterText", True)
+                page.locator("#lineBarFilterClearBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterInput")?.value === ""
+                      && document.querySelector("#lineBarFilterText")?.textContent.trim() === "no filter"
+                      && document.querySelector("#lineBarFilterClearBtn")?.hidden
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                        document.querySelector("#filterInput").value = "vehicle_age >= 2";
+                        document.querySelector("#filterApplyBtn").click();
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "3 / 4 rows"
+                      && document.querySelector("#lineBarFilterText")?.textContent.trim() === "vehicle_age >= 2"
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#ukMapTool").click()
                 page.wait_for_function(
                     """
@@ -7598,11 +7661,12 @@ COPY (
                 assert_dataset_viewer_hidden()
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "3 / 4 rows"
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "3 / 4 rows"
                     """,
                     timeout=10_000,
                 )
                 assert_filter_label_badge("#mapControlFilter", "map-filter--applied", True)
+                assert_filter_badge_clear("#mapControlFilterClearBtn", "#mapControlFilterText", True)
                 page.wait_for_function(
                     """
                     () => {
@@ -7625,7 +7689,7 @@ COPY (
                     timeout=10_000,
                 )
                 dataset_requests_before_clear = dataset_viewer_requests
-                page.evaluate('() => document.querySelector("#filterClearBtn").click()')
+                page.locator("#datasetViewerFilterClearBtn").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#datasetViewerCount")?.textContent.includes("4 shown")
@@ -7634,7 +7698,7 @@ COPY (
                 )
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#filterRowMeta")?.textContent.trim() === "4 rows"
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "4 rows"
                     """,
                     timeout=10_000,
                 )
@@ -7649,6 +7713,10 @@ COPY (
                 assert_filter_label_badge("#lineBarFilter", "line-bar-filter--applied", False)
                 assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", False)
                 assert_filter_label_badge("#mapControlFilter", "map-filter--applied", False)
+                assert_filter_badge_clear("#datasetViewerFilterClearBtn", "#datasetViewerFilterText", False)
+                assert_filter_badge_clear("#lineBarFilterClearBtn", "#lineBarFilterText", False)
+                assert_filter_badge_clear("#histogramFilterClearBtn", "#histogramFilterText", False)
+                assert_filter_badge_clear("#mapControlFilterClearBtn", "#mapControlFilterText", False)
                 self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_clear)
                 normal_resize = resize_tabulator_column('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]')
@@ -8209,6 +8277,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                assert_filter_badge_clear("#profileFilterClearBtn", "#profileFilterText", True)
                 page.locator('input[name="profileSummaryMode"][value="full"]').wait_for(state="attached", timeout=10_000)
                 self.assertTrue(page.locator('input[name="profileSummaryMode"][value="full"]').is_checked())
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
@@ -8221,7 +8290,7 @@ COPY (
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_clear_filter_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/column-profile/summary") and response.status == 200, timeout=10_000):
-                        page.evaluate('() => document.querySelector("#filterClearBtn").click()')
+                        page.locator("#profileFilterClearBtn").click()
                 profile_clear_filter_payload = json.loads(profile_clear_filter_request_info.value.post_data or "{}")
                 self.assertEqual(profile_clear_filter_payload["filter"], "")
                 self.assertEqual(profile_clear_filter_payload["mode"], "auto")
@@ -8234,6 +8303,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                assert_filter_badge_clear("#profileFilterClearBtn", "#profileFilterText", False)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]').wait_for(timeout=10_000)
                 profile_requests_before_search = profile_requests
@@ -8718,6 +8788,29 @@ COPY (
                 histogram_filter_payload = json.loads(histogram_filter_request_info.value.post_data or "{}")
                 self.assertEqual(histogram_filter_payload["filter"], "vehicle_age >= 0")
                 assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", True)
+                assert_filter_badge_clear("#histogramFilterClearBtn", "#histogramFilterText", True)
+
+                with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_clear_filter_request_info:
+                    with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
+                        page.locator("#histogramFilterClearBtn").click()
+                histogram_clear_filter_payload = json.loads(histogram_clear_filter_request_info.value.post_data or "{}")
+                self.assertEqual(histogram_clear_filter_payload["filter"], "")
+                assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", False)
+                assert_filter_badge_clear("#histogramFilterClearBtn", "#histogramFilterText", False)
+
+                with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_refilter_request_info:
+                    with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
+                        page.evaluate(
+                            """
+                            () => {
+                                document.querySelector("#filterInput").value = "vehicle_age >= 0";
+                                document.querySelector("#filterApplyBtn").click();
+                            }
+                            """
+                        )
+                histogram_refilter_payload = json.loads(histogram_refilter_request_info.value.post_data or "{}")
+                self.assertEqual(histogram_refilter_payload["filter"], "vehicle_age >= 0")
+                assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", True)
 
                 with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_metric_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):
@@ -8889,13 +8982,25 @@ COPY (
                 self.assertGreater(small_dot_pixels, 0)
                 self.assertGreater(restored_dot_pixels, small_dot_pixels)
                 wait_for_map_view(stable_map_view)
+                assert_filter_label_badge("#mapControlFilter", "map-filter--applied", True)
+                assert_filter_badge_clear("#mapControlFilterClearBtn", "#mapControlFilterText", True)
+                with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                    page.locator("#mapControlFilterClearBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterInput")?.value === ""
+                      && document.querySelector("#mapControlFilterText")?.textContent.trim() === "no filter"
+                      && document.querySelector("#mapControlFilterClearBtn")?.hidden
+                    """,
+                    timeout=10_000,
+                )
 
                 self.assertEqual(page_errors, [])
                 self.assertEqual(profile_requests, 6)
                 self.assertEqual(profile_detail_requests, 7)
-                self.assertEqual(chart_requests, 3)
-                self.assertEqual(histogram_requests, 6)
-                self.assertEqual(map_requests, 9)
+                self.assertEqual(chart_requests, 4)
+                self.assertEqual(histogram_requests, 8)
+                self.assertEqual(map_requests, 10)
             finally:
                 browser.close()
 
@@ -11255,7 +11360,8 @@ COPY (
                       };
                       return {
                         mode: rectFor(".filter-selection-mode"),
-                        clear: rectFor("#filterSidebarClearBtn"),
+                        clear: rectFor("#filterRowClearBtn"),
+                        text: rectFor("#filterRowMetaText"),
                         operator: rectFor(".filter-operator"),
                         primary: rectFor(".filter-controls-primary"),
                         header: rectFor(".filter-header"),
@@ -11263,8 +11369,9 @@ COPY (
                       };
                     }"""
                 )
-                self.assertGreater(filter_layout["clear"]["left"], filter_layout["mode"]["right"])
-                self.assertAlmostEqual(filter_layout["clear"]["right"], filter_layout["primary"]["right"], delta=1)
+                self.assertGreaterEqual(filter_layout["clear"]["left"], filter_layout["meta"]["left"])
+                self.assertLessEqual(filter_layout["clear"]["right"], filter_layout["text"]["left"] + 1)
+                self.assertLessEqual(filter_layout["text"]["right"], filter_layout["meta"]["right"])
                 self.assertGreater(filter_layout["operator"]["top"], filter_layout["mode"]["bottom"] - 1)
                 self.assertAlmostEqual(filter_layout["operator"]["left"], filter_layout["mode"]["left"], delta=1)
                 self.assertAlmostEqual(filter_layout["meta"]["right"], filter_layout["header"]["right"], delta=1)
@@ -11283,20 +11390,22 @@ COPY (
                 page.locator('.filter-selection-mode button[data-value="single"]').click()
 
                 self.assertFalse(page.locator('.filter-operator button[data-value="and"]').is_visible())
-                self.assertTrue(page.locator("#filterSidebarClearBtn").is_visible())
+                self.assertTrue(page.locator("#filterRowClearBtn").is_visible())
                 page.locator("#filterCollapseBtn").click()
-                self.assertFalse(page.locator("#filterSidebarClearBtn").is_visible())
+                self.assertTrue(page.locator("#filterRowClearBtn").is_visible())
                 page.locator("#filterCollapseBtn").click()
-                self.assertTrue(page.locator("#filterSidebarClearBtn").is_visible())
+                self.assertTrue(page.locator("#filterRowClearBtn").is_visible())
                 driver_rows.first.click()
                 self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
                 self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "false")
                 postcode_rows.first.click()
                 self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "false")
                 self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "true")
-                page.locator("#filterSidebarClearBtn").click()
+                self.assertTrue(page.locator("#filterRowClearBtn").is_visible())
+                page.locator("#filterRowClearBtn").click()
                 self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "false")
                 self.assertEqual(page.locator("#filterInput").input_value(), "")
+                self.assertFalse(page.locator("#filterRowClearBtn").is_visible())
 
                 footer_value = page.locator("#filterInput").input_value()
                 self.assertEqual(page.locator("#filterFooter").get_attribute("aria-hidden"), "true")
@@ -11397,7 +11506,7 @@ COPY (
                 )
                 self.assertTrue(older_id)
 
-                page.locator("#filterSidebarClearBtn").click()
+                page.locator("#filterRowClearBtn").click()
                 page.locator("#expectedSearch").fill("expected")
                 page.locator('#expectedList .feature[data-value="expected"]').click()
                 self.assertEqual(page.locator("#filterInput").input_value(), "")

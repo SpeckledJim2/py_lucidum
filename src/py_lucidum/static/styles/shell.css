@@ -418,7 +418,7 @@
         position: absolute;
         top: 10px;
         right: 12px;
-        z-index: 6;
+        z-index: 9;
         display: flex;
         flex-direction: column;
         align-items: flex-end;
@@ -426,6 +426,13 @@
         max-width: min(520px, calc(100% - 150px));
         text-align: right;
         pointer-events: none;
+      }
+
+      .workspace-messages #datasetViewerFilter,
+      .workspace-messages #profileFilter,
+      .workspace-messages #lineBarFilter,
+      .workspace-messages #histogramFilter {
+        pointer-events: auto;
       }
 
       #visualArea:not(.profile-mode):not(.map-mode) .workspace-messages {

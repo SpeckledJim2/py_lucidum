@@ -234,6 +234,14 @@
         display: none;
       }
 
+      .filter-header {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 22px;
+        min-width: 0;
+      }
+
       .sidebar-section-header {
         width: 100%;
         border: 0;
@@ -252,6 +260,11 @@
 
       .sidebar-section-header:hover {
         color: var(--accent);
+      }
+
+      .filter-collapse-button.sidebar-section-header {
+        flex: 0 1 auto;
+        width: auto;
       }
 
       .sidebar-section-title {
@@ -278,6 +291,10 @@
         background: transparent;
         border: 0;
         border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 4px;
         padding: 0;
       }
 
@@ -286,6 +303,36 @@
         border: 1px solid var(--filter-applied-border);
         color: var(--filter-applied-text);
         padding: 1px 4px;
+      }
+
+      .filter-row-clear {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: currentColor;
+        cursor: pointer;
+        flex: 0 0 auto;
+        font: inherit;
+        font-weight: 800;
+        line-height: 1;
+        margin: 0 1px 0 0;
+        min-width: 7px;
+        padding: 0;
+      }
+
+      .filter-row-clear:focus-visible {
+        outline: 1px solid currentColor;
+        outline-offset: 1px;
+      }
+
+      .filter-row-clear::before {
+        content: "x";
+      }
+
+      .filter-badge-text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       #kpiSelect {
@@ -518,14 +565,6 @@
         cursor: pointer;
         font-size: 15px;
         line-height: 1;
-      }
-
-      .filter-sidebar-clear {
-        width: 24px;
-        min-height: 24px;
-        flex: 0 0 auto;
-        margin-left: auto;
-        font-size: 14px;
       }
 
       #savedFilterSelect {
@@ -828,6 +867,9 @@
         border: 1px solid transparent;
         border-radius: 4px;
         color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
         font-size: 10px;
         line-height: 1.1;
         max-width: 100%;
