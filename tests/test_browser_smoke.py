@@ -7451,6 +7451,15 @@ COPY (
                 )
                 return {"before": float(probe["before"]), "after": float(after)}
 
+            def tabulator_column_width(column_selector: str) -> float:
+                width = page.evaluate(
+                    """
+                    selector => document.querySelector(selector)?.getBoundingClientRect().width || 0
+                    """,
+                    arg=column_selector,
+                )
+                return float(width)
+
             try:
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
@@ -7720,7 +7729,7 @@ COPY (
                 self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
                 self.assertGreater(dataset_viewer_requests, dataset_requests_before_clear)
                 normal_resize = resize_tabulator_column('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]')
-                self.assertAlmostEqual(normal_resize["before"], 150, delta=4)
+                self.assertAlmostEqual(normal_resize["before"], 180, delta=4)
                 self.assertGreater(normal_resize["after"], normal_resize["before"] + 20)
                 page.evaluate(
                     """
@@ -7924,14 +7933,68 @@ COPY (
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy cell to clipboard").wait_for(timeout=10_000)
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy cell to clipboard").click()
                 page.wait_for_function("() => window.__lucidumCopiedText === 'AB10 1AA'", timeout=10_000)
-                page.locator("#datasetViewerSearch").fill("AL1 2AA")
+                self.assertEqual(page.locator("#datasetViewerSearch").get_attribute("placeholder"), "Select columns, separate with commas")
+                page.locator("#datasetViewerSearch").fill("vehicle, Postcode")
                 page.wait_for_function(
                     """
                     () => {
                       const rows = [...document.querySelectorAll('#datasetViewerGrid .tabulator-row')].filter((row) => row.offsetParent !== null);
-                      return rows.length === 1 && rows[0].textContent.includes('AL1 2AA');
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return rows.length >= 4
+                        && headers.join(',') === 'c2,c0,c1,c5'
+                        && rows[0].querySelectorAll('.tabulator-cell').length === 4
+                        && rows[0].querySelector('.tabulator-cell[tabulator-field="c5"]')?.textContent.trim() === 'AB10 1AA';
                     }
+                    """,
+                    timeout=10_000,
+                )
+                requests_before_orientation_search_toggle = dataset_viewer_requests
+                page.locator("#datasetViewerTranspose").check()
+                page.wait_for_function(
                     """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                      if (!grid) return false;
+                      const rows = [...grid.querySelectorAll('.tabulator-row')].filter((row) => row.offsetParent !== null);
+                      const names = rows.map((row) => row.querySelector('.tabulator-cell[tabulator-field="__field"]')?.textContent.trim()).filter(Boolean);
+                      return rows.length === 4 && names.join(',') === 'vehicle_age,PostcodeArea,PostcodeSector,PostcodeUnit';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").uncheck()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid:not(.dataset-viewer-grid-transposed)');
+                      if (!grid) return false;
+                      const rows = [...grid.querySelectorAll('.tabulator-row')].filter((row) => row.offsetParent !== null);
+                      const headers = [...grid.querySelectorAll('.tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return rows.length >= 4 && headers.join(',') === 'c2,c0,c1,c5';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(dataset_viewer_requests, requests_before_orientation_search_toggle)
+                page.locator("#datasetViewerSearch").fill("  vehicle , , Postcode  ,")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      const rows = [...document.querySelectorAll('#datasetViewerGrid .tabulator-row')].filter((row) => row.offsetParent !== null);
+                      return rows.length >= 4 && headers.join(',') === 'c2,c0,c1,c5';
+                    }
+                    """,
+                    timeout=10_000,
                 )
                 page.locator("#datasetViewerSearchClear").click()
                 page.wait_for_function(
@@ -7939,7 +8002,13 @@ COPY (
                     () => {
                       const search = document.querySelector('#datasetViewerSearch');
                       const rows = [...document.querySelectorAll('#datasetViewerGrid .tabulator-row')].filter((row) => row.offsetParent !== null);
-                      return search?.value === '' && rows.length >= 4;
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return search?.value === ''
+                        && rows.length >= 4
+                        && headers.join(',') === 'c0,c1,c2,c3,c4,c5,c6,c7';
                     }
                     """,
                     timeout=10_000,
@@ -7982,7 +8051,7 @@ COPY (
                     timeout=10_000,
                 )
                 transposed_resize = resize_tabulator_column('#datasetViewerGrid .tabulator-col[tabulator-field="r0"]')
-                self.assertAlmostEqual(transposed_resize["before"], 100, delta=4)
+                self.assertAlmostEqual(transposed_resize["before"], 150, delta=4)
                 self.assertGreater(transposed_resize["after"], transposed_resize["before"] + 20)
                 page.wait_for_function(
                     """
@@ -8159,7 +8228,7 @@ COPY (
                 page.locator("#datasetViewerGrid .tabulator-tableholder").evaluate(
                     "node => { node.dataset.datasetViewerSearchProbe = 'kept'; }"
                 )
-                page.locator("#datasetViewerSearch").fill("PostcodeUnit")
+                page.locator("#datasetViewerSearch").fill("PostcodeUnit, vehicle")
                 page.wait_for_function(
                     """
                     () => {
@@ -8168,20 +8237,54 @@ COPY (
                       const holder = grid.querySelector('.tabulator-tableholder');
                       const headers = [...grid.querySelectorAll('.tabulator-col')].map((cell) => cell.textContent.trim());
                       const rows = [...grid.querySelectorAll('.tabulator-row')].filter((row) => row.offsetParent !== null);
+                      const names = rows.map((row) => row.querySelector('.tabulator-cell[tabulator-field="__field"]')?.textContent.trim()).filter(Boolean);
                       return holder?.dataset.datasetViewerSearchProbe === 'kept'
                         && headers.length === 5
                         && headers[0] === 'Column'
                         && headers[1] === 'Row 1'
                         && headers[4] === 'Row 4'
-                        && rows.length === 1
-                        && rows[0].querySelector('.tabulator-cell[tabulator-field="__field"]')?.textContent.trim() === 'PostcodeUnit'
-                        && rows[0].querySelector('.tabulator-cell[tabulator-field="r0"]')?.textContent.trim() === 'AB10 1AA'
-                        && rows[0].querySelector('.tabulator-cell[tabulator-field="r3"]')?.textContent.trim() === 'AL1 2AA';
+                        && rows.length === 2
+                        && names.join(',') === 'PostcodeUnit,vehicle_age'
+                        && rows.some((row) => row.querySelector('.tabulator-cell[tabulator-field="r0"]')?.textContent.trim() === 'AB10 1AA')
+                        && rows.some((row) => row.querySelector('.tabulator-cell[tabulator-field="r0"]')?.textContent.trim() === '1');
                     }
                     """,
                     timeout=10_000,
                 )
                 self.assertEqual(dataset_viewer_requests, transposed_requests_before_search)
+                page.locator("#datasetViewerTranspose").uncheck()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid:not(.dataset-viewer-grid-transposed)');
+                      if (!grid) return false;
+                      const rows = [...grid.querySelectorAll('.tabulator-row')].filter((row) => row.offsetParent !== null);
+                      const headers = [...grid.querySelectorAll('.tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return rows.length >= 4 && headers.join(',') === 'c5,c2';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(dataset_viewer_requests, transposed_requests_before_search)
+                page.locator("#datasetViewerTranspose").check()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                      if (!grid) return false;
+                      const rows = [...grid.querySelectorAll('.tabulator-row')].filter((row) => row.offsetParent !== null);
+                      const names = rows.map((row) => row.querySelector('.tabulator-cell[tabulator-field="__field"]')?.textContent.trim()).filter(Boolean);
+                      return rows.length === 2 && names.join(',') === 'PostcodeUnit,vehicle_age';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid .tabulator-tableholder").evaluate(
+                    "node => { node.dataset.datasetViewerSearchProbe = 'kept'; }"
+                )
                 page.locator("#datasetViewerSearchClear").click()
                 page.wait_for_function(
                     """
@@ -8201,6 +8304,34 @@ COPY (
                     """
                     () => document.querySelectorAll('#datasetViewerGrid .tabulator-row.tabulator-selected').length === 1
                       && document.querySelector('#datasetViewerGrid .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field="c5"]')?.textContent.trim() === 'AB10 1AA'
+                    """,
+                    timeout=10_000,
+                )
+                self.assertAlmostEqual(
+                    tabulator_column_width('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]'),
+                    normal_resize["after"],
+                    delta=4,
+                )
+                page.locator("#datasetViewerTranspose").check()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                      const first = grid?.querySelector('.tabulator-row .tabulator-cell[tabulator-field="__field"]');
+                      return Boolean(grid && first?.textContent.trim() === 'PostcodeArea');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertAlmostEqual(
+                    tabulator_column_width('#datasetViewerGrid .tabulator-col[tabulator-field="r0"]'),
+                    transposed_resize["after"],
+                    delta=4,
+                )
+                page.locator("#datasetViewerTranspose").uncheck()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
                     """,
                     timeout=10_000,
                 )

@@ -3,6 +3,7 @@ import { loadTabulator } from "./shared/tabulator.js";
 const TOOL_ID = "dataset_viewer";
 const MAX_ROWS = 100;
 const STYLESHEET_ID = "datasetViewerStylesheet";
+const NORMAL_SEARCH_REPLACE_MOVE_THRESHOLD = 16;
 
 function ensureDatasetViewerStyles() {
   if (document.getElementById(STYLESHEET_ID)) return;
@@ -37,6 +38,7 @@ export function createDatasetViewerTool({
   let datasetTable = null;
   let renderToken = 0;
   let currentRows = [];
+  let currentRenderedRows = [];
   let currentColumns = [];
   let currentFields = [];
   let currentDatasetRows = [];
@@ -52,6 +54,9 @@ export function createDatasetViewerTool({
   let renderedSearch = null;
   let renderedTranspose = null;
   let renderedAlphabeticalColumns = null;
+  let renderedWidthMode = "";
+  let normalColumnWidths = new Map();
+  let transposedColumnWidths = new Map();
   let resizeFrame = null;
   let resizeHard = false;
 
@@ -106,7 +111,7 @@ export function createDatasetViewerTool({
       wrap.innerHTML = `
         <div class="dataset-viewer-toolbar">
           <div class="dataset-viewer-search-row">
-            <input id="datasetViewerSearch" class="search dataset-viewer-search" placeholder="search table" />
+            <input id="datasetViewerSearch" class="search dataset-viewer-search" placeholder="Select columns, separate with commas" />
             <button id="datasetViewerSearchClear" class="filter-action" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
           </div>
           <label class="dataset-viewer-checkbox">
@@ -177,6 +182,7 @@ export function createDatasetViewerTool({
 
   function clearTable({ resetSelection = false } = {}) {
     closeDatasetViewerCellContextMenu();
+    snapshotDatasetViewerColumnWidths();
     if (resizeFrame !== null) {
       cancelAnimationFrame(resizeFrame);
       resizeFrame = null;
@@ -195,6 +201,7 @@ export function createDatasetViewerTool({
       transposedSort = { field: "", dir: "none" };
     }
     currentRows = [];
+    currentRenderedRows = [];
     currentColumns = [];
     currentFields = [];
     currentDatasetRows = [];
@@ -205,6 +212,7 @@ export function createDatasetViewerTool({
     renderedSearch = null;
     renderedTranspose = null;
     renderedAlphabeticalColumns = null;
+    renderedWidthMode = "";
   }
 
   function renderLoading() {
@@ -238,6 +246,7 @@ export function createDatasetViewerTool({
       ? transposedTableData(data)
       : normalTableData(data);
     currentRows = tableData.rows;
+    currentRenderedRows = tableData.renderRows || tableData.rows;
     currentColumns = tableData.columns;
     currentFields = tableData.fields;
     currentDatasetRows = tableData.datasetRows;
@@ -267,7 +276,7 @@ export function createDatasetViewerTool({
       const target = el("datasetViewerGrid");
       if (!target) return;
       datasetTable = new Tabulator(target, {
-        data: currentRows,
+        data: currentRenderedRows,
         index: "__row_id",
         autoResize: false,
         height: "100%",
@@ -288,15 +297,25 @@ export function createDatasetViewerTool({
         },
         columns: currentColumns,
       });
+      renderedWidthMode = "normal";
+      let searchReconciled = false;
+      const reconcileSearch = () => {
+        if (searchReconciled) return;
+        searchReconciled = true;
+        reconcileRenderedSearch(token, requestKey, syncNormalRenderedSelection);
+      };
       if (typeof datasetTable.on === "function") {
         datasetTable.on("rowSelectionChanged", handleNormalRowSelectionChanged);
-        datasetTable.on("renderComplete", syncNormalRenderedSelection);
+        datasetTable.on("renderComplete", () => {
+          syncNormalRenderedSelection();
+          reconcileSearch();
+        });
         datasetTable.on("dataSorted", syncNormalRenderedSelection);
         datasetTable.on("dataFiltered", syncNormalRenderedSelection);
+        datasetTable.on("columnResized", rememberNormalColumnWidth);
       }
-      applySearch();
+      applySearch({ mark: false });
       syncNormalRenderedSelection();
-      markRendered(requestKey);
     }).catch((error) => {
       if (token !== renderToken) return;
       renderError(error.message || String(error));
@@ -309,7 +328,7 @@ export function createDatasetViewerTool({
       const target = el("datasetViewerGrid");
       if (!target) return;
       datasetTable = new Tabulator(target, {
-        data: currentRows,
+        data: currentRenderedRows,
         index: "__row_id",
         autoResize: false,
         height: "100%",
@@ -328,13 +347,23 @@ export function createDatasetViewerTool({
         rowFormatter: formatTransposedRow,
         columns: currentColumns,
       });
+      renderedWidthMode = "transposed";
+      let searchReconciled = false;
+      const reconcileSearch = () => {
+        if (searchReconciled) return;
+        searchReconciled = true;
+        reconcileRenderedSearch(token, requestKey, syncTransposedRenderedSelection);
+      };
       if (typeof datasetTable.on === "function") {
-        datasetTable.on("renderComplete", syncTransposedRenderedSelection);
+        datasetTable.on("renderComplete", () => {
+          syncTransposedRenderedSelection();
+          reconcileSearch();
+        });
         datasetTable.on("dataFiltered", syncTransposedRenderedSelection);
+        datasetTable.on("columnResized", rememberTransposedColumnWidth);
       }
-      applySearch();
+      applySearch({ mark: false });
       syncTransposedRenderedSelection();
-      markRendered(requestKey);
     }).catch((error) => {
       if (token !== renderToken) return;
       renderError(error.message || String(error));
@@ -344,31 +373,153 @@ export function createDatasetViewerTool({
   function normalTableData(data) {
     const sourceColumns = orderedDatasetViewerColumns(data);
     const rows = Array.isArray(data?.rows) ? data.rows : [];
-    const columns = sourceColumns.map((column) => ({
+    const search = normalColumnsForSearch(datasetViewerSearchTerms(), sourceColumns);
+    return {
+      columns: search.columns,
+      rows,
+      fields: sourceColumns.map((column) => column.field),
+      datasetRows: rows,
+      datasetColumns: sourceColumns,
+      visibleDatasetColumns: search.visibleDatasetColumns,
+    };
+  }
+
+  function normalColumnsForSearch(terms, sourceColumns = currentDatasetColumns) {
+    const visibleDatasetColumns = orderedNormalColumnsForSearch(terms, sourceColumns);
+    const visibleFields = new Set(visibleDatasetColumns.map((column) => column.field));
+    const hiddenDatasetColumns = sourceColumns.filter((column) => !visibleFields.has(column.field));
+    const renderedColumns = terms.length ? [...visibleDatasetColumns, ...hiddenDatasetColumns] : sourceColumns;
+    return {
+      columns: renderedColumns.map((column) => normalColumnDefinition(column, visibleFields)),
+      visibleDatasetColumns,
+      visibleFields,
+    };
+  }
+
+  function normalColumnDefinition(column, visibleFields) {
+    return {
       title: normalHeaderHtml(column),
       copyTitle: column.name,
       name: column.name,
       field: column.field,
       headerTooltip: column.name,
+      visible: visibleFields.has(column.field),
       ...datasetViewerColumnWidth(column),
       hozAlign: column.kind === "numeric" || column.kind === "integer" ? "right" : "left",
-      headerHozAlign: column.kind === "numeric" || column.kind === "integer" ? "right" : "left",
-    }));
-    return {
-      columns,
-      rows,
-      fields: sourceColumns.map((column) => column.field),
-      datasetRows: rows,
-      datasetColumns: sourceColumns,
-      visibleDatasetColumns: sourceColumns,
+      headerHozAlign: "left",
     };
   }
 
   function datasetViewerColumnWidth(column) {
     const kind = String(column?.kind || "");
-    if (kind === "integer" || kind === "numeric") return { width: 96, minWidth: 72 };
-    if (kind === "date" || kind === "datetime") return { width: 128, minWidth: 104 };
-    return { width: 150, minWidth: 96 };
+    if (kind === "integer" || kind === "numeric") {
+      return datasetViewerColumnWidthWithSaved("normal", column?.field, { width: 112, minWidth: 72 });
+    }
+    if (kind === "date" || kind === "datetime") {
+      return datasetViewerColumnWidthWithSaved("normal", column?.field, { width: 144, minWidth: 104 });
+    }
+    return datasetViewerColumnWidthWithSaved("normal", column?.field, { width: 180, minWidth: 96 });
+  }
+
+  function datasetViewerTransposedColumnWidth(field, defaults) {
+    return datasetViewerColumnWidthWithSaved("transposed", field, defaults);
+  }
+
+  function datasetViewerColumnWidthWithSaved(mode, field, defaults) {
+    const key = String(field || "");
+    const widths = datasetViewerColumnWidthMap(mode);
+    if (!key || !widths.has(key)) return defaults;
+    const width = Number(widths.get(key));
+    if (!Number.isFinite(width) || width <= 0) return defaults;
+    const minWidth = Number(defaults?.minWidth);
+    return {
+      ...defaults,
+      width: Math.max(Number.isFinite(minWidth) ? minWidth : 0, Math.round(width)),
+    };
+  }
+
+  function datasetViewerColumnWidthMap(mode) {
+    return mode === "transposed" ? transposedColumnWidths : normalColumnWidths;
+  }
+
+  function rememberNormalColumnWidth(column) {
+    rememberDatasetViewerColumnWidth("normal", column);
+  }
+
+  function rememberTransposedColumnWidth(column) {
+    rememberDatasetViewerColumnWidth("transposed", column);
+  }
+
+  function rememberDatasetViewerColumnWidth(mode, column) {
+    rememberDatasetViewerFieldWidth(mode, datasetViewerColumnField(column), datasetViewerColumnRenderedWidth(column));
+  }
+
+  function rememberDatasetViewerFieldWidth(mode, field, width) {
+    const key = String(field || "");
+    const value = Math.round(Number(width));
+    if (!key || !Number.isFinite(value) || value <= 0) return;
+    datasetViewerColumnWidthMap(mode).set(key, value);
+  }
+
+  function datasetViewerColumnField(column) {
+    if (column && typeof column.getField === "function") {
+      try {
+        return String(column.getField() || "");
+      } catch (_) {
+        // Fall back to the rendered header element below.
+      }
+    }
+    try {
+      const element = typeof column?.getElement === "function" ? column.getElement() : null;
+      return String(element?.getAttribute?.("tabulator-field") || "");
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function datasetViewerColumnRenderedWidth(column) {
+    if (column && typeof column.getWidth === "function") {
+      try {
+        const width = Number(column.getWidth());
+        if (Number.isFinite(width) && width > 0) return width;
+      } catch (_) {
+        // Fall back to the rendered header element below.
+      }
+    }
+    try {
+      const element = typeof column?.getElement === "function" ? column.getElement() : null;
+      const width = Number(element?.getBoundingClientRect?.().width);
+      return Number.isFinite(width) ? width : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function snapshotDatasetViewerColumnWidths() {
+    const mode = renderedWidthMode;
+    if (!datasetTable || !mode) return;
+    let captured = false;
+    try {
+      if (typeof datasetTable.getColumns === "function") {
+        const columns = datasetTable.getColumns();
+        if (Array.isArray(columns)) {
+          columns.forEach((column) => rememberDatasetViewerColumnWidth(mode, column));
+          captured = columns.length > 0;
+        }
+      }
+    } catch (_) {
+      captured = false;
+    }
+    if (captured) return;
+    const grid = document.getElementById("datasetViewerGrid");
+    if (!grid) return;
+    grid.querySelectorAll(".tabulator-col[tabulator-field]").forEach((node) => {
+      rememberDatasetViewerFieldWidth(
+        mode,
+        node.getAttribute("tabulator-field") || "",
+        node.getBoundingClientRect().width,
+      );
+    });
   }
 
   function transposedTableData(data) {
@@ -380,6 +531,7 @@ export function createDatasetViewerTool({
       __column_field: column.field,
       __field: column.name,
     }));
+    const renderRows = orderedTransposedRowsForSearch(datasetViewerSearchTerms(), rows);
     const columns = [
       {
         title: transposedHeaderHtml({
@@ -391,39 +543,48 @@ export function createDatasetViewerTool({
         copyTitle: "Column",
         field: "__field",
         sortField: "__field",
-        width: 220,
-        minWidth: 170,
+        ...datasetViewerTransposedColumnWidth("__field", { width: 300, minWidth: 170 }),
         headerSort: false,
         resizable: true,
       },
-      ...sourceRows.map((row, index) => ({
-        title: transposedHeaderHtml({
-          title: `Row ${index + 1}`,
+      ...sourceRows.map((row, index) => {
+        const field = `r${index}`;
+        return {
+          title: transposedHeaderHtml({
+            title: `Row ${index + 1}`,
+            copyTitle: `Row ${index + 1}`,
+            field,
+            sortField: field,
+            datasetRowId: row.__row_id,
+            headerTooltip: row.__row_id ? `Dataset row ${row.__row_id}` : `Row ${index + 1}`,
+          }),
           copyTitle: `Row ${index + 1}`,
-          field: `r${index}`,
-          sortField: `r${index}`,
+          field,
+          sortField: field,
           datasetRowId: row.__row_id,
           headerTooltip: row.__row_id ? `Dataset row ${row.__row_id}` : `Row ${index + 1}`,
-        }),
-        copyTitle: `Row ${index + 1}`,
-        field: `r${index}`,
-        sortField: `r${index}`,
-        datasetRowId: row.__row_id,
-        headerTooltip: row.__row_id ? `Dataset row ${row.__row_id}` : `Row ${index + 1}`,
-        headerSort: false,
-        resizable: true,
-        width: 100,
-        minWidth: 72,
-      })),
+          headerSort: false,
+          resizable: true,
+          ...datasetViewerTransposedColumnWidth(field, { width: 150, minWidth: 72 }),
+        };
+      }),
     ];
     return {
       columns,
       rows,
+      renderRows,
       fields: ["__field", ...sourceRows.map((_, index) => `r${index}`)],
       datasetRows: sourceRows,
       datasetColumns: sourceColumns,
-      visibleDatasetColumns: sortedColumns,
+      visibleDatasetColumns: datasetColumnsFromTransposedRows(renderRows, sourceColumns),
     };
+  }
+
+  function datasetColumnsFromTransposedRows(rows, columns = currentDatasetColumns) {
+    const columnByField = new Map(columns.map((column) => [column.field, column]));
+    return (rows || [])
+      .map((row) => columnByField.get(row?.__column_field))
+      .filter(Boolean);
   }
 
   function normalHeaderHtml(column) {
@@ -761,46 +922,254 @@ export function createDatasetViewerTool({
     });
   }
 
-  function applySearch() {
-    const query = String(state.datasetViewerSearch || "").trim().toLowerCase();
+  function applySearch({ mark = true } = {}) {
+    const terms = datasetViewerSearchTerms();
     if (state.datasetViewerTranspose) {
-      applyTransposedSearch(query);
+      applyTransposedSearch(terms, { mark });
       return;
     }
-    if (!datasetTable) return;
+    applyNormalColumnSearch(terms, { mark });
+  }
+
+  function datasetViewerSearchTerms() {
+    return String(state.datasetViewerSearch || "")
+      .split(",")
+      .map((term) => term.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  function datasetViewerColumnMatchesSearch(column, terms) {
+    if (!terms.length) return true;
+    return datasetViewerColumnSearchTermIndex(column, terms) !== -1;
+  }
+
+  function datasetViewerColumnSearchTermIndex(column, terms) {
+    const name = formatCellValue(column?.name ?? column?.__field ?? column?.title).toLowerCase();
+    return terms.findIndex((term) => name.includes(term));
+  }
+
+  function orderedNormalColumnsForSearch(terms, sourceColumns = currentDatasetColumns) {
+    if (!terms.length) return sourceColumns;
+    const groupedColumns = terms.map(() => []);
+    sourceColumns.forEach((column) => {
+      const matchIndex = datasetViewerColumnSearchTermIndex(column, terms);
+      if (matchIndex !== -1) groupedColumns[matchIndex].push(column);
+    });
+    return groupedColumns.flat();
+  }
+
+  function syncNormalColumnVisibilityAndOrder(visibleColumns, visibleFields) {
+    if (!datasetTable || typeof datasetTable.getColumns !== "function") return;
+    withDatasetViewerRedrawBlocked(() => {
+      const tableColumns = datasetTable.getColumns();
+      const componentByField = new Map();
+      tableColumns.forEach((column) => {
+        const field = datasetViewerColumnField(column);
+        if (!field) return;
+        componentByField.set(field, column);
+        const visible = visibleFields.has(field);
+        if (visible && typeof column.show === "function") column.show();
+        if (!visible && typeof column.hide === "function") column.hide();
+      });
+      reorderNormalColumns(visibleColumns, componentByField, tableColumns, visibleFields);
+    });
+  }
+
+  function withDatasetViewerRedrawBlocked(callback) {
+    const canBlock = datasetTable
+      && datasetTable.initialized === true
+      && typeof datasetTable.blockRedraw === "function"
+      && typeof datasetTable.restoreRedraw === "function";
+    if (!canBlock) {
+      callback();
+      return;
+    }
+    datasetTable.blockRedraw();
     try {
-      if (!query) {
-        datasetTable.clearFilter();
-        markRendered(toolCache(TOOL_ID).requestKey);
+      callback();
+    } finally {
+      datasetTable.restoreRedraw();
+    }
+  }
+
+  function reorderNormalColumns(visibleColumns, componentByField, tableColumns, visibleFields) {
+    const desiredFields = visibleColumns.map((column) => column.field).filter((field) => componentByField.has(field));
+    if (desiredFields.length < 2) return;
+    const currentVisibleFields = tableColumns
+      .map((column) => datasetViewerColumnField(column))
+      .filter((field) => visibleFields.has(field));
+    const alreadyOrdered = desiredFields.length === currentVisibleFields.length
+      && desiredFields.every((field, index) => field === currentVisibleFields[index]);
+    if (alreadyOrdered) return;
+    const stableFields = longestInOrderFields(currentVisibleFields, desiredFields);
+    let previousField = "";
+    desiredFields.forEach((field, index) => {
+      if (stableFields.has(field)) {
+        previousField = field;
         return;
       }
-      const fields = [...currentFields];
-      datasetTable.setFilter((row) => fields.some((field) => formatCellValue(row[field]).toLowerCase().includes(query)));
-      markRendered(toolCache(TOOL_ID).requestKey);
-    } catch (_) {
-      // Search is client-only convenience; stale Tabulator instances can be ignored.
+      const column = componentByField.get(field);
+      if (!column || typeof column.move !== "function") {
+        previousField = field;
+        return;
+      }
+      const nextStableField = desiredFields.slice(index + 1).find((candidate) => stableFields.has(candidate));
+      try {
+        if (nextStableField) {
+          const nextColumn = componentByField.get(nextStableField);
+          if (nextColumn && nextColumn !== column) column.move(nextColumn, false);
+        } else if (previousField) {
+          const previousColumn = componentByField.get(previousField);
+          if (previousColumn && previousColumn !== column) column.move(previousColumn, true);
+        }
+      } catch (_) {
+        // Reordering is cosmetic; preserve visibility and copy order if Tabulator rejects a stale component.
+      }
+      previousField = field;
+    });
+  }
+
+  function longestInOrderFields(currentFields, desiredFields) {
+    const desiredIndexByField = new Map(desiredFields.map((field, index) => [field, index]));
+    const indexedFields = currentFields
+      .map((field) => ({ field, index: desiredIndexByField.get(field) }))
+      .filter((entry) => Number.isInteger(entry.index));
+    if (!indexedFields.length) return new Set();
+    const lengths = indexedFields.map(() => 1);
+    const previous = indexedFields.map(() => -1);
+    let best = 0;
+    for (let index = 1; index < indexedFields.length; index += 1) {
+      for (let candidate = 0; candidate < index; candidate += 1) {
+        if (indexedFields[candidate].index >= indexedFields[index].index) continue;
+        if (lengths[candidate] + 1 <= lengths[index]) continue;
+        lengths[index] = lengths[candidate] + 1;
+        previous[index] = candidate;
+      }
+      if (lengths[index] > lengths[best]) best = index;
     }
+    const fields = new Set();
+    for (let index = best; index !== -1; index = previous[index]) {
+      fields.add(indexedFields[index].field);
+    }
+    return fields;
   }
 
-  function transposedColumnMatchesSearch(column, query) {
-    return formatCellValue(column?.__field ?? column?.name).toLowerCase().includes(query);
-  }
-
-  function applyTransposedSearch(query) {
+  function applyNormalColumnSearch(terms, { mark = true } = {}) {
     if (!datasetTable) return;
     try {
-      if (!query) {
-        datasetTable.clearFilter();
-        syncTransposedVisibleColumnsFromRows(currentRows);
-      } else {
-        datasetTable.setFilter((row) => transposedColumnMatchesSearch(row, query));
-        syncTransposedVisibleColumnsFromActiveRows();
+      const search = normalColumnsForSearch(terms);
+      currentColumns = search.columns;
+      currentVisibleDatasetColumns = search.visibleDatasetColumns;
+      if (!replaceNormalColumns(search)) {
+        syncNormalColumnVisibilityAndOrder(search.visibleDatasetColumns, search.visibleFields);
       }
-      syncTransposedRenderedSelection();
-      markRendered(toolCache(TOOL_ID).requestKey);
+      syncNormalRenderedSelection();
+      if (mark) markRendered(toolCache(TOOL_ID).requestKey);
     } catch (_) {
       // Search is client-only convenience; stale Tabulator instances can be ignored.
     }
+  }
+
+  function replaceNormalColumns(search) {
+    if (!datasetTable || datasetTable.initialized !== true || typeof datasetTable.setColumns !== "function") return false;
+    if (!normalSearchNeedsColumnReplacement(search.visibleDatasetColumns, search.visibleFields)) return false;
+    snapshotDatasetViewerColumnWidths();
+    const sorters = normalTableSorters();
+    try {
+      datasetTable.setColumns(search.columns);
+      restoreNormalTableSorters(sorters);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function normalSearchNeedsColumnReplacement(visibleColumns, visibleFields) {
+    if (!datasetTable || typeof datasetTable.getColumns !== "function") return false;
+    let tableColumns = [];
+    try {
+      tableColumns = datasetTable.getColumns();
+    } catch (_) {
+      return false;
+    }
+    const desiredFields = visibleColumns.map((column) => column.field).filter(Boolean);
+    const currentVisibleFields = tableColumns
+      .map((column) => datasetViewerColumnField(column))
+      .filter((field) => visibleFields.has(field));
+    if (desiredFields.length < 2 || desiredFields.length !== currentVisibleFields.length) return false;
+    const stableFields = longestInOrderFields(currentVisibleFields, desiredFields);
+    return desiredFields.length - stableFields.size > NORMAL_SEARCH_REPLACE_MOVE_THRESHOLD;
+  }
+
+  function normalTableSorters() {
+    if (!datasetTable || typeof datasetTable.getSorters !== "function") return [];
+    try {
+      const sorters = datasetTable.getSorters();
+      return Array.isArray(sorters) ? sorters : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function restoreNormalTableSorters(sorters) {
+    if (!sorters.length || !datasetTable || typeof datasetTable.setSort !== "function") return;
+    try {
+      datasetTable.setSort(sorters);
+    } catch (_) {
+      // Search should remain useful even if a stale sorter references a replaced column.
+    }
+  }
+
+  function transposedRowSearchTermIndex(row, terms) {
+    return datasetViewerColumnSearchTermIndex({ name: row?.__field ?? row?.name }, terms);
+  }
+
+  function orderedTransposedRowsForSearch(terms, sourceRows = currentRows) {
+    if (!terms.length) return sourceRows;
+    const groupedRows = terms.map(() => []);
+    sourceRows.forEach((row) => {
+      const matchIndex = transposedRowSearchTermIndex(row, terms);
+      if (matchIndex !== -1) groupedRows[matchIndex].push(row);
+    });
+    return groupedRows.flat();
+  }
+
+  function applyTransposedSearch(terms, { mark = true } = {}) {
+    if (!datasetTable) return;
+    try {
+      const rows = orderedTransposedRowsForSearch(terms);
+      currentRenderedRows = rows;
+      replaceTransposedRows(rows);
+      syncTransposedVisibleColumnsFromRows(rows);
+      syncTransposedRenderedSelection();
+      if (mark) markRendered(toolCache(TOOL_ID).requestKey);
+    } catch (_) {
+      // Search is client-only convenience; stale Tabulator instances can be ignored.
+    }
+  }
+
+  function replaceTransposedRows(rows) {
+    if (!datasetTable || datasetTable.initialized !== true) return false;
+    try {
+      const replace = typeof datasetTable.replaceData === "function"
+        ? datasetTable.replaceData(rows)
+        : typeof datasetTable.setData === "function"
+          ? datasetTable.setData(rows)
+          : null;
+      if (replace && typeof replace.then === "function") {
+        replace.then(syncTransposedRenderedSelection).catch(() => {});
+      }
+      return Boolean(replace);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function reconcileRenderedSearch(token, requestKey, syncSelection) {
+    if (token !== renderToken || !datasetTable) return;
+    applySearch({ mark: false });
+    if (typeof syncSelection === "function") syncSelection();
+    markRendered(requestKey);
   }
 
   function syncTransposedVisibleColumnsFromActiveRows() {
@@ -815,9 +1184,7 @@ export function createDatasetViewerTool({
   }
 
   function syncTransposedVisibleColumnsFromRows(rows) {
-    currentVisibleDatasetColumns = (rows || [])
-      .map((row) => currentDatasetColumnByField.get(row?.__column_field))
-      .filter(Boolean);
+    currentVisibleDatasetColumns = datasetColumnsFromTransposedRows(rows);
   }
 
   function datasetViewerCellValue(cell) {
@@ -867,7 +1234,7 @@ export function createDatasetViewerTool({
   async function copyDisplayedTable() {
     const csv = state.datasetViewerTranspose
       ? transposedRowsToCsv(activeTransposedRowsForCopy(), currentColumns)
-      : rowsToCsv(rowsForColumnCopy(), currentDatasetColumns);
+      : rowsToCsv(rowsForColumnCopy(), currentVisibleDatasetColumns);
     const copied = await copyTextToClipboard(csv);
     showClipboardToast(copied ? "Displayed table copied" : "Could not copy displayed table", !copied);
   }
@@ -886,7 +1253,7 @@ export function createDatasetViewerTool({
   }
 
   function columnsForRowCopy() {
-    return state.datasetViewerTranspose ? currentVisibleDatasetColumns : currentDatasetColumns;
+    return currentVisibleDatasetColumns;
   }
 
   function rowsForColumnCopy() {
@@ -910,7 +1277,7 @@ export function createDatasetViewerTool({
   }
 
   function activeTransposedRowsForCopy() {
-    if (!datasetTable) return currentRows;
+    if (!datasetTable) return currentRenderedRows;
     try {
       if (typeof datasetTable.getRows === "function") {
         return datasetTable.getRows("active")
@@ -925,7 +1292,7 @@ export function createDatasetViewerTool({
     } catch (_) {
       // Ignore stale Tabulator instances.
     }
-    return currentRows;
+    return currentRenderedRows;
   }
 
   function rowsToCsv(rows, columns) {
