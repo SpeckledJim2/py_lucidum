@@ -155,12 +155,6 @@ export function createUkMapTool({
   const MAP_LABEL_MIN_FONT_SIZE = 6;
   const MAP_LABEL_MAX_FONT_SIZE = 20;
   const MAP_INITIAL_FIT_OPTIONS = { animate: false };
-  const MAP_CONTROL_POSITION_VERSION = "4";
-  const MAP_CONTROL_POSITION_KEYS = {
-    left: "py_lucidum_map_control_left",
-    top: "py_lucidum_map_control_top",
-    version: "py_lucidum_map_control_version",
-  };
   const MAP_CONTROL_EXPANDED_ICON = '<path d="M7 17 17 7"></path><path d="M10 7h7v7"></path>';
   const MAP_CONTROL_COLLAPSED_ICON = '<path d="M17 7 7 17"></path><path d="M14 17H7v-7"></path>';
   const MAP_BASE_LAYERS = {
@@ -1545,11 +1539,6 @@ export function createUkMapTool({
 
   function setupMapFloatingControlDrag() {
     const panel = el("mapFloatingControl");
-    const saved = restoreMapFloatingPosition();
-    if (saved) {
-      state.mapControlMoved = true;
-      requestAnimationFrame(() => setMapFloatingPosition(saved.left, saved.top));
-    }
 
     let dragging = false;
     let startX = 0;
@@ -1584,7 +1573,6 @@ export function createUkMapTool({
       panel.classList.remove("dragging");
       document.body.classList.remove("dragging-map-control");
       window.getSelection()?.removeAllRanges();
-      persistMapFloatingPosition();
       if (event.pointerId !== undefined) {
         try {
           panel.releasePointerCapture(event.pointerId);
@@ -1598,31 +1586,6 @@ export function createUkMapTool({
 
   function isMapFloatingInteractiveTarget(target) {
     return Boolean(target?.closest?.("button, input, select, textarea, label, a"));
-  }
-
-  function restoreMapFloatingPosition() {
-    if (localStorage.getItem(MAP_CONTROL_POSITION_KEYS.version) !== MAP_CONTROL_POSITION_VERSION) {
-      clearMapFloatingPosition();
-      return null;
-    }
-    const left = Number(localStorage.getItem(MAP_CONTROL_POSITION_KEYS.left));
-    const top = Number(localStorage.getItem(MAP_CONTROL_POSITION_KEYS.top));
-    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
-    return { left, top };
-  }
-
-  function persistMapFloatingPosition() {
-    const position = state.mapControlPosition;
-    if (!position) return;
-    localStorage.setItem(MAP_CONTROL_POSITION_KEYS.left, String(Math.round(position.left)));
-    localStorage.setItem(MAP_CONTROL_POSITION_KEYS.top, String(Math.round(position.top)));
-    localStorage.setItem(MAP_CONTROL_POSITION_KEYS.version, MAP_CONTROL_POSITION_VERSION);
-  }
-
-  function clearMapFloatingPosition() {
-    localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.left);
-    localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.top);
-    localStorage.removeItem(MAP_CONTROL_POSITION_KEYS.version);
   }
 
   function setMapFloatingPosition(rawLeft, rawTop, { updateState = true } = {}) {

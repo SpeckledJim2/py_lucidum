@@ -2,7 +2,6 @@ import { stackedShapChartOption } from "./gbm-stacked-shap-chart.js";
 
 const BAND_STEPS = makeBandSteps();
 const BAND_BUTTONS = [0.01, 0.1, 1, 5, 10, 100];
-const STACKED_SHAP_SIDE_WIDTH_KEY = "py_lucidum_gbm_stacked_shap_side_width";
 const TAIL_OPTIONS = [
   { value: 0, label: "-" },
   { value: 0.1, label: "0.1%" },
@@ -28,6 +27,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
   let lastPayload = null;
   let configSeq = 0;
   let plotSeq = 0;
+  let sidePanelWidth = null;
   const state = {
     modelFeature: "",
     featureSort: "importance",
@@ -522,9 +522,8 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     const side = root.querySelector(".gbm-stacked-shap-side");
     const resizer = root.querySelector("#gbmStackedShapMainResizer");
     if (!side || !resizer) return;
-    const savedWidth = Number(localStorage.getItem(STACKED_SHAP_SIDE_WIDTH_KEY));
-    if (Number.isFinite(savedWidth) && savedWidth > 0) {
-      setMainSideWidth(root, savedWidth);
+    if (Number.isFinite(sidePanelWidth) && sidePanelWidth > 0) {
+      setMainSideWidth(root, sidePanelWidth);
     }
 
     resizer.addEventListener("pointerdown", (event) => {
@@ -542,10 +541,6 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.getSelection()?.removeAllRanges();
-        const width = parseFloat(root.style.getPropertyValue("--gbm-stacked-shap-side-width"));
-        if (Number.isFinite(width)) {
-          localStorage.setItem(STACKED_SHAP_SIDE_WIDTH_KEY, String(Math.round(width)));
-        }
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp, { once: true });
@@ -556,8 +551,6 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
       event.preventDefault();
       const current = side.getBoundingClientRect().width || 0;
       setMainSideWidth(root, current + (event.key === "ArrowRight" ? 24 : -24));
-      const width = parseFloat(root.style.getPropertyValue("--gbm-stacked-shap-side-width"));
-      if (Number.isFinite(width)) localStorage.setItem(STACKED_SHAP_SIDE_WIDTH_KEY, String(Math.round(width)));
     });
   }
 
@@ -569,6 +562,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     const minChartWidth = 360;
     const maxWidth = Math.max(minSideWidth, availableWidth - resizerWidth - minChartWidth);
     const width = Math.min(Math.max(rawWidth, minSideWidth), maxWidth);
+    sidePanelWidth = width;
     root.style.setProperty("--gbm-stacked-shap-side-width", `${Math.round(width)}px`);
     resizer?.setAttribute("aria-valuemin", String(minSideWidth));
     resizer?.setAttribute("aria-valuemax", String(Math.round(maxWidth)));

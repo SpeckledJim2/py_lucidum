@@ -2854,10 +2854,6 @@
       function setupSidebarResize() {
         const shell = document.querySelector(".shell");
         const resizer = el("sidebarResizer");
-        const savedWidth = Number(localStorage.getItem("py_lucidum_sidebar_width"));
-        if (Number.isFinite(savedWidth) && savedWidth > 0) {
-          setSidebarWidth(savedWidth);
-        }
 
         let dragging = false;
         resizer.addEventListener("pointerdown", (event) => {
@@ -2880,10 +2876,6 @@
           resizer.classList.remove("dragging");
           document.body.classList.remove("resizing-sidebar");
           window.getSelection()?.removeAllRanges();
-          const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"));
-          if (Number.isFinite(width)) {
-            localStorage.setItem("py_lucidum_sidebar_width", String(Math.round(width)));
-          }
           if (event.pointerId !== undefined) {
             try {
               resizer.releasePointerCapture(event.pointerId);
@@ -2906,10 +2898,6 @@
       function setupChartControlsResize() {
         const visualArea = document.querySelector(".visual-area");
         const resizer = el("chartControlsResizer");
-        const savedWidth = Number(localStorage.getItem("py_lucidum_chart_controls_width"));
-        if (Number.isFinite(savedWidth) && savedWidth > 0) {
-          setChartControlsWidth(savedWidth);
-        }
 
         let dragging = false;
         resizer.addEventListener("pointerdown", (event) => {
@@ -2932,10 +2920,6 @@
           resizer.classList.remove("dragging");
           document.body.classList.remove("resizing-chart-controls");
           window.getSelection()?.removeAllRanges();
-          const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chart-controls-width"));
-          if (Number.isFinite(width)) {
-            localStorage.setItem("py_lucidum_chart_controls_width", String(Math.round(width)));
-          }
           if (event.pointerId !== undefined) {
             try {
               resizer.releasePointerCapture(event.pointerId);

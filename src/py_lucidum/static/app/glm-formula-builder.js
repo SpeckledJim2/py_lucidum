@@ -15,7 +15,6 @@ import {
 } from "./glm-formula-assist.js";
 
 const ACE_BASE_PATH = "/static/vendor/ace";
-const GLM_BUILDER_SPLIT_STORAGE_KEY = "py_lucidum_glm_formula_panel_width";
 
 let aceLoaderPromise = null;
 
@@ -84,6 +83,7 @@ export function createGlmFormulaBuilder({
   let formulaAssistSelectedLevelKeys = new Set();
   let formulaAssistIncludeHeader = localStorage.getItem("py_lucidum_glm_formula_assist_include_header") === "true";
   let formulaAssistCategoricalMode = localStorage.getItem("py_lucidum_glm_formula_assist_categorical_mode") || "group";
+  let splitPanelWidth = null;
   if (!["group", "ind"].includes(formulaAssistCategoricalMode)) formulaAssistCategoricalMode = "group";
   let formulaAssistLevelRequestSeq = 0;
   const formulaAssistLevelCache = new Map();
@@ -690,8 +690,7 @@ export function createGlmFormulaBuilder({
   }
 
   function savedSplitWidthStyle() {
-    const width = Number(localStorage.getItem(GLM_BUILDER_SPLIT_STORAGE_KEY));
-    return Number.isFinite(width) && width > 0 ? `--glm-formula-panel-width: ${Math.round(width)}px;` : "";
+    return Number.isFinite(splitPanelWidth) && splitPanelWidth > 0 ? `--glm-formula-panel-width: ${Math.round(splitPanelWidth)}px;` : "";
   }
 
   function bindResizer() {
@@ -699,15 +698,15 @@ export function createGlmFormulaBuilder({
     const resizer = el("glmBuilderResizer");
     if (!layout || !resizer) return;
 
-    const resizeTo = (width, persist = true) => {
+    const resizeTo = (width) => {
       const layoutRect = layout.getBoundingClientRect();
       const resizerWidth = resizer.getBoundingClientRect().width || 0;
       const minLeft = 320;
       const minRight = 360;
       const maxLeft = Math.max(minLeft, layoutRect.width - resizerWidth - minRight);
       const clamped = Math.max(minLeft, Math.min(maxLeft, width));
+      splitPanelWidth = clamped;
       layout.style.setProperty("--glm-formula-panel-width", `${Math.round(clamped)}px`);
-      if (persist) localStorage.setItem(GLM_BUILDER_SPLIT_STORAGE_KEY, String(Math.round(clamped)));
       if (aceEditor) aceEditor.resize();
     };
 

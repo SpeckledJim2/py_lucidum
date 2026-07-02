@@ -2,8 +2,6 @@ import { emptyOption, ensureShapChartLibraries, shapChartOption } from "./gbm-sh
 
 const BAND_STEPS = makeBandSteps();
 const BAND_BUTTONS = [0.01, 0.1, 1, 5, 10];
-const SHAP_CHOOSER_HEIGHT_KEY = "py_lucidum_gbm_shap_feature1_height";
-const SHAP_SIDE_WIDTH_KEY = "py_lucidum_gbm_shap_side_width";
 const TAIL_OPTIONS = [
   { value: 0, label: "-" },
   { value: 0.1, label: "0.1%" },
@@ -23,6 +21,8 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
   let configSeq = 0;
   let plotSeq = 0;
   let pendingLegendState = null;
+  let chooserFeatureHeight = null;
+  let sidePanelWidth = null;
   const state = {
     feature1: "",
     feature2: "",
@@ -702,9 +702,8 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const firstPanel = side?.querySelector(".gbm-shap-feature-section");
     const resizer = root.querySelector("#gbmShapChooserDivider");
     if (!side || !firstPanel || !resizer) return;
-    const savedHeight = Number(localStorage.getItem(SHAP_CHOOSER_HEIGHT_KEY));
-    if (Number.isFinite(savedHeight) && savedHeight > 0) {
-      setChooserFeatureHeight(root, savedHeight);
+    if (Number.isFinite(chooserFeatureHeight) && chooserFeatureHeight > 0) {
+      setChooserFeatureHeight(root, chooserFeatureHeight);
     }
 
     let dragging = false;
@@ -733,7 +732,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       window.getSelection()?.removeAllRanges();
       const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--gbm-shap-feature1-height"));
       if (Number.isFinite(height)) {
-        localStorage.setItem(SHAP_CHOOSER_HEIGHT_KEY, String(Math.round(height)));
+        chooserFeatureHeight = height;
       }
       if (event.pointerId !== undefined) {
         try {
@@ -764,9 +763,8 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const side = root.querySelector(".gbm-shap-side");
     const resizer = root.querySelector("#gbmShapMainResizer");
     if (!side || !resizer) return;
-    const savedWidth = Number(localStorage.getItem(SHAP_SIDE_WIDTH_KEY));
-    if (Number.isFinite(savedWidth) && savedWidth > 0) {
-      setMainSideWidth(root, savedWidth);
+    if (Number.isFinite(sidePanelWidth) && sidePanelWidth > 0) {
+      setMainSideWidth(root, sidePanelWidth);
     }
 
     resizer.addEventListener("pointerdown", (event) => {
@@ -784,10 +782,6 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.getSelection()?.removeAllRanges();
-        const width = parseFloat(root.style.getPropertyValue("--gbm-shap-side-width"));
-        if (Number.isFinite(width)) {
-          localStorage.setItem(SHAP_SIDE_WIDTH_KEY, String(Math.round(width)));
-        }
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp, { once: true });
@@ -798,8 +792,6 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       event.preventDefault();
       const current = side.getBoundingClientRect().width || 0;
       setMainSideWidth(root, current + (event.key === "ArrowRight" ? 24 : -24));
-      const width = parseFloat(root.style.getPropertyValue("--gbm-shap-side-width"));
-      if (Number.isFinite(width)) localStorage.setItem(SHAP_SIDE_WIDTH_KEY, String(Math.round(width)));
     });
   }
 
@@ -811,6 +803,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const minChartWidth = 360;
     const maxWidth = Math.max(minSideWidth, availableWidth - resizerWidth - minChartWidth);
     const width = Math.min(Math.max(rawWidth, minSideWidth), maxWidth);
+    sidePanelWidth = width;
     root.style.setProperty("--gbm-shap-side-width", `${Math.round(width)}px`);
     resizer?.setAttribute("aria-valuemin", String(minSideWidth));
     resizer?.setAttribute("aria-valuemax", String(Math.round(maxWidth)));

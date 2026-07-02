@@ -9363,8 +9363,11 @@ COPY (
                 page.mouse.up()
                 page.wait_for_function(
                     """
-                    (height) => Number(localStorage.getItem("py_lucidum_gbm_shap_feature1_height")) > 0
-                      && Math.abs((document.querySelector("#gbmShapFeatureList1")?.closest(".gbm-shap-feature-section")?.getBoundingClientRect().height || 0) - height) > 8
+                    (height) => {
+                      const current = document.querySelector("#gbmShapFeatureList1")?.closest(".gbm-shap-feature-section")?.getBoundingClientRect().height || 0;
+                      const cssHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--gbm-shap-feature1-height"));
+                      return Number.isFinite(cssHeight) && cssHeight > 0 && Math.abs(current - height) > 8;
+                    }
                     """,
                     arg=divider_height_before,
                     timeout=10_000,

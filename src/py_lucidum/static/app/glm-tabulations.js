@@ -1,12 +1,12 @@
 export const GLM_TABULATION_MODEL_CROSSTAB = "__model__";
-const GLM_TABULATION_SPLIT_STORAGE_KEY = "py_lucidum_glm_tabulation_sidebar_width_v2";
-const GLM_TABULATION_MODEL_LIST_HEIGHT_KEY = "py_lucidum_glm_tabulation_model_list_height";
 const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
 
 export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) {
+  let splitSidebarWidth = null;
+  let modelListHeight = null;
+
   function savedSplitWidthStyle() {
-    const width = Number(localStorage.getItem(GLM_TABULATION_SPLIT_STORAGE_KEY));
-    return Number.isFinite(width) && width > 0 ? `--glm-tabulation-sidebar-width: ${Math.round(width)}px;` : "";
+    return Number.isFinite(splitSidebarWidth) && splitSidebarWidth > 0 ? `--glm-tabulation-sidebar-width: ${Math.round(splitSidebarWidth)}px;` : "";
   }
 
   function bindResizer() {
@@ -14,15 +14,15 @@ export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) 
     const resizer = el("glmTabulationResizer");
     if (!layout || !resizer) return;
 
-    const resizeTo = (width, persist = true) => {
+    const resizeTo = (width) => {
       const layoutRect = layout.getBoundingClientRect();
       const resizerWidth = resizer.getBoundingClientRect().width || 0;
       const minLeft = 420;
       const minRight = 420;
       const maxLeft = Math.max(minLeft, layoutRect.width - resizerWidth - minRight);
       const clamped = Math.max(minLeft, Math.min(maxLeft, width));
+      splitSidebarWidth = clamped;
       layout.style.setProperty("--glm-tabulation-sidebar-width", `${Math.round(clamped)}px`);
-      if (persist) localStorage.setItem(GLM_TABULATION_SPLIT_STORAGE_KEY, String(Math.round(clamped)));
       scheduleResize();
     };
 
@@ -65,7 +65,7 @@ export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) 
     if (!sidebar || !modelRegion || !resizer || resizer.dataset.bound === "true") return;
     resizer.dataset.bound = "true";
 
-    const resizeTo = (height, persist = true) => {
+    const resizeTo = (height) => {
       const minModelHeight = 96;
       const minTableHeight = 120;
       const fixedNodes = [
@@ -82,17 +82,16 @@ export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) 
       const availableHeight = sidebar.getBoundingClientRect().height || window.innerHeight;
       const maxHeight = Math.max(minModelHeight, availableHeight - fixedHeight - minTableHeight);
       const clamped = Math.max(minModelHeight, Math.min(maxHeight, height));
+      modelListHeight = clamped;
       sidebar.style.setProperty("--glm-tabulation-model-list-height", `${Math.round(clamped)}px`);
       resizer.setAttribute("aria-valuemin", String(minModelHeight));
       resizer.setAttribute("aria-valuemax", String(Math.round(maxHeight)));
       resizer.setAttribute("aria-valuenow", String(Math.round(clamped)));
-      if (persist) localStorage.setItem(GLM_TABULATION_MODEL_LIST_HEIGHT_KEY, String(Math.round(clamped)));
       scheduleResize();
     };
 
-    const savedHeight = Number(localStorage.getItem(GLM_TABULATION_MODEL_LIST_HEIGHT_KEY));
-    if (Number.isFinite(savedHeight) && savedHeight > 0) {
-      resizeTo(savedHeight, false);
+    if (Number.isFinite(modelListHeight) && modelListHeight > 0) {
+      resizeTo(modelListHeight);
     }
 
     resizer.addEventListener("pointerdown", (event) => {
