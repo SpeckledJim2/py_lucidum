@@ -7141,7 +7141,7 @@ COPY (
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#datasetViewerCount")?.textContent.includes("100 shown")
+                    () => document.querySelector("#datasetViewerCount")?.textContent.trim() === "First 100 shown"
                     """,
                     timeout=10_000,
                 )
@@ -7504,7 +7504,15 @@ COPY (
                       const meta = document.querySelector("#datasetViewerMeta");
                       const group = document.querySelector("#datasetViewerGroupMeta");
                       const filter = document.querySelector("#datasetViewerFilter");
-                      return Boolean(toolbar && meta && toolbar.contains(meta) && meta.contains(group) && meta.contains(filter));
+                      return Boolean(
+                        toolbar
+                        && !toolbar.hidden
+                        && meta
+                        && toolbar.contains(meta)
+                        && meta.contains(group)
+                        && meta.contains(filter)
+                        && !document.querySelector("#datasetViewerGrid .dataset-viewer-state")
+                      );
                     }
                     """,
                     timeout=10_000,
@@ -7915,7 +7923,19 @@ COPY (
                 page.locator('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c5"]').first.click(button="right")
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy cell to clipboard").wait_for(timeout=10_000)
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy displayed table to clipboard").wait_for(timeout=10_000)
-                self.assertEqual(page.locator("#datasetViewerCellContextMenu:not([hidden]) [role='separator']").count(), 0)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const menu = document.querySelector("#datasetViewerCellContextMenu:not([hidden])");
+                      const entries = [...menu?.children || []].map((node) => (
+                        node.getAttribute("role") === "separator" ? "separator" : node.textContent.trim()
+                      ));
+                      return entries.slice(0, 4).join("|") === "Pin column|separator|Copy cell to clipboard|Copy displayed table to clipboard";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(page.locator("#datasetViewerCellContextMenu:not([hidden]) [role='separator']").count(), 1)
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy displayed table to clipboard").click()
                 page.wait_for_function(
                     """
@@ -7933,6 +7953,238 @@ COPY (
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy cell to clipboard").wait_for(timeout=10_000)
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy cell to clipboard").click()
                 page.wait_for_function("() => window.__lucidumCopiedText === 'AB10 1AA'", timeout=10_000)
+                pin_requests_before = dataset_viewer_requests
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"]').click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_role("menuitem", name="Pin column").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      const grid = document.querySelector('#datasetViewerGrid');
+                      const hasFrozenContent = Boolean(grid?.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row'));
+                      return headers[0] === 'c2'
+                        && document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .dataset-viewer-pin-indicator')
+                        && document.querySelector('#datasetViewerCount')?.textContent.trim() === '4 shown · vehicle_age pinned'
+                        && !hasFrozenContent;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c5"]').first.click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_role("menuitem", name="Pin column").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid:not(.dataset-viewer-grid-transposed)');
+                      if (!grid) return false;
+                      const headers = [...grid.querySelectorAll('.tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return headers.slice(0, 4).join(',') === 'c5,c2,c0,c1'
+                        && grid.querySelector('.tabulator-col[tabulator-field="c5"] .dataset-viewer-pin-indicator')
+                        && grid.querySelector('.tabulator-col[tabulator-field="c2"] .dataset-viewer-pin-indicator')
+                        && document.querySelector('#datasetViewerCount')?.textContent.trim() === '4 shown · PostcodeUnit, vehicle_age pinned'
+                        && !grid.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid .tabulator-tableholder").evaluate(
+                    """
+                    (node) => {
+                      node.scrollLeft = 4000;
+                      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid:not(.dataset-viewer-grid-transposed)');
+                      const holder = grid?.querySelector('.tabulator-tableholder');
+                      if (!grid || !holder) return false;
+                      const canScroll = holder.scrollWidth > holder.clientWidth + 1;
+                      if (canScroll && holder.scrollLeft <= 0) return false;
+                      const holderRect = holder.getBoundingClientRect();
+                      const visibleHeaders = [...grid.querySelectorAll('.tabulator-col[tabulator-field]')]
+                        .filter((cell) => {
+                          const rect = cell.getBoundingClientRect();
+                          return rect.right > holderRect.left && rect.left < holderRect.right;
+                        })
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return visibleHeaders.length > 0
+                        && (!canScroll || holder.scrollLeft < 180 || visibleHeaders[0] !== 'c5')
+                        && !grid.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid .tabulator-tableholder").evaluate(
+                    """
+                    (node) => {
+                      node.scrollLeft = 0;
+                      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+                    }
+                    """
+                )
+                page.locator("#datasetViewerSearch").fill("price")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      const row = document.querySelector('#datasetViewerGrid .tabulator-row');
+                      return headers.join(',') === 'c5,c2,c3'
+                        && row?.querySelectorAll('.tabulator-cell').length === 3
+                        && row.querySelector('.tabulator-cell[tabulator-field="c5"]')?.textContent.trim() === 'AB10 1AA'
+                        && row.querySelector('.tabulator-cell[tabulator-field="c3"]')?.textContent.trim() === '100';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").check()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                      if (!grid) return false;
+                      const labelText = (row) => {
+                        const cell = row.querySelector('.tabulator-cell[tabulator-field="__field"]');
+                        return (cell?.querySelector('.dataset-viewer-pinned-field-text') || cell)?.textContent.trim();
+                      };
+                      const visibleNames = [...grid.querySelectorAll('.tabulator-tableholder .tabulator-row')]
+                        .map(labelText)
+                        .filter(Boolean);
+                      return visibleNames.slice(0, 3).join(',') === 'PostcodeUnit,vehicle_age,price'
+                        && grid.querySelectorAll('.tabulator-tableholder .tabulator-row .dataset-viewer-pin-indicator').length >= 2
+                        && !grid.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid .tabulator-tableholder").evaluate(
+                    """
+                    (node) => {
+                      node.scrollLeft = 600;
+                      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                      const holder = grid?.querySelector('.tabulator-tableholder');
+                      if (!grid || !holder) return false;
+                      const canScroll = holder.scrollWidth > holder.clientWidth + 1;
+                      if (canScroll && holder.scrollLeft <= 0) return false;
+                      const holderRect = holder.getBoundingClientRect();
+                      const visibleHeaders = [...grid.querySelectorAll('.tabulator-col[tabulator-field]')]
+                        .filter((cell) => {
+                          const rect = cell.getBoundingClientRect();
+                          return rect.right > holderRect.left && rect.left < holderRect.right;
+                        })
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return visibleHeaders.length > 0
+                        && (!canScroll || holder.scrollLeft < 300 || visibleHeaders[0] !== '__field')
+                        && !grid.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerGrid .tabulator-tableholder").evaluate(
+                    """
+                    (node) => {
+                      node.scrollLeft = 0;
+                      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+                    }
+                    """
+                )
+                page.locator("#datasetViewerGrid .tabulator-tableholder").evaluate(
+                    """
+                    (node) => {
+                      node.scrollTop = 1000;
+                      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                      return Boolean(grid) && !grid.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").uncheck()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const grid = document.querySelector('#datasetViewerGrid:not(.dataset-viewer-grid-transposed)');
+                      const headers = [...grid.querySelectorAll('.tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return headers.join(',') === 'c5,c2,c3';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c5"]').click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_role("menuitem", name="Unpin column").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return headers.join(',') === 'c2,c3';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"]').click(button="right")
+                page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_role("menuitem", name="Unpin column").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return headers.join(',') === 'c3';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerSearchClear").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const search = document.querySelector('#datasetViewerSearch');
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return search?.value === ''
+                        && headers.join(',') === 'c0,c1,c2,c3,c4,c5,c6,c7'
+                        && document.querySelector('#datasetViewerCount')?.textContent.trim() === '4 shown'
+                        && !document.querySelector('#datasetViewerGrid .tabulator-col.tabulator-frozen, #datasetViewerGrid .tabulator-cell.tabulator-frozen, #datasetViewerGrid .tabulator-frozen-rows-holder .tabulator-row');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(dataset_viewer_requests, pin_requests_before)
                 self.assertEqual(page.locator("#datasetViewerSearch").get_attribute("placeholder"), "Select columns, separate with commas")
                 page.locator("#datasetViewerSearch").fill("vehicle, Postcode")
                 page.wait_for_function(
@@ -8081,7 +8333,7 @@ COPY (
                 )
                 page.locator("#datasetViewerGrid .tabulator-row[data-dataset-viewer-column-field]", has_text="PostcodeArea").locator('.tabulator-cell[tabulator-field="r0"]').click(button="right")
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Clear selection").wait_for(timeout=10_000)
-                self.assertEqual(page.locator("#datasetViewerCellContextMenu:not([hidden]) [role='separator']").count(), 1)
+                self.assertEqual(page.locator("#datasetViewerCellContextMenu:not([hidden]) [role='separator']").count(), 2)
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Clear selection").click()
                 page.wait_for_function(
                     """
@@ -8195,7 +8447,7 @@ COPY (
                 page.locator('#datasetViewerGrid .tabulator-row[data-dataset-viewer-column-field]').first.locator('.tabulator-cell[tabulator-field="r0"]').click(button="right")
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy cell to clipboard").wait_for(timeout=10_000)
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy displayed table to clipboard").wait_for(timeout=10_000)
-                self.assertEqual(page.locator("#datasetViewerCellContextMenu:not([hidden]) [role='separator']").count(), 0)
+                self.assertEqual(page.locator("#datasetViewerCellContextMenu:not([hidden]) [role='separator']").count(), 1)
                 page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_text("Copy displayed table to clipboard").click()
                 page.wait_for_function(
                     """

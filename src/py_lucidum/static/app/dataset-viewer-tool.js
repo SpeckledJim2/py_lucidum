@@ -4,6 +4,7 @@ const TOOL_ID = "dataset_viewer";
 const MAX_ROWS = 100;
 const STYLESHEET_ID = "datasetViewerStylesheet";
 const NORMAL_SEARCH_REPLACE_MOVE_THRESHOLD = 16;
+const DATASET_VIEWER_STATE_INLINE_STYLE = "align-items:center;display:flex;font:12px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100%;justify-content:center;min-height:220px;";
 
 function ensureDatasetViewerStyles() {
   if (document.getElementById(STYLESHEET_ID)) return;
@@ -54,6 +55,7 @@ export function createDatasetViewerTool({
   let renderedSearch = null;
   let renderedTranspose = null;
   let renderedAlphabeticalColumns = null;
+  let renderedPinnedColumns = null;
   let renderedWidthMode = "";
   let normalColumnWidths = new Map();
   let transposedColumnWidths = new Map();
@@ -212,6 +214,7 @@ export function createDatasetViewerTool({
     renderedSearch = null;
     renderedTranspose = null;
     renderedAlphabeticalColumns = null;
+    renderedPinnedColumns = null;
     renderedWidthMode = "";
   }
 
@@ -221,8 +224,8 @@ export function createDatasetViewerTool({
     renderToken += 1;
     clearTable({ resetSelection: true });
     el("datasetViewerCount").textContent = "";
-    el("datasetViewerGrid").classList.remove("dataset-viewer-grid-transposed");
-    el("datasetViewerGrid").innerHTML = `<div class="dataset-viewer-state">Loading dataset...</div>`;
+    setDatasetViewerToolbarHidden(true);
+    renderDatasetViewerState("Reading data...");
   }
 
   function renderError(message) {
@@ -231,8 +234,22 @@ export function createDatasetViewerTool({
     renderToken += 1;
     clearTable({ resetSelection: true });
     el("datasetViewerCount").textContent = "";
-    el("datasetViewerGrid").classList.remove("dataset-viewer-grid-transposed");
-    el("datasetViewerGrid").innerHTML = `<div class="dataset-viewer-state dataset-viewer-state-error">${escapeHtml(message || "Dataset viewer query failed")}</div>`;
+    setDatasetViewerToolbarHidden(true);
+    renderDatasetViewerState(message || "Dataset viewer query failed", { error: true });
+  }
+
+  function setDatasetViewerToolbarHidden(hidden) {
+    const toolbar = el("datasetViewerWrap")?.querySelector(".dataset-viewer-toolbar");
+    if (toolbar) toolbar.hidden = Boolean(hidden);
+  }
+
+  function renderDatasetViewerState(message, { error = false, transposed = false } = {}) {
+    const grid = el("datasetViewerGrid");
+    if (!grid) return;
+    grid.classList.toggle("dataset-viewer-grid-transposed", Boolean(transposed));
+    const classes = `dataset-viewer-state${error ? " dataset-viewer-state-error" : ""}`;
+    const color = error ? "var(--danger)" : "var(--muted)";
+    grid.innerHTML = `<div class="${classes}" style="${DATASET_VIEWER_STATE_INLINE_STYLE}color:${color};">${escapeHtml(message || "")}</div>`;
   }
 
   function renderData(data, requestKey = null) {
@@ -241,6 +258,7 @@ export function createDatasetViewerTool({
     const token = renderToken + 1;
     renderToken = token;
     clearTable();
+    setDatasetViewerToolbarHidden(true);
     syncTransposeControl(data);
     const tableData = Boolean(state.datasetViewerTranspose)
       ? transposedTableData(data)
@@ -265,8 +283,7 @@ export function createDatasetViewerTool({
       status: "",
       chartMessage: "",
     });
-    el("datasetViewerGrid").innerHTML = "";
-    el("datasetViewerGrid").classList.toggle("dataset-viewer-grid-transposed", Boolean(state.datasetViewerTranspose));
+    renderDatasetViewerState("Preparing table...", { transposed: Boolean(state.datasetViewerTranspose) });
     if (state.datasetViewerTranspose) {
       renderTransposedGrid(token, requestKey);
       return;
@@ -307,6 +324,8 @@ export function createDatasetViewerTool({
       if (typeof datasetTable.on === "function") {
         datasetTable.on("rowSelectionChanged", handleNormalRowSelectionChanged);
         datasetTable.on("renderComplete", () => {
+          if (token !== renderToken) return;
+          setDatasetViewerToolbarHidden(false);
           syncNormalRenderedSelection();
           reconcileSearch();
         });
@@ -356,6 +375,8 @@ export function createDatasetViewerTool({
       };
       if (typeof datasetTable.on === "function") {
         datasetTable.on("renderComplete", () => {
+          if (token !== renderToken) return;
+          setDatasetViewerToolbarHidden(false);
           syncTransposedRenderedSelection();
           reconcileSearch();
         });
@@ -402,7 +423,6 @@ export function createDatasetViewerTool({
       copyTitle: column.name,
       name: column.name,
       field: column.field,
-      headerTooltip: column.name,
       visible: visibleFields.has(column.field),
       ...datasetViewerColumnWidth(column),
       hozAlign: column.kind === "numeric" || column.kind === "integer" ? "right" : "left",
@@ -556,13 +576,11 @@ export function createDatasetViewerTool({
             field,
             sortField: field,
             datasetRowId: row.__row_id,
-            headerTooltip: row.__row_id ? `Dataset row ${row.__row_id}` : `Row ${index + 1}`,
           }),
           copyTitle: `Row ${index + 1}`,
           field,
           sortField: field,
           datasetRowId: row.__row_id,
-          headerTooltip: row.__row_id ? `Dataset row ${row.__row_id}` : `Row ${index + 1}`,
           headerSort: false,
           resizable: true,
           ...datasetViewerTransposedColumnWidth(field, { width: 150, minWidth: 72 }),
@@ -588,7 +606,10 @@ export function createDatasetViewerTool({
   }
 
   function normalHeaderHtml(column) {
-    return `<button class="dataset-viewer-header-label" type="button" data-dataset-viewer-column-field="${escapeHtml(column.field)}" title="${escapeHtml(column.name)}">${escapeHtml(column.name)}</button>`;
+    return `<button class="dataset-viewer-header-label" type="button" data-dataset-viewer-column-field="${escapeHtml(column.field)}">
+        <span class="dataset-viewer-header-text">${escapeHtml(column.name)}</span>
+        ${datasetViewerPinIndicator(column.field)}
+      </button>`;
   }
 
   function transposedHeaderHtml(column) {
@@ -596,7 +617,7 @@ export function createDatasetViewerTool({
     const sortDir = transposedSort.field === column.sortField ? transposedSort.dir : "none";
     const selected = column.datasetRowId !== undefined && selectedRowIds.has(Number(column.datasetRowId));
     const label = column.datasetRowId !== undefined
-      ? `<button class="dataset-viewer-transposed-header-label" type="button" data-dataset-viewer-row-id="${escapeHtml(String(column.datasetRowId))}" title="${escapeHtml(column.headerTooltip || title)}">${escapeHtml(title)}</button>`
+      ? `<button class="dataset-viewer-transposed-header-label" type="button" data-dataset-viewer-row-id="${escapeHtml(String(column.datasetRowId))}">${escapeHtml(title)}</button>`
       : `<span class="dataset-viewer-transposed-header-label-static">${escapeHtml(title)}</span>`;
     return `<div class="dataset-viewer-transposed-header-content" data-dataset-viewer-transposed-field="${escapeHtml(column.sortField || column.field)}" data-sort-dir="${escapeHtml(sortDir)}" aria-sort="${transposedAriaSort(sortDir)}"${selected ? ' data-selected-row="true"' : ""}>
         ${label}
@@ -620,7 +641,22 @@ export function createDatasetViewerTool({
   function formatTransposedCell(cell) {
     const rowData = typeof cell?.getData === "function" ? cell.getData() : {};
     const field = typeof cell?.getField === "function" ? cell.getField() : "";
+    if (field === "__field") return datasetViewerPinnedFieldHtml(rowData);
     return escapeHtml(formatCellValue(transposedCellValue(rowData, field)));
+  }
+
+  function datasetViewerPinnedFieldHtml(rowData) {
+    const label = escapeHtml(formatCellValue(rowData?.__field));
+    if (!isDatasetViewerColumnPinned(rowData?.__column_field)) return label;
+    return `<span class="dataset-viewer-pinned-field-label">
+        <span class="dataset-viewer-pinned-field-text">${label}</span>
+        ${datasetViewerPinIndicator(rowData?.__column_field)}
+      </span>`;
+  }
+
+  function datasetViewerPinIndicator(field) {
+    if (!isDatasetViewerColumnPinned(field)) return "";
+    return `<span class="dataset-viewer-pin-indicator" aria-hidden="true">&#128204;</span>`;
   }
 
   function transposedCellValue(rowData, field, sourceRows = currentDatasetRows) {
@@ -638,9 +674,12 @@ export function createDatasetViewerTool({
   }
 
   function sortedTransposedColumns(columns, sourceRows) {
-    if (!transposedSort.field || transposedSort.dir === "none") return columns;
+    const pinnedFields = datasetViewerPinnedColumnSet();
+    const pinnedColumns = columns.filter((column) => pinnedFields.has(column.field));
+    const unpinnedColumns = columns.filter((column) => !pinnedFields.has(column.field));
+    if (!transposedSort.field || transposedSort.dir === "none") return [...pinnedColumns, ...unpinnedColumns];
     const direction = transposedSort.dir === "desc" ? -1 : 1;
-    return columns
+    const sortedUnpinnedColumns = unpinnedColumns
       .map((column, index) => ({ column, index }))
       .sort((left, right) => {
         const comparison = compareDatasetViewerValues(
@@ -650,6 +689,7 @@ export function createDatasetViewerTool({
         return (comparison || left.index - right.index) * direction;
       })
       .map((entry) => entry.column);
+    return [...pinnedColumns, ...sortedUnpinnedColumns];
   }
 
   function transposedSortValue(column, field, sourceRows = currentDatasetRows) {
@@ -661,15 +701,66 @@ export function createDatasetViewerTool({
     return match ? Number(match[1]) : -1;
   }
 
+  function datasetViewerPinnedColumnFields() {
+    const raw = Array.isArray(state.datasetViewerPinnedColumns) ? state.datasetViewerPinnedColumns : [];
+    const fields = [];
+    const seen = new Set();
+    raw.forEach((field) => {
+      const key = String(field || "");
+      if (!key || key.startsWith("__") || seen.has(key)) return;
+      seen.add(key);
+      fields.push(key);
+    });
+    if (fields.length !== raw.length || fields.some((field, index) => field !== raw[index])) {
+      state.datasetViewerPinnedColumns = fields;
+    }
+    return fields;
+  }
+
+  function datasetViewerPinnedColumnSet() {
+    return new Set(datasetViewerPinnedColumnFields());
+  }
+
+  function isDatasetViewerColumnPinned(field) {
+    return datasetViewerPinnedColumnSet().has(String(field || ""));
+  }
+
+  function datasetViewerPinnedColumnsKey() {
+    return datasetViewerPinnedColumnFields().slice().sort().join("|");
+  }
+
+  function datasetViewerPinnedColumnNames() {
+    return datasetViewerPinnedColumnFields()
+      .map((field) => currentDatasetColumnByField.get(field))
+      .filter(Boolean)
+      .sort((left, right) => compareDatasetViewerColumnNames(left, right))
+      .map((column) => column.name || column.field);
+  }
+
+  function pruneDatasetViewerPinnedColumns(columns = currentDatasetColumns) {
+    const validFields = new Set((columns || []).map((column) => String(column?.field || "")).filter(Boolean));
+    const currentFields = datasetViewerPinnedColumnFields();
+    const fields = currentFields.filter((field) => validFields.has(field));
+    if (fields.length !== currentFields.length) state.datasetViewerPinnedColumns = fields;
+  }
+
   function orderedDatasetViewerColumns(data) {
     const sourceColumns = Array.isArray(data?.columns) ? data.columns : [];
-    if (!state.datasetViewerAlphabeticalColumns) return sourceColumns;
-    return sourceColumns
-      .map((column, index) => ({ column, index }))
+    pruneDatasetViewerPinnedColumns(sourceColumns);
+    const pinnedFields = datasetViewerPinnedColumnSet();
+    const indexedColumns = sourceColumns.map((column, index) => ({ column, index }));
+    const pinnedColumns = indexedColumns
+      .filter((entry) => pinnedFields.has(entry.column.field))
       .sort((left, right) => (
         compareDatasetViewerColumnNames(left.column, right.column) || left.index - right.index
-      ))
-      .map((entry) => entry.column);
+      ));
+    const unpinnedColumns = indexedColumns.filter((entry) => !pinnedFields.has(entry.column.field));
+    if (state.datasetViewerAlphabeticalColumns) {
+      unpinnedColumns.sort((left, right) => (
+        compareDatasetViewerColumnNames(left.column, right.column) || left.index - right.index
+      ));
+    }
+    return [...pinnedColumns, ...unpinnedColumns].map((entry) => entry.column);
   }
 
   function compareDatasetViewerColumnNames(left, right) {
@@ -731,8 +822,17 @@ export function createDatasetViewerTool({
     const grid = el("datasetViewerGrid");
     if (!grid || !grid.contains(event.target)) return;
     const cell = event.target?.closest?.(".tabulator-cell[tabulator-field]");
+    const pinField = datasetViewerContextColumnField(event, grid);
     const selectionLabel = selectedCopyLabel();
     const actions = [];
+    if (pinField) {
+      actions.push({
+        mode: "toggle-pin",
+        label: isDatasetViewerColumnPinned(pinField) ? "Unpin column" : "Pin column",
+        field: pinField,
+      });
+      actions.push({ divider: true });
+    }
     if (cell && grid.contains(cell)) {
       actions.push({ mode: "cell", label: "Copy cell to clipboard", value: datasetViewerCellValue(cell) });
     }
@@ -745,6 +845,37 @@ export function createDatasetViewerTool({
     event.preventDefault();
     event.stopPropagation();
     openDatasetViewerContextMenu(event, actions);
+  }
+
+  function datasetViewerContextColumnField(event, grid) {
+    if (state.datasetViewerTranspose) {
+      const row = event.target?.closest?.(".tabulator-row[data-dataset-viewer-column-field]");
+      const field = row && grid.contains(row) ? row.dataset.datasetViewerColumnField || "" : "";
+      return validDatasetViewerColumnField(field) ? field : "";
+    }
+    const cell = event.target?.closest?.(".tabulator-cell[tabulator-field]");
+    const header = event.target?.closest?.(".tabulator-col[tabulator-field]");
+    const field = cell && grid.contains(cell)
+      ? cell.getAttribute("tabulator-field") || ""
+      : header && grid.contains(header)
+        ? header.getAttribute("tabulator-field") || ""
+        : "";
+    return validDatasetViewerColumnField(field) ? field : "";
+  }
+
+  function validDatasetViewerColumnField(field) {
+    const key = String(field || "");
+    return Boolean(key && !key.startsWith("__") && currentDatasetColumnByField.has(key));
+  }
+
+  function toggleDatasetViewerPinnedColumn(field) {
+    const key = String(field || "");
+    if (!validDatasetViewerColumnField(key)) return;
+    const fields = datasetViewerPinnedColumnFields();
+    state.datasetViewerPinnedColumns = fields.includes(key)
+      ? fields.filter((candidate) => candidate !== key)
+      : [...fields, key];
+    rerenderCachedData();
   }
 
   function cycleTransposedSort(field) {
@@ -950,12 +1081,15 @@ export function createDatasetViewerTool({
 
   function orderedNormalColumnsForSearch(terms, sourceColumns = currentDatasetColumns) {
     if (!terms.length) return sourceColumns;
+    const pinnedFields = datasetViewerPinnedColumnSet();
+    const pinnedColumns = sourceColumns.filter((column) => pinnedFields.has(column.field));
     const groupedColumns = terms.map(() => []);
     sourceColumns.forEach((column) => {
+      if (pinnedFields.has(column.field)) return;
       const matchIndex = datasetViewerColumnSearchTermIndex(column, terms);
       if (matchIndex !== -1) groupedColumns[matchIndex].push(column);
     });
-    return groupedColumns.flat();
+    return [...pinnedColumns, ...groupedColumns.flat()];
   }
 
   function syncNormalColumnVisibilityAndOrder(visibleColumns, visibleFields) {
@@ -1126,12 +1260,14 @@ export function createDatasetViewerTool({
 
   function orderedTransposedRowsForSearch(terms, sourceRows = currentRows) {
     if (!terms.length) return sourceRows;
+    const pinnedRows = sourceRows.filter((row) => isDatasetViewerColumnPinned(row?.__column_field));
     const groupedRows = terms.map(() => []);
     sourceRows.forEach((row) => {
+      if (isDatasetViewerColumnPinned(row?.__column_field)) return;
       const matchIndex = transposedRowSearchTermIndex(row, terms);
       if (matchIndex !== -1) groupedRows[matchIndex].push(row);
     });
-    return groupedRows.flat();
+    return [...pinnedRows, ...groupedRows.flat()];
   }
 
   function applyTransposedSearch(terms, { mark = true } = {}) {
@@ -1366,6 +1502,7 @@ export function createDatasetViewerTool({
       button.setAttribute("role", "menuitem");
       button.dataset.copyMode = action.mode || "cell";
       button.dataset.copyValue = action.value || "";
+      button.dataset.columnField = action.field || "";
       button.textContent = action.label || "Copy cell to clipboard";
       menu.append(button);
     });
@@ -1411,6 +1548,11 @@ export function createDatasetViewerTool({
       closeDatasetViewerCellContextMenu();
       return;
     }
+    if (button.dataset.copyMode === "toggle-pin") {
+      toggleDatasetViewerPinnedColumn(button.dataset.columnField || "");
+      closeDatasetViewerCellContextMenu();
+      return;
+    }
     const value = button.dataset.copyValue || "";
     const copied = await copyTextToClipboard(value);
     showClipboardToast(copied ? "Cell copied to clipboard" : "Could not copy cell", !copied);
@@ -1443,8 +1585,11 @@ export function createDatasetViewerTool({
 
   function countMeta(data) {
     const displayed = Number(data?.displayed_row_count || 0);
-    const displayMeta = `${displayed.toLocaleString()} shown`;
-    return data?.has_more ? `${displayMeta} · more available` : displayMeta;
+    const shownMeta = `${displayed.toLocaleString()} shown`;
+    const displayMeta = data?.has_more ? `First ${shownMeta}` : shownMeta;
+    const pinnedNames = datasetViewerPinnedColumnNames();
+    if (!pinnedNames.length) return displayMeta;
+    return `${displayMeta} · ${pinnedNames.join(", ")} pinned`;
   }
 
   function currentSearchKey() {
@@ -1456,6 +1601,7 @@ export function createDatasetViewerTool({
     renderedSearch = currentSearchKey();
     renderedTranspose = Boolean(state.datasetViewerTranspose);
     renderedAlphabeticalColumns = Boolean(state.datasetViewerAlphabeticalColumns);
+    renderedPinnedColumns = datasetViewerPinnedColumnsKey();
   }
 
   function cacheIsRendered(cache) {
@@ -1467,6 +1613,7 @@ export function createDatasetViewerTool({
         && renderedSearch === currentSearchKey()
         && renderedTranspose === Boolean(state.datasetViewerTranspose)
         && renderedAlphabeticalColumns === Boolean(state.datasetViewerAlphabeticalColumns)
+        && renderedPinnedColumns === datasetViewerPinnedColumnsKey()
         && grid
         && grid.children.length
     );

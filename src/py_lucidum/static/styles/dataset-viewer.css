@@ -150,13 +150,15 @@
       }
 
       .dataset-viewer-header-label {
+        align-items: center;
         background: transparent;
         border: 0;
         color: inherit;
         cursor: pointer;
-        display: block;
+        display: inline-flex;
         font: inherit;
         font-weight: 700;
+        gap: 4px;
         line-height: 1.15;
         min-width: 0;
         overflow: hidden;
@@ -165,6 +167,23 @@
         text-overflow: ellipsis;
         white-space: nowrap;
         width: 100%;
+      }
+
+      .dataset-viewer-header-text,
+      .dataset-viewer-pinned-field-text {
+        display: block;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .dataset-viewer-pin-indicator {
+        color: var(--accent);
+        flex: 0 0 auto;
+        font-size: 10px;
+        line-height: 1;
       }
 
       .dataset-viewer-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content .tabulator-col-sorter,
@@ -312,6 +331,15 @@
 
       .dataset-viewer-grid-transposed .tabulator-row .tabulator-cell[tabulator-field="__field"] {
         font-weight: 700;
+      }
+
+      .dataset-viewer-pinned-field-label {
+        align-items: center;
+        display: inline-flex;
+        gap: 4px;
+        max-width: 100%;
+        min-width: 0;
+        width: 100%;
       }
 
       .dataset-viewer-grid-transposed .tabulator-col.dataset-viewer-transposed-column-selected {

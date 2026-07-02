@@ -120,6 +120,7 @@
         datasetViewerSearch: "",
         datasetViewerTranspose: false,
         datasetViewerAlphabeticalColumns: false,
+        datasetViewerPinnedColumns: [],
         datasetViewerColumnCount: null,
         profileSort: { key: "", direction: "asc" },
         profileColumnSearch: "",
@@ -3201,6 +3202,7 @@
           const previousSidebarVisible = state.sidebarVisible;
           if (state.tool === "uk_map") ukMapTool.captureView("reload");
           state.schema = await api("/api/reload", { method: "POST" });
+          state.datasetViewerPinnedColumns = [];
           state.datasetViewerColumnCount = null;
           renderSidebarVersion();
           syncHeaderButtons();
