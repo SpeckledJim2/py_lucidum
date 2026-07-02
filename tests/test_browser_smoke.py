@@ -8483,7 +8483,23 @@ COPY (
                 page.wait_for_function("() => window.__lucidumCopiedText === 'vehicle_age'")
                 page.wait_for_function('() => document.querySelector("#profileColumnContextMenu")?.hidden === true')
                 page.locator("#clipboardToast").get_by_text("Copied vehicle_age to clipboard").wait_for(timeout=10_000)
-                self.assertEqual(page.locator("#clipboardToast").evaluate("node => getComputedStyle(node).position"), "fixed")
+                clipboard_toast_style = page.locator("#clipboardToast").evaluate(
+                    """
+                    node => {
+                      const style = getComputedStyle(node);
+                      return {
+                        position: style.position,
+                        top: style.top,
+                        right: style.right,
+                        bottom: style.bottom,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(clipboard_toast_style["position"], "fixed")
+                self.assertEqual(clipboard_toast_style["top"], "18px")
+                self.assertEqual(clipboard_toast_style["right"], "18px")
+                self.assertNotEqual(clipboard_toast_style["bottom"], "18px")
                 self.assertEqual(page.locator("#status").text_content(), "")
                 self.assertNotEqual(vehicle_age_row.get_attribute("aria-selected"), "true")
                 vehicle_age_row.click()

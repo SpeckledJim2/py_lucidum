@@ -1010,12 +1010,12 @@
       .clipboard-toast {
         position: fixed;
         right: 18px;
-        bottom: 18px;
+        top: 18px;
         z-index: 1100;
         max-width: min(360px, calc(100vw - 36px));
-        border: 1px solid var(--line);
+        border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
         border-radius: 6px;
-        background: var(--panel);
+        background: color-mix(in srgb, var(--accent) 9%, var(--panel));
         box-shadow: 0 12px 30px rgb(15 23 42 / 18%);
         color: var(--text);
         font-size: 12px;
@@ -1026,6 +1026,7 @@
 
       .clipboard-toast.error {
         border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
+        background: color-mix(in srgb, var(--danger) 8%, var(--panel));
         color: var(--danger);
       }
 
