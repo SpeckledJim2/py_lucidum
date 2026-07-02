@@ -1535,7 +1535,7 @@ export function createLineBarTool({
         value: r.volume,
         itemStyle: { color: weightBarColor(data, r) },
       })),
-      label: { show: showBarLabels, position: "top", fontSize: 10, formatter: formatChartLabel },
+      label: { show: showBarLabels, position: "top", fontSize: 10, formatter: formatChartLabel, ...lineBarChartLabelStyle() },
       barWidth: barLayout.width,
       barMaxWidth: barLayout.maxWidth,
       barCategoryGap: barLayout.categoryGap,
@@ -1555,7 +1555,7 @@ export function createLineBarTool({
       itemStyle: { color: responseColors[index] || actualColor },
       data: data.rows.map((r) => r[`resp${index}`]),
       showAllSymbol: true,
-      label: { show: showLineLabels, fontSize: 10, formatter: (params) => formatResponseLabel(params, formatChartResponseValue) },
+      label: { show: showLineLabels, fontSize: 10, formatter: (params) => formatResponseLabel(params, formatChartResponseValue), ...lineBarChartLabelStyle() },
     }));
     const upliftBaseline = upliftBaselineSeries(data, renderTransform);
 
@@ -2267,6 +2267,15 @@ export function createLineBarTool({
   function formatResponseLabel(params, responseValueFormatter = formatResponseValue) {
     const value = Array.isArray(params.value) ? params.value[1] : params.value;
     return responseValueFormatter(value);
+  }
+
+  function lineBarChartLabelStyle() {
+    if (!document.body.classList.contains("dark")) return {};
+    return {
+      color: "#ffffff",
+      textBorderWidth: 0,
+      textShadowBlur: 0,
+    };
   }
 
   function formatResponseValue(value) {
