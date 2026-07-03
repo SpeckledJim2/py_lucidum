@@ -4759,6 +4759,65 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
 
         self.assertIn(".tool-selector-section {\n        margin-bottom: 14px;\n        padding-top: 2px;", css)
 
+    def test_mobile_layout_static_contract(self) -> None:
+        css = self.app_css_contract()
+        js = self.app_js_contract()
+
+        self.assertIn("@media (max-width: 760px) {\n        header {", css)
+        self.assertIn(
+            ".shell,\n"
+            "        body.sidebar-collapsed .shell {\n"
+            "          grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr) !important;",
+            css,
+        )
+        self.assertIn("box-shadow: 12px 0 28px rgb(15 23 42 / 18%);", css)
+        self.assertIn("body.sidebar-collapsed #appSidebar {\n          box-shadow: none;", css)
+        self.assertIn(".sidebar-resizer {\n          display: none;", css)
+        self.assertIn(
+            ".filter-footer {\n"
+            "          align-items: stretch;\n"
+            "          grid-template-columns: minmax(0, 1fr);",
+            css,
+        )
+        self.assertIn(
+            ".visual-area {\n"
+            "          grid-template-columns: minmax(0, 1fr) !important;\n"
+            "          grid-template-rows: auto minmax(0, 1fr);",
+            css,
+        )
+        self.assertIn(
+            ".visual-area.dataset-viewer-mode,\n"
+            "        .visual-area.map-mode,\n"
+            "        .visual-area.profile-mode,\n"
+            "        .visual-area.histogram-mode,\n"
+            "        .visual-area.model-mode,\n"
+            "        .visual-area.specs-mode,\n"
+            "        body.line-bar-focus-mode .visual-area {\n"
+            "          grid-template-columns: minmax(0, 1fr) !important;\n"
+            "          grid-template-rows: minmax(0, 1fr);",
+            css,
+        )
+        self.assertIn(".chart-controls-resizer {\n          display: none !important;", css)
+        self.assertIn(
+            ".chart-side-controls {\n"
+            "          grid-template-rows: minmax(0, 1fr) 18px minmax(0, 1fr);\n"
+            "          height: min(34dvh, 280px);",
+            css,
+        )
+        self.assertIn(
+            ".chart-side-controls.chart-expected-collapsed {\n"
+            "          grid-template-rows: minmax(0, 1fr) 18px;",
+            css,
+        )
+
+        self.assertIn("const MOBILE_LAYOUT_MAX_WIDTH = 760;", js)
+        self.assertIn("let mobileLayoutActive = null;", js)
+        self.assertIn("function syncMobileSidebarLayout({ initial = false } = {})", js)
+        self.assertIn("const enteredMobile = mobile && mobileLayoutActive !== true;", js)
+        self.assertIn("if ((initial || enteredMobile) && mobile && state.sidebarVisible)", js)
+        self.assertIn("syncMobileSidebarLayout();\n          scheduleDatasetMetaCompactCheck();", js)
+        self.assertIn("setTool(state.tool, false);\n          syncMobileSidebarLayout({ initial: true });", js)
+
     def test_dataset_viewer_tool_static_assets_are_registered(self) -> None:
         _, html_body = self.assert_no_store("/")
         css = self.app_css_contract()

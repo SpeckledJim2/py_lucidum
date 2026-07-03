@@ -680,3 +680,45 @@
         font-style: italic;
         text-align: left;
       }
+
+      @media (max-width: 760px) {
+        .visual-area {
+          grid-template-columns: minmax(0, 1fr) !important;
+          grid-template-rows: auto minmax(0, 1fr);
+        }
+
+        .visual-area.startup-mode,
+        .visual-area.dataset-viewer-mode,
+        .visual-area.map-mode,
+        .visual-area.profile-mode,
+        .visual-area.histogram-mode,
+        .visual-area.model-mode,
+        .visual-area.specs-mode,
+        body.line-bar-focus-mode .visual-area {
+          grid-template-columns: minmax(0, 1fr) !important;
+          grid-template-rows: minmax(0, 1fr);
+        }
+
+        .chart-controls-resizer {
+          display: none !important;
+        }
+
+        .chart-side-controls {
+          grid-template-rows: minmax(0, 1fr) 18px minmax(0, 1fr);
+          height: min(34dvh, 280px);
+          max-height: min(34dvh, 280px);
+          min-height: 160px;
+        }
+
+        .chart-side-controls.chart-expected-collapsed {
+          grid-template-rows: minmax(0, 1fr) 18px;
+        }
+
+        .chart-side-section {
+          min-height: 0;
+        }
+
+        .visual-area .workspace {
+          min-height: 0;
+        }
+      }

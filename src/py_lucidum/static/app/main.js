@@ -57,6 +57,7 @@
       };
       const TOOL_IDS = Object.keys(TOOL_BUTTON_IDS);
       const CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED = "collapsed";
+      const MOBILE_LAYOUT_MAX_WIDTH = 760;
       const LINE_BAR_RATIO_COLUMN = "gbm_to_glm_ratio";
       const GLM_PREDICTION_COLUMNS = ["glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"];
       const GBM_PREDICTION_COLUMNS = ["gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction"];
@@ -221,6 +222,7 @@
       let datasetViewerToolPromise = null;
       let chartFeatureControlsExpandedHeight = null;
       let chartExpectedStartupCollapseApplied = false;
+      let mobileLayoutActive = null;
 
       async function ensureDatasetViewerTool() {
         if (!toolEnabled("dataset_viewer")) return null;
@@ -1584,6 +1586,15 @@
         el("appSidebar").removeAttribute("aria-hidden");
         syncSidebarToggleButton();
         scheduleActiveToolResize({ hard: true });
+      }
+
+      function syncMobileSidebarLayout({ initial = false } = {}) {
+        const mobile = window.innerWidth <= MOBILE_LAYOUT_MAX_WIDTH;
+        const enteredMobile = mobile && mobileLayoutActive !== true;
+        mobileLayoutActive = mobile;
+        if ((initial || enteredMobile) && mobile && state.sidebarVisible) {
+          setSidebarVisible(false);
+        }
       }
 
       function toggleLineBarFocusMode() {
@@ -3246,6 +3257,7 @@
           refreshActiveTool({ force: true });
         });
         window.addEventListener("resize", () => {
+          syncMobileSidebarLayout();
           scheduleDatasetMetaCompactCheck();
           if (state.tool === "line_bar") {
             const controls = document.querySelector(".chart-side-controls");
@@ -3304,6 +3316,7 @@
           await lineBarTool.refreshFavourites();
           state.tool = chooseDefaultTool();
           setTool(state.tool, false);
+          syncMobileSidebarLayout({ initial: true });
           const startupFavouriteError = await lineBarTool.applyStartupFavourite();
           setStartupProgress("Loading initial dataset");
           await refreshMetricSummary({ force: true });

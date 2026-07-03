@@ -121,6 +121,138 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_mobile_phone_viewport_keeps_default_tools_usable(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long\n"
+                "AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1\n"
+                "AB,AB10 1,2,200,20,AB10 1AB,57.2,-2.2\n"
+                "AL,AL1 1,3,300,30,AL1 1AA,51.8,-0.3\n"
+                "AL,AL1 2,4,400,40,AL1 2AA,51.7,-0.2\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(data_path, title_prefix="Lucidum Smoke Dataset")
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page_errors: list[str] = []
+
+                    def new_mobile_page(width: int, height: int):
+                        page = browser.new_page(viewport={"width": width, "height": height})
+                        page.on("pageerror", lambda error: page_errors.append(str(error)))
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.locator("#datasetMeta").get_by_text("Lucidum Smoke Dataset").wait_for(timeout=10_000)
+                        return page
+
+                    def wait_for_mobile_line_bar(page) -> dict[str, Any]:
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const controls = document.querySelector("#chartSideControls");
+                              const workspace = document.querySelector(".workspace");
+                              const chart = document.querySelector("#chart");
+                              if (!controls || !workspace || !chart || chart.classList.contains("hidden")) return false;
+                              const controlsRect = controls.getBoundingClientRect();
+                              const workspaceRect = workspace.getBoundingClientRect();
+                              const chartRect = chart.getBoundingClientRect();
+                              return document.body.classList.contains("sidebar-collapsed")
+                                && document.body.scrollWidth <= document.body.clientWidth
+                                && controlsRect.width >= 280
+                                && workspaceRect.width >= 280
+                                && chartRect.width >= 260
+                                && workspaceRect.top >= controlsRect.bottom - 1;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        return page.evaluate(
+                            """
+                            () => {
+                              const rectFor = (selector) => {
+                                const rect = document.querySelector(selector).getBoundingClientRect();
+                                return { left: rect.left, top: rect.top, right: rect.right, width: rect.width, height: rect.height };
+                              };
+                              return {
+                                bodyScrollWidth: document.body.scrollWidth,
+                                bodyClientWidth: document.body.clientWidth,
+                                controls: rectFor("#chartSideControls"),
+                                workspace: rectFor(".workspace"),
+                                chart: rectFor("#chart"),
+                              };
+                            }
+                            """
+                        )
+
+                    page = new_mobile_page(390, 844)
+                    try:
+                        line_bar_rects = wait_for_mobile_line_bar(page)
+                        self.assertLessEqual(line_bar_rects["bodyScrollWidth"], line_bar_rects["bodyClientWidth"])
+                        self.assertGreaterEqual(line_bar_rects["chart"]["width"], 260)
+                        self.assertGreaterEqual(line_bar_rects["workspace"]["width"], 280)
+                        self.assertGreaterEqual(line_bar_rects["workspace"]["top"], line_bar_rects["controls"]["top"])
+
+                        page.locator("#sidebarToggleBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const sidebar = document.querySelector("#appSidebar")?.getBoundingClientRect();
+                              const main = document.querySelector("main")?.getBoundingClientRect();
+                              if (!sidebar || !main) return false;
+                              return !document.body.classList.contains("sidebar-collapsed")
+                                && document.body.scrollWidth <= document.body.clientWidth
+                                && sidebar.width > 200
+                                && main.width >= 300
+                                && sidebar.right > main.left;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        page.locator("#sidebarToggleBtn").click()
+                        page.wait_for_function("() => document.body.classList.contains('sidebar-collapsed')", timeout=10_000)
+
+                        for tool_button, wrapper_selector in [
+                            ("#datasetViewerTool", "#datasetViewerWrap"),
+                            ("#profileTool", "#profileWrap"),
+                            ("#histogramTool", "#histogramWrap"),
+                            ("#ukMapTool", "#ukMap"),
+                            ("#specsTool", "#specificationsWrap"),
+                        ]:
+                            page.locator(tool_button).click()
+                            page.wait_for_function(
+                                """
+                                (selector) => {
+                                  const wrapper = document.querySelector(selector);
+                                  if (!wrapper || wrapper.classList.contains("hidden")) return false;
+                                  const rect = wrapper.getBoundingClientRect();
+                                  return document.body.scrollWidth <= document.body.clientWidth
+                                    && rect.width >= 280
+                                    && rect.height >= 260;
+                                }
+                                """,
+                                arg=wrapper_selector,
+                                timeout=10_000,
+                            )
+                    finally:
+                        page.close()
+
+                    page = new_mobile_page(430, 932)
+                    try:
+                        line_bar_rects = wait_for_mobile_line_bar(page)
+                        self.assertLessEqual(line_bar_rects["bodyScrollWidth"], line_bar_rects["bodyClientWidth"])
+                        self.assertGreaterEqual(line_bar_rects["chart"]["width"], 260)
+                    finally:
+                        page.close()
+
+                    browser.close()
+                    self.assertEqual(page_errors, [])
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_app_text_is_not_drag_selectable_except_inputs(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
@@ -1203,13 +1335,14 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
-                    page.locator("#sidebarToggleBtn").click()
-                    page.wait_for_function(
-                        """
-                        () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
-                        """,
-                        timeout=10_000,
-                    )
+                    if page.locator("#sidebarToggleBtn").get_attribute("aria-expanded") == "true":
+                        page.locator("#sidebarToggleBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
+                            """,
+                            timeout=10_000,
+                        )
                     page.locator("#lineBarExpandBtn").click()
                     page.wait_for_function(
                         """
@@ -7556,6 +7689,14 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                if page.locator("#sidebarToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#sidebarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                        """,
+                        timeout=10_000,
+                    )
                 self.assertEqual(page.locator(".dataset-meta-column-link").count(), 0)
                 self.assertEqual(page.locator(".dataset-meta-uk-map-link").count(), 0)
                 self.assertNotIn("Area·Sector·Unit", page.locator("#datasetMeta").text_content())

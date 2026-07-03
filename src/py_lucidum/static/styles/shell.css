@@ -547,3 +547,66 @@
         color: var(--muted);
         font-size: 13px;
       }
+
+      @media (max-width: 760px) {
+        header {
+          gap: 8px;
+          padding: 0 8px;
+        }
+
+        .mark {
+          width: 42px;
+          height: 42px;
+        }
+
+        .shell,
+        body.sidebar-collapsed .shell {
+          grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr) !important;
+          overflow: hidden;
+          position: relative;
+        }
+
+        body.single-tool-mode.sidebar-collapsed .shell {
+          grid-template-columns: minmax(0, 1fr) !important;
+        }
+
+        .sidebar-resizer {
+          display: none;
+        }
+
+        #appSidebar {
+          box-shadow: 12px 0 28px rgb(15 23 42 / 18%);
+          max-width: calc(100vw - 16px);
+          overflow: auto;
+          position: relative;
+          width: min(320px, calc(100vw - 16px));
+          z-index: 20;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        body.sidebar-collapsed #appSidebar {
+          box-shadow: none;
+          overflow: hidden;
+          width: var(--sidebar-collapsed-width);
+        }
+
+        main {
+          padding: 8px;
+        }
+
+        .filter-footer {
+          align-items: stretch;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 6px;
+        }
+
+        .footer-filter-controls {
+          grid-template-columns: 28px 28px minmax(0, 1fr);
+        }
+
+        .action-timing-monitor {
+          justify-self: start;
+          max-width: 100%;
+          text-align: left;
+        }
+      }
