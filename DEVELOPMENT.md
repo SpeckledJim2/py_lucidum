@@ -47,7 +47,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `lucidum path/to/data.parquet`
   - `lucidum path/to/data.csv`
   - `lucidum path/to/parquet-folder/`
-  - common options include `--open`, `--host`, `--port`, `--no-token`, `--buttons`, `--x`, `--actual`, `--expected`, `--expected2`, `--denominator`, `--line-bar-favourite`, `--line-bar-favourites`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
+  - common options include `--open`, `--host`, `--port`, `--no-token`, `--buttons`, `--title-prefix`, `--x`, `--actual`, `--expected`, `--expected2`, `--denominator`, `--line-bar-favourite`, `--line-bar-favourites`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
 - Python:
   - `py_lucidum.serve(...)`
   - `py_lucidum.serve_line_bar(...)`
@@ -121,7 +121,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - The wheel packages the demo dataset as `py_lucidum/datasets/motor_premiums.parquet`.
 - Other top-level local CSV/Parquet files under `datasets/` remain ignored; keep ad hoc nested dataset folders out of git unless they are intentional fixtures.
 - Parquet is the preferred working format for speed; CSV remains supported for convenience.
-- A dataset path may be a folder of direct-child `.parquet` files for non-modelling tools. Lucidum builds one DuckDB `read_parquet([...])` relation from the sorted direct children, ignores non-Parquet files and nested folders, and requires every file to have identical column-name-to-DuckDB-type mappings. The schema payload reports the folder path, direct-child Parquet `file_count`, combined byte size, combined row count, and `source_kind: "parquet_folder"`; the header displays folder names as `name (n files)`.
+- A dataset path may be a folder of direct-child `.parquet` files for non-modelling tools. Lucidum builds one DuckDB `read_parquet([...])` relation from the sorted direct children, ignores non-Parquet files and nested folders, and requires every file to have identical column-name-to-DuckDB-type mappings. The schema payload reports the folder path, direct-child Parquet `file_count`, combined byte size, combined row count, `source_kind: "parquet_folder"`, and the app-level `title_prefix`; the header displays folder names as `name (n files)`.
 - Parquet folder inputs are rejected at app creation when `glm`, `gbm`, or `--tools all` enables modelling tools. GLM/GBM model stores, workers, prediction sidecars, SHAP sidecars, generated samples, and dataset workspaces remain single-source-file only.
 - `GET /api/schema` includes `data_sources` and `feature_bases`. The default source is `dataset`; model outputs publish named tabular artifacts through this same contract.
 - `GET /api/schema` does not precompute numeric band suggestions. Column payloads keep `band_suggestion` for compatibility, normally as `null`; chart tools request initial numeric band estimates lazily through `POST /api/banding/suggestion`.
@@ -276,6 +276,9 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - CLI launches use token-protected URLs by default.
 - `--no-token` disables token checks for local-only use.
 - Main app header `Stop app` and `Open monitor` buttons are hidden by default. `--buttons`, `serve(..., buttons=True)`, or `create_app(..., header_buttons=True)` shows both controls.
+- `--title-prefix`, `serve(..., title_prefix=...)`, and `create_app(..., title_prefix=...)` populate `/api/schema.title_prefix` and render before the file or folder name in the main app header. `lucidum --demo` defaults this prefix to `Lucidum Demo Motor Dataset` unless an explicit value, including an empty value, is supplied.
+- Header dataset metadata is inert except for GLM/GBM model-count links: postcode Area/Sector/Unit shortcuts and the Column Profile shortcut are intentionally not rendered in the header.
+- When the main header metadata overflows at high browser zoom or narrow viewport widths, the frontend hides the file name, size, rows, columns, and model-count links and keeps only the bold title prefix visible. Launches without `title_prefix` keep the normal metadata ellipsis behavior.
 - In notebook-style runtimes with an existing event loop, `serve()` and `run_app()` start the Uvicorn server in a background thread and return the URL.
 - In a normal terminal or Python shell, server calls block until stopped.
 - When enabled, the browser Stop app button calls `POST /api/shutdown`; health polling greys out the page after server shutdown. The monitor page remains available at `/monitor` with the normal token rules even when the main app header button is hidden.

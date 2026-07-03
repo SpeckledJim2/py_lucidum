@@ -193,6 +193,7 @@ def create_app(
     no_features: bool = False,
     line_bar_favourites_path: str | Path | None = None,
     header_buttons: bool = False,
+    title_prefix: str | None = None,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
     resolved_dataset_path = Path(dataset_path).expanduser().resolve()
@@ -238,6 +239,7 @@ def create_app(
     )
     app.state.enabled_tools = enabled_tools
     app.state.header_buttons = bool(header_buttons)
+    app.state.title_prefix = str(title_prefix or "").strip()
     app.state.defaults = {
         key: value
         for key, value in (defaults or {}).items()
@@ -262,6 +264,7 @@ def create_app(
         payload["data_sources"] = app.state.dataset.data_sources()
         payload["app_version"] = __version__
         payload["header_buttons"] = app.state.header_buttons
+        payload["title_prefix"] = app.state.title_prefix
         return payload
 
     @app.get("/")

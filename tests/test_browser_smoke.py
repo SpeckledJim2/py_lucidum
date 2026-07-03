@@ -110,7 +110,7 @@ class BrowserSmokeTests(unittest.TestCase):
                 "AL,AL1 2,4,400,40,AL1 2AA,51.7,-0.2\n",
                 encoding="utf-8",
             )
-            base_url, server, thread = self.start_app(data_path)
+            base_url, server, thread = self.start_app(data_path, title_prefix="Lucidum Smoke Dataset")
             try:
                 self.assert_static_asset(base_url, "/static/app.css", "text/css")
                 self.assert_static_asset(base_url, "/static/app.js", "text/javascript")
@@ -142,6 +142,9 @@ class BrowserSmokeTests(unittest.TestCase):
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
                         page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                        self.assertEqual(page.locator(".dataset-meta-title").count(), 0)
+                        self.assertFalse(page.locator("#datasetMeta").evaluate("node => node.classList.contains('dataset-meta-title-only')"))
+                        self.assertIn("sample.csv", page.locator(".dataset-meta-details").text_content())
                         page.locator("#chartSideControls:not(.hidden) #featureSearch").wait_for(timeout=10_000)
                         self.assertFalse(page.locator("#toolSelectorSection").is_visible())
                         self.assertEqual(page.locator("#toolSelectorSection .tool-option:not(.hidden)").count(), 0)
@@ -3404,6 +3407,7 @@ COPY (
         defaults: dict[str, str] | None = None,
         tools: list[str] | None = None,
         buttons: bool = False,
+        title_prefix: str | None = None,
     ) -> tuple[str, uvicorn.Server, threading.Thread]:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -3425,6 +3429,7 @@ COPY (
             token=token,
             tools=tools,
             header_buttons=buttons,
+            title_prefix=title_prefix,
         )
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         server = uvicorn.Server(config)
@@ -7497,23 +7502,63 @@ COPY (
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
-                    () => document.querySelector("#datasetMeta")?.textContent.includes("Area·Sector·Unit")
+                    () => document.querySelector(".dataset-meta-column-count")?.textContent.trim() === "8 columns"
                     """
                 )
                 self.assertEqual(page.locator("header").evaluate("node => getComputedStyle(node).height"), "52px")
-                self.assertEqual(page.locator(".dataset-meta-column-link").text_content().strip(), "8 columns")
-                self.assertIn(
-                    "underline",
-                    page.locator(".dataset-meta-column-link").evaluate("node => getComputedStyle(node).textDecorationLine"),
-                )
+                self.assertEqual(page.locator(".dataset-meta-title").text_content().strip(), "Lucidum Smoke Dataset")
+                self.assertFalse(page.locator("#datasetMeta").evaluate("node => node.classList.contains('dataset-meta-title-only')"))
+                self.assertTrue(page.locator(".dataset-meta-details").is_visible())
                 self.assertEqual(
-                    page.locator(".dataset-meta-uk-map-link").evaluate_all("nodes => nodes.map((node) => node.textContent.trim()).join('/')"),
-                    "Area/Sector/Unit",
+                    page.locator(".dataset-meta-title").evaluate("node => getComputedStyle(node).color"),
+                    page.evaluate(
+                        """
+                        () => {
+                          const probe = document.createElement("span");
+                          probe.style.color = "var(--text)";
+                          document.body.append(probe);
+                          const color = getComputedStyle(probe).color;
+                          probe.remove();
+                          return color;
+                        }
+                        """
+                    ),
                 )
+                self.assertGreaterEqual(
+                    int(page.locator(".dataset-meta-title").evaluate("node => getComputedStyle(node).fontWeight")),
+                    700,
+                )
+                self.assertGreater(
+                    int(page.locator(".dataset-meta-title").evaluate("node => getComputedStyle(node).fontWeight")),
+                    int(page.locator("#datasetMeta").evaluate("node => getComputedStyle(node).fontWeight")),
+                )
+                self.assertIn("4 rows", page.locator("#datasetMeta").text_content())
+                self.assertEqual(page.locator(".dataset-meta-column-count").text_content().strip(), "8 columns")
                 self.assertEqual(
-                    page.locator(".dataset-meta-uk-map-separator").evaluate_all("nodes => nodes.map((node) => node.textContent).join('')"),
-                    "··",
+                    page.locator(".dataset-meta-column-count").evaluate("node => getComputedStyle(node).textDecorationLine"),
+                    "none",
                 )
+                page.set_viewport_size({"width": 420, "height": 800})
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetMeta")?.classList.contains("dataset-meta-title-only")
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(page.locator("#datasetMeta").inner_text().strip(), "Lucidum Smoke Dataset")
+                self.assertFalse(page.locator(".dataset-meta-details").is_visible())
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.wait_for_function(
+                    """
+                    () => !document.querySelector("#datasetMeta")?.classList.contains("dataset-meta-title-only")
+                      && document.querySelector(".dataset-meta-details")
+                      && getComputedStyle(document.querySelector(".dataset-meta-details")).display !== "none"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(page.locator(".dataset-meta-column-link").count(), 0)
+                self.assertEqual(page.locator(".dataset-meta-uk-map-link").count(), 0)
+                self.assertNotIn("Area·Sector·Unit", page.locator("#datasetMeta").text_content())
                 self.assertEqual(page.locator(".dataset-meta-uk-map-icon").count(), 0)
                 self.assertTrue(page.locator("#ukMapTool img").is_visible())
                 self.assertTrue(page.locator("#ukMapTool img").evaluate("node => node.complete && node.naturalWidth > 0"))
@@ -8852,7 +8897,7 @@ COPY (
                 self.assertEqual(page.locator("#collapsedSidebarVersion").inner_text().strip(), f"v{__version__}")
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
 
-                page.locator('.dataset-meta-uk-map-link[data-map-level="area"]').click()
+                page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                 page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-pane')")
@@ -9053,7 +9098,7 @@ COPY (
                     self.assertLessEqual(abs(label_state["centerY"] - first_label_state["centerY"]), 1)
                 self.assertGreater(label_states["states"][-1]["width"], first_label_state["width"])
                 self.assertGreater(label_states["states"][-1]["height"], first_label_state["height"])
-                page.locator(".dataset-meta-column-link").click()
+                page.locator("#profileTool").click()
                 page.locator("#profileTool.active").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden)").wait_for(timeout=10_000)
                 page.locator("#ukMapTool").click()
@@ -9316,7 +9361,7 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                    page.locator('.dataset-meta-uk-map-link[data-map-level="sector"]').click()
+                    page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').check()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').is_checked())
                 self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
@@ -9346,7 +9391,7 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                    page.locator('.dataset-meta-uk-map-link[data-map-level="unit"]').click()
+                    page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').check()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")')
                 self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').is_checked())
                 self.assertTrue(page.locator("#mapLineWeightControl").is_hidden())

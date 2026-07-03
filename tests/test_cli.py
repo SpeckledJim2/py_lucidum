@@ -15,6 +15,7 @@ import uvicorn
 
 from py_lucidum._version import __version__
 from py_lucidum.cli import (
+    DEMO_TITLE_PREFIX,
     LucidumServer,
     _display_url_for_app,
     _lan_url_hint_for_app,
@@ -281,6 +282,7 @@ class CliRuntimeTests(unittest.TestCase):
                     longitude="long_col",
                     line_bar_favourite="Loss curve",
                     line_bar_favourites_path=favourites_path,
+                    title_prefix="Portfolio sample",
                 )
 
         defaults = create_app_mock.call_args.kwargs["defaults"]
@@ -289,6 +291,7 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(defaults["longitude"], "long_col")
         self.assertEqual(defaults["line_bar_favourite"], "Loss curve")
         self.assertEqual(create_app_mock.call_args.kwargs["line_bar_favourites_path"], favourites_path)
+        self.assertEqual(create_app_mock.call_args.kwargs["title_prefix"], "Portfolio sample")
         start_server_mock.assert_called_once()
 
     def test_serve_passes_kpi_options_and_reports_status(self) -> None:
@@ -539,6 +542,26 @@ class CliRuntimeTests(unittest.TestCase):
         demo_path_mock.assert_called_once_with()
         self.assertEqual(serve_mock.call_args.kwargs["path"], demo_path)
         self.assertEqual(serve_mock.call_args.kwargs["port"], 8050)
+        self.assertEqual(serve_mock.call_args.kwargs["title_prefix"], DEMO_TITLE_PREFIX)
+
+    def test_main_demo_title_prefix_can_be_overridden_or_suppressed(self) -> None:
+        demo_path = Path("/tmp/py-lucidum-demo.parquet")
+        cases = [
+            (["lucidum", "--demo", "--title-prefix", "Custom Demo"], "Custom Demo"),
+            (["lucidum", "--demo", "--title-prefix", ""], ""),
+        ]
+
+        for argv, expected in cases:
+            with self.subTest(expected=expected):
+                with (
+                    patch("sys.argv", argv),
+                    patch("py_lucidum.cli.demo_dataset_path", return_value=demo_path),
+                    patch("py_lucidum.cli.serve", return_value="http://127.0.0.1:8000/") as serve_mock,
+                ):
+                    result = main()
+
+                self.assertEqual(result, 0)
+                self.assertEqual(serve_mock.call_args.kwargs["title_prefix"], expected)
 
     def test_main_demo_uses_bundled_specs_when_no_local_defaults_exist(self) -> None:
         demo_path = Path("/tmp/py-lucidum-demo.parquet")
@@ -770,7 +793,13 @@ class CliRuntimeTests(unittest.TestCase):
             (
                 "header_buttons",
                 ["lucidum", "--demo", "--buttons"],
-                {"path": demo_path, "buttons": True},
+                {"path": demo_path, "buttons": True, "title_prefix": DEMO_TITLE_PREFIX},
+                True,
+            ),
+            (
+                "title_prefix",
+                ["lucidum", "--demo", "--title-prefix", "Demo Portfolio"],
+                {"path": demo_path, "title_prefix": "Demo Portfolio"},
                 True,
             ),
             (

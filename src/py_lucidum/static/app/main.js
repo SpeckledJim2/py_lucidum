@@ -1,7 +1,7 @@
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import { createLineBarTool } from "./line-bar-tool.js";
       import { createHistogramTool } from "./histogram-tool.js";
-      import { createUkMapTool, ukMapPostcodeAvailability } from "./uk-map-tool.js";
+      import { createUkMapTool } from "./uk-map-tool.js";
       import { createGlmTool } from "./glm-tool.js";
       import { createGbmTool } from "./gbm-tool.js";
       import { createSpecificationsTool } from "./specifications-tool.js";
@@ -188,6 +188,7 @@
       let datasetMetaBase = "";
       let datasetGlmCount = null;
       let datasetGbmCount = null;
+      let datasetMetaCompactFrame = null;
       const el = (id) => document.getElementById(id);
       const api = createApiClient({ token });
       const {
@@ -477,6 +478,7 @@
           : !el("monitorLink")?.classList.contains("hidden");
         setHeaderButtonVisible(el("monitorLink"), visible);
         setHeaderButtonVisible(el("stopAppBtn"), visible);
+        scheduleDatasetMetaCompactCheck();
       }
 
       function startServerHeartbeat() {
@@ -502,6 +504,7 @@
         node.classList.toggle("ready", stateClass === "ready");
         node.classList.toggle("error", stateClass === "error");
         node.classList.toggle("hidden", !message);
+        scheduleDatasetMetaCompactCheck();
       }
 
       function setReadyBadge(message = "Ready") {
@@ -1250,6 +1253,7 @@
       }
 
       function schemaFileMeta() {
+        const parts = [];
         let path = state.schema?.path?.split(/[\\/]/).pop() || "";
         if (state.schema?.source_kind === "parquet_folder") {
           const fileCount = Number(state.schema?.file_count || 0);
@@ -1257,8 +1261,10 @@
             path = `${path} (${fileCount.toLocaleString()} ${fileCount === 1 ? "file" : "files"})`;
           }
         }
+        if (path) parts.push(path);
         const fileSize = formatFileSize(state.schema?.file_size);
-        return fileSize ? `${path} · ${fileSize}` : path;
+        if (fileSize) parts.push(fileSize);
+        return parts.join(" · ");
       }
 
       function renderSidebarVersion() {
@@ -1272,32 +1278,26 @@
         collapsedTarget.hidden = !version;
       }
 
-      function renderDatasetPostcodeMeta(target) {
-        if (!toolEnabled("uk_map")) return;
-        const availability = ukMapPostcodeAvailability({ schema: state.schema, locationParams });
-        if (!availability.levels.length) return;
-        target.append(document.createTextNode(" · "));
-        const group = document.createElement("span");
-        group.className = "dataset-meta-uk-map";
-        group.title = "Open UK Mapping by postcode resolution";
-        availability.levels.forEach((entry, index) => {
-          if (index > 0) {
-            const separator = document.createElement("span");
-            separator.className = "dataset-meta-uk-map-separator";
-            separator.textContent = "·";
-            group.append(separator);
-          }
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "dataset-meta-uk-map-link";
-          button.dataset.mapLevel = entry.level;
-          button.textContent = entry.label;
-          button.title = `Open UK Mapping at postcode ${entry.label.toLowerCase()} resolution`;
-          button.setAttribute("aria-label", button.title);
-          button.addEventListener("click", () => openUkMapLevel(entry.level));
-          group.append(button);
+      function scheduleDatasetMetaCompactCheck() {
+        if (datasetMetaCompactFrame !== null) return;
+        datasetMetaCompactFrame = requestAnimationFrame(() => {
+          datasetMetaCompactFrame = null;
+          updateDatasetMetaCompactMode();
         });
-        target.append(group);
+      }
+
+      function updateDatasetMetaCompactMode() {
+        const target = el("datasetMeta");
+        if (!target) return;
+        const title = target.querySelector(".dataset-meta-title");
+        const details = target.querySelector(".dataset-meta-details");
+        if (!title || !details) {
+          target.classList.remove("dataset-meta-title-only");
+          return;
+        }
+        target.classList.remove("dataset-meta-title-only");
+        const overflows = target.scrollWidth > target.clientWidth + 1;
+        target.classList.toggle("dataset-meta-title-only", overflows);
       }
 
       function renderDatasetMeta(fileMeta = datasetMetaBase, gbmCount = datasetGbmCount, glmCount = datasetGlmCount) {
@@ -1310,18 +1310,26 @@
         const rows = Number(state.schema?.row_count || 0).toLocaleString();
         const columns = Number(state.schema?.columns?.length || 0).toLocaleString();
         target.textContent = "";
-        target.append(document.createTextNode(`${datasetMetaBase} · ${rows} rows · `));
-        const columnButton = document.createElement("button");
-        columnButton.type = "button";
-        columnButton.className = "dataset-meta-column-link";
-        columnButton.textContent = `${columns} columns`;
-        columnButton.title = "Open Column Profile";
-        columnButton.setAttribute("aria-label", `Open Column Profile, ${columns} columns`);
-        columnButton.addEventListener("click", openColumnProfile);
-        target.append(columnButton);
-        renderDatasetPostcodeMeta(target);
+        const titlePrefix = String(state.schema?.title_prefix || "").trim();
+        if (titlePrefix) {
+          const title = document.createElement("span");
+          title.className = "dataset-meta-title";
+          title.textContent = titlePrefix;
+          target.append(title);
+        }
+        const details = document.createElement("span");
+        details.className = "dataset-meta-details";
+        target.append(details);
+        const leadingParts = [datasetMetaBase, `${rows} rows`].filter(Boolean);
+        if (leadingParts.length) {
+          details.append(document.createTextNode(`${titlePrefix ? " · " : ""}${leadingParts.join(" · ")} · `));
+        }
+        const columnCount = document.createElement("span");
+        columnCount.className = "dataset-meta-column-count";
+        columnCount.textContent = `${columns} columns`;
+        details.append(columnCount);
         if (datasetGlmCount !== null && toolEnabled("glm")) {
-          target.append(document.createTextNode(" · "));
+          details.append(document.createTextNode(" · "));
           const button = document.createElement("button");
           button.type = "button";
           button.className = "dataset-meta-glm-link";
@@ -1329,18 +1337,20 @@
           button.title = "Open GLM Model navigator";
           button.setAttribute("aria-label", `Open saved GLMs, ${datasetGlmCount.toLocaleString()} models`);
           button.addEventListener("click", openGlmModelNavigator);
-          target.append(button);
+          details.append(button);
         }
-        if (datasetGbmCount === null || !toolEnabled("gbm")) return;
-        target.append(document.createTextNode(" · "));
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "dataset-meta-gbm-link";
-        button.textContent = `GBMs (${datasetGbmCount.toLocaleString()})`;
-        button.title = "Open GBM Model navigator";
-        button.setAttribute("aria-label", `Open saved GBMs, ${datasetGbmCount.toLocaleString()} models`);
-        button.addEventListener("click", openGbmModelNavigator);
-        target.append(button);
+        if (datasetGbmCount !== null && toolEnabled("gbm")) {
+          details.append(document.createTextNode(" · "));
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "dataset-meta-gbm-link";
+          button.textContent = `GBMs (${datasetGbmCount.toLocaleString()})`;
+          button.title = "Open GBM Model navigator";
+          button.setAttribute("aria-label", `Open saved GBMs, ${datasetGbmCount.toLocaleString()} models`);
+          button.addEventListener("click", openGbmModelNavigator);
+          details.append(button);
+        }
+        scheduleDatasetMetaCompactCheck();
       }
 
       async function refreshDatasetGlmCount() {
@@ -1379,18 +1389,6 @@
       function setDatasetGlmCount(count) {
         if (!toolEnabled("glm")) return;
         renderDatasetMeta(datasetMetaBase, datasetGbmCount, count);
-      }
-
-      function openUkMapLevel(level) {
-        if (!toolEnabled("uk_map")) return;
-        const refreshOnLevelChange = state.tool === "uk_map";
-        if (!ukMapTool.setMapLevel(level, { refresh: refreshOnLevelChange })) return;
-        setTool("uk_map", state.tool !== "uk_map");
-      }
-
-      function openColumnProfile() {
-        if (!toolEnabled("column_profile") || state.tool === "column_profile") return;
-        setTool("column_profile");
       }
 
       function openGlmModelNavigator() {
@@ -3248,6 +3246,7 @@
           refreshActiveTool({ force: true });
         });
         window.addEventListener("resize", () => {
+          scheduleDatasetMetaCompactCheck();
           if (state.tool === "line_bar") {
             const controls = document.querySelector(".chart-side-controls");
             if (controls) setChartControlsWidth(controls.getBoundingClientRect().width);

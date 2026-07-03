@@ -40,6 +40,8 @@ DEFAULT_SPEC_CANDIDATES = {
     "features": ("feature_spec.csv", "specs/feature_spec.csv"),
 }
 
+DEMO_TITLE_PREFIX = "Lucidum Demo Motor Dataset"
+
 
 class LucidumServer(uvicorn.Server):
     def __init__(
@@ -280,6 +282,7 @@ def serve(
     use_features: bool = True,
     tools: str | Sequence[str] | None = None,
     buttons: bool = False,
+    title_prefix: str | None = None,
 ) -> str:
     selected_port = port or find_free_port()
     ensure_port_available(host, selected_port)
@@ -318,6 +321,7 @@ def serve(
         use_features=features_enabled,
         line_bar_favourites_path=line_bar_favourites_path,
         header_buttons=buttons,
+        title_prefix=title_prefix,
     )
     url = _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
@@ -360,6 +364,7 @@ def serve_line_bar(
     no_features: bool = False,
     use_features: bool = True,
     buttons: bool = False,
+    title_prefix: str | None = None,
 ) -> str:
     return serve(
         path=path,
@@ -391,6 +396,7 @@ def serve_line_bar(
         use_features=use_features,
         tools=["line_bar"],
         buttons=buttons,
+        title_prefix=title_prefix,
     )
 
 
@@ -452,6 +458,7 @@ def main() -> int:
     parser.add_argument("--no-token", action="store_true", help="Disable the token in the URL and API requests")
     parser.add_argument("--open", action="store_true", help="Open the app with Python's configured browser/viewer")
     parser.add_argument("--buttons", action="store_true", help="Show the Stop app and Open monitor buttons in the app header")
+    parser.add_argument("--title-prefix", default=None, help="Text to show before the dataset file or folder name in the app header")
     parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
     parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
@@ -509,6 +516,7 @@ def main() -> int:
         parser.error("the following arguments are required: path or --demo")
     path = demo_dataset_path() if args.demo else args.path
     demo_spec_defaults = _demo_spec_defaults(args) if args.demo else {}
+    title_prefix = DEMO_TITLE_PREFIX if args.demo and args.title_prefix is None else args.title_prefix
     try:
         serve(
             path=path,
@@ -536,6 +544,7 @@ def main() -> int:
             no_features=args.no_features,
             tools=args.tools,
             buttons=args.buttons,
+            title_prefix=title_prefix,
         )
     except (RuntimeError, ValueError, OSError) as error:
         parser.exit(1, f"lucidum: error: {error}\n")

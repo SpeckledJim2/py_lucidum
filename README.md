@@ -94,6 +94,8 @@ Launch the bundled synthetic demo dataset:
 
 Open the printed URL in your browser. Stop the server with `Ctrl+C` in the terminal. Pass `--buttons` when you want the browser header to show `Stop app` and `Open monitor` buttons.
 
+Demo launches label the header as `Lucidum Demo Motor Dataset · motor_premiums.parquet · ...` before the size, row count, and column count.
+
 The sidebar footer shows the installed Lucidum package version as `lucidum v<version>` when expanded and `v<version>` when collapsed. Both labels are populated from the running app's schema metadata.
 
 Run your own data:
@@ -130,6 +132,8 @@ DuckDB types. Non-Parquet files and nested folders are ignored. Folder inputs
 are available only when GLM and GBM are not enabled; use a single Parquet file
 for modelling tools. The app header displays folder inputs with their file
 count, for example `monthly (7 files)`.
+Use `--title-prefix` to put your own text before the file or folder name,
+separated by the same middle dot used by the rest of the header metadata.
 
 ## Dataset Workspaces
 
@@ -172,6 +176,8 @@ When a saved view references a column, data source, filter expression, KPI row, 
 .venv/bin/lucidum --demo --no-features
 .venv/bin/lucidum --demo --tools line-bar
 .venv/bin/lucidum --demo --buttons
+.venv/bin/lucidum --demo --title-prefix "Lucidum Demo Motor Dataset"
+.venv/bin/lucidum path/to/my_data.parquet --title-prefix "Motor pricing data"
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm,gbm
 .venv/bin/lucidum path/to/my_data.parquet --tools all
 ```
@@ -180,6 +186,7 @@ When a saved view references a column, data source, filter expression, KPI row, 
 - `--host 0.0.0.0` binds to all network interfaces for LAN testing. Keep token protection enabled unless another access layer is in place.
 - `--no-token` disables URL/API token protection for local-only use.
 - `--buttons` shows the `Stop app` and `Open monitor` buttons in the browser header. Without it, those header buttons are hidden; stop terminal launches with `Ctrl+C`, and open the monitor directly at `/monitor?token=...` when needed.
+- `--title-prefix` shows custom text before the file or folder name in the browser header. `--demo` defaults this to `Lucidum Demo Motor Dataset`; pass an empty value to suppress it.
 - `--x`, `--actual`, `--expected`, `--expected2`, and `--denominator` set initial Line/Bar selections.
 - `--line-bar-favourite` opens Line/Bar on a saved Favourites view by name or id. URL query parameter `line_bar_favourite` provides the same startup selection and overrides the default supplied by Python or the CLI.
 - `--line-bar-favourites` points Lucidum at the JSON file used to store Line/Bar Favourites. It is a server-side file path, not a URL query parameter.
@@ -219,6 +226,7 @@ py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
 py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
 py_lucidum.serve("path/to/monthly_parquets/", port=8000, open_browser=True)
 py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, buttons=True)
+py_lucidum.serve("path/to/my_data.parquet", port=8000, title_prefix="Motor pricing data")
 py_lucidum.serve(
     "datasets/monthly",
     line_bar_favourites_path="config/monthly_favourites.json",
@@ -249,6 +257,7 @@ app = create_app(
     features_path="specs/feature_spec.csv",
     tools=["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"],
     header_buttons=True,
+    title_prefix="Motor pricing data",
 )
 
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
