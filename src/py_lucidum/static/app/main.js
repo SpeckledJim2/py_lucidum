@@ -633,12 +633,17 @@
         el("chartMessage").classList.toggle("hidden", !displayMessage || hiddenForView);
       }
 
-      function setGroupMeta(tool, message) {
+      function setGroupMeta(tool, message, options = {}) {
         if (tool === "dataset_viewer") return;
         const id = tool === "uk_map"
             ? "mapGroupMeta"
             : (tool === "column_profile" ? "profileGroupMeta" : (tool === "histogram" ? "histogramGroupMeta" : (isModelTool(tool) ? "modelToolGroupMeta" : "lineBarGroupMeta")));
-        el(id).textContent = message || "";
+        const target = el(id);
+        if (options.html) {
+          target.innerHTML = message || "";
+          return;
+        }
+        target.textContent = message || "";
       }
 
       function activeFilterLabel() {
@@ -1027,6 +1032,7 @@
       function saveToolPresentation(tool, presentation) {
         toolCache(tool).presentation = {
           groupMeta: presentation.groupMeta || "",
+          groupMetaHtml: presentation.groupMetaHtml || "",
           status: presentation.status || "",
           statusError: Boolean(presentation.statusError),
           chartMessage: presentation.chartMessage || "",
@@ -1036,7 +1042,7 @@
       function applyToolPresentation(tool) {
         const presentation = toolCache(tool).presentation;
         if (!presentation) return;
-        setGroupMeta(tool, presentation.groupMeta);
+        setGroupMeta(tool, presentation.groupMetaHtml || presentation.groupMeta, { html: Boolean(presentation.groupMetaHtml) });
         setStatus(presentation.status, presentation.statusError);
         setChartMessage(presentation.chartMessage);
       }

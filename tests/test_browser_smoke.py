@@ -29,8 +29,9 @@ from py_lucidum.tools.glm.training import stop_persistent_glm_fit_worker, train_
 
 
 try:
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 except ImportError:  # pragma: no cover - exercised only without optional test deps.
+    PlaywrightTimeoutError = TimeoutError
     sync_playwright = None
 
 
@@ -7282,20 +7283,51 @@ COPY (
                 )
 
             def wait_for_map_view(expected: dict[str, float]) -> None:
-                page.wait_for_function(
-                    """
-                    expected => {
-                        const map = document.querySelector("#ukMap")?._lucidumMap;
-                        if (!map) return false;
-                        const center = map.getCenter();
-                        return Math.abs(center.lat - expected.lat) < 0.01
-                            && Math.abs(center.lng - expected.lng) < 0.01
-                            && Math.abs(map.getZoom() - expected.zoom) < 0.01;
-                    }
-                    """,
-                    arg=expected,
-                    timeout=10_000,
-                )
+                try:
+                    page.wait_for_function(
+                        """
+                        expected => {
+                            const map = document.querySelector("#ukMap")?._lucidumMap;
+                            if (!map) return false;
+                            const center = map.getCenter();
+                            return Math.abs(center.lat - expected.lat) < 0.01
+                                && Math.abs(center.lng - expected.lng) < 0.01
+                                && Math.abs(map.getZoom() - expected.zoom) < 0.01;
+                        }
+                        """,
+                        arg=expected,
+                        timeout=10_000,
+                    )
+                except PlaywrightTimeoutError as exc:
+                    debug = page.evaluate(
+                        """
+                        expected => {
+                            const map = document.querySelector("#ukMap")?._lucidumMap;
+                            const container = document.querySelector("#ukMap");
+                            const rect = container?.getBoundingClientRect();
+                            if (!map) return { expected, actual: null };
+                            const center = map.getCenter();
+                            const actual = { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+                            return {
+                                expected,
+                                actual,
+                                delta: {
+                                    lat: actual.lat - expected.lat,
+                                    lng: actual.lng - expected.lng,
+                                    zoom: actual.zoom - expected.zoom,
+                                },
+                                hidden: container?.classList.contains("hidden"),
+                                activeTools: [...document.querySelectorAll(".tool-option.active")].map((node) => node.id),
+                                sidebarExpanded: document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded"),
+                                mapMeta: document.querySelector("#mapGroupMeta")?.textContent || "",
+                                actionTiming: document.querySelector("#actionTimingMonitor")?.textContent || "",
+                                mapBox: rect ? { width: rect.width, height: rect.height, x: rect.x, y: rect.y } : null,
+                            };
+                        }
+                        """,
+                        arg=expected,
+                    )
+                    raise AssertionError(f"UK map view did not settle: {json.dumps(debug, sort_keys=True)}") from exc
 
             def assert_filter_label_badge(selector: str, applied_class: str, applied: bool) -> None:
                 page.wait_for_function(
@@ -9394,12 +9426,19 @@ COPY (
                     timeout=10_000,
                 )
 
+                request_counts = {
+                    "profile": profile_requests,
+                    "profile_detail": profile_detail_requests,
+                    "chart": chart_requests,
+                    "histogram": histogram_requests,
+                    "map": map_requests,
+                }
                 self.assertEqual(page_errors, [])
-                self.assertEqual(profile_requests, 6)
-                self.assertEqual(profile_detail_requests, 7)
-                self.assertEqual(chart_requests, 4)
-                self.assertEqual(histogram_requests, 8)
-                self.assertEqual(map_requests, 10)
+                self.assertEqual(profile_requests, 6, request_counts)
+                self.assertEqual(profile_detail_requests, 7, request_counts)
+                self.assertEqual(chart_requests, 4, request_counts)
+                self.assertEqual(histogram_requests, 8, request_counts)
+                self.assertEqual(map_requests, 10, request_counts)
             finally:
                 browser.close()
 

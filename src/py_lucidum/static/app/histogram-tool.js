@@ -97,16 +97,24 @@ export function createHistogramTool({
     renderChart(data);
     renderStatsTable(data);
     const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
-    const valid = formatNumber(data.valid_count);
-    const sampled = data.sampled_valid_count && data.sampled_valid_count !== data.valid_count
-      ? ` - ${formatNumber(data.sampled_valid_count)} sampled`
+    const invalidCount = Math.max(0, Number(data.filtered_row_count || 0) - Number(data.valid_count || 0));
+    const invalidLabel = invalidCount > 0 ? `${formatNumber(invalidCount)} invalid` : "";
+    const sampledLabel = data.sampled_valid_count && data.sampled_valid_count !== data.valid_count
+      ? `${formatNumber(data.sampled_valid_count)} sampled`
       : "";
-    const groupMeta = `${formatNumber(data.bins)} bins - ${valid} valid${sampled} - ${rowMeta}`;
+    const groupMeta = `${formatNumber(data.bins)} bins - ${rowMeta}`;
+    const groupMetaBadges = [
+      invalidLabel ? `<span class="histogram-invalid-badge">${escapeHtml(invalidLabel)}</span>` : "",
+      sampledLabel ? `<span class="histogram-sample-badge">${escapeHtml(sampledLabel)}</span>` : "",
+    ].filter(Boolean).join("");
+    const groupMetaHtml = groupMetaBadges
+      ? `<span class="histogram-meta-text">${escapeHtml(groupMeta)}</span>${groupMetaBadges}`
+      : "";
     const warnings = [...(data.warnings || [])].filter(Boolean).join(" ");
-    setGroupMeta("histogram", groupMeta);
+    setGroupMeta("histogram", groupMetaHtml || groupMeta, { html: Boolean(groupMetaHtml) });
     setStatus("");
     setChartMessage(warnings);
-    saveToolPresentation("histogram", { groupMeta, chartMessage: warnings });
+    saveToolPresentation("histogram", { groupMeta, groupMetaHtml, chartMessage: warnings });
   }
 
   function useCachedHistogramData(cache, options = {}) {

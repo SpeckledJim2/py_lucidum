@@ -145,7 +145,7 @@ class HistogramToolTests(unittest.TestCase):
         self.assertEqual(empty["rows"], [])
         self.assertTrue(any("No valid histogram values" in warning for warning in empty["warnings"]))
 
-    def test_sampled_mode_samples_distribution_stats_and_warns(self) -> None:
+    def test_sampled_mode_samples_distribution_stats_without_warning(self) -> None:
         sample_path = Path(self.tmp.name) / "many_values.csv"
         sample_path.write_text("Actual\n" + "\n".join(str(value) for value in range(1, 11)) + "\n", encoding="utf-8")
 
@@ -163,8 +163,8 @@ class HistogramToolTests(unittest.TestCase):
         self.assertEqual(next(row["value"] for row in result["stats"] if row["statistic"] == "Numeric count"), 10)
         self.assertIsNone(next(row["value"] for row in result["stats"] if row["statistic"] == "Std deviation"))
         warnings = " ".join(result["warnings"])
-        self.assertIn("bars and distribution statistics", warnings)
-        self.assertIn("row counts and exclusions are exact", warnings)
+        self.assertNotIn("bars and distribution statistics", warnings)
+        self.assertNotIn("row counts and exclusions are exact", warnings)
         self.assertNotIn("statistics are exact", warnings)
 
     def test_all_mode_keeps_exact_distribution_stats(self) -> None:

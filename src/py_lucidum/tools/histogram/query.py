@@ -59,7 +59,7 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         )
         bins_count = stats_sampled_count if sample_values else valid_count
         bins_requested = normalise_bins(request.get("bins"), bins_count)
-        warnings = histogram_warnings(denominator, counts, log_scale, sample_values, stats_sampled_count)
+        warnings = histogram_warnings(denominator, counts, log_scale)
 
         if valid_count <= 0:
             warnings.append("No valid histogram values were found after filtering.")
@@ -741,8 +741,6 @@ def histogram_warnings(
     denominator: dict[str, str | None],
     counts: dict[str, Any],
     log_scale: str,
-    sample_values: bool,
-    stats_sampled_count: int,
 ) -> list[str]:
     warnings: list[str] = []
     missing_actual = int(counts.get("missing_actual_count") or 0)
@@ -762,11 +760,6 @@ def histogram_warnings(
     nonpositive = int(counts.get("nonpositive_count") or 0)
     if log_scale in {"x", "both"} and nonpositive:
         warnings.append(f"{nonpositive:,} nonpositive values excluded for log x-scale.")
-    if sample_values:
-        warnings.append(
-            f"Histogram bars and distribution statistics use a deterministic {stats_sampled_count:,}-row sample; "
-            "row counts and exclusions are exact. Use all for exact distribution statistics."
-        )
     return warnings
 
 

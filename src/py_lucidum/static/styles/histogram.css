@@ -53,6 +53,36 @@
         height: 100%;
       }
 
+      #histogramGroupMeta:not(.hidden) {
+        align-items: center;
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        justify-content: flex-end;
+        max-width: 100%;
+      }
+
+      .histogram-meta-text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .histogram-invalid-badge,
+      .histogram-sample-badge {
+        align-items: center;
+        background: var(--filter-applied-bg);
+        border: 1px solid var(--filter-applied-border);
+        border-radius: 4px;
+        color: var(--filter-applied-text);
+        display: inline-flex;
+        flex: 0 0 auto;
+        line-height: 1.1;
+        padding: 1px 4px;
+        white-space: nowrap;
+      }
+
       .histogram-grid {
         background: var(--panel);
         border: solid var(--line);
