@@ -16,6 +16,8 @@ from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 FAVOURITES_VERSION = 1
 FAVOURITES_FILENAME = "favourites.json"
 FAVOURITE_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
+FAVOURITE_SCOPES = {"metrics", "metrics_filter", "line_bar_view", "map_view"}
+DEFAULT_FAVOURITE_SCOPE = "line_bar_view"
 GLM_PREDICTION_COLUMNS = {"glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"}
 GBM_PREDICTION_COLUMNS = {"gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction"}
 GLM_SOURCE_RE = re.compile(r"^glm:[A-Za-z0-9_.-]+:predictions$")
@@ -96,6 +98,7 @@ class LineBarFavouriteStore:
         cleaned_name = self.clean_name(name)
         if not isinstance(view, dict):
             raise LineBarFavouriteError("Favourite view must be an object")
+        view = normalise_favourite_view(view)
         payload = self.read_payload()
         favourites = payload["favourites"]
         self.ensure_unique_name(cleaned_name, favourites)
@@ -175,7 +178,8 @@ class LineBarFavouriteStore:
         kpis: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload = dict(item)
-        view = payload.get("view") if isinstance(payload.get("view"), dict) else {}
+        view = normalise_favourite_view(payload.get("view") if isinstance(payload.get("view"), dict) else {})
+        payload["view"] = view
         payload["validation"] = self.validate_view(view, saved_filters=saved_filters, kpis=kpis)
         return payload
 
@@ -188,37 +192,40 @@ class LineBarFavouriteStore:
     ) -> dict[str, Any]:
         errors: list[str] = []
         warnings: list[str] = []
+        scope = favourite_scope(view, errors)
         source = self.validate_favourite_source(view.get("source"), "", errors, label="data source")
-        x_source = self.validate_favourite_source(view.get("xSource") or source, view.get("x"), errors, label="x-axis source")
-        self.validate_column(x_source, view.get("x"), errors, label="x-axis feature")
         actual = view.get("actual") if isinstance(view.get("actual"), dict) else {}
         actual_source = self.validate_favourite_source(actual.get("sourceId") or source, actual.get("value"), errors, label="Actual source")
         self.validate_column(actual_source, actual.get("value"), errors, label="Actual", numeric=True)
         denominator = str(view.get("denominator") or "__none__").strip() or "__none__"
         if denominator != "__none__":
             self.validate_column(source, denominator, errors, label="Weight", numeric=True)
-        expected = view.get("expectedSelections")
-        if isinstance(expected, list):
-            for index, selection in enumerate(expected[:2], start=1):
-                if not isinstance(selection, dict):
-                    continue
-                expected_source = self.validate_favourite_source(selection.get("sourceId") or source, selection.get("value"), errors, label=f"Expected {index} source")
-                self.validate_column(expected_source, selection.get("value"), errors, label=f"Expected {index}", numeric=True)
-        filter_sql = str(view.get("filter") or "").strip()
-        if filter_sql and source:
-            try:
-                active_dataset(self.dataset_path, self.dataset).normalise_filter(filter_sql, source_id=source)
-            except (ValueError, duckdb.Error) as exc:
-                errors.append(f"Favourite filter is invalid: {exc}")
-        saved_rows = view.get("savedFilterRows")
-        if isinstance(saved_rows, list) and saved_rows:
-            available = {saved_filter_key(row) for row in saved_filters or []}
-            missing = [
-                row for row in saved_rows
-                if isinstance(row, dict) and saved_filter_key(row) not in available
-            ]
-            if missing:
-                warnings.append(f"{len(missing)} saved FILTER selection{'s' if len(missing) != 1 else ''} no longer exist.")
+        if scope == "line_bar_view":
+            x_source = self.validate_favourite_source(view.get("xSource") or source, view.get("x"), errors, label="x-axis source")
+            self.validate_column(x_source, view.get("x"), errors, label="x-axis feature")
+            expected = view.get("expectedSelections")
+            if isinstance(expected, list):
+                for index, selection in enumerate(expected[:2], start=1):
+                    if not isinstance(selection, dict):
+                        continue
+                    expected_source = self.validate_favourite_source(selection.get("sourceId") or source, selection.get("value"), errors, label=f"Expected {index} source")
+                    self.validate_column(expected_source, selection.get("value"), errors, label=f"Expected {index}", numeric=True)
+        if scope in {"metrics_filter", "line_bar_view", "map_view"}:
+            filter_sql = str(view.get("filter") or "").strip()
+            if filter_sql and source:
+                try:
+                    active_dataset(self.dataset_path, self.dataset).normalise_filter(filter_sql, source_id=source)
+                except (ValueError, duckdb.Error) as exc:
+                    errors.append(f"Favourite filter is invalid: {exc}")
+            saved_rows = view.get("savedFilterRows")
+            if isinstance(saved_rows, list) and saved_rows:
+                available = {saved_filter_key(row) for row in saved_filters or []}
+                missing = [
+                    row for row in saved_rows
+                    if isinstance(row, dict) and saved_filter_key(row) not in available
+                ]
+                if missing:
+                    warnings.append(f"{len(missing)} saved FILTER selection{'s' if len(missing) != 1 else ''} no longer exist.")
         kpi = view.get("kpi") if isinstance(view.get("kpi"), dict) else {}
         if kpi:
             available_kpis = {kpi_key(row) for row in kpis or []}
@@ -345,6 +352,25 @@ def favourite_model_source_kind(raw_source: Any, column_name: Any) -> str:
 
 def timestamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def normalise_favourite_view(view: dict[str, Any]) -> dict[str, Any]:
+    payload = json_safe(view)
+    if not str(payload.get("scope") or "").strip():
+        payload["scope"] = DEFAULT_FAVOURITE_SCOPE
+    return payload
+
+
+def favourite_scope(view: dict[str, Any], errors: list[str] | None = None) -> str:
+    raw = str(view.get("scope") or "").strip()
+    if not raw:
+        return DEFAULT_FAVOURITE_SCOPE
+    if raw in FAVOURITE_SCOPES:
+        return raw
+    if errors is not None:
+        accepted = ", ".join(sorted(FAVOURITE_SCOPES))
+        errors.append(f"Favourite scope is invalid: {raw!r}. Use one of: {accepted}")
+    return DEFAULT_FAVOURITE_SCOPE
 
 
 def saved_filter_key(row: dict[str, Any]) -> tuple[str, str, str]:

@@ -128,29 +128,6 @@
         min-height: 0;
       }
 
-      .line-bar-favourites-control {
-        position: relative;
-        min-width: 250px;
-      }
-
-      .line-bar-favourites-row {
-        display: grid;
-        grid-template-columns: minmax(120px, 1fr) 28px 28px;
-        gap: 4px;
-        align-items: center;
-      }
-
-      .line-bar-favourites-row select {
-        height: 24px;
-      }
-
-      .line-bar-favourites-row select:focus,
-      .line-bar-favourites-row select:focus-visible {
-        border-color: var(--line);
-        box-shadow: none;
-        outline: none;
-      }
-
       .line-bar-favourite-icon-button {
         min-height: 24px;
         border: 1px solid var(--line);
@@ -290,6 +267,7 @@
       }
 
       .line-bar-favourite-popover-message,
+      .line-bar-favourite-row-scope,
       .line-bar-favourite-row-message,
       .line-bar-favourite-empty {
         color: var(--muted);

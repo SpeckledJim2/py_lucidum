@@ -23,7 +23,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
 - **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables with XLSX export, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, SHAP plotting when SHAP rows are saved during training, and XLSX export for saved tabulations.
-- **Filters, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, KPI specs that set Actual/Weight choices and formatting, and GBM feature scenarios/interaction constraints.
+- **Filters, Favourites, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, sidebar Favourites for saved metric/filter/Line/Bar/Map views, separate KPI metric presets, and GBM feature scenarios/interaction constraints.
 - **Specifications**: default editor tab for feature, KPI, and filter specification CSV files, with continuous validation and save actions against the app's current metadata contracts.
 
 Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skipped by the shared schema used by normal selectors. Column Profile reports them as skipped, and the GBM feature chooser shows them as disabled invalid rows.
@@ -147,7 +147,7 @@ The dataset slug comes from the CSV or Parquet filename. The dataset signature i
 
 If a dataset file is replaced or edited, it gets a new signature workspace. Existing GLM/GBM models from the previous version remain on disk but are not shown or used; rebuild models after changing the source file. Older root-level `.lucidum/models/` folders are ignored by current Lucidum versions. Parquet folder inputs do not create or read GLM/GBM workspaces because modelling tools require a single source Parquet.
 
-By default, Line/Bar Favourites are saved beside those workspaces but one level above the dataset signature:
+By default, saved Favourites are saved beside those workspaces but one level above the dataset signature:
 
 ```text
 .lucidum/datasets/<dataset-slug>/line_bar/favourites.json
@@ -155,7 +155,7 @@ By default, Line/Bar Favourites are saved beside those workspaces but one level 
 
 They persist across replacements of the dataset at the same path. For server deployments, `--line-bar-favourites path/to/favourites.json` overrides that default and makes Lucidum read and write exactly that JSON file instead; the parent folder is created on first save if needed. If the configured JSON is malformed, favourites are reported as unavailable and Lucidum does not overwrite the bad file during that request.
 
-When a saved view references a column, data source, filter expression, KPI row, or saved FILTER row that is no longer valid, Lucidum validates the view against the current dataset before restoring it and reports the stale fields in the browser.
+The sidebar FAVOURITES accordion shows only user-saved favourites. New saved favourites choose a restore scope: Metrics, Metrics + filter, Line/Bar view, or Map view when UK Mapping is active. Older favourites without a scope are treated as Line/Bar view favourites. When a saved view references a column, data source, filter expression, KPI row, or saved FILTER row that is no longer valid, Lucidum validates the view against the current dataset before restoring it and reports the stale fields in the browser. Map view favourites restore UK map level, base map, palette, sliders, and camera where possible, falling back safely for stale map presentation values.
 
 ## Common Options
 
@@ -188,8 +188,8 @@ When a saved view references a column, data source, filter expression, KPI row, 
 - `--buttons` shows the `Stop app` and `Open monitor` buttons in the browser header. Without it, those header buttons are hidden; stop terminal launches with `Ctrl+C`, and open the monitor directly at `/monitor?token=...` when needed.
 - `--title-prefix` shows custom text before the file or folder name in the browser header. `--demo` defaults this to `Lucidum Demo Motor Dataset`; pass an empty value to suppress it.
 - `--x`, `--actual`, `--expected`, `--expected2`, and `--denominator` set initial Line/Bar selections.
-- `--line-bar-favourite` opens Line/Bar on a saved Favourites view by name or id. URL query parameter `line_bar_favourite` provides the same startup selection and overrides the default supplied by Python or the CLI.
-- `--line-bar-favourites` points Lucidum at the JSON file used to store Line/Bar Favourites. It is a server-side file path, not a URL query parameter.
+- `--line-bar-favourite` opens a saved Favourite by name or id. URL query parameter `line_bar_favourite` provides the same startup selection and overrides the default supplied by Python or the CLI.
+- `--line-bar-favourites` points Lucidum at the JSON file used to store saved Favourites. It is a server-side file path, not a URL query parameter.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
 - `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
@@ -302,6 +302,8 @@ FINANCIAL,Premium,PREMIUM,N,2,currency
 
 `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`.
 
+KPI rows appear as read-only presets in their own sidebar KPI accordion. They set Actual, Weight, decimals, and formatting only; filters and Line/Bar view state belong to saved favourites, not the KPI CSV.
+
 When the Specifications tool opens a missing KPI spec, it starts with one blank row and visual placeholder hints for each field; those hints are not saved as cell values.
 
 ## Feature Specs
@@ -350,7 +352,7 @@ The GBM tool is opt-in and must be requested with `line-bar`. Request `glm` sepa
 
 ### Feature setup
 
-The GBM tool uses the same sidebar Actual and Weight/KPI controls as Line and Bar, so users can choose the modelling response before training.
+The GBM tool uses the same sidebar Actual, Weight, FAVOURITES, and KPI controls as Line and Bar, so users can choose the modelling response before training.
 
 If a Feature Specification is loaded, the Feature table shows its `Grouping` values, a multi-select interaction-constraint dropdown, and a scenario dropdown next to `Clear all`; choosing a scenario selects only that scenario's usable features.
 

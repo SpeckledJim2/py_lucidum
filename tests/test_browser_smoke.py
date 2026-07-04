@@ -3169,6 +3169,206 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_favourites_save_and_restore_map_view(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value,PostcodeUnit,lat,long\n"
+                "AB,AB10 1,1,100,10,AB10 1AA,57.1,-2.1\n"
+                "AB,AB10 1,2,200,20,AB10 1AB,57.2,-2.2\n"
+                "AL,AL1 1,3,300,30,AL1 1AA,51.8,-0.3\n"
+                "AL,AL1 2,4,400,40,AL1 2AA,51.7,-0.2\n",
+                encoding="utf-8",
+            )
+            filters_path = root / "filter_spec.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "AGE,Older,vehicle_age >= 3\n",
+                encoding="utf-8",
+            )
+            favourites_path = root / "config" / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path,
+                filters_path=filters_path,
+                use_saved_filters=True,
+                line_bar_favourites_path=favourites_path,
+                tools=["line_bar", "uk_map"],
+                defaults={"x": "vehicle_age", "actual": "price", "denominator": "value"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.locator("#ukMapTool").click()
+                        page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
+                        page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                        page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
+
+                        with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                            page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').check()
+                        page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
+                        page.locator('.map-layer-control input[name="baseMap"][value="grey"]').check()
+                        page.locator('.map-palette-button[data-palette="viridis"]').click()
+                        page.eval_on_selector("#mapLineWeight", "(input) => { input.value = '3'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
+                        page.eval_on_selector("#mapOpacity", "(input) => { input.value = '0.4'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
+                        with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                            page.eval_on_selector("#mapSmoothing", "(input) => { input.value = '2'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
+                        page.wait_for_function(
+                            """() => document.querySelector("#mapLineWeight")?.value === "3"
+                              && document.querySelector("#mapOpacity")?.value === "0.4"
+                              && document.querySelector("#mapSmoothing")?.value === "2" """,
+                            timeout=10_000,
+                        )
+                        page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              map.setView([51.5, -0.12], 9, { animate: false });
+                            }
+                            """
+                        )
+                        page.wait_for_timeout(50)
+
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.locator("#sidebarFavouriteAddBtn").click()
+                        page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            """() => document.querySelector('input[name="sidebarFavouriteScope"][value="map_view"]')?.checked
+                              && [...document.querySelectorAll(".sidebar-favourite-scope-option span")]
+                                .map((node) => node.textContent.trim()).join("|") === "Map view|Metrics + filter|Metrics" """,
+                            timeout=10_000,
+                        )
+                        page.locator("#sidebarFavouriteNameInput").fill("Sector map")
+                        page.locator('[data-favourite-action="save-add"]').click()
+                        page.wait_for_function(
+                            """() => [...document.querySelectorAll(".saved-favourite-option")]
+                              .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Sector map"
+                                && button.querySelector(".favourite-detail")?.textContent.trim() === "Map view"
+                                && button.classList.contains("active")) """,
+                            timeout=10_000,
+                        )
+                        map_favourite_id = page.eval_on_selector(
+                            ".saved-favourite-option.active",
+                            'button => button?.dataset.favouriteId || ""',
+                        )
+                        self.assertTrue(map_favourite_id)
+
+                        page.locator("#lineBarTool").click()
+                        page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                        page.locator("#actualNumerator").select_option("vehicle_age")
+                        page.locator("#denominator").select_option("__none__")
+                        page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
+                        page.wait_for_function(
+                            """([id]) => document.querySelector("#ukMapTool")?.classList.contains("active")
+                              && document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")
+                              && document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
+                              && document.querySelector('.map-layer-control input[name="mapLevel"][value="sector"]')?.checked
+                              && document.querySelector('.map-layer-control input[name="baseMap"][value="grey"]')?.checked
+                              && document.querySelector('.map-palette-button[data-palette="viridis"]')?.classList.contains("active")
+                              && document.querySelector("#mapLineWeight")?.value === "3"
+                              && document.querySelector("#mapOpacity")?.value === "0.4"
+                              && document.querySelector("#mapSmoothing")?.value === "2"
+                              && document.querySelector("#actualNumerator")?.value === "price"
+                              && document.querySelector("#denominator")?.value === "value" """,
+                            arg=[map_favourite_id],
+                            timeout=10_000,
+                        )
+                        restored_camera = page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const center = map.getCenter();
+                              return { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+                            }
+                            """
+                        )
+                        self.assertAlmostEqual(restored_camera["lat"], 51.5, delta=0.25)
+                        self.assertAlmostEqual(restored_camera["lng"], -0.12, delta=0.25)
+                        self.assertAlmostEqual(restored_camera["zoom"], 9, delta=0.5)
+
+                        page.locator('.map-palette-button[data-palette="spectral"]').click()
+                        page.wait_for_function("""() => !document.querySelector(".saved-favourite-option.active")""", timeout=10_000)
+
+                        page.locator("#sidebarFavouriteAddBtn").click()
+                        page.locator("#sidebarFavouriteNameInput").fill("Map metrics")
+                        page.locator('[data-favourite-scope-option="metrics"]').click()
+                        page.locator('[data-favourite-action="save-add"]').click()
+                        page.wait_for_function(
+                            """() => [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")]
+                              .some((node) => node.textContent.trim() === "Map metrics"
+                                && node.closest(".saved-favourite-option")?.querySelector(".favourite-detail")?.textContent.trim() === "Metrics")""",
+                            timeout=10_000,
+                        )
+                        metric_id = page.evaluate(
+                            """
+                            () => [...document.querySelectorAll(".saved-favourite-option")]
+                              .find((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Map metrics")
+                              ?.dataset.favouriteId || ""
+                            """
+                        )
+                        self.assertTrue(metric_id)
+                        page.locator("#lineBarTool").click()
+                        page.locator("#actualNumerator").select_option("vehicle_age")
+                        page.locator("#denominator").select_option("__none__")
+                        page.locator(f'.saved-favourite-option[data-favourite-id="{metric_id}"]').click()
+                        page.wait_for_function(
+                            """() => document.querySelector("#lineBarTool")?.classList.contains("active")
+                              && document.querySelector("#actualNumerator")?.value === "price"
+                              && document.querySelector("#denominator")?.value === "value" """,
+                            timeout=10_000,
+                        )
+
+                        page.locator("#ukMapTool").click()
+                        if page.locator("#filterCollapseBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#filterCollapseBtn").click()
+                        age_heading = page.locator('.saved-filter-theme[data-filter-theme="AGE"]')
+                        if age_heading.get_attribute("aria-expanded") == "false":
+                            age_heading.click()
+                        page.locator('.saved-filter-option[data-filter-theme="AGE"]').click()
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.locator("#sidebarFavouriteAddBtn").click()
+                        page.locator("#sidebarFavouriteNameInput").fill("Map metric filter")
+                        page.locator('[data-favourite-scope-option="metrics_filter"]').click()
+                        page.locator('[data-favourite-action="save-add"]').click()
+                        page.wait_for_function(
+                            """() => [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")]
+                              .some((node) => node.textContent.trim() === "Map metric filter"
+                                && node.closest(".saved-favourite-option")?.querySelector(".favourite-detail")?.textContent.trim() === "Metrics + filter")""",
+                            timeout=10_000,
+                        )
+                        metric_filter_id = page.evaluate(
+                            """
+                            () => [...document.querySelectorAll(".saved-favourite-option")]
+                              .find((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Map metric filter")
+                              ?.dataset.favouriteId || ""
+                            """
+                        )
+                        self.assertTrue(metric_filter_id)
+                        page.locator("#lineBarTool").click()
+                        page.locator("#filterRowClearBtn").click()
+                        page.locator(f'.saved-favourite-option[data-favourite-id="{metric_filter_id}"]').click()
+                        page.wait_for_function(
+                            """() => document.querySelector("#lineBarTool")?.classList.contains("active")
+                              && document.querySelector("#filterInput")?.value === "vehicle_age >= 3" """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+                self.assertTrue(favourites_path.exists())
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_favourite_keeps_chart_format_while_next_view_loads(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -3282,11 +3482,13 @@ COPY (
                             route.continue_()
 
                         page.route("**/api/chart", handle_chart_route)
-                        page.locator("#lineBarFavouriteSelect").select_option("ratio-view")
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.locator('.saved-favourite-option[data-favourite-id="ratio-view"]').wait_for(timeout=10_000)
+                        page.locator('.saved-favourite-option[data-favourite-id="ratio-view"]').click()
                         page.wait_for_function(
                             """
                             () => document.querySelector("#actualNumerator")?.value === "ratio"
-                              && document.querySelector("#kpiSelectedMeta")?.textContent === "Ratio"
+                              && document.querySelector("#favouritesSelectedMeta")?.textContent === "Ratio view"
                             """,
                             timeout=10_000,
                         )
@@ -3500,12 +3702,13 @@ COPY (
                             '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                             timeout=10_000,
                         )
-                        page.locator("#lineBarFavouriteSelect").wait_for(timeout=10_000)
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.locator('.saved-favourite-option[data-favourite-id="saved-ratio-view"]').wait_for(timeout=10_000)
                         with page.expect_request(
                             lambda request: request.url.endswith("/api/chart") and "gbm_to_glm_ratio" in (request.post_data or ""),
                             timeout=10_000,
                         ) as chart_request_info:
-                            page.locator("#lineBarFavouriteSelect").select_option("saved-ratio-view")
+                            page.locator('.saved-favourite-option[data-favourite-id="saved-ratio-view"]').click()
                         page.wait_for_function(
                             """
                             () => document.querySelector('#featureList .feature.active')?.dataset.sourceId === 'model_ratio:gbm_to_glm_ratio:active-gbm:active-glm'
@@ -4216,6 +4419,7 @@ COPY (
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
             section_buttons = {
+                "favourites": "#favouritesCollapseBtn",
                 "kpi": "#kpiCollapseBtn",
                 "gbm": "#gbmModelCollapseBtn",
                 "glm": "#glmModelCollapseBtn",
@@ -4223,6 +4427,7 @@ COPY (
             }
 
             section_bodies = {
+                "favourites": "#favouritesSelect",
                 "kpi": "#kpiSelect",
                 "gbm": "#gbmModelSelect",
                 "glm": "#glmModelSelect",
@@ -4257,7 +4462,7 @@ COPY (
                         """
                         () => {
                           const sections = [...document.querySelectorAll("[data-sidebar-section]")].map((section) => section.dataset.sidebarSection);
-                          return sections.join("|") === "kpi|gbm|glm|filter";
+                          return sections.join("|") === "favourites|kpi|gbm|glm|filter";
                         }
                         """
                     )
@@ -4292,6 +4497,8 @@ COPY (
                 assert_sidebar_headers_visible()
                 wait_accordion_state(None)
 
+                page.locator("#favouritesCollapseBtn").click()
+                wait_accordion_state("favourites")
                 page.locator("#kpiCollapseBtn").click()
                 wait_accordion_state("kpi")
                 page.locator("#glmModelCollapseBtn").click()
@@ -4329,6 +4536,7 @@ COPY (
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
                 self.assertFalse(page.locator("#sidebarResizer").is_visible())
+                self.assertFalse(page.locator("#favouritesCollapseBtn").is_visible())
                 self.assertFalse(page.locator("#kpiCollapseBtn").is_visible())
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
@@ -4355,6 +4563,7 @@ COPY (
                 self.assertFalse(page.locator("#gbmModelCollapseBtn").is_visible())
                 self.assertFalse(page.locator("#glmModelCollapseBtn").is_visible())
                 self.assertTrue(page.locator("#filterCollapseBtn").is_visible())
+                self.assertTrue(page.locator("#favouritesCollapseBtn").is_visible())
                 self.assertTrue(page.locator("#kpiCollapseBtn").is_visible())
                 self.assertEqual(page.locator("#filterCollapseBtn").get_attribute("aria-expanded"), "false")
                 self.assertTrue(
@@ -4364,7 +4573,7 @@ COPY (
                           const sections = [...document.querySelectorAll("[data-sidebar-section]")]
                             .filter((section) => section.offsetParent !== null)
                             .map((section) => section.dataset.sidebarSection);
-                          return sections.join("|") === "kpi|filter";
+                          return sections.join("|") === "favourites|kpi|filter";
                         }
                         """
                     )
@@ -9074,7 +9283,7 @@ COPY (
                 self.assertTrue(page.locator("#histogramTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
-                self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
+                self.assertFalse(page.locator(".sidebar-favourites-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#sidebarVersion").is_visible())
                 self.assertTrue(page.locator("#collapsedSidebarVersion").is_visible())
@@ -9089,7 +9298,7 @@ COPY (
                 self.assertTrue(page.locator("#histogramTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
-                self.assertFalse(page.locator(".sidebar-kpi-section").is_visible())
+                self.assertFalse(page.locator(".sidebar-favourites-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#sidebarVersion").is_visible())
                 self.assertTrue(page.locator("#collapsedSidebarVersion").is_visible())
@@ -9514,7 +9723,7 @@ COPY (
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
-                self.assertTrue(page.locator(".sidebar-kpi-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-favourites-section").is_visible())
                 self.assertTrue(page.locator(".sidebar-filter-section").is_visible())
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
@@ -11262,7 +11471,7 @@ COPY (
                 gbm_top_after_error = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
                 self.assertLessEqual(abs(gbm_top_before - gbm_top_after_error), 1)
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
-                self.assertTrue(page.locator(".sidebar-kpi-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-favourites-section").is_visible())
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertTrue(page.locator(".sidebar-filter-section").is_visible())
@@ -12151,7 +12360,8 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#lineBarFavouriteAddBtn").wait_for(timeout=10_000)
+                page.locator("#favouritesCollapseBtn").click()
+                page.locator("#sidebarFavouriteAddBtn").wait_for(timeout=10_000)
 
                 page.locator("#filterCollapseBtn").click()
                 age_heading = page.locator('.saved-filter-theme[data-filter-theme="AGE"]')
@@ -12170,24 +12380,36 @@ COPY (
 
                 chart_box_before = page.locator("#chart").bounding_box()
                 self.assertIsNotNone(chart_box_before)
-                page.locator("#lineBarFavouriteAddBtn").click()
-                page.locator("#lineBarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.locator("#favouritesCollapseBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                    timeout=10_000,
+                )
+                page.locator("#sidebarFavouriteAddBtn").click()
+                page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """() => document.querySelector(".sidebar-favourite-scope-title")?.textContent.trim() === "Scope"
+                      && document.querySelector('input[name="sidebarFavouriteScope"][value="line_bar_view"]')?.checked
+                      && [...document.querySelectorAll(".sidebar-favourite-scope-option span")]
+                        .map((node) => node.textContent.trim()).join("|") === "Line/Bar view|Metrics + filter|Metrics" """,
+                    timeout=10_000,
+                )
                 chart_box_after = page.locator("#chart").bounding_box()
                 self.assertIsNotNone(chart_box_after)
                 assert chart_box_before is not None and chart_box_after is not None
                 self.assertLessEqual(abs(chart_box_after["y"] - chart_box_before["y"]), 1)
-                page.locator("#lineBarFavouriteNameInput").fill("Older view")
+                page.locator("#sidebarFavouriteNameInput").fill("Older view")
                 page.locator('[data-favourite-action="save-add"]').click()
                 page.wait_for_function(
-                    """() => document.querySelector("#lineBarFavouriteSelect")?.selectedOptions[0]?.textContent.trim() === "Older view" """,
+                    """() => [...document.querySelectorAll(".saved-favourite-option")]
+                      .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Older view"
+                        && button.querySelector(".favourite-detail")?.textContent.trim() === "Line/Bar view"
+                        && button.classList.contains("active")) """,
                     timeout=10_000,
                 )
                 older_id = page.eval_on_selector(
-                    "#lineBarFavouriteSelect",
-                    """select => {
-                      const option = [...select.options].find((item) => item.textContent.trim() === "Older view");
-                      return option ? option.value : "";
-                    }""",
+                    ".saved-favourite-option.active",
+                    'button => button?.dataset.favouriteId || ""',
                 )
                 self.assertTrue(older_id)
 
@@ -12195,7 +12417,7 @@ COPY (
                 page.locator("#expectedSearch").fill("expected")
                 page.locator('#expectedList .feature[data-value="expected"]').click()
                 self.assertEqual(page.locator("#filterInput").input_value(), "")
-                page.locator("#lineBarFavouriteSelect").select_option(older_id)
+                page.locator(f'.saved-favourite-option[data-favourite-id="{older_id}"]').click()
                 page.wait_for_function(
                     """() => document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
                       && document.querySelector('.saved-filter-option[data-filter-theme="AGE"]')?.getAttribute("aria-selected") === "true"
@@ -12204,15 +12426,15 @@ COPY (
                     timeout=10_000,
                 )
 
-                page.locator("#lineBarFavouriteMenuBtn").click()
-                page.locator("#lineBarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
-                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.locator("#sidebarFavouriteMenuBtn").click()
+                page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.locator("#sidebarFavouriteMenuBtn").click()
                 page.wait_for_function(
-                    """() => document.querySelector("#lineBarFavouritePopover")?.hidden === true""",
+                    """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,
                 )
-                page.locator("#lineBarFavouriteMenuBtn").click()
-                page.locator("#lineBarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.locator("#sidebarFavouriteMenuBtn").click()
+                page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 self.assertTrue(page.locator('[data-favourite-action="move-up"]').is_disabled())
                 self.assertTrue(page.locator('[data-favourite-action="move-down"]').is_disabled())
                 first_row = page.locator(".line-bar-favourite-row").first
@@ -12228,21 +12450,21 @@ COPY (
                 )
                 rename_button.click()
                 page.wait_for_function(
-                    """() => [...document.querySelectorAll("#lineBarFavouriteSelect option")]
-                      .some((option) => option.textContent.trim() === "Renamed view")""",
+                    """() => [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")]
+                      .some((node) => node.textContent.trim() === "Renamed view")""",
                     timeout=10_000,
                 )
 
-                page.locator("#lineBarFavouriteAddBtn").click()
-                page.locator("#lineBarFavouriteNameInput").fill("Second view")
+                page.locator("#sidebarFavouriteAddBtn").click()
+                page.locator("#sidebarFavouriteNameInput").fill("Second view")
                 page.locator('[data-favourite-action="save-add"]').click()
                 page.wait_for_function(
-                    """() => [...document.querySelectorAll("#lineBarFavouriteSelect option")]
-                      .some((option) => option.textContent.trim() === "Second view")""",
+                    """() => [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")]
+                      .some((node) => node.textContent.trim() === "Second view")""",
                     timeout=10_000,
                 )
-                page.locator("#lineBarFavouriteMenuBtn").click()
-                page.locator("#lineBarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.locator("#sidebarFavouriteMenuBtn").click()
+                page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 move_up = page.locator('[data-favourite-action="move-up"]')
                 move_down = page.locator('[data-favourite-action="move-down"]')
                 self.assertTrue(move_up.is_disabled())
@@ -12260,12 +12482,12 @@ COPY (
                 move_down.click()
                 page.wait_for_function(
                     """() => {
-                      const labels = [...document.querySelectorAll("#lineBarFavouriteSelect option")].map((option) => option.textContent.trim());
+                      const labels = [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")].map((node) => node.textContent.trim());
                       const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
                       const up = document.querySelector('[data-favourite-action="move-up"]');
                       const down = document.querySelector('[data-favourite-action="move-down"]');
-                      return labels[1] === "Second view" &&
-                        labels[2] === "Renamed view" &&
+                      return labels[0] === "Second view" &&
+                        labels[1] === "Renamed view" &&
                         rows[1]?.classList.contains("selected") &&
                         rows[1]?.querySelector("input") === document.activeElement &&
                         up && !up.disabled &&
@@ -12276,12 +12498,12 @@ COPY (
                 move_up.click()
                 page.wait_for_function(
                     """() => {
-                      const labels = [...document.querySelectorAll("#lineBarFavouriteSelect option")].map((option) => option.textContent.trim());
+                      const labels = [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")].map((node) => node.textContent.trim());
                       const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
                       const up = document.querySelector('[data-favourite-action="move-up"]');
                       const down = document.querySelector('[data-favourite-action="move-down"]');
-                      return labels[1] === "Renamed view" &&
-                        labels[2] === "Second view" &&
+                      return labels[0] === "Renamed view" &&
+                        labels[1] === "Second view" &&
                         rows[0]?.classList.contains("selected") &&
                         rows[0]?.querySelector("input") === document.activeElement &&
                         up?.disabled &&
@@ -12289,9 +12511,9 @@ COPY (
                     }""",
                     timeout=10_000,
                 )
-                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.locator("#sidebarFavouriteMenuBtn").click()
                 page.wait_for_function(
-                    """() => document.querySelector("#lineBarFavouritePopover")?.hidden === true""",
+                    """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,
                 )
 
@@ -12314,40 +12536,148 @@ COPY (
                 self.assertEqual(startup_errors, [])
                 startup_page.close()
 
-                page.locator("#lineBarFavouriteMenuBtn").click()
+                page.locator("#sidebarFavouriteMenuBtn").click()
                 page.locator('.line-bar-favourite-row [data-favourite-action="delete"]').first.click()
                 page.wait_for_function(
-                    """() => [...document.querySelectorAll("#lineBarFavouriteSelect option")]
-                      .filter((option) => option.value).length === 1""",
+                    """() => document.querySelectorAll(".saved-favourite-option").length === 1""",
+                    timeout=10_000,
+                )
+                page.locator("#sidebarFavouriteMenuBtn").click()
+                page.wait_for_function(
+                    """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,
                 )
                 remaining_favourite = page.eval_on_selector(
-                    "#lineBarFavouriteSelect",
-                    """select => {
-                      const option = [...select.options].find((item) => item.value);
-                      return option ? { id: option.value, name: option.textContent.trim() } : { id: "", name: "" };
-                    }""",
+                    ".saved-favourite-option",
+                    """button => ({
+                      id: button?.dataset.favouriteId || "",
+                      name: button?.querySelector(".saved-filter-name")?.textContent.trim() || "",
+                    })""",
                 )
                 self.assertTrue(remaining_favourite["id"])
-                page.locator("#lineBarFavouriteSelect").select_option(remaining_favourite["id"])
+                page.locator(f'.saved-favourite-option[data-favourite-id="{remaining_favourite["id"]}"]').click()
                 page.wait_for_function(
-                    """([id]) => document.querySelector("#lineBarFavouriteSelect")?.value === id""",
+                    """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")""",
                     arg=[remaining_favourite["id"]],
                     timeout=10_000,
                 )
                 page.locator('.segmented[data-control="labels"] button[data-value="bar"]').click()
                 page.wait_for_function(
-                    """() => {
-                      const select = document.querySelector("#lineBarFavouriteSelect");
-                      return select?.value === "" && select.selectedOptions[0]?.textContent.trim() === "Choose";
-                    }""",
+                    """() => !document.querySelector(".saved-favourite-option.active")""",
                     timeout=10_000,
                 )
-                page.locator("#lineBarFavouriteSelect").select_option(remaining_favourite["id"])
+                page.locator(f'.saved-favourite-option[data-favourite-id="{remaining_favourite["id"]}"]').click()
                 page.wait_for_function(
-                    """([id]) => document.querySelector("#lineBarFavouriteSelect")?.value === id
+                    """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
                       && document.querySelector('.segmented[data-control="labels"] button[data-value="none"]')?.classList.contains("active")""",
                     arg=[remaining_favourite["id"]],
+                    timeout=10_000,
+                )
+
+                page.locator("#sidebarFavouriteAddBtn").click()
+                page.locator("#sidebarFavouriteNameInput").fill("Metric only")
+                page.locator('[data-favourite-scope-option="metrics"]').click()
+                page.wait_for_function(
+                    """() => document.querySelector('input[name="sidebarFavouriteScope"][value="metrics"]')?.checked
+                      && document.querySelector('[data-favourite-scope-option="metrics"]')?.classList.contains("active")""",
+                    timeout=10_000,
+                )
+                page.locator('[data-favourite-action="save-add"]').click()
+                page.wait_for_function(
+                    """() => [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")]
+                      .some((node) => node.textContent.trim() === "Metric only"
+                        && node.closest(".saved-favourite-option")?.querySelector(".favourite-detail")?.textContent.trim() === "Metrics")""",
+                    timeout=10_000,
+                )
+                metric_only_id = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll(".saved-favourite-option")]
+                      .find((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Metric only")
+                      ?.dataset.favouriteId || ""
+                    """
+                )
+                self.assertTrue(metric_only_id)
+                page.locator("#filterRowClearBtn").click()
+                page.locator("#actualNumerator").select_option("value")
+                page.locator("#denominator").select_option("__none__")
+                page.locator(f'.saved-favourite-option[data-favourite-id="{metric_only_id}"]').click()
+                page.wait_for_function(
+                    """() => document.querySelector("#actualNumerator")?.value === "price"
+                      && document.querySelector("#denominator")?.value === "value"
+                      && document.querySelector("#filterInput")?.value === "" """,
+                    timeout=10_000,
+                )
+
+                if page.locator("#filterCollapseBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#filterCollapseBtn").click()
+                age_row.click()
+                page.locator("#favouritesCollapseBtn").click()
+                page.locator("#sidebarFavouriteAddBtn").click()
+                page.locator("#sidebarFavouriteNameInput").fill("Metric filter")
+                page.locator('[data-favourite-scope-option="metrics_filter"]').click()
+                page.wait_for_function(
+                    """() => document.querySelector('input[name="sidebarFavouriteScope"][value="metrics_filter"]')?.checked
+                      && document.querySelector('[data-favourite-scope-option="metrics_filter"]')?.classList.contains("active")""",
+                    timeout=10_000,
+                )
+                page.locator('[data-favourite-action="save-add"]').click()
+                page.wait_for_function(
+                    """() => [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")]
+                      .some((node) => node.textContent.trim() === "Metric filter"
+                        && node.closest(".saved-favourite-option")?.querySelector(".favourite-detail")?.textContent.trim() === "Metrics + filter")""",
+                    timeout=10_000,
+                )
+                metric_filter_id = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll(".saved-favourite-option")]
+                      .find((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Metric filter")
+                      ?.dataset.favouriteId || ""
+                    """
+                )
+                self.assertTrue(metric_filter_id)
+                page.locator("#filterRowClearBtn").click()
+                page.locator("#tableTab").click()
+                page.locator("#tableWrap:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#sidebarFavouriteAddBtn").click()
+                page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """() => document.querySelector('input[name="sidebarFavouriteScope"][value="line_bar_view"]')?.checked
+                      && [...document.querySelectorAll(".sidebar-favourite-scope-option span")]
+                        .map((node) => node.textContent.trim()).join("|") === "Table view|Metrics + filter|Metrics" """,
+                    timeout=10_000,
+                )
+                page.locator("#sidebarFavouriteNameInput").fill("Table favourite")
+                page.locator('[data-favourite-action="save-add"]').click()
+                page.wait_for_function(
+                    """() => [...document.querySelectorAll(".saved-favourite-option")]
+                      .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Table favourite"
+                        && button.querySelector(".favourite-detail")?.textContent.trim() === "Table view"
+                        && button.classList.contains("active")) """,
+                    timeout=10_000,
+                )
+                table_favourite_id = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll(".saved-favourite-option")]
+                      .find((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Table favourite")
+                      ?.dataset.favouriteId || ""
+                    """
+                )
+                self.assertTrue(table_favourite_id)
+                page.locator("#chartTab").click()
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.locator(f'.saved-favourite-option[data-favourite-id="{table_favourite_id}"]').click()
+                page.wait_for_function(
+                    """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
+                      && !document.querySelector("#tableWrap")?.classList.contains("hidden")
+                      && document.querySelector("#tableTab")?.classList.contains("active") """,
+                    arg=[table_favourite_id],
+                    timeout=10_000,
+                )
+                page.locator(f'.saved-favourite-option[data-favourite-id="{metric_filter_id}"]').click()
+                page.wait_for_function(
+                    """() => document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
+                      && !document.querySelector("#tableWrap")?.classList.contains("hidden")
+                      && document.querySelector("#lineBarTool")?.classList.contains("active")""",
                     timeout=10_000,
                 )
                 self.assertEqual(dialogs, [])

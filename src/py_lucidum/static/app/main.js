@@ -64,6 +64,24 @@
       const MODEL_RATIO_SOURCE_RE = /^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/;
       const GLM_PREDICTION_SOURCE_RE = /^glm:[A-Za-z0-9_.-]+:predictions$/;
       const GBM_PREDICTION_SOURCE_RE = /^gbm:[A-Za-z0-9_.-]+:predictions$/;
+      const FAVOURITE_SCOPES = new Set(["metrics", "metrics_filter", "line_bar_view", "map_view"]);
+      const DEFAULT_FAVOURITE_SCOPE = "line_bar_view";
+      const FAVOURITE_SCOPE_LABELS = {
+        metrics: "Metrics",
+        metrics_filter: "Metrics + filter",
+        line_bar_view: "Line/Bar view",
+        map_view: "Map view",
+      };
+      const LINE_BAR_FAVOURITE_SCOPE_OPTIONS = [
+        ["line_bar_view", FAVOURITE_SCOPE_LABELS.line_bar_view],
+        ["metrics_filter", FAVOURITE_SCOPE_LABELS.metrics_filter],
+        ["metrics", FAVOURITE_SCOPE_LABELS.metrics],
+      ];
+      const MAP_FAVOURITE_SCOPE_OPTIONS = [
+        ["map_view", FAVOURITE_SCOPE_LABELS.map_view],
+        ["metrics_filter", FAVOURITE_SCOPE_LABELS.metrics_filter],
+        ["metrics", FAVOURITE_SCOPE_LABELS.metrics],
+      ];
       const state = {
         schema: null,
         x: null,
@@ -153,6 +171,7 @@
         mapStartupFitDone: false,
         renderedMapLevel: null,
         mapView: null,
+        mapFavouriteRestoreInProgress: false,
         mapViewportSyncFrame: null,
         restoringMapView: false,
         pendingMapZoom: null,
@@ -224,6 +243,12 @@
       let chartFeatureControlsExpandedHeight = null;
       let chartExpectedStartupCollapseApplied = false;
       let mobileLayoutActive = null;
+      let lineBarFavourites = [];
+      let lineBarFavouritesLoaded = false;
+      let favouritePopoverMode = "manage";
+      let favouriteStartupApplied = false;
+      let selectedFavouriteManageId = "";
+      let favouriteLoadError = "";
 
       async function ensureDatasetViewerTool() {
         if (!toolEnabled("dataset_viewer")) return null;
@@ -324,9 +349,7 @@
         getCss,
         bandSteps: BAND_STEPS,
         refreshLineBar,
-        captureLineBarFavouriteView,
-        applyLineBarFavouriteView,
-        startupLineBarFavourite: () => requestedDefault("line_bar_favourite"),
+        clearActiveFavouriteSelection: () => clearActiveFavouriteSelectionForScope("line_bar_view"),
       });
       const histogramTool = createHistogramTool({
         api,
@@ -377,6 +400,7 @@
         columnExists,
         numericColumnExists,
         refreshUkMap,
+        clearActiveFavouriteSelection: () => clearActiveFavouriteSelectionForScope("map_view"),
       });
       const glmTool = createGlmTool({
         api,
@@ -1412,6 +1436,10 @@
         if (previousTool === "column_profile" && tool !== "column_profile") columnProfileTool.closeMenus();
         if (previousTool === "specs" && tool !== "specs") specificationsTool.closeMenus();
         state.tool = tool;
+        if (previousTool && previousTool !== tool) {
+          if (previousTool === "line_bar") clearActiveFavouriteSelectionForScope("line_bar_view");
+          if (previousTool === "uk_map") clearActiveFavouriteSelectionForScope("map_view");
+        }
         el("visualArea").classList.remove("startup-mode");
         el("datasetViewerTool").classList.toggle("active", tool === "dataset_viewer");
         el("profileTool").classList.toggle("active", tool === "column_profile");
@@ -1719,6 +1747,7 @@
       }
 
       const SIDEBAR_ACCORDION_SECTIONS = {
+        favourites: { sectionSelector: ".sidebar-favourites-section", buttonId: "favouritesCollapseBtn", label: "FAVOURITES" },
         kpi: { sectionSelector: ".sidebar-kpi-section", buttonId: "kpiCollapseBtn", label: "KPIs" },
         gbm: { sectionSelector: ".gbm-sidebar-panel", buttonId: "gbmModelCollapseBtn", label: "GBMs" },
         glm: { sectionSelector: ".glm-sidebar-panel", buttonId: "glmModelCollapseBtn", label: "GLMs" },
@@ -2066,6 +2095,10 @@
         return Boolean(name && numericColumns().some((col) => col.name === name));
       }
 
+      function datasetNumericColumnExists(name) {
+        return Boolean(name && numericColumnsForSource("dataset").some((col) => col.name === name));
+      }
+
       function selectedExpectedIsPrediction() {
         return expectedSelections()[0]?.metricKind === "prediction";
       }
@@ -2216,6 +2249,9 @@
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
+        syncKpiSelectionFromMetrics();
+        renderKpis();
+        renderFavourites();
         await refreshMetricSummary({ force: true });
       }
 
@@ -2240,6 +2276,8 @@
         renderSavedFilters();
         if (filtersUnchanged) restoreSavedFilterSelection(previousSavedFilterSelection);
         renderKpis();
+        renderFavourites();
+        await refreshFavourites();
         syncKpiSelectionFromMetrics();
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
@@ -2288,8 +2326,8 @@
           }))
           .filter((kpi) => (
             kpi.name &&
-            numericColumnExists(kpi.actual) &&
-            (kpi.denominator === "__none__" || numericColumnExists(kpi.denominator)) &&
+            datasetNumericColumnExists(kpi.actual) &&
+            (kpi.denominator === "__none__" || datasetNumericColumnExists(kpi.denominator)) &&
             Number.isInteger(kpi.decimals) &&
             kpi.decimals >= 0 &&
             ["number", "currency", "percent"].includes(kpi.format)
@@ -2305,7 +2343,8 @@
       function setActiveKpiState(kpi) {
         state.activeKpiKey = kpi ? kpiKey(kpi) : "";
         state.activeKpiFormat = kpi ? { decimals: kpi.decimals, format: kpi.format } : null;
-        el("kpiSelectedMeta").textContent = kpi ? kpi.name : "";
+        const meta = el("kpiSelectedMeta");
+        if (meta) meta.textContent = kpi ? kpi.name : "";
       }
 
       function syncKpiSelectionFromMetrics() {
@@ -2314,15 +2353,144 @@
       }
 
       function syncKpiActiveRows() {
-        el("kpiSelect").querySelectorAll(".kpi-option").forEach((button) => {
+        const list = el("kpiSelect");
+        if (!list) return;
+        list.querySelectorAll(".kpi-option").forEach((button) => {
           const active = button.dataset.kpiKey === state.activeKpiKey;
           button.classList.toggle("active", active);
           button.setAttribute("aria-selected", String(active));
         });
       }
 
+      function favouriteScope(favourite) {
+        const scope = String(favourite?.view?.scope || "").trim();
+        return FAVOURITE_SCOPES.has(scope) ? scope : DEFAULT_FAVOURITE_SCOPE;
+      }
+
+      function favouriteScopeLabel(scope) {
+        return FAVOURITE_SCOPE_LABELS[scope] || FAVOURITE_SCOPE_LABELS[DEFAULT_FAVOURITE_SCOPE];
+      }
+
+      function lineBarCurrentViewScopeLabel() {
+        return state.tool === "line_bar" && state.view === "table" ? "Table view" : FAVOURITE_SCOPE_LABELS.line_bar_view;
+      }
+
+      function favouriteTypeLabel(favourite) {
+        const scope = favouriteScope(favourite);
+        if (scope === "line_bar_view" && favourite?.view?.view === "table") return "Table view";
+        return favouriteScopeLabel(scope);
+      }
+
+      function favouriteScopeIncludesChange(scope, change) {
+        if (change === "metrics") return true;
+        if (change === "filter") return scope === "metrics_filter" || scope === "line_bar_view" || scope === "map_view";
+        if (change === "line_bar_view") return scope === "line_bar_view";
+        if (change === "map_view") return scope === "map_view";
+        return false;
+      }
+
+      function favouriteById(id) {
+        return lineBarFavourites.find((favourite) => favourite.id === id) || null;
+      }
+
+      function activeSavedFavourite() {
+        return favouriteById(state.activeLineBarFavouriteId);
+      }
+
+      function clearActiveFavouriteSelectionForScope(change) {
+        const favourite = activeSavedFavourite();
+        if (!favourite || !favouriteScopeIncludesChange(favouriteScope(favourite), change)) return false;
+        state.activeLineBarFavouriteId = "";
+        renderFavourites();
+        return true;
+      }
+
+      function favouriteByStartupKey(key) {
+        const target = String(key || "").trim();
+        if (!target) return null;
+        const byId = favouriteById(target);
+        if (byId) return byId;
+        const folded = target.toLowerCase();
+        return lineBarFavourites.find((favourite) => String(favourite.name || "").toLowerCase() === folded) || null;
+      }
+
+      function favouriteValidationErrors(favourite) {
+        const errors = favourite?.validation?.errors;
+        return Array.isArray(errors) ? errors.filter(Boolean) : [];
+      }
+
+      function favouriteValidationWarnings(favourite) {
+        const warnings = favourite?.validation?.warnings;
+        return Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+      }
+
+      function favouriteMessage(favourite) {
+        return [...favouriteValidationErrors(favourite), ...favouriteValidationWarnings(favourite)].join(" ");
+      }
+
+      function syncFavouriteHeaderMeta() {
+        const meta = el("favouritesSelectedMeta");
+        if (!meta) return;
+        const favourite = activeSavedFavourite();
+        meta.textContent = favourite ? favourite.name || "" : "";
+      }
+
+      function syncFavouriteActiveRows() {
+        const list = el("favouritesSelect");
+        if (!list) return;
+        list.querySelectorAll(".saved-favourite-option").forEach((button) => {
+          const active = button.dataset.favouriteId === state.activeLineBarFavouriteId;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-selected", String(active));
+        });
+        syncFavouriteHeaderMeta();
+      }
+
+      function renderFavourites() {
+        const list = el("favouritesSelect");
+        if (!list) return;
+        list.innerHTML = "";
+        if (favouriteLoadError) {
+          const message = document.createElement("div");
+          message.className = "favourites-list-message";
+          message.textContent = favouriteLoadError;
+          list.append(message);
+        }
+        if (!lineBarFavourites.length) {
+          if (!favouriteLoadError) {
+            const empty = document.createElement("div");
+            empty.className = "favourites-list-message";
+            empty.textContent = "No favourites";
+            list.append(empty);
+          }
+          syncFavouriteHeaderMeta();
+          syncFavouriteActionButtons();
+          return;
+        }
+        for (const favourite of lineBarFavourites) {
+          const scope = favouriteScope(favourite);
+          const invalid = favouriteValidationErrors(favourite).length > 0;
+          const active = favourite.id === state.activeLineBarFavouriteId;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `feature favourite-option saved-favourite-option${active ? " active" : ""}${invalid ? " favourite-option-invalid" : ""}`;
+          button.dataset.favouriteId = favourite.id;
+          button.dataset.favouriteScope = scope;
+          button.setAttribute("role", "option");
+          button.setAttribute("aria-selected", String(active));
+          if (favouriteMessage(favourite)) button.title = favouriteMessage(favourite);
+          const suffix = invalid ? " (invalid)" : "";
+          button.innerHTML = `<span class="saved-filter-name">${escapeHtml(String(favourite.name || "") + suffix)}</span><span class="favourite-detail">${escapeHtml(favouriteTypeLabel(favourite))}</span>`;
+          button.addEventListener("click", () => applySavedFavourite(favourite, { refresh: true }));
+          list.append(button);
+        }
+        syncFavouriteHeaderMeta();
+        syncFavouriteActionButtons();
+      }
+
       function renderKpis() {
         const list = el("kpiSelect");
+        if (!list) return;
         const kpis = availableKpis();
         const availableGroups = new Set(kpis.map((kpi) => kpi.group));
         const selected = selectedKpiForCurrentMetric();
@@ -2389,20 +2557,477 @@
         });
       }
 
+      function applyMetricValues(actualValue, actualSource, denominatorValue) {
+        const previousActual = el("actualNumerator").value;
+        const previousActualSource = actualSelectionSourceId();
+        const previousDenominator = normaliseKpiDenominator(el("denominator").value);
+        const resolvedActualSource = resolveFavouriteSourceId(actualValue, actualSource || state.source || "dataset");
+        if (!setActualSelection(actualValue, resolvedActualSource)) {
+          if (!setActualSelection(actualValue)) chooseFirstActualSelection();
+        }
+        const selectedActual = el("actualNumerator").value;
+        const selectedActualSource = actualSelectionSourceId();
+        const sourceChanged = syncActualSourceFromSelection();
+        if (sourceChanged) {
+          syncControlsForSourceChange({ actualValue: selectedActual, actualSource: selectedActualSource });
+        }
+        const nextDenominator = normaliseKpiDenominator(denominatorValue);
+        el("denominator").value = numericColumnExists(nextDenominator) ? nextDenominator : "__none__";
+        syncKpiSelectionFromMetrics();
+        return previousActual !== el("actualNumerator").value
+          || previousActualSource !== actualSelectionSourceId()
+          || previousDenominator !== normaliseKpiDenominator(el("denominator").value);
+      }
+
       function selectKpi(kpi) {
-        const actual = el("actualNumerator");
-        const denominator = el("denominator");
-        const nextDenominator = normaliseKpiDenominator(kpi.denominator);
-        const changed = actual.value !== kpi.actual || denominator.value !== nextDenominator;
-        actual.value = kpi.actual;
-        denominator.value = nextDenominator;
+        const changed = applyMetricValues(kpi.actual, "dataset", kpi.denominator);
         setActiveKpiState(kpi);
-        renderKpis();
+        syncKpiActiveRows();
+        if (changed) clearActiveFavouriteSelectionForScope("metrics");
         refreshMetricSummary();
         if (changed) {
-          lineBarTool.clearActiveFavouriteSelection();
           refreshActiveToolForMetricChange();
         }
+      }
+
+      function applyFavouriteMetricState(favourite) {
+        const view = favourite?.view || {};
+        const actual = view.actual && typeof view.actual === "object" ? view.actual : {};
+        return applyMetricValues(actual.value, actual.sourceId || view.source || "dataset", view.denominator || "__none__");
+      }
+
+      function applyFavouriteFilterState(view) {
+        state.filterSelectionMode = String(view.filterSelectionMode || "grouped");
+        state.filterOperator = String(view.filterOperator || "and");
+        state.activeFilter = String(view.filter || "").trim();
+        el("filterInput").value = state.activeFilter;
+        setFilterSelectionMode(state.filterSelectionMode, { apply: false });
+        syncFilterOperatorControl();
+        restoreSavedFilterRows(view.savedFilterRows);
+        invalidateLineBarDateBucketSuggestion();
+        clearProfileDetailCache();
+        syncActiveFilterLabels();
+      }
+
+      function waitForFrame() {
+        return new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+
+      async function finishMapFavouriteRestore() {
+        await waitForFrame();
+        await waitForFrame();
+        state.mapFavouriteRestoreInProgress = false;
+      }
+
+      async function applyMapFavouriteView(favourite) {
+        if (!toolEnabled("uk_map")) {
+          throw new Error("UK Mapping is not enabled for this app.");
+        }
+        const view = favourite?.view || {};
+        state.activeLineBarFavouriteId = favourite?.id || "";
+        applyFavouriteMetricState(favourite);
+        applyFavouriteFilterState(view);
+        state.mapFavouriteRestoreInProgress = true;
+        try {
+          ukMapTool.applyFavouriteState(view.map || {});
+          renderFavourites();
+          setTool("uk_map", false);
+          await refreshFilterRowCountMeta();
+          await refreshMetricSummary({ force: true });
+          await refreshUkMap({ force: true });
+        } finally {
+          await finishMapFavouriteRestore();
+        }
+      }
+
+      async function refreshFavourites(options = {}) {
+        try {
+          const data = await api("/api/line-bar/favourites");
+          lineBarFavourites = Array.isArray(data.favourites) ? data.favourites : [];
+          lineBarFavouritesLoaded = true;
+          favouriteLoadError = "";
+          renderFavourites();
+          if (options.renderPopover) renderFavouritePopover(favouritePopoverMode);
+          return lineBarFavourites;
+        } catch (error) {
+          lineBarFavourites = [];
+          lineBarFavouritesLoaded = false;
+          favouriteLoadError = error.message || "Favourites unavailable";
+          renderFavourites();
+          return [];
+        }
+      }
+
+      async function applySavedFavourite(favourite, options = {}) {
+        if (!favourite) return "";
+        const errors = favouriteValidationErrors(favourite);
+        if (errors.length) {
+          const message = `Favourite "${favourite.name}" cannot be used. ${errors.join(" ")}`;
+          setStatus(message, true);
+          renderFavourites();
+          return message;
+        }
+        const scope = favouriteScope(favourite);
+        try {
+          if (scope === "map_view") {
+            await applyMapFavouriteView(favourite);
+          } else if (scope === "line_bar_view") {
+            if (toolEnabled("line_bar")) setTool("line_bar", false);
+            await applyLineBarFavouriteView(favourite, options);
+          } else {
+            state.activeLineBarFavouriteId = favourite.id || "";
+            const metricsChanged = applyFavouriteMetricState(favourite);
+            if (scope === "metrics_filter") {
+              applyFavouriteFilterState(favourite.view || {});
+              await refreshFilterRowCountMeta();
+            }
+            renderFavourites();
+            await refreshMetricSummary({ force: true });
+            if (scope === "metrics_filter") {
+              await refreshActiveTool({ force: true });
+            } else if (metricsChanged) {
+              refreshActiveToolForMetricChange();
+            }
+          }
+          const warnings = favouriteValidationWarnings(favourite);
+          const message = warnings.length ? warnings.join(" ") : "";
+          setStatus(message, Boolean(message));
+          renderFavourites();
+          return "";
+        } catch (error) {
+          const message = error.message || "Favourite could not be restored.";
+          setStatus(message, true);
+          renderFavourites();
+          return message;
+        }
+      }
+
+      async function applyStartupFavourite() {
+        if (favouriteStartupApplied) return "";
+        favouriteStartupApplied = true;
+        const target = String(requestedDefault("line_bar_favourite") || "").trim();
+        if (!target) return "";
+        if (!lineBarFavouritesLoaded) await refreshFavourites();
+        const favourite = favouriteByStartupKey(target);
+        if (!favourite) {
+          const message = `Favourite not found: ${target}`;
+          setStatus(message, true);
+          return message;
+        }
+        return applySavedFavourite(favourite, { refresh: false });
+      }
+
+      function syncFavouriteActionButtons() {
+        const addButton = el("sidebarFavouriteAddBtn");
+        const menuButton = el("sidebarFavouriteMenuBtn");
+        if (addButton) addButton.disabled = !lineBarFavouritesLoaded;
+        if (menuButton) menuButton.disabled = !lineBarFavouritesLoaded;
+      }
+
+      function closeFavouritePopover() {
+        const popover = el("sidebarFavouritePopover");
+        if (!popover) return;
+        popover.hidden = true;
+        popover.innerHTML = "";
+        selectedFavouriteManageId = "";
+      }
+
+      function placeFavouritePopover() {
+        const control = el("sidebarFavouritesControls");
+        const popover = el("sidebarFavouritePopover");
+        if (!control || !popover) return;
+        const rect = control.getBoundingClientRect();
+        const top = Math.max(8, Math.round(rect.bottom + 6));
+        const popoverWidth = Math.min(520, Math.max(0, window.innerWidth - 32));
+        const left = Math.max(8, Math.min(Math.round(rect.left), Math.round(window.innerWidth - popoverWidth - 8)));
+        const maxHeight = Math.max(160, Math.round(window.innerHeight - top - 12));
+        popover.style.setProperty("--line-bar-favourite-popover-top", `${top}px`);
+        popover.style.setProperty("--line-bar-favourite-popover-left", `${left}px`);
+        popover.style.setProperty("--line-bar-favourite-popover-max-height", `${maxHeight}px`);
+      }
+
+      function openFavouritePopover(mode = "manage") {
+        favouritePopoverMode = mode;
+        if (mode === "manage") selectedFavouriteManageId = "";
+        renderFavouritePopover(mode);
+        const popover = el("sidebarFavouritePopover");
+        if (!popover) return;
+        placeFavouritePopover();
+        popover.hidden = false;
+        const input = popover.querySelector("input");
+        if (mode === "add" && input) input.focus();
+      }
+
+      function favouriteManageRowById(id) {
+        const popover = el("sidebarFavouritePopover");
+        if (!popover || !id) return null;
+        return [...popover.querySelectorAll(".line-bar-favourite-row")]
+          .find((row) => row.dataset.favouriteId === id) || null;
+      }
+
+      function selectedFavouriteManageIndex() {
+        if (!selectedFavouriteManageId) return -1;
+        return lineBarFavourites.findIndex((favourite) => favourite.id === selectedFavouriteManageId);
+      }
+
+      function focusSelectedFavouriteManageInput() {
+        const input = favouriteManageRowById(selectedFavouriteManageId)?.querySelector(".line-bar-favourite-name-input");
+        input?.focus();
+      }
+
+      function updateFavouriteMoveControls() {
+        const popover = el("sidebarFavouritePopover");
+        if (!popover) return;
+        if (selectedFavouriteManageIndex() < 0) selectedFavouriteManageId = "";
+        const selectedIndex = selectedFavouriteManageIndex();
+        popover.querySelectorAll(".line-bar-favourite-row").forEach((row) => {
+          const selected = Boolean(selectedFavouriteManageId) && row.dataset.favouriteId === selectedFavouriteManageId;
+          row.classList.toggle("selected", selected);
+          row.setAttribute("aria-selected", selected ? "true" : "false");
+        });
+        const upButton = popover.querySelector('[data-favourite-action="move-up"]');
+        const downButton = popover.querySelector('[data-favourite-action="move-down"]');
+        if (upButton) upButton.disabled = selectedIndex <= 0;
+        if (downButton) downButton.disabled = selectedIndex < 0 || selectedIndex >= lineBarFavourites.length - 1;
+      }
+
+      function selectFavouriteManageRow(row) {
+        const id = row?.dataset.favouriteId || "";
+        if (!id) return;
+        selectedFavouriteManageId = id;
+        updateFavouriteMoveControls();
+      }
+
+      function updateFavouriteRenameButton(row) {
+        const input = row?.querySelector(".line-bar-favourite-name-input");
+        const button = row?.querySelector('[data-favourite-action="rename"]');
+        if (!input || !button) return;
+        const original = String(row.dataset.originalName || "").trim();
+        const current = String(input.value || "").trim();
+        const dirty = Boolean(current) && current !== original;
+        button.disabled = !dirty;
+        button.classList.toggle("active", dirty);
+      }
+
+      function updateFavouriteAddButton() {
+        const input = el("sidebarFavouriteNameInput");
+        const button = el("sidebarFavouritePopover")?.querySelector('[data-favourite-action="save-add"]');
+        if (!input || !button) return;
+        const ready = Boolean(String(input.value || "").trim());
+        button.disabled = !ready;
+        button.classList.toggle("active", ready);
+      }
+
+      function defaultFavouriteAddScope() {
+        return state.tool === "uk_map" && toolEnabled("uk_map") ? "map_view" : DEFAULT_FAVOURITE_SCOPE;
+      }
+
+      function favouriteScopeOptionsForAdd() {
+        if (defaultFavouriteAddScope() === "map_view") return MAP_FAVOURITE_SCOPE_OPTIONS;
+        return LINE_BAR_FAVOURITE_SCOPE_OPTIONS.map(([scope, label]) => (
+          scope === "line_bar_view" ? [scope, lineBarCurrentViewScopeLabel()] : [scope, label]
+        ));
+      }
+
+      function renderFavouriteScopeOptions(selectedScope = defaultFavouriteAddScope()) {
+        return favouriteScopeOptionsForAdd()
+          .map(([scope, label]) => `
+            <label class="sidebar-favourite-scope-option${scope === selectedScope ? " active" : ""}" data-favourite-scope-option="${escapeHtml(scope)}">
+              <input class="sidebar-favourite-scope-radio" type="radio" name="sidebarFavouriteScope" value="${escapeHtml(scope)}"${scope === selectedScope ? " checked" : ""} />
+              <span>${escapeHtml(label)}</span>
+            </label>
+          `)
+          .join("");
+      }
+
+      function selectedFavouriteAddScope() {
+        const popover = el("sidebarFavouritePopover");
+        const fallback = defaultFavouriteAddScope();
+        const scope = String(popover?.dataset.favouriteScope || fallback);
+        return FAVOURITE_SCOPES.has(scope) ? scope : fallback;
+      }
+
+      function setFavouriteAddScope(scope) {
+        const popover = el("sidebarFavouritePopover");
+        if (!popover) return;
+        const fallback = defaultFavouriteAddScope();
+        const nextScope = FAVOURITE_SCOPES.has(scope) ? scope : fallback;
+        popover.dataset.favouriteScope = nextScope;
+        popover.querySelectorAll("[data-favourite-scope-option]").forEach((option) => {
+          const active = option.dataset.favouriteScopeOption === nextScope;
+          option.classList.toggle("active", active);
+          const input = option.querySelector('input[type="radio"]');
+          if (input) input.checked = active;
+        });
+      }
+
+      function renderFavouritePopover(mode = "manage", message = "", isError = false) {
+        const popover = el("sidebarFavouritePopover");
+        if (!popover) return;
+        if (mode === "add") {
+          const defaultScope = defaultFavouriteAddScope();
+          popover.dataset.favouriteScope = defaultScope;
+          popover.innerHTML = `
+            <div class="line-bar-favourite-popover-head sidebar-favourite-popover-head">
+              <button class="line-bar-favourite-action-button line-bar-favourite-save" type="button" data-favourite-action="save-add" aria-label="Save favourite" title="Save favourite" disabled>&#10003;</button>
+              <input id="sidebarFavouriteNameInput" class="line-bar-favourite-name-input" type="text" maxlength="120" placeholder="Name" />
+            </div>
+            <div class="sidebar-favourite-scope-row" role="radiogroup" aria-label="Favourite scope">
+              <div class="sidebar-favourite-scope-title">Scope</div>
+              <div class="sidebar-favourite-scope-options">
+                ${renderFavouriteScopeOptions(defaultScope)}
+              </div>
+            </div>
+            <div class="line-bar-favourite-popover-message${isError ? " error" : ""}">${escapeHtml(message)}</div>
+          `;
+          updateFavouriteAddButton();
+          placeFavouritePopover();
+          return;
+        }
+        if (selectedFavouriteManageId && !favouriteById(selectedFavouriteManageId)) selectedFavouriteManageId = "";
+        const rows = lineBarFavourites.map((favourite) => `
+          <div class="line-bar-favourite-row${favourite.id === selectedFavouriteManageId ? " selected" : ""}" data-favourite-id="${escapeHtml(favourite.id)}" data-original-name="${escapeHtml(favourite.name)}" aria-selected="${favourite.id === selectedFavouriteManageId ? "true" : "false"}">
+            <button class="line-bar-favourite-action-button line-bar-favourite-rename-button" type="button" data-favourite-action="rename" aria-label="Save name change" title="Save name change" disabled>&#10003;</button>
+            <input class="line-bar-favourite-name-input" type="text" maxlength="120" value="${escapeHtml(favourite.name)}" aria-label="Favourite name" />
+            <button class="line-bar-favourite-action-button line-bar-favourite-delete-button" type="button" data-favourite-action="delete" aria-label="Delete ${escapeHtml(favourite.name)}" title="Delete">&times;</button>
+          </div>
+          <div class="line-bar-favourite-row-scope">${escapeHtml(favouriteScopeLabel(favouriteScope(favourite)))}</div>
+          ${favouriteMessage(favourite) ? `<div class="line-bar-favourite-row-message">${escapeHtml(favouriteMessage(favourite))}</div>` : ""}
+        `).join("");
+        popover.innerHTML = `
+          <div class="line-bar-favourite-popover-list">${rows || '<div class="line-bar-favourite-empty">No favourites</div>'}</div>
+          <div class="line-bar-favourite-move-controls" aria-label="Move selected favourite">
+            <button class="line-bar-favourite-action-button" type="button" data-favourite-action="move-up" aria-label="Move selected favourite up" title="Move selected favourite up" disabled>&uarr;</button>
+            <button class="line-bar-favourite-action-button" type="button" data-favourite-action="move-down" aria-label="Move selected favourite down" title="Move selected favourite down" disabled>&darr;</button>
+          </div>
+          <div class="line-bar-favourite-popover-message${isError ? " error" : ""}">${escapeHtml(message)}</div>
+        `;
+        popover.querySelectorAll(".line-bar-favourite-row").forEach(updateFavouriteRenameButton);
+        updateFavouriteMoveControls();
+        placeFavouritePopover();
+      }
+
+      function favouritePopoverRow(button) {
+        return button.closest(".line-bar-favourite-row");
+      }
+
+      async function handleFavouritePopoverAction(action, button) {
+        try {
+          if (action === "save-add") {
+            const input = el("sidebarFavouriteNameInput");
+            const scope = selectedFavouriteAddScope();
+            const name = input?.value.trim() || "";
+            if (!name) return;
+            const view = captureLineBarFavouriteView({ scope });
+            const data = await api("/api/line-bar/favourites", { method: "POST", body: JSON.stringify({ name, view }) });
+            state.activeLineBarFavouriteId = data?.favourite?.id || "";
+            await refreshFavourites();
+            closeFavouritePopover();
+            return;
+          }
+          if (action === "move-up" || action === "move-down") {
+            const favouriteId = selectedFavouriteManageId;
+            const index = lineBarFavourites.findIndex((favourite) => favourite.id === favouriteId);
+            const nextIndex = action === "move-up" ? index - 1 : index + 1;
+            if (index < 0 || nextIndex < 0 || nextIndex >= lineBarFavourites.length) return;
+            const ordered = [...lineBarFavourites];
+            [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
+            await api("/api/line-bar/favourites/order", {
+              method: "PUT",
+              body: JSON.stringify({ ids: ordered.map((favourite) => favourite.id) }),
+            });
+            selectedFavouriteManageId = favouriteId;
+            await refreshFavourites({ renderPopover: true });
+            focusSelectedFavouriteManageInput();
+            return;
+          }
+          const row = favouritePopoverRow(button);
+          const favouriteId = row?.dataset.favouriteId || "";
+          if (!favouriteId) return;
+          if (action === "rename") {
+            const name = row.querySelector("input")?.value.trim() || "";
+            if (!name || button.disabled) return;
+            selectedFavouriteManageId = favouriteId;
+            await api(`/api/line-bar/favourites/${encodeURIComponent(favouriteId)}`, { method: "PATCH", body: JSON.stringify({ name }) });
+            await refreshFavourites({ renderPopover: true });
+            focusSelectedFavouriteManageInput();
+            return;
+          }
+          if (action === "delete") {
+            await api(`/api/line-bar/favourites/${encodeURIComponent(favouriteId)}`, { method: "DELETE" });
+            if (state.activeLineBarFavouriteId === favouriteId) state.activeLineBarFavouriteId = "";
+            if (selectedFavouriteManageId === favouriteId) selectedFavouriteManageId = "";
+            await refreshFavourites({ renderPopover: true });
+          }
+        } catch (error) {
+          renderFavouritePopover(favouritePopoverMode, error.message || "Favourite action failed", true);
+        }
+      }
+
+      function bindFavouriteControls() {
+        el("sidebarFavouriteAddBtn")?.addEventListener("click", () => openFavouritePopover("add"));
+        el("sidebarFavouriteMenuBtn")?.addEventListener("click", () => {
+          const popover = el("sidebarFavouritePopover");
+          if (popover && !popover.hidden && favouritePopoverMode === "manage") {
+            closeFavouritePopover();
+            return;
+          }
+          openFavouritePopover("manage");
+        });
+        el("sidebarFavouritePopover")?.addEventListener("click", (event) => {
+          const scopeButton = event.target.closest("[data-favourite-scope-option]");
+          if (scopeButton) {
+            setFavouriteAddScope(scopeButton.dataset.favouriteScopeOption || defaultFavouriteAddScope());
+            return;
+          }
+          const button = event.target.closest("button[data-favourite-action]");
+          if (!button) return;
+          handleFavouritePopoverAction(button.dataset.favouriteAction, button);
+        });
+        el("sidebarFavouritePopover")?.addEventListener("focusin", (event) => {
+          const row = event.target.closest?.(".line-bar-favourite-row");
+          if (!row || !event.target.classList?.contains("line-bar-favourite-name-input")) return;
+          selectFavouriteManageRow(row);
+        });
+        el("sidebarFavouritePopover")?.addEventListener("input", (event) => {
+          if (event.target.id === "sidebarFavouriteNameInput") {
+            updateFavouriteAddButton();
+            return;
+          }
+          if (event.target.name === "sidebarFavouriteScope") {
+            setFavouriteAddScope(event.target.value || defaultFavouriteAddScope());
+            return;
+          }
+          const row = event.target.closest(".line-bar-favourite-row");
+          if (!row) return;
+          selectFavouriteManageRow(row);
+          updateFavouriteRenameButton(row);
+        });
+        el("sidebarFavouritePopover")?.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            closeFavouritePopover();
+          }
+          if (event.key === "Enter" && favouritePopoverMode === "add" && event.target.id === "sidebarFavouriteNameInput") {
+            const saveButton = el("sidebarFavouritePopover").querySelector('[data-favourite-action="save-add"]');
+            saveButton?.click();
+          }
+        });
+        document.addEventListener("click", (event) => {
+          const section = document.querySelector(".sidebar-favourites-section");
+          const popover = el("sidebarFavouritePopover");
+          if (!section || !popover || popover.hidden) return;
+          if (!section.contains(event.target)) closeFavouritePopover();
+        });
+        window.addEventListener("resize", () => {
+          const popover = el("sidebarFavouritePopover");
+          if (!popover || popover.hidden) return;
+          placeFavouritePopover();
+        });
+        el("appSidebar")?.addEventListener("scroll", () => {
+          const popover = el("sidebarFavouritePopover");
+          if (!popover || popover.hidden) return;
+          placeFavouritePopover();
+        });
       }
 
       function savedFilterSpecSignature(filters = state.schema?.filters || []) {
@@ -2630,10 +3255,13 @@
           : null;
       }
 
-      function captureLineBarFavouriteView() {
+      function captureLineBarFavouriteView(options = {}) {
         const actualOption = el("actualNumerator").selectedOptions[0];
-        return {
+        const requestedScope = String(options.scope || DEFAULT_FAVOURITE_SCOPE);
+        const scope = FAVOURITE_SCOPES.has(requestedScope) ? requestedScope : DEFAULT_FAVOURITE_SCOPE;
+        const view = {
           version: 1,
+          scope,
           source: state.source || "dataset",
           x: state.x || "",
           xSource: state.xSource || "",
@@ -2662,6 +3290,10 @@
           filterOperator: state.filterOperator,
           savedFilterRows: selectedSavedFilterRows(),
         };
+        if (scope === "map_view") {
+          view.map = ukMapTool.captureFavouriteState();
+        }
+        return view;
       }
 
       function syncFilterOperatorControl() {
@@ -2747,6 +3379,7 @@
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
         lineBarTool.setView(state.view);
+        renderFavourites();
         await refreshFilterRowCountMeta();
         if (options.refresh !== false) {
           await refreshMetricSummary({ force: true });
@@ -2803,7 +3436,7 @@
           return;
         }
         state.activeFilter = nextFilter;
-        lineBarTool.clearActiveFavouriteSelection();
+        clearActiveFavouriteSelectionForScope("filter");
         invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
@@ -2827,7 +3460,7 @@
           return;
         }
         state.activeFilter = "";
-        lineBarTool.clearActiveFavouriteSelection();
+        clearActiveFavouriteSelectionForScope("filter");
         invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
@@ -3200,6 +3833,7 @@
         syncActionTimingMonitor();
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
         lineBarTool.bindControls();
+        bindFavouriteControls();
         document.querySelectorAll('.segmented[data-control="filterOperator"], .segmented[data-control="filterSelectionMode"]').forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
@@ -3207,7 +3841,7 @@
             event.target.classList.add("active");
             const previousValue = state[group.dataset.control];
             state[group.dataset.control] = event.target.dataset.value;
-            if (state[group.dataset.control] !== previousValue) lineBarTool.clearActiveFavouriteSelection();
+            if (state[group.dataset.control] !== previousValue) clearActiveFavouriteSelectionForScope("filter");
             if (group.dataset.control === "filterOperator") {
               applySavedFilters();
               return;
@@ -3225,13 +3859,13 @@
             syncControlsForSourceChange({ actualValue, actualSource });
           }
           syncKpiSelectionFromMetrics();
-          lineBarTool.clearActiveFavouriteSelection();
+          clearActiveFavouriteSelectionForScope("metrics");
           refreshMetricSummary();
           refreshActiveToolForMetricChange();
         });
         el("denominator").addEventListener("change", () => {
           syncKpiSelectionFromMetrics();
-          lineBarTool.clearActiveFavouriteSelection();
+          clearActiveFavouriteSelectionForScope("metrics");
           refreshMetricSummary();
           refreshActiveToolForMetricChange();
         });
@@ -3253,6 +3887,7 @@
         el("specsTool").addEventListener("click", () => handleToolClick("specs"));
         el("sidebarToggleBtn").addEventListener("click", () => setSidebarVisible(!state.sidebarVisible));
         el("filterFooterToggleBtn").addEventListener("click", () => setFilterFooterVisible(state.filterFooterCollapsed));
+        el("favouritesCollapseBtn").addEventListener("click", () => toggleSidebarSection("favourites"));
         el("kpiCollapseBtn").addEventListener("click", () => toggleSidebarSection("kpi"));
         el("glmModelCollapseBtn").addEventListener("click", () => toggleSidebarSection("glm"));
         el("gbmModelCollapseBtn").addEventListener("click", () => toggleSidebarSection("gbm"));
@@ -3305,6 +3940,7 @@
           renderSavedFilters();
           if (filtersUnchanged) restoreSavedFilterSelection(previousSavedFilterSelection);
           renderKpis();
+          renderFavourites();
           renderToolSelector();
           if (!toolEnabled(state.tool)) {
             state.tool = chooseDefaultTool();
@@ -3312,7 +3948,7 @@
           lineBarTool.renderExpectedNumerators();
           lineBarTool.renderFeatures();
           lineBarTool.updateAxisControls();
-          await lineBarTool.refreshFavourites();
+          await refreshFavourites();
           setTool(state.tool, false);
           setSidebarVisible(previousSidebarVisible);
           await refreshMetricSummary({ force: true });
@@ -3367,6 +4003,7 @@
           setStartupProgress("Rendering controls");
           chooseDefaults();
           renderKpis();
+          renderFavourites();
           renderToolSelector();
           renderDatasetMeta(fileMeta);
           refreshDatasetGlmCount();
@@ -3375,11 +4012,11 @@
           lineBarTool.renderExpectedNumerators();
           lineBarTool.renderFeatures();
           lineBarTool.updateAxisControls();
-          await lineBarTool.refreshFavourites();
+          await refreshFavourites();
           state.tool = chooseDefaultTool();
           setTool(state.tool, false);
           syncMobileSidebarLayout({ initial: true });
-          const startupFavouriteError = await lineBarTool.applyStartupFavourite();
+          const startupFavouriteError = await applyStartupFavourite();
           setStartupProgress("Loading initial dataset");
           await refreshMetricSummary({ force: true });
           await refreshActiveTool({ force: true });

@@ -136,6 +136,7 @@ export function createUkMapTool({
   columnExists,
   numericColumnExists,
   refreshUkMap,
+  clearActiveFavouriteSelection = () => {},
 }) {
   const L = leafletImpl;
   const MAP_PALETTES = {
@@ -197,6 +198,11 @@ export function createUkMapTool({
   let mapZoomControl = null;
   let mapHomeControl = null;
   let mapResizeObserver = null;
+
+  function clearActiveMapFavourite(options = {}) {
+    if (state.mapFavouriteRestoreInProgress && !options.force) return;
+    clearActiveFavouriteSelection();
+  }
 
   function buildMapRequest() {
     if (!state.schema) return null;
@@ -397,6 +403,7 @@ export function createUkMapTool({
       return null;
     }
     state.mapView = view;
+    if (reason === "leaflet" && state.tool === "uk_map") clearActiveMapFavourite();
     return view;
   }
 
@@ -527,12 +534,14 @@ export function createUkMapTool({
     if (!target || target.tagName !== "INPUT") return;
     if (target.name === "baseMap") {
       setBaseMap(target.value);
+      clearActiveMapFavourite({ force: true });
       scheduleMapViewportSync({ mode: "preserve" });
       return;
     }
     if (target.name === "mapLevel" && target.checked && mapLevelSelectable(target.value) && target.value !== state.mapLevel) {
       captureMapView("map-level-change");
       state.mapLevel = target.value;
+      clearActiveMapFavourite({ force: true });
       syncMapControls();
       syncFloatingMapControl();
       refreshMap();
@@ -546,6 +555,7 @@ export function createUkMapTool({
     if (changed) {
       if (state.tool === "uk_map") captureMapView("map-level-change");
       state.mapLevel = nextLevel;
+      if (options.clearFavourite !== false) clearActiveMapFavourite();
     }
     syncMapControls();
     syncFloatingMapControl();
@@ -553,6 +563,74 @@ export function createUkMapTool({
       refreshMap(options.refreshOptions || {});
     }
     return true;
+  }
+
+  function clampMapNumber(value, fallback, min, max, options = {}) {
+    const number = Number(value);
+    const finite = Number.isFinite(number) ? number : fallback;
+    const clamped = Math.max(min, Math.min(max, finite));
+    return options.integer ? Math.round(clamped) : clamped;
+  }
+
+  function normaliseFavouriteMapLevel(level) {
+    const requested = String(level || "");
+    if (Object.prototype.hasOwnProperty.call(MAP_LEVELS, requested) && mapLevelSelectable(requested)) return requested;
+    if (Object.prototype.hasOwnProperty.call(MAP_LEVELS, state.mapLevel) && mapLevelSelectable(state.mapLevel)) return state.mapLevel;
+    return Object.keys(MAP_LEVELS).find((candidate) => mapLevelSelectable(candidate)) || "area";
+  }
+
+  function normaliseFavouriteMapState(map = {}) {
+    const payload = map && typeof map === "object" ? map : {};
+    const level = normaliseFavouriteMapLevel(payload.level);
+    const baseMap = MAP_BASE_LAYERS[payload.baseMap] ? String(payload.baseMap) : "blank";
+    const palette = MAP_PALETTES[payload.palette] ? String(payload.palette) : "divergent";
+    return {
+      level,
+      baseMap,
+      palette,
+      lineWeight: clampMapNumber(payload.lineWeight, 1, 0, 5, { integer: true }),
+      dotSize: clampMapNumber(payload.dotSize, 1, 0, 5, { integer: true }),
+      opacity: clampMapNumber(payload.opacity, 1, 0, 1),
+      hotspots: clampMapNumber(payload.hotspots, 0, -9, 9, { integer: true }),
+      labelSize: clampMapNumber(payload.labelSize, 0, 0, 10, { integer: true }),
+      smoothingLevel: clampMapNumber(payload.smoothingLevel, 0, 0, 5, { integer: true }),
+      view: normaliseMapView(payload.view),
+    };
+  }
+
+  function captureFavouriteState() {
+    const view = captureMapView("favourite") || state.mapView;
+    return {
+      level: state.mapLevel,
+      baseMap: state.baseMap,
+      palette: state.mapPalette,
+      lineWeight: Number(state.mapLineWeight),
+      dotSize: Number(state.mapDotSize),
+      opacity: Number(state.mapOpacity),
+      hotspots: Number(state.mapHotspots),
+      labelSize: Number(state.mapLabelSize),
+      smoothingLevel: Number(state.mapSmoothingLevel),
+      view: normaliseMapView(view),
+    };
+  }
+
+  function applyFavouriteState(map = {}) {
+    const next = normaliseFavouriteMapState(map);
+    state.mapLevel = next.level;
+    state.mapPalette = next.palette;
+    state.mapLineWeight = next.lineWeight;
+    state.mapDotSize = next.dotSize;
+    state.mapOpacity = next.opacity;
+    state.mapHotspots = next.hotspots;
+    state.mapLabelSize = next.labelSize;
+    state.mapSmoothingLevel = next.smoothingLevel;
+    state.mapView = next.view;
+    state.pendingMapZoom = null;
+    state.mapStartupFitDone = Boolean(next.view);
+    setBaseMap(next.baseMap);
+    syncMapControls();
+    syncFloatingMapControl();
+    return next;
   }
 
   function syncMapControls() {
@@ -1734,6 +1812,7 @@ export function createUkMapTool({
     document.querySelectorAll(".map-palette-button").forEach((button) => {
       button.addEventListener("click", () => {
         state.mapPalette = button.dataset.palette || "viridis";
+        clearActiveMapFavourite({ force: true });
         redrawMapInPlace();
       });
     });
@@ -1746,6 +1825,7 @@ export function createUkMapTool({
     ].forEach(([id, stateKey]) => {
       el(id).addEventListener("input", (event) => {
         state[stateKey] = Number(event.target.value);
+        clearActiveMapFavourite({ force: true });
         if (
           (id === "mapLineWeight" && state.mapLevel === "unit")
           || (id === "mapDotSize" && state.mapLevel !== "unit")
@@ -1759,6 +1839,7 @@ export function createUkMapTool({
     });
     el("mapSmoothing").addEventListener("input", (event) => {
       state.mapSmoothingLevel = Number(event.target.value);
+      clearActiveMapFavourite({ force: true });
       syncFloatingMapControl();
       if (state.mapLevel !== "sector") return;
       captureMapView("smoothing-change");
@@ -1822,6 +1903,8 @@ export function createUkMapTool({
     activate,
     bindControls,
     captureView: captureMapView,
+    captureFavouriteState,
+    applyFavouriteState,
     setMapLevel,
     syncViewport,
     resize,

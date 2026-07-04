@@ -232,9 +232,17 @@ export function createGbmTool({
   }
 
   function scheduleGbmTableRedraws() {
+    const safeRedraw = (table) => {
+      if (!table || typeof table.redraw !== "function" || !table.initialized || !table.element?.isConnected) return;
+      try {
+        table.redraw(true);
+      } catch (error) {
+        // Ignore stale Tabulator instances during fast tool switches.
+      }
+    };
     const redraw = () => {
       for (const table of [featureTable, parameterTable, modelTable, ebmGainSummaryTable]) {
-        if (table && typeof table.redraw === "function") table.redraw(true);
+        safeRedraw(table);
       }
     };
     requestAnimationFrame(() => {

@@ -677,6 +677,59 @@ COPY (
 
         self.assertIn("missing x-axis feature column", str(context.exception))
 
+    def test_line_bar_favourite_scope_defaults_and_metric_only_validation(self) -> None:
+        store = LineBarFavouriteStore(self.data_path, Dataset(self.data_path))
+
+        legacy = store.create_favourite("Legacy", self.favourite_view())
+        self.assertEqual(legacy["view"]["scope"], "line_bar_view")
+
+        with self.assertRaises(ValueError) as context:
+            store.create_favourite("Broken full view", self.favourite_view(x=""))
+        self.assertIn("missing x-axis feature", str(context.exception))
+
+        with self.assertRaises(ValueError) as context:
+            store.create_favourite("Broken scope", self.favourite_view(scope="summary"))
+        self.assertIn("Favourite scope is invalid", str(context.exception))
+
+        metric_only = store.create_favourite(
+            "Metric only",
+            self.favourite_view(scope="metrics", x="", xSource="", expectedSelections=[], filter="not valid sql"),
+        )
+        self.assertEqual(metric_only["view"]["scope"], "metrics")
+        self.assertTrue(metric_only["validation"]["valid"])
+
+        map_view = store.create_favourite(
+            "Map view",
+            self.favourite_view(
+                scope="map_view",
+                x="",
+                xSource="",
+                expectedSelections=[],
+                map={
+                    "level": "sector",
+                    "baseMap": "grey",
+                    "palette": "viridis",
+                    "lineWeight": 2,
+                    "dotSize": 3,
+                    "opacity": 0.8,
+                    "hotspots": 4,
+                    "labelSize": 5,
+                    "smoothingLevel": 2,
+                    "view": {"center": {"lat": 51.5, "lng": -0.1}, "zoom": 8},
+                },
+            ),
+        )
+        self.assertEqual(map_view["view"]["scope"], "map_view")
+        self.assertTrue(map_view["validation"]["valid"])
+        self.assertEqual(map_view["view"]["map"]["level"], "sector")
+
+        with self.assertRaises(ValueError) as context:
+            store.create_favourite(
+                "Broken map filter",
+                self.favourite_view(scope="map_view", x="", xSource="", expectedSelections=[], filter="not valid sql"),
+            )
+        self.assertIn("Favourite filter is invalid", str(context.exception))
+
     def test_line_bar_favourite_store_uses_explicit_json_path(self) -> None:
         dataset = Dataset(self.data_path)
         explicit_path = self.root / "config" / "monthly_favourites.json"

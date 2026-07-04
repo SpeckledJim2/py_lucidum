@@ -125,6 +125,22 @@
             </div>
           </section>
 
+          <section class="section sidebar-favourites-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="favourites">
+            <button id="favouritesCollapseBtn" class="favourites-header sidebar-section-header" type="button" aria-label="Expand FAVOURITES" aria-expanded="false" title="Expand FAVOURITES">
+              <span class="filter-collapse-icon" aria-hidden="true"></span>
+              <span class="sidebar-section-title">FAVOURITES</span>
+              <span id="favouritesSelectedMeta" class="favourites-selected-meta"></span>
+            </button>
+            <div class="sidebar-section-body">
+              <div id="sidebarFavouritesControls" class="sidebar-favourites-controls">
+                <button id="sidebarFavouriteAddBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Add favourite" aria-label="Add favourite">+</button>
+                <button id="sidebarFavouriteMenuBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Manage favourites" aria-label="Manage favourites">...</button>
+              </div>
+              <div id="favouritesSelect" class="feature-list favourites-list" role="listbox" aria-label="FAVOURITES"></div>
+              <div id="sidebarFavouritePopover" class="line-bar-favourite-popover sidebar-favourite-popover" hidden></div>
+            </div>
+          </section>
+
           <section class="section sidebar-kpi-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="kpi">
             <button id="kpiCollapseBtn" class="kpi-header sidebar-section-header" type="button" aria-label="Expand KPIs" aria-expanded="false" title="Expand KPIs">
               <span class="filter-collapse-icon" aria-hidden="true"></span>
@@ -196,15 +212,6 @@
 
         <main>
           <div id="lineBarToolbar" class="toolbar hidden">
-            <div id="lineBarFavouritesControl" class="control line-bar-favourites-control">
-              <h3>Favourites</h3>
-              <div class="line-bar-favourites-row">
-                <select id="lineBarFavouriteSelect" aria-label="Line/Bar favourite views"></select>
-                <button id="lineBarFavouriteAddBtn" class="line-bar-favourite-icon-button" type="button" title="Add favourite" aria-label="Add favourite">+</button>
-                <button id="lineBarFavouriteMenuBtn" class="line-bar-favourite-icon-button" type="button" title="Manage favourites" aria-label="Manage favourites">...</button>
-              </div>
-              <div id="lineBarFavouritePopover" class="line-bar-favourite-popover" hidden></div>
-            </div>
             <div class="control">
               <h3>Group low weights</h3>
               <div class="segmented" data-control="lowGroup">
