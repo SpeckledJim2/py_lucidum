@@ -4903,7 +4903,10 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         self.assertNotIn("tool-selector-toggle", css)
         self.assertNotIn("tool-selector-collapsed", css)
         self.assertNotIn("body.sidebar-collapsed aside,\n      body.sidebar-collapsed .sidebar-resizer", css)
-        self.assertIn("sidebarVisible: true", js)
+        self.assertIn("function initialSidebarVisible()", js)
+        self.assertIn('return !document.body.classList.contains("sidebar-collapsed");', js)
+        self.assertIn("sidebarVisible: initialSidebarVisible()", js)
+        self.assertNotIn("sidebarVisible: true", js)
         self.assertIn('document.body.classList.toggle("single-tool-mode", enabledTools.length === 1);', js)
         self.assertIn('document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible)', js)
         self.assertIn('el("appSidebar").removeAttribute("aria-hidden");', js)
@@ -4943,9 +4946,12 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         self.assertIn("overflow: hidden;\n        pointer-events: none;\n        text-overflow: ellipsis;\n        white-space: nowrap;", css)
 
     def test_mobile_layout_static_contract(self) -> None:
+        html = self.assert_no_store("/")[1].decode("utf-8")
         css = self.app_css_contract()
         js = self.app_js_contract()
 
+        self.assertIn('window.matchMedia("(max-width: 760px)").matches', html)
+        self.assertIn('document.body.classList.add("sidebar-collapsed");', html)
         self.assertIn("@media (max-width: 760px) {\n        header {", css)
         self.assertIn(
             ".shell,\n"
@@ -4955,7 +4961,15 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         )
         self.assertIn("box-shadow: 12px 0 28px rgb(15 23 42 / 18%);", css)
         self.assertIn("body.sidebar-collapsed #appSidebar {\n          box-shadow: none;", css)
+        self.assertIn("z-index: 1100;", css)
         self.assertIn(".sidebar-resizer {\n          display: none;", css)
+        self.assertIn(
+            "main {\n"
+            "          padding: 8px;\n"
+            "          position: relative;\n"
+            "          z-index: 0;",
+            css,
+        )
         self.assertIn(
             ".filter-footer {\n"
             "          align-items: stretch;\n"
@@ -4999,6 +5013,7 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         self.assertIn("const enteredMobile = mobile && mobileLayoutActive !== true;", js)
         self.assertIn("if ((initial || enteredMobile) && mobile && state.sidebarVisible)", js)
         self.assertIn("syncMobileSidebarLayout();\n          scheduleDatasetMetaCompactCheck();", js)
+        self.assertIn("syncHeaderButtons();\n        syncSidebarToggleButton();", js)
         self.assertIn("setTool(state.tool, false);\n          syncMobileSidebarLayout({ initial: true });", js)
 
     def test_dataset_viewer_tool_static_assets_are_registered(self) -> None:

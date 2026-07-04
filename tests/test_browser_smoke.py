@@ -210,6 +210,67 @@ class BrowserSmokeTests(unittest.TestCase):
                             """
                         )
 
+                    def assert_mobile_sidebar_fronts_map(page) -> None:
+                        page.locator("#sidebarToggleBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const sidebar = document.querySelector("#appSidebar")?.getBoundingClientRect();
+                              const main = document.querySelector("main")?.getBoundingClientRect();
+                              if (!sidebar || !main) return false;
+                              return !document.body.classList.contains("sidebar-collapsed")
+                                && sidebar.width > 200
+                                && sidebar.right > main.left;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-control')")
+                        front_points = page.evaluate(
+                            """
+                            () => {
+                              const sidebarEl = document.querySelector("#appSidebar");
+                              const sidebarRect = sidebarEl.getBoundingClientRect();
+                              const mainRect = document.querySelector("main").getBoundingClientRect();
+                              const x = Math.round(Math.min(
+                                sidebarRect.right - 8,
+                                Math.max(mainRect.left + 16, sidebarRect.left + Math.min(260, sidebarRect.width - 20)),
+                              ));
+                              return [
+                                sidebarRect.top + 72,
+                                sidebarRect.top + 220,
+                                sidebarRect.bottom - 80,
+                              ].map((rawY) => {
+                                const y = Math.round(Math.max(sidebarRect.top + 8, Math.min(sidebarRect.bottom - 8, rawY)));
+                                const element = document.elementFromPoint(x, y);
+                                return {
+                                  x,
+                                  y,
+                                  insideSidebar: Boolean(element && sidebarEl.contains(element)),
+                                  target: element
+                                    ? `${element.tagName.toLowerCase()}#${element.id || ""}.${String(element.className || "").replace(/\\s+/g, ".")}`
+                                    : "",
+                                };
+                              });
+                            }
+                            """
+                        )
+                        self.assertTrue(all(point["insideSidebar"] for point in front_points), front_points)
+                        page.locator("#sidebarToggleBtn").click()
+                        page.wait_for_function("() => document.body.classList.contains('sidebar-collapsed')", timeout=10_000)
+
+                    prepaint_page = browser.new_page(viewport={"width": 390, "height": 844})
+                    prepaint_page.route(
+                        "**/static/app.js",
+                        lambda route: route.fulfill(status=200, content_type="text/javascript", body=""),
+                    )
+                    try:
+                        prepaint_page.goto(base_url, wait_until="domcontentloaded")
+                        self.assertTrue(prepaint_page.locator("body").evaluate("body => body.classList.contains('sidebar-collapsed')"))
+                        self.assertEqual(prepaint_page.locator("#datasetMeta").inner_text(), "Loading dataset...")
+                    finally:
+                        prepaint_page.close()
+
                     page = new_mobile_page(390, 844)
                     try:
                         line_bar_rects = wait_for_mobile_line_bar(page)
@@ -259,6 +320,9 @@ class BrowserSmokeTests(unittest.TestCase):
                                 arg=wrapper_selector,
                                 timeout=10_000,
                             )
+                            if tool_button == "#ukMapTool":
+                                page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                                assert_mobile_sidebar_fronts_map(page)
                     finally:
                         page.close()
 

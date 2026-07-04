@@ -82,6 +82,11 @@
         ["metrics_filter", FAVOURITE_SCOPE_LABELS.metrics_filter],
         ["metrics", FAVOURITE_SCOPE_LABELS.metrics],
       ];
+
+      function initialSidebarVisible() {
+        return !document.body.classList.contains("sidebar-collapsed");
+      }
+
       const state = {
         schema: null,
         x: null,
@@ -89,7 +94,7 @@
         sort: "alpha",
         lowGroup: "0",
         labels: "none",
-        sidebarVisible: true,
+        sidebarVisible: initialSidebarVisible(),
         lineBarSideControlsCollapsed: false,
         lineBarToolbarCollapsed: false,
         bandWidth: "0",
@@ -4135,6 +4140,7 @@
         bindControls();
         syncThemeButton();
         syncHeaderButtons();
+        syncSidebarToggleButton();
         cacheShutdownIcon();
         try {
           setStartupProgress("Requesting schema");
