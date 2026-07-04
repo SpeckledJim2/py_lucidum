@@ -54,7 +54,6 @@ export function createLineBarTool({
   captureLineBarFavouriteView = () => ({}),
   applyLineBarFavouriteView = () => Promise.resolve(),
   startupLineBarFavourite = () => "",
-  toggleLineBarFocusMode = () => {},
 }) {
   const TABLE_PAGE_SIZE = 10000;
   const TABLE_SEARCH_DEBOUNCE_MS = 250;
@@ -3444,7 +3443,6 @@ export function createLineBarTool({
     bindLineBarPickerKeyboard("featureSearch", "featureList");
     el("expectedSearchClear").addEventListener("click", () => clearSearchInput("expectedSearch", renderExpectedNumerators));
     el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));
-    el("lineBarExpandBtn")?.addEventListener("click", toggleLineBarFocusMode);
     el("lineBarCopyBtn")?.addEventListener("click", copyVisibleLineBarView);
     el("chartTab").addEventListener("click", () => {
       const changed = state.view !== "chart";

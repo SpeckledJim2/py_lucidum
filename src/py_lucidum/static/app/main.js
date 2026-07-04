@@ -72,7 +72,8 @@
         lowGroup: "0",
         labels: "none",
         sidebarVisible: true,
-        lineBarFocusMode: false,
+        lineBarSideControlsCollapsed: false,
+        lineBarToolbarCollapsed: false,
         bandWidth: "0",
         quantileMode: "off",
         previousBandWidthsByFeature: {},
@@ -326,7 +327,6 @@
         captureLineBarFavouriteView,
         applyLineBarFavouriteView,
         startupLineBarFavourite: () => requestedDefault("line_bar_favourite"),
-        toggleLineBarFocusMode,
       });
       const histogramTool = createHistogramTool({
         api,
@@ -1408,7 +1408,6 @@
       function setTool(tool, refresh = true) {
         if (!toolEnabled(tool)) return;
         const previousTool = state.tool;
-        if (state.lineBarFocusMode && tool !== "line_bar") setLineBarFocusMode(false);
         if (previousTool === "uk_map" && tool !== "uk_map") ukMapTool.captureView("tool-switch");
         if (previousTool === "column_profile" && tool !== "column_profile") columnProfileTool.closeMenus();
         if (previousTool === "specs" && tool !== "specs") specificationsTool.closeMenus();
@@ -1425,7 +1424,6 @@
         glmTool.syncSidebarFromSchema();
         gbmTool.syncSidebarFromSchema();
         syncSidebarAccordion();
-        el("lineBarToolbar").classList.toggle("hidden", tool !== "line_bar");
         el("histogramToolbar").classList.toggle("hidden", tool !== "histogram");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
         el("visualArea").classList.toggle("dataset-viewer-mode", tool === "dataset_viewer");
@@ -1433,10 +1431,8 @@
         el("visualArea").classList.toggle("histogram-mode", tool === "histogram");
         el("visualArea").classList.toggle("specs-mode", tool === "specs");
         el("visualArea").classList.toggle("model-mode", isModelTool(tool));
-        el("chartSideControls").classList.toggle("hidden", tool !== "line_bar");
-        el("chartControlsResizer").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
-        syncLineBarFocusMode();
+        syncLineBarLayoutVisibility();
         el("datasetViewerGroupMeta").classList.toggle("hidden", tool !== "dataset_viewer");
         el("datasetViewerFilter").classList.toggle("hidden", tool !== "dataset_viewer");
         el("profileGroupMeta").classList.toggle("hidden", tool !== "column_profile");
@@ -1597,35 +1593,100 @@
         }
       }
 
-      function toggleLineBarFocusMode() {
-        setLineBarFocusMode(!state.lineBarFocusMode);
+      function toggleLineBarSideControls() {
+        setLineBarSideControlsCollapsed(!state.lineBarSideControlsCollapsed);
       }
 
-      function setLineBarFocusMode(focused) {
-        const nextFocused = Boolean(focused) && state.tool === "line_bar";
-        if (state.lineBarFocusMode === nextFocused) {
-          syncLineBarFocusMode();
-          scheduleLineBarFocusResize();
+      function setLineBarSideControlsCollapsed(collapsed) {
+        const nextCollapsed = Boolean(collapsed);
+        if (state.lineBarSideControlsCollapsed === nextCollapsed) {
+          syncLineBarLayoutVisibility();
+          scheduleLineBarLayoutResize();
           return;
         }
-        state.lineBarFocusMode = nextFocused;
-        syncLineBarFocusMode();
-        scheduleLineBarFocusResize();
+        state.lineBarSideControlsCollapsed = nextCollapsed;
+        syncLineBarLayoutVisibility();
+        scheduleLineBarLayoutResize();
       }
 
-      function syncLineBarFocusMode() {
-        const focused = state.tool === "line_bar" && state.lineBarFocusMode;
-        document.body.classList.toggle("line-bar-focus-mode", focused);
-        const button = el("lineBarExpandBtn");
+      function toggleLineBarToolbar() {
+        setLineBarToolbarCollapsed(!state.lineBarToolbarCollapsed);
+      }
+
+      function setLineBarToolbarCollapsed(collapsed) {
+        const nextCollapsed = Boolean(collapsed);
+        if (state.lineBarToolbarCollapsed === nextCollapsed) {
+          syncLineBarLayoutVisibility();
+          scheduleLineBarLayoutResize();
+          return;
+        }
+        state.lineBarToolbarCollapsed = nextCollapsed;
+        syncLineBarLayoutVisibility();
+        scheduleLineBarLayoutResize();
+      }
+
+      function setupLineBarLayoutToggles() {
+        el("lineBarSideControlsToggleBtn")?.addEventListener("click", toggleLineBarSideControls);
+        el("lineBarToolbarToggleBtn")?.addEventListener("click", toggleLineBarToolbar);
+        syncLineBarLayoutVisibility();
+      }
+
+      function syncLineBarLayoutVisibility() {
+        const lineBarActive = state.tool === "line_bar";
+        const sideCollapsed = lineBarActive && state.lineBarSideControlsCollapsed;
+        const toolbarCollapsed = lineBarActive && state.lineBarToolbarCollapsed;
+        const toolbar = el("lineBarToolbar");
+        const visualArea = el("visualArea");
+        const sideControls = el("chartSideControls");
+        const resizer = el("chartControlsResizer");
+
+        toolbar.classList.toggle("hidden", !lineBarActive || toolbarCollapsed);
+        toolbar.toggleAttribute("inert", !lineBarActive || toolbarCollapsed);
+        if (toolbarCollapsed && toolbar.contains(document.activeElement)) {
+          document.activeElement?.blur?.();
+        }
+
+        sideControls.classList.toggle("hidden", !lineBarActive);
+        resizer.classList.toggle("hidden", !lineBarActive);
+        visualArea.classList.toggle("line-bar-side-controls-collapsed", sideCollapsed);
+        sideControls.toggleAttribute("inert", !lineBarActive || sideCollapsed);
+        resizer.toggleAttribute("inert", !lineBarActive || sideCollapsed);
+        if (sideCollapsed && sideControls.contains(document.activeElement)) {
+          document.activeElement?.blur?.();
+        }
+        if (!lineBarActive || sideCollapsed) {
+          sideControls.setAttribute("aria-hidden", "true");
+          resizer.setAttribute("aria-hidden", "true");
+        } else {
+          sideControls.removeAttribute("aria-hidden");
+          resizer.removeAttribute("aria-hidden");
+        }
+
+        syncLineBarSideControlsToggle();
+        syncLineBarToolbarToggle();
+      }
+
+      function syncLineBarSideControlsToggle() {
+        const button = el("lineBarSideControlsToggleBtn");
         if (!button) return;
-        const label = focused ? "Restore chart controls" : "Focus chart";
-        button.classList.remove("active");
-        button.setAttribute("aria-pressed", String(focused));
+        const collapsed = state.tool === "line_bar" && state.lineBarSideControlsCollapsed;
+        const label = collapsed ? "Show x-axis and Expected controls" : "Hide x-axis and Expected controls";
+        button.setAttribute("aria-expanded", String(!collapsed));
         button.setAttribute("aria-label", label);
         button.title = label;
       }
 
-      function scheduleLineBarFocusResize() {
+      function syncLineBarToolbarToggle() {
+        const button = el("lineBarToolbarToggleBtn");
+        if (!button) return;
+        const collapsed = state.tool === "line_bar" && state.lineBarToolbarCollapsed;
+        const label = collapsed ? "Show chart control row" : "Hide chart control row";
+        button.setAttribute("aria-expanded", String(!collapsed));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
+      function scheduleLineBarLayoutResize() {
         requestAnimationFrame(() => {
           syncChartControlHeightToAvailableSpace();
           lineBarTool.resize();
@@ -3081,7 +3142,7 @@
 
       function syncChartControlHeightToAvailableSpace() {
         const controls = document.querySelector(".chart-side-controls");
-        if (!controls || controls.classList.contains("hidden")) return;
+        if (!controls || controls.classList.contains("hidden") || state.lineBarSideControlsCollapsed) return;
         const firstPanel = controls.querySelector(".chart-side-section");
         if (controls.classList.contains("chart-expected-collapsed")) {
           setChartFeatureControlsHeight(CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED);
@@ -3130,6 +3191,7 @@
         setupSidebarResize();
         setupChartControlsResize();
         setupChartControlHeightsResize();
+        setupLineBarLayoutToggles();
         ukMapTool.bindControls();
         histogramTool.bindControls();
         syncSidebarToggleButton();

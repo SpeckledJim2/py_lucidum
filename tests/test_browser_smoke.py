@@ -1285,7 +1285,7 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
-    def test_line_bar_focus_chart_stays_inside_viewport_with_long_header(self) -> None:
+    def test_line_bar_collapsed_side_controls_stay_inside_viewport_with_long_header(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / (
                 "line_bar_zoom_overflow_regression_dataset_with_a_long_unbroken_name_for_header_truncation.csv"
@@ -1343,10 +1343,10 @@ class BrowserSmokeTests(unittest.TestCase):
                             """,
                             timeout=10_000,
                         )
-                    page.locator("#lineBarExpandBtn").click()
+                    page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
-                        () => document.body.classList.contains("line-bar-focus-mode")
+                        () => document.querySelector("#visualArea")?.classList.contains("line-bar-side-controls-collapsed")
                         """,
                         timeout=10_000,
                     )
@@ -1567,22 +1567,42 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
-                    page.locator("#lineBarExpandBtn").click()
+                    initial_toggle_state = page.evaluate(
+                        """
+                        () => ({
+                          sideExpanded: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-expanded"),
+                          toolbarExpanded: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-expanded"),
+                          sideRight: document.querySelector("#lineBarSideControlsToggleBtn").getBoundingClientRect().right,
+                          toolbarLeft: document.querySelector("#lineBarToolbarToggleBtn").getBoundingClientRect().left,
+                          toolbarRight: document.querySelector("#lineBarToolbarToggleBtn").getBoundingClientRect().right,
+                          copyLeft: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().left,
+                          copyRight: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().right,
+                          chartLeft: document.querySelector("#chartTab").getBoundingClientRect().left,
+                        })
+                        """
+                    )
+                    self.assertEqual(initial_toggle_state["sideExpanded"], "true")
+                    self.assertEqual(initial_toggle_state["toolbarExpanded"], "true")
+                    self.assertLessEqual(initial_toggle_state["sideRight"], initial_toggle_state["toolbarLeft"])
+                    self.assertLessEqual(initial_toggle_state["toolbarRight"], initial_toggle_state["copyLeft"])
+                    self.assertLessEqual(initial_toggle_state["copyRight"], initial_toggle_state["chartLeft"])
+                    page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
-                        () => document.body.classList.contains("line-bar-focus-mode")
+                        () => document.querySelector("#visualArea")?.classList.contains("line-bar-side-controls-collapsed")
                           && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
-                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display === "none"
                           && getComputedStyle(document.querySelector("#chartSideControls")).display === "none"
                           && getComputedStyle(document.querySelector("#chartControlsResizer")).display === "none"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
                           && getComputedStyle(document.querySelector("#chartTab")).display !== "none"
                           && getComputedStyle(document.querySelector("#tableTab")).display !== "none"
                           && getComputedStyle(document.querySelector("#lineBarCopyBtn")).display !== "none"
-                          && getComputedStyle(document.querySelector("#lineBarExpandBtn")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarSideControlsToggleBtn")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarToolbarToggleBtn")).display !== "none"
                         """,
                         timeout=10_000,
                     )
-                    focused_state = page.evaluate(
+                    side_collapsed_state = page.evaluate(
                         """
                         () => {
                           const rootStyle = getComputedStyle(document.documentElement);
@@ -1591,37 +1611,76 @@ class BrowserSmokeTests(unittest.TestCase):
                             sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
                             chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
                             chartWidth: chartRect.width,
-                            expandPressed: document.querySelector("#lineBarExpandBtn").getAttribute("aria-pressed"),
-                            expandActive: document.querySelector("#lineBarExpandBtn").classList.contains("active"),
-                            enterIconDisplay: getComputedStyle(document.querySelector(".line-bar-focus-icon-enter")).display,
-                            exitIconDisplay: getComputedStyle(document.querySelector(".line-bar-focus-icon-exit")).display,
-                            expandRight: document.querySelector("#lineBarExpandBtn").getBoundingClientRect().right,
-                            copyLeft: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().left,
-                            copyRight: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().right,
-                            chartLeft: document.querySelector("#chartTab").getBoundingClientRect().left,
+                            sideExpanded: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-expanded"),
+                            toolbarExpanded: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-expanded"),
+                            sideIconTransform: getComputedStyle(document.querySelector("#lineBarSideControlsToggleBtn .line-bar-chevron-horizontal")).transform,
                           };
                         }
                         """
                     )
-                    self.assertEqual(focused_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
-                    self.assertEqual(focused_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
-                    self.assertEqual(focused_state["expandPressed"], "true")
-                    self.assertFalse(focused_state["expandActive"])
-                    self.assertEqual(focused_state["enterIconDisplay"], "none")
-                    self.assertNotEqual(focused_state["exitIconDisplay"], "none")
-                    self.assertLessEqual(focused_state["expandRight"], focused_state["copyLeft"])
-                    self.assertLessEqual(focused_state["copyRight"], focused_state["chartLeft"])
-                    self.assertGreater(focused_state["chartWidth"], initial_focus_state["chartWidth"] + 100)
-                    page.locator("#lineBarExpandBtn").click()
+                    self.assertEqual(side_collapsed_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
+                    self.assertEqual(side_collapsed_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
+                    self.assertEqual(side_collapsed_state["sideExpanded"], "false")
+                    self.assertEqual(side_collapsed_state["toolbarExpanded"], "true")
+                    self.assertNotEqual(side_collapsed_state["sideIconTransform"], "none")
+                    self.assertGreater(side_collapsed_state["chartWidth"], initial_focus_state["chartWidth"] + 100)
+                    page.locator("#lineBarToolbarToggleBtn").click()
                     page.wait_for_function(
                         """
-                        () => !document.body.classList.contains("line-bar-focus-mode")
+                        () => document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "false"
                           && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
-                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
-                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display === "none"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display === "none"
+                          && getComputedStyle(document.querySelector("#chartControlsResizer")).display === "none"
                           && getComputedStyle(document.querySelector("#chartTab")).display !== "none"
                           && getComputedStyle(document.querySelector("#tableTab")).display !== "none"
                           && getComputedStyle(document.querySelector("#lineBarCopyBtn")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarSideControlsToggleBtn")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarToolbarToggleBtn")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    toolbar_collapsed_state = page.evaluate(
+                        """
+                        () => {
+                          const rootStyle = getComputedStyle(document.documentElement);
+                          const chartRect = document.querySelector("#chart").getBoundingClientRect();
+                          return {
+                            sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
+                            chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
+                            chartWidth: chartRect.width,
+                            sideExpanded: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-expanded"),
+                            toolbarExpanded: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-expanded"),
+                            toolbarIconTransform: getComputedStyle(document.querySelector("#lineBarToolbarToggleBtn .line-bar-chevron-vertical")).transform,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(toolbar_collapsed_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
+                    self.assertEqual(toolbar_collapsed_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
+                    self.assertEqual(toolbar_collapsed_state["sideExpanded"], "false")
+                    self.assertEqual(toolbar_collapsed_state["toolbarExpanded"], "false")
+                    self.assertNotEqual(toolbar_collapsed_state["toolbarIconTransform"], "none")
+                    self.assertGreaterEqual(toolbar_collapsed_state["chartWidth"], side_collapsed_state["chartWidth"] - 5)
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector("#visualArea")?.classList.contains("line-bar-side-controls-collapsed")
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => !document.querySelector("#visualArea")?.classList.contains("line-bar-side-controls-collapsed")
+                          && document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                          && getComputedStyle(document.querySelector("#chartControlsResizer")).display !== "none"
                         """,
                         timeout=10_000,
                     )
@@ -1634,15 +1693,13 @@ class BrowserSmokeTests(unittest.TestCase):
                             sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
                             chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
                             chartWidth: chartRect.width,
-                            expandPressed: document.querySelector("#lineBarExpandBtn").getAttribute("aria-pressed"),
                           };
                         }
                         """
                     )
                     self.assertEqual(restored_focus_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
                     self.assertEqual(restored_focus_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
-                    self.assertEqual(restored_focus_state["expandPressed"], "false")
-                    self.assertLess(restored_focus_state["chartWidth"], focused_state["chartWidth"] - 100)
+                    self.assertLess(restored_focus_state["chartWidth"], side_collapsed_state["chartWidth"] - 100)
                     page.locator("#sidebarToggleBtn").click()
                     page.wait_for_function(
                         """
@@ -1650,18 +1707,18 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
-                    page.locator("#lineBarExpandBtn").click()
+                    page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
-                        () => document.body.classList.contains("line-bar-focus-mode")
+                        () => document.querySelector("#visualArea")?.classList.contains("line-bar-side-controls-collapsed")
                           && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
                         """,
                         timeout=10_000,
                     )
-                    page.locator("#lineBarExpandBtn").click()
+                    page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
-                        () => !document.body.classList.contains("line-bar-focus-mode")
+                        () => !document.querySelector("#visualArea")?.classList.contains("line-bar-side-controls-collapsed")
                           && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
                         """,
                         timeout=10_000,
@@ -1687,14 +1744,15 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
-                    page.locator("#lineBarExpandBtn").click()
+                    page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
-                        () => document.body.classList.contains("line-bar-focus-mode")
+                        () => document.querySelector("#visualArea")?.classList.contains("line-bar-side-controls-collapsed")
                           && getComputedStyle(document.querySelector("#chartTab")).display !== "none"
                           && getComputedStyle(document.querySelector("#tableTab")).display !== "none"
                           && getComputedStyle(document.querySelector("#lineBarCopyBtn")).display !== "none"
-                          && getComputedStyle(document.querySelector("#lineBarExpandBtn")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarSideControlsToggleBtn")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarToolbarToggleBtn")).display !== "none"
                         """,
                         timeout=10_000,
                     )
@@ -1711,14 +1769,14 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    self.assertEqual(focused_table_spacing["paddingTop"], "42px")
+                    self.assertEqual(focused_table_spacing["paddingTop"], "36px")
                     self.assertGreaterEqual(focused_table_spacing["gridTop"], focused_table_spacing["tabsBottom"])
                     page.locator("#chartTab").click()
                     page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                     page.locator("#tableTab").click()
                     page.locator("#tableWrap:not(.hidden) #lineBarTableGrid").wait_for(timeout=10_000)
-                    page.locator("#lineBarExpandBtn").click()
-                    page.wait_for_function("() => !document.body.classList.contains('line-bar-focus-mode')", timeout=10_000)
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function("() => !document.querySelector('#visualArea')?.classList.contains('line-bar-side-controls-collapsed')", timeout=10_000)
                     chart_requests_before_sort = chart_requests
                     table_requests_before_sort = table_requests
                     page.locator('.segmented[data-control="sort"] button[data-value="actual"]').click()

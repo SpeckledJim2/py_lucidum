@@ -378,14 +378,14 @@
 
             <section class="workspace">
               <div id="lineBarTabs" class="tabs workspace-tabs hidden">
-                <button id="lineBarExpandBtn" class="tab line-bar-icon-tab line-bar-expand-button" type="button" aria-label="Focus chart" title="Focus chart" aria-pressed="false">
-                  <svg class="line-bar-tab-icon line-bar-focus-icon line-bar-focus-icon-enter" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="M17 17 7 7"></path>
-                    <path d="M7 14V7h7"></path>
+                <button id="lineBarSideControlsToggleBtn" class="tab line-bar-icon-tab line-bar-side-controls-toggle" type="button" aria-controls="chartSideControls" aria-expanded="true" aria-label="Hide x-axis and Expected controls" title="Hide x-axis and Expected controls">
+                  <svg class="line-bar-tab-icon line-bar-chevron-icon line-bar-chevron-horizontal" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="m15 18-6-6 6-6"></path>
                   </svg>
-                  <svg class="line-bar-tab-icon line-bar-focus-icon line-bar-focus-icon-exit" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="M7 7 17 17"></path>
-                    <path d="M10 17h7v-7"></path>
+                </button>
+                <button id="lineBarToolbarToggleBtn" class="tab line-bar-icon-tab line-bar-toolbar-toggle" type="button" aria-controls="lineBarToolbar" aria-expanded="true" aria-label="Hide chart control row" title="Hide chart control row">
+                  <svg class="line-bar-tab-icon line-bar-chevron-icon line-bar-chevron-vertical" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="m18 15-6-6-6 6"></path>
                   </svg>
                 </button>
                 <button id="lineBarCopyBtn" class="tab line-bar-icon-tab" type="button" aria-label="Copy chart or table" title="Copy chart or table">
