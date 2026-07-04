@@ -12398,13 +12398,15 @@ COPY (
                 self.assertIsNotNone(chart_box_after)
                 assert chart_box_before is not None and chart_box_after is not None
                 self.assertLessEqual(abs(chart_box_after["y"] - chart_box_before["y"]), 1)
-                page.locator("#sidebarFavouriteNameInput").fill("Older view")
+                long_favourite_name = "Codex Favourites Test With A Long Sidebar Name That Must Truncate"
+                page.locator("#sidebarFavouriteNameInput").fill(long_favourite_name)
                 page.locator('[data-favourite-action="save-add"]').click()
                 page.wait_for_function(
-                    """() => [...document.querySelectorAll(".saved-favourite-option")]
-                      .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Older view"
+                    """([name]) => [...document.querySelectorAll(".saved-favourite-option")]
+                      .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === name
                         && button.querySelector(".favourite-detail")?.textContent.trim() === "Line/Bar view"
                         && button.classList.contains("active")) """,
+                    arg=[long_favourite_name],
                     timeout=10_000,
                 )
                 older_id = page.eval_on_selector(
@@ -12412,6 +12414,25 @@ COPY (
                     'button => button?.dataset.favouriteId || ""',
                 )
                 self.assertTrue(older_id)
+                page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '220px')")
+                page.wait_for_function(
+                    """
+                    ([name]) => {
+                      const selectors = ["#favouritesCollapseBtn", "#kpiCollapseBtn", "#filterCollapseBtn"];
+                      const icons = selectors.map((selector) => document.querySelector(`${selector} .filter-collapse-icon`));
+                      if (icons.some((icon) => !icon)) return false;
+                      const lefts = icons.map((icon) => icon.getBoundingClientRect().left);
+                      const meta = document.querySelector("#favouritesSelectedMeta");
+                      return Math.max(...lefts) - Math.min(...lefts) <= 3
+                        && meta?.textContent === name
+                        && meta.clientWidth > 0
+                        && meta.scrollWidth > meta.clientWidth;
+                    }
+                    """,
+                    arg=[long_favourite_name],
+                    timeout=10_000,
+                )
+                page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '300px')")
 
                 page.locator("#filterRowClearBtn").click()
                 page.locator("#expectedSearch").fill("expected")

@@ -271,6 +271,7 @@
         margin: 0;
         font-size: 12px;
         font-weight: 700;
+        flex: 0 0 auto;
       }
 
       .favourites-selected-meta,
@@ -286,6 +287,7 @@
         color: var(--muted);
         font-size: 12px;
         margin-left: auto;
+        flex: 1 1 auto;
       }
 
       .filter-row-meta {
@@ -609,6 +611,7 @@
       .filter-collapse-icon {
         width: 9px;
         height: 9px;
+        flex: 0 0 9px;
         border-right: 1.75px solid currentColor;
         border-bottom: 1.75px solid currentColor;
         transform: rotate(45deg) translate(-1px, -1px);
