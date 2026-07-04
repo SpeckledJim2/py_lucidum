@@ -235,18 +235,22 @@ class BrowserSmokeTests(unittest.TestCase):
                             """
                             () => {
                               const controls = document.querySelector("#chartSideControls");
+                              const toolbar = document.querySelector("#lineBarToolbar");
+                              const sideToggle = document.querySelector("#lineBarSideControlsToggleBtn");
+                              const toolbarToggle = document.querySelector("#lineBarToolbarToggleBtn");
                               const workspace = document.querySelector(".workspace");
                               const chart = document.querySelector("#chart");
-                              if (!controls || !workspace || !chart || chart.classList.contains("hidden")) return false;
-                              const controlsRect = controls.getBoundingClientRect();
+                              if (!controls || !toolbar || !sideToggle || !toolbarToggle || !workspace || !chart || chart.classList.contains("hidden")) return false;
                               const workspaceRect = workspace.getBoundingClientRect();
                               const chartRect = chart.getBoundingClientRect();
                               return document.body.classList.contains("sidebar-collapsed")
                                 && document.body.scrollWidth <= document.body.clientWidth
-                                && controlsRect.width >= 280
+                                && sideToggle.getAttribute("aria-expanded") === "false"
+                                && toolbarToggle.getAttribute("aria-expanded") === "false"
+                                && getComputedStyle(controls).display === "none"
+                                && getComputedStyle(toolbar).display === "none"
                                 && workspaceRect.width >= 280
-                                && chartRect.width >= 260
-                                && workspaceRect.top >= controlsRect.bottom - 1;
+                                && chartRect.width >= 260;
                             }
                             """,
                             timeout=10_000,
@@ -261,7 +265,10 @@ class BrowserSmokeTests(unittest.TestCase):
                               return {
                                 bodyScrollWidth: document.body.scrollWidth,
                                 bodyClientWidth: document.body.clientWidth,
-                                controls: rectFor("#chartSideControls"),
+                                controlsDisplay: getComputedStyle(document.querySelector("#chartSideControls")).display,
+                                toolbarDisplay: getComputedStyle(document.querySelector("#lineBarToolbar")).display,
+                                sideExpanded: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-expanded"),
+                                toolbarExpanded: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-expanded"),
                                 workspace: rectFor(".workspace"),
                                 chart: rectFor("#chart"),
                               };
@@ -336,7 +343,10 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertLessEqual(line_bar_rects["bodyScrollWidth"], line_bar_rects["bodyClientWidth"])
                         self.assertGreaterEqual(line_bar_rects["chart"]["width"], 260)
                         self.assertGreaterEqual(line_bar_rects["workspace"]["width"], 280)
-                        self.assertGreaterEqual(line_bar_rects["workspace"]["top"], line_bar_rects["controls"]["top"])
+                        self.assertEqual(line_bar_rects["controlsDisplay"], "none")
+                        self.assertEqual(line_bar_rects["toolbarDisplay"], "none")
+                        self.assertEqual(line_bar_rects["sideExpanded"], "false")
+                        self.assertEqual(line_bar_rects["toolbarExpanded"], "false")
 
                         page.locator("#sidebarToggleBtn").click()
                         page.wait_for_function(
@@ -425,9 +435,23 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertEqual(page.locator(".dataset-meta-title").count(), 0)
                         self.assertFalse(page.locator("#datasetMeta").evaluate("node => node.classList.contains('dataset-meta-title-only')"))
                         self.assertIn("sample.csv", page.locator(".dataset-meta-details").text_content())
-                        page.locator("#chartSideControls:not(.hidden) #featureSearch").wait_for(timeout=10_000)
+                        page.locator("#lineBarSideControlsToggleBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                              && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                            """,
+                            timeout=10_000,
+                        )
                         self.assertFalse(page.locator("#toolSelectorSection").is_visible())
                         self.assertEqual(page.locator("#toolSelectorSection .tool-option:not(.hidden)").count(), 0)
+                        self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                        self.assertEqual(page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded"), "true")
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
+                            timeout=10_000,
+                        )
                         self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                         sidebar_box = page.locator("#appSidebar").bounding_box()
                         filter_box = page.locator(".sidebar-filter-section").bounding_box()
@@ -820,6 +844,14 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.goto(base_url, wait_until="domcontentloaded")
                     page.locator("#datasetMeta").get_by_text("many_columns.csv").wait_for(timeout=10_000)
                     page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                     page.locator("#featureList .line-bar-scroll-region").wait_for(timeout=10_000)
                     page.locator("#expectedList .line-bar-scroll-region").wait_for(state="attached", timeout=10_000)
                     page.wait_for_function(
@@ -1497,10 +1529,10 @@ class BrowserSmokeTests(unittest.TestCase):
                             """,
                             timeout=10_000,
                         )
-                    page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
                         () => document.querySelector("#visualArea")?.classList.contains("line-bar-side-controls-collapsed")
+                          && document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "false"
                         """,
                         timeout=10_000,
                     )
@@ -1709,8 +1741,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         """
                     )
                     self.assertEqual(initial_focus_state["sidebarExpanded"], "true")
-                    self.assertNotEqual(initial_focus_state["toolbarDisplay"], "none")
-                    self.assertNotEqual(initial_focus_state["controlsDisplay"], "none")
+                    self.assertEqual(initial_focus_state["toolbarDisplay"], "none")
+                    self.assertEqual(initial_focus_state["controlsDisplay"], "none")
                     page.locator("#lineBarCopyBtn").click()
                     page.wait_for_function(
                         """
@@ -1726,6 +1758,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         () => ({
                           sideExpanded: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-expanded"),
                           toolbarExpanded: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-expanded"),
+                          sideLabel: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-label"),
+                          toolbarLabel: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-label"),
                           sideRight: document.querySelector("#lineBarSideControlsToggleBtn").getBoundingClientRect().right,
                           toolbarLeft: document.querySelector("#lineBarToolbarToggleBtn").getBoundingClientRect().left,
                           toolbarRight: document.querySelector("#lineBarToolbarToggleBtn").getBoundingClientRect().right,
@@ -1735,11 +1769,37 @@ class BrowserSmokeTests(unittest.TestCase):
                         })
                         """
                     )
-                    self.assertEqual(initial_toggle_state["sideExpanded"], "true")
-                    self.assertEqual(initial_toggle_state["toolbarExpanded"], "true")
+                    self.assertEqual(initial_toggle_state["sideExpanded"], "false")
+                    self.assertEqual(initial_toggle_state["toolbarExpanded"], "false")
+                    self.assertEqual(initial_toggle_state["sideLabel"], "Show x-axis and Expected controls")
+                    self.assertEqual(initial_toggle_state["toolbarLabel"], "Show chart control row")
                     self.assertLessEqual(initial_toggle_state["sideRight"], initial_toggle_state["toolbarLeft"])
                     self.assertLessEqual(initial_toggle_state["toolbarRight"], initial_toggle_state["copyLeft"])
                     self.assertLessEqual(initial_toggle_state["copyRight"], initial_toggle_state["chartLeft"])
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    expanded_focus_state = page.evaluate(
+                        """
+                        () => {
+                          const rootStyle = getComputedStyle(document.documentElement);
+                          const chartRect = document.querySelector("#chart").getBoundingClientRect();
+                          return {
+                            sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
+                            chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
+                            chartWidth: chartRect.width,
+                          };
+                        }
+                        """
+                    )
                     page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
@@ -1772,12 +1832,12 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    self.assertEqual(side_collapsed_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
-                    self.assertEqual(side_collapsed_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
+                    self.assertEqual(side_collapsed_state["sidebarWidth"], expanded_focus_state["sidebarWidth"])
+                    self.assertEqual(side_collapsed_state["chartControlsWidth"], expanded_focus_state["chartControlsWidth"])
                     self.assertEqual(side_collapsed_state["sideExpanded"], "false")
                     self.assertEqual(side_collapsed_state["toolbarExpanded"], "true")
                     self.assertNotEqual(side_collapsed_state["sideIconTransform"], "none")
-                    self.assertGreater(side_collapsed_state["chartWidth"], initial_focus_state["chartWidth"] + 100)
+                    self.assertGreater(side_collapsed_state["chartWidth"], expanded_focus_state["chartWidth"] + 100)
                     page.locator("#lineBarToolbarToggleBtn").click()
                     page.wait_for_function(
                         """
@@ -1810,8 +1870,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    self.assertEqual(toolbar_collapsed_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
-                    self.assertEqual(toolbar_collapsed_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
+                    self.assertEqual(toolbar_collapsed_state["sidebarWidth"], expanded_focus_state["sidebarWidth"])
+                    self.assertEqual(toolbar_collapsed_state["chartControlsWidth"], expanded_focus_state["chartControlsWidth"])
                     self.assertEqual(toolbar_collapsed_state["sideExpanded"], "false")
                     self.assertEqual(toolbar_collapsed_state["toolbarExpanded"], "false")
                     self.assertNotEqual(toolbar_collapsed_state["toolbarIconTransform"], "none")
@@ -1851,8 +1911,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    self.assertEqual(restored_focus_state["sidebarWidth"], initial_focus_state["sidebarWidth"])
-                    self.assertEqual(restored_focus_state["chartControlsWidth"], initial_focus_state["chartControlsWidth"])
+                    self.assertEqual(restored_focus_state["sidebarWidth"], expanded_focus_state["sidebarWidth"])
+                    self.assertEqual(restored_focus_state["chartControlsWidth"], expanded_focus_state["chartControlsWidth"])
                     self.assertLess(restored_focus_state["chartWidth"], side_collapsed_state["chartWidth"] - 100)
                     page.locator("#sidebarToggleBtn").click()
                     page.wait_for_function(
@@ -2258,6 +2318,17 @@ COPY (
                         """,
                         timeout=10_000,
                     )
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                     page.locator('#bandControl [data-value="5"]').click()
                     page.wait_for_function(
                         """
@@ -2401,6 +2472,15 @@ COPY (
                     self.assertLess(virtual_state["renderedRows"], 500)
                     self.assertIn("1-10,000 of 10,005 groups", virtual_state["pager"])
                     chart_requests_before_sort = chart_requests
+                    if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#lineBarToolbarToggleBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                              && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                            """,
+                            timeout=10_000,
+                        )
                     with page.expect_response(lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200, timeout=10_000):
                         page.locator('.segmented[data-control="sort"] button[data-value="volume"]').click()
                     self.assertEqual(chart_requests, chart_requests_before_sort)
@@ -3029,6 +3109,14 @@ COPY (
                             '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                             timeout=10_000,
                         )
+                        page.locator("#lineBarSideControlsToggleBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                              && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                            """,
+                            timeout=10_000,
+                        )
                         page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
                         page.locator("#gbmTool").click()
                         page.get_by_role("button", name="Model navigator").click()
@@ -3389,7 +3477,12 @@ COPY (
                         )
                         page.wait_for_timeout(50)
 
-                        page.locator("#favouritesCollapseBtn").click()
+                        if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#favouritesCollapseBtn").click()
+                            page.wait_for_function(
+                                '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                                timeout=10_000,
+                            )
                         page.locator("#sidebarFavouriteAddBtn").click()
                         page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                         page.wait_for_function(
@@ -3638,6 +3731,15 @@ COPY (
                             '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                             timeout=10_000,
                         )
+                        if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarToolbarToggleBtn").click()
+                            page.wait_for_function(
+                                """
+                                () => document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                                  && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                                """,
+                                timeout=10_000,
+                            )
                         page.locator('.segmented[data-control="labels"] button[data-value="line"]').click()
                         page.wait_for_function(
                             """
@@ -3658,7 +3760,12 @@ COPY (
                             route.continue_()
 
                         page.route("**/api/chart", handle_chart_route)
-                        page.locator("#favouritesCollapseBtn").click()
+                        if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#favouritesCollapseBtn").click()
+                            page.wait_for_function(
+                                '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                                timeout=10_000,
+                            )
                         page.locator('.saved-favourite-option[data-favourite-id="ratio-view"]').wait_for(timeout=10_000)
                         page.locator('.saved-favourite-option[data-favourite-id="ratio-view"]').click()
                         page.wait_for_function(
@@ -3878,7 +3985,12 @@ COPY (
                             '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                             timeout=10_000,
                         )
-                        page.locator("#favouritesCollapseBtn").click()
+                        if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#favouritesCollapseBtn").click()
+                            page.wait_for_function(
+                                '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                                timeout=10_000,
+                            )
                         page.locator('.saved-favourite-option[data-favourite-id="saved-ratio-view"]').wait_for(timeout=10_000)
                         with page.expect_request(
                             lambda request: request.url.endswith("/api/chart") and "gbm_to_glm_ratio" in (request.post_data or ""),
@@ -4766,12 +4878,11 @@ COPY (
                     },
                 )
                 self.assert_tool_button_tooltip_over_button(page, "#profileTool", "Column profile")
-                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
-                self.assertTrue(page.locator("#actualNumerator").is_visible())
-                self.assertTrue(page.locator("#denominator").is_visible())
                 assert_sidebar_headers_visible()
-                wait_accordion_state(None)
+                wait_accordion_state("favourites")
 
+                page.locator("#favouritesCollapseBtn").click()
+                wait_accordion_state(None)
                 page.locator("#favouritesCollapseBtn").click()
                 wait_accordion_state("favourites")
                 page.locator("#kpiCollapseBtn").click()
@@ -4933,6 +5044,12 @@ COPY (
                 page.locator("#profileDetailTitle").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(state="attached", timeout=10_000)
                 page.locator("#glmModelSelect").wait_for(state="attached", timeout=10_000)
+                if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#favouritesCollapseBtn").click()
+                    page.wait_for_function(
+                        '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
+                        timeout=10_000,
+                    )
                 if page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded") == "true":
                     page.locator("#glmModelCollapseBtn").click()
                     self.assertEqual(page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded"), "false")
@@ -5468,6 +5585,15 @@ COPY (
                     page.locator("#glmCoefficientContextMenu [role='menuitem']", has_text="Go to Line and Bar (Segment)").click()
                 glm_coefficient_chart_body = json.loads(glm_coefficient_chart_info.value.post_data or "{}")
                 page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
                 self.assertEqual(glm_coefficient_chart_body["x"], "Segment")
                 self.assertEqual(glm_coefficient_chart_body["responses"][1]["numerator"], "glm_prediction")
@@ -5558,6 +5684,14 @@ COPY (
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                     timeout=10_000,
                 )
+                page.locator("#lineBarSideControlsToggleBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                      && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                    """,
+                    timeout=10_000,
+                )
                 open_sidebar_section("#gbmModelCollapseBtn")
                 chart_requests_before = chart_requests
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as chart_request_info:
@@ -5579,6 +5713,14 @@ COPY (
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                 page.wait_for_function(
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    timeout=10_000,
+                )
+                page.locator("#lineBarSideControlsToggleBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                      && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                    """,
                     timeout=10_000,
                 )
                 expected_state = page.evaluate(
@@ -6041,6 +6183,15 @@ COPY (
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                     timeout=10_000,
                 )
+                if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000):
                     page.locator('.segmented[data-control="transform"] button[data-value="one"]').click()
                 page.wait_for_function(
@@ -6150,6 +6301,15 @@ COPY (
                     '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                     timeout=10_000,
                 )
+                if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
                 page.locator("#glmTool").click()
                 page.locator(".glm-tool").wait_for(timeout=10_000)
@@ -6317,6 +6477,15 @@ COPY (
                 self.assertEqual(glm_navigator_chart_body["x"], "Segment")
                 self.assertEqual(glm_navigator_chart_body["responses"][1]["numerator"], "glm_prediction")
                 self.assertEqual(glm_navigator_chart_body["responses"][1]["source"], "glm:browser-smoke-glm-2:predictions")
+                if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
                 page.locator("#glmTool").click()
                 page.locator(".glm-tool").wait_for(timeout=10_000)
@@ -7297,6 +7466,12 @@ COPY (
                 )
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                 assert_specs_first_tab_aligns_with_model_tabs()
+                if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#favouritesCollapseBtn").click()
+                    page.wait_for_function(
+                        '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
+                        timeout=10_000,
+                    )
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
@@ -8261,6 +8436,12 @@ COPY (
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.wait_for_function('() => Boolean(document.querySelector("#datasetViewerStylesheet"))', timeout=10_000)
                 self.assertGreaterEqual(dataset_viewer_requests, 1)
+                if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "true":
+                    page.locator("#favouritesCollapseBtn").click()
+                    page.wait_for_function(
+                        '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
+                        timeout=10_000,
+                    )
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
@@ -10119,6 +10300,27 @@ COPY (
                 self.assertEqual(histogram_bins_payload["bins"], "5")
                 page.locator("#histogramStatsGrid .tabulator-row").first.wait_for(timeout=10_000)
 
+                page.evaluate(
+                    """
+                    () => {
+                      ["#favouritesCollapseBtn", "#kpiCollapseBtn", "#gbmModelCollapseBtn", "#glmModelCollapseBtn", "#filterCollapseBtn"]
+                        .forEach((selector) => {
+                          const button = document.querySelector(selector);
+                          if (button?.getAttribute("aria-expanded") === "true") button.click();
+                        });
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => ["#favouritesCollapseBtn", "#kpiCollapseBtn", "#gbmModelCollapseBtn", "#glmModelCollapseBtn", "#filterCollapseBtn"]
+                      .every((selector) => {
+                        const button = document.querySelector(selector);
+                        return !button || button.getAttribute("aria-expanded") === "false";
+                      })
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
@@ -10418,6 +10620,15 @@ COPY (
                     page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Go to Line and Bar").click()
                 gbm_context_chart_body = json.loads(gbm_context_chart_info.value.post_data or "{}")
                 page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                 page.locator("#featureList .feature.active", has_text="Age").wait_for(timeout=10_000)
                 self.assertEqual(gbm_context_chart_body["x"], "Age")
                 self.assertEqual(gbm_context_chart_body["responses"][1]["numerator"], "gbm_prediction")
@@ -12771,7 +12982,8 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#favouritesCollapseBtn").click()
+                if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#favouritesCollapseBtn").click()
                 page.locator("#sidebarFavouriteAddBtn").wait_for(timeout=10_000)
 
                 page.locator("#filterCollapseBtn").click()
@@ -12782,6 +12994,15 @@ COPY (
                 age_row.click()
                 self.assertEqual(page.locator("#filterInput").input_value(), "vehicle_age >= 3")
 
+                if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                 if page.locator("#expectedSideSection").get_attribute("aria-hidden") == "true":
                     page.locator("#chartExpectedToggle").click()
                 page.locator("#expectedSearch").fill("expected")
@@ -13077,6 +13298,15 @@ COPY (
                     arg=[remaining_favourite["id"]],
                     timeout=10_000,
                 )
+                if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                 page.locator('.segmented[data-control="labels"] button[data-value="bar"]').click()
                 page.wait_for_function(
                     """() => !document.querySelector(".saved-favourite-option.active")""",
