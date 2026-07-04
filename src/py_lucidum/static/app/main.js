@@ -3013,10 +3013,12 @@
           }
         });
         document.addEventListener("click", (event) => {
-          const section = document.querySelector(".sidebar-favourites-section");
           const popover = el("sidebarFavouritePopover");
-          if (!section || !popover || popover.hidden) return;
-          if (!section.contains(event.target)) closeFavouritePopover();
+          if (!popover || popover.hidden) return;
+          const addButton = el("sidebarFavouriteAddBtn");
+          const menuButton = el("sidebarFavouriteMenuBtn");
+          if (popover.contains(event.target) || addButton?.contains(event.target) || menuButton?.contains(event.target)) return;
+          closeFavouritePopover();
         });
         window.addEventListener("resize", () => {
           const popover = el("sidebarFavouritePopover");

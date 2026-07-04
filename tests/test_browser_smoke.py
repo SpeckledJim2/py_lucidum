@@ -12266,6 +12266,10 @@ COPY (
                 self.assertGreaterEqual(filter_layout["clear"]["left"], filter_layout["meta"]["left"])
                 self.assertLessEqual(filter_layout["clear"]["right"], filter_layout["text"]["left"] + 1)
                 self.assertLessEqual(filter_layout["text"]["right"], filter_layout["meta"]["right"])
+                self.assertLessEqual(
+                    filter_layout["meta"]["right"] - filter_layout["meta"]["left"],
+                    filter_layout["text"]["right"] - filter_layout["clear"]["left"] + 14,
+                )
                 self.assertGreater(filter_layout["operator"]["top"], filter_layout["mode"]["bottom"] - 1)
                 self.assertAlmostEqual(filter_layout["operator"]["left"], filter_layout["mode"]["left"], delta=1)
                 self.assertAlmostEqual(filter_layout["meta"]["right"], filter_layout["header"]["right"], delta=1)
@@ -12433,6 +12437,19 @@ COPY (
                     timeout=10_000,
                 )
                 page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '300px')")
+                page.locator("#sidebarFavouriteAddBtn").click()
+                page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.evaluate(
+                    """
+                    ([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)
+                      ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }))
+                    """,
+                    arg=[older_id],
+                )
+                page.wait_for_function(
+                    """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
+                    timeout=10_000,
+                )
 
                 page.locator("#filterRowClearBtn").click()
                 page.locator("#expectedSearch").fill("expected")
@@ -12450,6 +12467,19 @@ COPY (
                 page.locator("#sidebarFavouriteMenuBtn").click()
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 page.locator("#sidebarFavouriteMenuBtn").click()
+                page.wait_for_function(
+                    """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
+                    timeout=10_000,
+                )
+                page.locator("#sidebarFavouriteMenuBtn").click()
+                page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                page.evaluate(
+                    """
+                    ([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)
+                      ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }))
+                    """,
+                    arg=[older_id],
+                )
                 page.wait_for_function(
                     """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,
