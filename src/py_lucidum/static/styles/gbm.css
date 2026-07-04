@@ -1730,7 +1730,7 @@
 
       @media (max-width: 1180px) {
         .shell {
-          grid-template-columns: var(--sidebar-width, 280px) 6px 1fr;
+          grid-template-columns: var(--sidebar-width, 280px) 3px 1fr;
         }
 
         .toolbar {

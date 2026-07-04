@@ -1694,7 +1694,10 @@
 
       function handleToolClick(tool) {
         hideToolButtonTooltip();
-        if (state.tool === tool) return;
+        if (state.tool === tool) {
+          setSidebarVisible(!state.sidebarVisible);
+          return;
+        }
         setTool(tool);
       }
 

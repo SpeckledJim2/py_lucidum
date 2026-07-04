@@ -288,6 +288,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Keep the app dense, utilitarian, and work-focused.
 - Preserve chart space; controls should stay compact and avoid unnecessary wrapping.
 - The sidebar is resizable so users can trade space between long column names and the chart.
+- When multiple tools are enabled, the sidebar tool selector is a vertical rail that remains visible while the sidebar is collapsed. Clicking the active tool button toggles the sidebar open or closed; clicking an inactive tool switches tools without changing the sidebar state. Single-tool mode still hides the selector.
 - Response controls sit above the x-axis feature list because response selection is usually the first workflow choice.
 - Chart/Table controls sit before the filter bar.
 - Saved-filter selections populate and apply the filter expression immediately. Manual filter edits require Enter or Apply.

@@ -240,7 +240,7 @@
 
       .shell {
         display: grid;
-        grid-template-columns: var(--sidebar-width, 300px) 6px minmax(0, 1fr);
+        grid-template-columns: var(--sidebar-width, 300px) 3px minmax(0, 1fr);
         min-height: 0;
         min-width: 0;
       }
@@ -262,21 +262,41 @@
       }
 
       body.sidebar-collapsed #appSidebar {
-        align-items: center;
-        padding: 8px;
+        grid-template-columns: var(--sidebar-collapsed-width);
       }
 
-      body.sidebar-collapsed #appSidebar > .section:not(#toolSelectorSection) {
+      body.sidebar-collapsed .sidebar-control-pane {
         display: none;
       }
 
       #appSidebar {
         background: var(--sidebar-bg);
-        padding: 8px;
         overflow: hidden;
+        display: grid;
+        grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);
+        min-height: 0;
+        min-width: 0;
+      }
+
+      body.single-tool-mode #appSidebar {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .sidebar-control-pane {
+        border-left: 1px solid var(--line);
         display: flex;
         flex-direction: column;
+        grid-column: 2;
         min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        padding: 8px;
+      }
+
+      body.single-tool-mode .sidebar-control-pane {
+        border-left: 0;
+        grid-column: 1;
+        padding: 8px;
       }
 
       .sidebar-version {
@@ -310,7 +330,7 @@
       .sidebar-resizer {
         background: linear-gradient(to right, var(--line), transparent);
         cursor: col-resize;
-        min-width: 6px;
+        min-width: 3px;
         touch-action: none;
         user-select: none;
         -webkit-user-select: none;

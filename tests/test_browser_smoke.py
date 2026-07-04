@@ -4583,25 +4583,28 @@ COPY (
                 assert_tool_order("column_profile|line_bar|uk_map|glm|gbm")
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#gbmSidebarPanel").wait_for(timeout=10_000)
-                tool_row_state = page.evaluate(
+                tool_rail_state = page.evaluate(
                     """
                     () => {
                       const buttons = [...document.querySelectorAll("#toolSelectorSection .tool-option:not(.hidden)")];
                       const selector = document.querySelector("#toolSelectorSection .tool-selector");
                       const selectorStyle = getComputedStyle(selector);
-                      const originalWidth = selector.style.width;
-                      selector.style.width = "76px";
-                      const scrollsWhenNarrow = selector.scrollWidth > selector.clientWidth;
-                      selector.style.width = originalWidth;
+                      const sidebarRect = document.querySelector("#appSidebar").getBoundingClientRect();
+                      const railRect = document.querySelector("#toolSelectorSection").getBoundingClientRect();
+                      const paneRect = document.querySelector("#sidebarControlPane").getBoundingClientRect();
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
+                      const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
                       return {
                         count: buttons.length,
-                        oneLine: new Set(tops).size === 1,
+                        selectorDisplay: selectorStyle.display,
                         gap: selectorStyle.gap,
-                        flexWrap: selectorStyle.flexWrap,
                         overflowX: selectorStyle.overflowX,
+                        overflowY: selectorStyle.overflowY,
                         selectorMatchesSidebar: selectorStyle.backgroundColor === getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
-                        scrollsWhenNarrow,
+                        vertical: new Set(lefts).size === 1 && new Set(tops).size === buttons.length,
+                        railWidth: Math.round(railRect.width),
+                        railAtSidebarLeft: Math.round(railRect.left) === Math.round(sidebarRect.left),
+                        paneRightOfRail: Math.round(paneRect.left) >= Math.round(railRect.right),
                         allButtonsVisible: buttons.every((button) => {
                           const rect = button.getBoundingClientRect();
                           return rect.width > 0 && rect.height > 0 && getComputedStyle(button).display !== "none";
@@ -4638,15 +4641,18 @@ COPY (
                     """
                 )
                 self.assertEqual(
-                    tool_row_state,
+                    tool_rail_state,
                     {
                         "count": 5,
-                        "oneLine": True,
+                        "selectorDisplay": "grid",
                         "gap": "2px",
-                        "flexWrap": "nowrap",
-                        "overflowX": "auto",
+                        "overflowX": "hidden",
+                        "overflowY": "auto",
                         "selectorMatchesSidebar": True,
-                        "scrollsWhenNarrow": True,
+                        "vertical": True,
+                        "railWidth": 52,
+                        "railAtSidebarLeft": True,
+                        "paneRightOfRail": True,
                         "allButtonsVisible": True,
                         "allButtonsSquare": True,
                         "allButtonsBorderless": True,
@@ -4685,11 +4691,16 @@ COPY (
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
                 page.locator("#lineBarTool.active").click()
-                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
-                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+
+                page.locator("#ukMapTool.active").click()
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
                 assert_sidebar_headers_visible()
                 wait_accordion_state("filter")
 
@@ -9449,16 +9460,54 @@ COPY (
                 self.assertTrue(page.locator("#toolSelectorSection .tool-option:not(.hidden)").first.is_visible())
                 expanded_first_tool_top = page.locator("#toolSelectorSection .tool-option:not(.hidden)").first.bounding_box()
                 self.assertIsNotNone(expanded_first_tool_top)
-                self.assertTrue(
-                    page.evaluate(
-                        """
-                        () => {
-                          const label = document.querySelector("#lineBarTool .tool-label");
+                expanded_tool_state = page.evaluate(
+                    """
+                    () => {
+                      const buttons = [...document.querySelectorAll("#toolSelectorSection .tool-option:not(.hidden)")];
+                      const selector = document.querySelector("#toolSelectorSection .tool-selector");
+                      const rail = document.querySelector("#toolSelectorSection");
+                      const pane = document.querySelector("#sidebarControlPane");
+                      const sidebar = document.querySelector("#appSidebar");
+                      const railRect = rail.getBoundingClientRect();
+                      const paneRect = pane.getBoundingClientRect();
+                      const sidebarRect = sidebar.getBoundingClientRect();
+                      const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
+                      const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
+                      return {
+                        count: buttons.length,
+                        selectorDisplay: getComputedStyle(selector).display,
+                        selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === getComputedStyle(sidebar).backgroundColor,
+                        gap: getComputedStyle(selector).gap,
+                        overflowX: getComputedStyle(selector).overflowX,
+                        overflowY: getComputedStyle(selector).overflowY,
+                        vertical: new Set(lefts).size === 1 && new Set(tops).size === buttons.length,
+                        railWidth: Math.round(railRect.width),
+                        railAtSidebarLeft: Math.round(railRect.left) === Math.round(sidebarRect.left),
+                        paneRightOfRail: Math.round(paneRect.left) >= Math.round(railRect.right),
+                        labelsHidden: buttons.every((button) => {
+                          const label = button.querySelector(".tool-label");
                           const style = label ? getComputedStyle(label) : null;
                           return style?.position === "absolute" && style.width === "1px" && style.overflow === "hidden";
-                        }
-                        """
-                    )
+                        }),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    expanded_tool_state,
+                    {
+                        "count": 6,
+                        "selectorDisplay": "grid",
+                        "selectorMatchesSidebar": True,
+                        "gap": "2px",
+                        "overflowX": "hidden",
+                        "overflowY": "auto",
+                        "vertical": True,
+                        "railWidth": 52,
+                        "railAtSidebarLeft": True,
+                        "paneRightOfRail": True,
+                        "labelsHidden": True,
+                    },
                 )
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
@@ -9485,6 +9534,8 @@ COPY (
                         selectorDisplay: getComputedStyle(selector).display,
                         selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
                         gap: getComputedStyle(selector).gap,
+                        overflowX: getComputedStyle(selector).overflowX,
+                        overflowY: getComputedStyle(selector).overflowY,
                         vertical: new Set(lefts).size === 1 && new Set(tops).size === buttons.length,
                         allButtonsSquare: buttons.every((button) => {
                           const rect = button.getBoundingClientRect();
@@ -9518,6 +9569,8 @@ COPY (
                         "selectorDisplay": "grid",
                         "selectorMatchesSidebar": True,
                         "gap": "2px",
+                        "overflowX": "hidden",
+                        "overflowY": "auto",
                         "vertical": True,
                         "allButtonsSquare": True,
                         "allButtonsBorderless": True,
@@ -9652,9 +9705,10 @@ COPY (
                 wait_for_map_toggle_top_right()
                 sidebar_resizer_box = page.locator("#sidebarResizer").bounding_box()
                 self.assertIsNotNone(sidebar_resizer_box)
-                page.mouse.move(sidebar_resizer_box["x"] + 3, sidebar_resizer_box["y"] + 100)
+                sidebar_resizer_x = sidebar_resizer_box["x"] + sidebar_resizer_box["width"] / 2
+                page.mouse.move(sidebar_resizer_x, sidebar_resizer_box["y"] + 100)
                 page.mouse.down()
-                page.mouse.move(sidebar_resizer_box["x"] + 83, sidebar_resizer_box["y"] + 100, steps=8)
+                page.mouse.move(sidebar_resizer_x + 80, sidebar_resizer_box["y"] + 100, steps=8)
                 page.mouse.up()
                 wait_for_map_toggle_top_right()
                 page.locator("#sidebarToggleBtn").click()
@@ -9981,6 +10035,14 @@ COPY (
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                page.evaluate(
+                    """
+                    () => new Promise((resolve) => {
+                        requestAnimationFrame(() => requestAnimationFrame(resolve));
+                    })
+                    """
+                )
+                stable_map_view = map_view()
                 wait_for_map_view(stable_map_view)
 
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):

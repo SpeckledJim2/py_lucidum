@@ -530,27 +530,29 @@
       }
 
       .tool-selector-section {
-        margin-bottom: 8px;
-        padding-top: 0;
-        min-width: 0;
-      }
-
-      body.sidebar-collapsed .tool-selector-section {
-        width: 100%;
+        align-items: center;
+        display: flex;
+        flex-direction: column;
+        grid-column: 1;
         margin-bottom: 0;
-        padding-top: 0;
+        min-height: 0;
+        min-width: 0;
+        padding: 8px;
+        width: var(--sidebar-collapsed-width);
       }
 
       .tool-selector {
-        display: flex;
-        flex-wrap: nowrap;
+        display: grid;
+        flex: 0 1 auto;
+        grid-template-columns: 1fr;
         gap: 2px;
         max-width: 100%;
+        min-height: 0;
         min-width: 0;
         border-radius: 4px;
         background: var(--sidebar-bg);
-        overflow-x: auto;
-        overflow-y: hidden;
+        overflow-x: hidden;
+        overflow-y: auto;
         scrollbar-width: thin;
         -webkit-overflow-scrolling: touch;
       }
@@ -588,49 +590,7 @@
         border: 0;
       }
 
-      body.sidebar-collapsed .tool-selector {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 2px;
-        overflow: visible;
-        scrollbar-width: auto;
-      }
-
-      body.sidebar-collapsed .tool-option {
-        width: 36px;
-        height: 36px;
-        min-height: 36px;
-        flex-basis: 36px;
-        border: 0;
-        background: transparent;
-        justify-content: center;
-        gap: 0;
-        padding: 0;
-        border-radius: 0;
-      }
-
-      body.sidebar-collapsed .tool-icon {
-        width: 30px;
-        height: 30px;
-      }
-
-      body.sidebar-collapsed .tool-icon svg {
-        width: 28px;
-        height: 28px;
-      }
-
-      body.sidebar-collapsed .tool-icon img {
-        width: 30px;
-        height: 30px;
-      }
-
       .tool-option.active {
-        background: transparent;
-        color: var(--accent);
-        opacity: 1;
-      }
-
-      body.sidebar-collapsed .tool-option.active {
         background: transparent;
         color: var(--accent);
         opacity: 1;

@@ -115,100 +115,102 @@
                 <span class="tool-label">Specifications</span>
               </button>
             </div>
+            <div id="collapsedSidebarVersion" class="collapsed-sidebar-version" aria-label="Lucidum version" hidden></div>
           </section>
 
-          <section class="section sidebar-metric-section">
-            <div class="metric-row">
-              <div id="actualMetricTitle" class="metric-title">Actual</div>
-              <select id="actualNumerator"></select>
-            </div>
-            <div class="metric-row">
-              <div id="weightMetricTitle" class="metric-title">Weight</div>
-              <select id="denominator"></select>
-            </div>
-          </section>
-
-          <section class="section sidebar-favourites-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="favourites">
-            <button id="favouritesCollapseBtn" class="favourites-header sidebar-section-header" type="button" aria-label="Expand FAVOURITES" aria-expanded="false" title="Expand FAVOURITES">
-              <span class="filter-collapse-icon" aria-hidden="true"></span>
-              <span class="sidebar-section-title">FAVOURITES</span>
-              <span id="favouritesSelectedMeta" class="favourites-selected-meta"></span>
-            </button>
-            <div class="sidebar-section-body">
-              <div id="sidebarFavouritesControls" class="sidebar-favourites-controls">
-                <button id="sidebarFavouriteMenuBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Edit favourites" aria-label="Edit favourites">Edit favourites</button>
-                <button id="sidebarFavouriteAddBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Add favourite" aria-label="Add favourite">Add favourite</button>
+          <div id="sidebarControlPane" class="sidebar-control-pane">
+            <section class="section sidebar-metric-section">
+              <div class="metric-row">
+                <div id="actualMetricTitle" class="metric-title">Actual</div>
+                <select id="actualNumerator"></select>
               </div>
-              <div id="favouritesSelect" class="feature-list favourites-list" role="listbox" aria-label="FAVOURITES"></div>
-              <div id="sidebarFavouritePopover" class="line-bar-favourite-popover sidebar-favourite-popover" hidden></div>
-            </div>
-          </section>
+              <div class="metric-row">
+                <div id="weightMetricTitle" class="metric-title">Weight</div>
+                <select id="denominator"></select>
+              </div>
+            </section>
 
-          <section class="section sidebar-kpi-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="kpi">
-            <button id="kpiCollapseBtn" class="kpi-header sidebar-section-header" type="button" aria-label="Expand KPIs" aria-expanded="false" title="Expand KPIs">
-              <span class="filter-collapse-icon" aria-hidden="true"></span>
-              <span class="sidebar-section-title">KPIs</span>
-              <span id="kpiSelectedMeta" class="kpi-selected-meta"></span>
-            </button>
-            <div class="sidebar-section-body">
-              <div id="kpiSelect" class="feature-list kpi-list" role="listbox" aria-label="KPIs"></div>
-            </div>
-          </section>
-
-          <section id="gbmSidebarPanel" class="section gbm-sidebar-panel sidebar-accordion-section sidebar-section-closed" data-sidebar-section="gbm">
-            <button id="gbmModelCollapseBtn" class="gbm-model-header sidebar-section-header" type="button" aria-label="Expand GBMs" aria-expanded="false" title="Expand GBMs">
-              <span class="filter-collapse-icon" aria-hidden="true"></span>
-              <span class="sidebar-section-title">GBMs</span>
-              <span id="gbmModelSelectedMeta" class="gbm-model-selected-meta"></span>
-            </button>
-            <div class="sidebar-section-body">
-              <div id="gbmModelSelect" class="feature-list gbm-model-list" role="listbox" aria-label="GBM models"></div>
-            </div>
-          </section>
-
-          <section id="glmSidebarPanel" class="section glm-sidebar-panel sidebar-accordion-section sidebar-section-closed" data-sidebar-section="glm">
-            <button id="glmModelCollapseBtn" class="glm-model-header sidebar-section-header" type="button" aria-label="Expand GLMs" aria-expanded="false" title="Expand GLMs">
-              <span class="filter-collapse-icon" aria-hidden="true"></span>
-              <span class="sidebar-section-title">GLMs</span>
-              <span id="glmModelSelectedMeta" class="glm-model-selected-meta"></span>
-            </button>
-            <div class="sidebar-section-body">
-              <div id="glmModelSelect" class="feature-list glm-model-list" role="listbox" aria-label="GLM models"></div>
-            </div>
-          </section>
-
-          <section class="section sidebar-filter-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="filter">
-            <div class="filter-header">
-              <button id="filterCollapseBtn" class="filter-collapse-button sidebar-section-header" type="button" aria-label="Expand FILTER" aria-expanded="false" title="Expand FILTER">
+            <section class="section sidebar-favourites-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="favourites">
+              <button id="favouritesCollapseBtn" class="favourites-header sidebar-section-header" type="button" aria-label="Expand FAVOURITES" aria-expanded="false" title="Expand FAVOURITES">
                 <span class="filter-collapse-icon" aria-hidden="true"></span>
-                <span class="sidebar-section-title">FILTER</span>
+                <span class="sidebar-section-title">FAVOURITES</span>
+                <span id="favouritesSelectedMeta" class="favourites-selected-meta"></span>
               </button>
-              <span id="filterRowMeta" class="filter-row-meta">
-                <button id="filterRowClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button>
-                <span id="filterRowMetaText" class="filter-badge-text"></span>
-              </span>
-            </div>
-            <div class="sidebar-section-body">
-              <div class="filter-controls-row">
-                <div class="filter-controls-primary">
-                  <div class="segmented filter-selection-mode" data-control="filterSelectionMode" aria-label="Saved filter selection mode">
-                    <button data-value="single" type="button">Single</button>
-                    <button data-value="grouped" class="active" type="button">Grouped</button>
-                    <button data-value="multi" type="button">Multi</button>
+              <div class="sidebar-section-body">
+                <div id="sidebarFavouritesControls" class="sidebar-favourites-controls">
+                  <button id="sidebarFavouriteMenuBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Edit favourites" aria-label="Edit favourites">Edit favourites</button>
+                  <button id="sidebarFavouriteAddBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Add favourite" aria-label="Add favourite">Add favourite</button>
+                </div>
+                <div id="favouritesSelect" class="feature-list favourites-list" role="listbox" aria-label="FAVOURITES"></div>
+                <div id="sidebarFavouritePopover" class="line-bar-favourite-popover sidebar-favourite-popover" hidden></div>
+              </div>
+            </section>
+
+            <section class="section sidebar-kpi-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="kpi">
+              <button id="kpiCollapseBtn" class="kpi-header sidebar-section-header" type="button" aria-label="Expand KPIs" aria-expanded="false" title="Expand KPIs">
+                <span class="filter-collapse-icon" aria-hidden="true"></span>
+                <span class="sidebar-section-title">KPIs</span>
+                <span id="kpiSelectedMeta" class="kpi-selected-meta"></span>
+              </button>
+              <div class="sidebar-section-body">
+                <div id="kpiSelect" class="feature-list kpi-list" role="listbox" aria-label="KPIs"></div>
+              </div>
+            </section>
+
+            <section id="gbmSidebarPanel" class="section gbm-sidebar-panel sidebar-accordion-section sidebar-section-closed" data-sidebar-section="gbm">
+              <button id="gbmModelCollapseBtn" class="gbm-model-header sidebar-section-header" type="button" aria-label="Expand GBMs" aria-expanded="false" title="Expand GBMs">
+                <span class="filter-collapse-icon" aria-hidden="true"></span>
+                <span class="sidebar-section-title">GBMs</span>
+                <span id="gbmModelSelectedMeta" class="gbm-model-selected-meta"></span>
+              </button>
+              <div class="sidebar-section-body">
+                <div id="gbmModelSelect" class="feature-list gbm-model-list" role="listbox" aria-label="GBM models"></div>
+              </div>
+            </section>
+
+            <section id="glmSidebarPanel" class="section glm-sidebar-panel sidebar-accordion-section sidebar-section-closed" data-sidebar-section="glm">
+              <button id="glmModelCollapseBtn" class="glm-model-header sidebar-section-header" type="button" aria-label="Expand GLMs" aria-expanded="false" title="Expand GLMs">
+                <span class="filter-collapse-icon" aria-hidden="true"></span>
+                <span class="sidebar-section-title">GLMs</span>
+                <span id="glmModelSelectedMeta" class="glm-model-selected-meta"></span>
+              </button>
+              <div class="sidebar-section-body">
+                <div id="glmModelSelect" class="feature-list glm-model-list" role="listbox" aria-label="GLM models"></div>
+              </div>
+            </section>
+
+            <section class="section sidebar-filter-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="filter">
+              <div class="filter-header">
+                <button id="filterCollapseBtn" class="filter-collapse-button sidebar-section-header" type="button" aria-label="Expand FILTER" aria-expanded="false" title="Expand FILTER">
+                  <span class="filter-collapse-icon" aria-hidden="true"></span>
+                  <span class="sidebar-section-title">FILTER</span>
+                </button>
+                <span id="filterRowMeta" class="filter-row-meta">
+                  <button id="filterRowClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button>
+                  <span id="filterRowMetaText" class="filter-badge-text"></span>
+                </span>
+              </div>
+              <div class="sidebar-section-body">
+                <div class="filter-controls-row">
+                  <div class="filter-controls-primary">
+                    <div class="segmented filter-selection-mode" data-control="filterSelectionMode" aria-label="Saved filter selection mode">
+                      <button data-value="single" type="button">Single</button>
+                      <button data-value="grouped" class="active" type="button">Grouped</button>
+                      <button data-value="multi" type="button">Multi</button>
+                    </div>
+                  </div>
+                  <div class="segmented filter-operator" data-control="filterOperator" aria-label="Saved filter operator">
+                    <button data-value="and" class="active" type="button">All</button>
+                    <button data-value="or" type="button">Any</button>
+                    <button data-value="nand" type="button">Not all</button>
+                    <button data-value="nor" type="button">None</button>
                   </div>
                 </div>
-                <div class="segmented filter-operator" data-control="filterOperator" aria-label="Saved filter operator">
-                  <button data-value="and" class="active" type="button">All</button>
-                  <button data-value="or" type="button">Any</button>
-                  <button data-value="nand" type="button">Not all</button>
-                  <button data-value="nor" type="button">None</button>
-                </div>
+                <div id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox" aria-label="Saved filters" aria-multiselectable="true"></div>
               </div>
-              <div id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox" aria-label="Saved filters" aria-multiselectable="true"></div>
-            </div>
-          </section>
-          <div id="sidebarVersion" class="sidebar-version" aria-label="Lucidum version" hidden></div>
-          <div id="collapsedSidebarVersion" class="collapsed-sidebar-version" aria-label="Lucidum version" hidden></div>
+            </section>
+            <div id="sidebarVersion" class="sidebar-version" aria-label="Lucidum version" hidden></div>
+          </div>
         </aside>
 
         <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
