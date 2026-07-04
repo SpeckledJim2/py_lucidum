@@ -97,6 +97,23 @@ COPY (
 
 
 class BrowserSmokeTests(unittest.TestCase):
+    def click_sidebar_favourite_action(self, page: Any, selector: str) -> None:
+        page.locator(".sidebar-favourites-header-row").hover()
+        page.wait_for_function(
+            """
+            (selector) => {
+              const button = document.querySelector(selector);
+              const controls = button?.closest(".sidebar-favourites-controls");
+              if (!controls) return false;
+              const style = getComputedStyle(controls);
+              return style.opacity === "1" && style.pointerEvents !== "none";
+            }
+            """,
+            arg=selector,
+            timeout=10_000,
+        )
+        page.locator(selector).click()
+
     def assert_tool_button_tooltip_over_button(self, page: Any, selector: str, text: str) -> None:
         page.locator(selector).hover()
         page.wait_for_timeout(250)
@@ -3411,6 +3428,293 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_view_favourites_restore_with_single_data_request_and_no_stale_kpi(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,vehicle_age,segment,price,value,alt_price\n"
+                "AB,AB10 1,AB10 1AA,57.1,-2.1,1,A,100,10,1000\n"
+                "AB,AB10 1,AB10 1AB,57.2,-2.2,2,A,200,20,2000\n"
+                "AL,AL1 1,AL1 1AA,51.8,-0.3,3,B,300,30,3000\n"
+                "AL,AL1 2,AL1 2AA,51.7,-0.2,4,B,400,40,4000\n",
+                encoding="utf-8",
+            )
+            kpis_path = root / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "TEST,Price,price,value,1,number\n"
+                "TEST,Alt,alt_price,value,1,number\n",
+                encoding="utf-8",
+            )
+            favourite_view = {
+                "version": 1,
+                "source": "dataset",
+                "x": "vehicle_age",
+                "xSource": "dataset",
+                "sort": "alpha",
+                "lowGroup": "0",
+                "labels": "none",
+                "bandWidth": "1",
+                "quantileMode": "off",
+                "dateBucket": "none",
+                "transform": "none",
+                "sigma": "0",
+                "partialDependence": "none",
+                "featureSort": "alpha",
+                "expectedSort": "alpha",
+                "actual": {"value": "price", "sourceId": "dataset", "metricKind": "metric"},
+                "denominator": "value",
+                "expectedSelections": [],
+                "filter": "",
+                "filterSelectionMode": "grouped",
+                "filterOperator": "and",
+                "savedFilterRows": [],
+            }
+            favourites_path = root / "favourites.json"
+            favourites_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "favourites": [
+                            {
+                                "id": "chart-fav",
+                                "name": "Chart favourite",
+                                "view": {**favourite_view, "scope": "line_bar_view", "view": "chart"},
+                            },
+                            {
+                                "id": "table-fav",
+                                "name": "Table favourite",
+                                "view": {**favourite_view, "scope": "line_bar_view", "view": "table", "x": "segment"},
+                            },
+                            {
+                                "id": "map-fav",
+                                "name": "Map favourite",
+                                "view": {
+                                    **favourite_view,
+                                    "scope": "map_view",
+                                    "map": {
+                                        "level": "sector",
+                                        "baseMap": "blank",
+                                        "palette": "viridis",
+                                        "lineWeight": 1,
+                                        "dotSize": 1,
+                                        "opacity": 1,
+                                        "hotspots": 0,
+                                        "labelSize": 0,
+                                        "smoothingLevel": 0,
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                kpis_path=kpis_path,
+                use_kpis=True,
+                line_bar_favourites_path=favourites_path,
+                defaults={"x": "vehicle_age", "actual": "alt_price", "denominator": "value"},
+                tools=["line_bar", "uk_map"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    request_counts = {
+                        "/api/chart": 0,
+                        "/api/line-bar/table": 0,
+                        "/api/uk-map/summary": 0,
+                        "/api/metrics/summary": 0,
+                        "/api/filter/row-count": 0,
+                    }
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def count_request(request: object) -> None:
+                        path = "/" + request.url.split("/", 3)[3].split("?", 1)[0]
+                        if path in request_counts:
+                            request_counts[path] += 1
+
+                    page.on("request", count_request)
+                    page.add_init_script(
+                        """
+                        (() => {
+                          const originalFetch = window.fetch.bind(window);
+                          window.__lucidumDelayPaths = new Set();
+                          window.__lucidumDelayedResolvers = {};
+                          window.__lucidumReleaseDelayedFetch = (path) => {
+                            window.__lucidumDelayPaths.delete(path);
+                            const resolve = window.__lucidumDelayedResolvers[path];
+                            if (resolve) {
+                              delete window.__lucidumDelayedResolvers[path];
+                              resolve();
+                            }
+                          };
+                          window.fetch = async (...args) => {
+                            const input = args[0];
+                            const rawUrl = typeof input === "string" ? input : input?.url || "";
+                            const path = new URL(rawUrl, window.location.href).pathname;
+                            const responsePromise = originalFetch(...args);
+                            if (window.__lucidumDelayPaths.has(path)) {
+                              await new Promise((resolve) => {
+                                window.__lucidumDelayedResolvers[path] = resolve;
+                              });
+                            }
+                            return responsePromise;
+                          };
+                        })();
+                        """
+                    )
+
+                    def reset_counts() -> None:
+                        for key in request_counts:
+                            request_counts[key] = 0
+
+                    def delay_path(path: str) -> None:
+                        page.evaluate("(path) => window.__lucidumDelayPaths.add(path)", path)
+
+                    def release_path(path: str) -> None:
+                        page.evaluate("(path) => window.__lucidumReleaseDelayedFetch(path)", path)
+
+                    def click_favourite(name: str) -> None:
+                        page.evaluate(
+                            """
+                            (name) => {
+                              const row = [...document.querySelectorAll("#favouritesSelect .saved-favourite-option")]
+                                .find((button) => (button.textContent || "").includes(name));
+                              if (!row) throw new Error(`Favourite not found: ${name}`);
+                              row.click();
+                            }
+                            """,
+                            name,
+                        )
+
+                    def select_alt_kpi() -> None:
+                        page.evaluate(
+                            """
+                            () => {
+                              const row = [...document.querySelectorAll("#kpiSelect .kpi-option")]
+                                .find((button) => (button.textContent || "").includes("Alt"));
+                              if (!row) throw new Error("Alt KPI not found");
+                              row.click();
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            """() => document.querySelector("#actualNumerator")?.value === "alt_price"
+                              && (document.querySelector("#actualMetricTitle")?.textContent || "").includes("100")
+                              && (!document.querySelector("#lineBarTool")?.classList.contains("active")
+                                || (!((document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("Computing"))
+                                  && !((document.querySelector("#lineBarTableContent")?.textContent || "").includes("Loading table"))))
+                              && (!document.querySelector("#ukMapTool")?.classList.contains("active")
+                                || !((document.querySelector("#mapGroupMeta")?.textContent || "").includes("Computing")))""",
+                            timeout=10_000,
+                        )
+
+                    def assert_metric_pending() -> None:
+                        pending = page.evaluate(
+                            """
+                            () => ({
+                              actual: document.querySelector("#actualNumerator")?.value || "",
+                              title: document.querySelector("#actualMetricTitle")?.textContent.trim() || "",
+                              hasValue: Boolean(document.querySelector("#actualMetricTitle .metric-value")),
+                            })
+                            """
+                        )
+                        self.assertEqual(pending["actual"], "price")
+                        self.assertEqual(pending["title"], "Actual")
+                        self.assertFalse(pending["hasValue"])
+
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """() => document.querySelector("#lineBarTool")?.classList.contains("active")
+                          && (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("groups")""",
+                        timeout=10_000,
+                    )
+
+                    select_alt_kpi()
+                    delay_path("/api/chart")
+                    reset_counts()
+                    click_favourite("Chart favourite")
+                    page.wait_for_function(
+                        """() => document.querySelector("#actualNumerator")?.value === "price"
+                          && (document.querySelector("#lineBarGroupMeta")?.textContent || "") === "Computing..." """,
+                        timeout=10_000,
+                    )
+                    assert_metric_pending()
+                    page.wait_for_function("() => window.__lucidumDelayedResolvers['/api/chart']", timeout=10_000)
+                    self.assertEqual(request_counts["/api/chart"], 1)
+                    self.assertEqual(request_counts["/api/metrics/summary"], 0)
+                    self.assertEqual(request_counts["/api/filter/row-count"], 0)
+                    release_path("/api/chart")
+                    page.wait_for_function(
+                        """() => (document.querySelector("#actualMetricTitle")?.textContent || "").includes("10.0")
+                          && (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("groups")""",
+                        timeout=10_000,
+                    )
+
+                    select_alt_kpi()
+                    delay_path("/api/line-bar/table")
+                    reset_counts()
+                    click_favourite("Table favourite")
+                    page.wait_for_function(
+                        """() => document.querySelector("#actualNumerator")?.value === "price"
+                          && (document.querySelector("#lineBarTableContent")?.textContent || "").includes("Loading table")""",
+                        timeout=10_000,
+                    )
+                    assert_metric_pending()
+                    page.wait_for_function("() => window.__lucidumDelayedResolvers['/api/line-bar/table']", timeout=10_000)
+                    self.assertEqual(request_counts["/api/line-bar/table"], 1)
+                    self.assertEqual(request_counts["/api/chart"], 0)
+                    self.assertEqual(request_counts["/api/metrics/summary"], 0)
+                    self.assertEqual(request_counts["/api/filter/row-count"], 0)
+                    release_path("/api/line-bar/table")
+                    page.wait_for_function(
+                        """() => (document.querySelector("#actualMetricTitle")?.textContent || "").includes("10.0")
+                          && (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("groups")
+                          && !(document.querySelector("#lineBarTableContent")?.textContent || "").includes("Loading table")""",
+                        timeout=10_000,
+                    )
+
+                    select_alt_kpi()
+                    delay_path("/api/uk-map/summary")
+                    reset_counts()
+                    click_favourite("Map favourite")
+                    page.wait_for_function(
+                        """() => document.querySelector("#ukMapTool")?.classList.contains("active")
+                          && document.querySelector("#actualNumerator")?.value === "price"
+                          && (document.querySelector("#mapGroupMeta")?.textContent || "") === "Computing map..." """,
+                        timeout=10_000,
+                    )
+                    assert_metric_pending()
+                    page.wait_for_function("() => window.__lucidumDelayedResolvers['/api/uk-map/summary']", timeout=10_000)
+                    self.assertEqual(request_counts["/api/uk-map/summary"], 1)
+                    self.assertEqual(request_counts["/api/chart"], 0)
+                    self.assertEqual(request_counts["/api/line-bar/table"], 0)
+                    self.assertEqual(request_counts["/api/metrics/summary"], 0)
+                    self.assertEqual(request_counts["/api/filter/row-count"], 0)
+                    release_path("/api/uk-map/summary")
+                    page.wait_for_function(
+                        """() => (document.querySelector("#actualMetricTitle")?.textContent || "").includes("10.0")
+                          && (document.querySelector("#mapGroupMeta")?.textContent || "").includes("sectors matched")""",
+                        timeout=10_000,
+                    )
+
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_uk_map_favourites_save_and_restore_map_view(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -3483,7 +3787,7 @@ COPY (
                                 '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
                                 timeout=10_000,
                             )
-                        page.locator("#sidebarFavouriteAddBtn").click()
+                        self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                         page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                         page.wait_for_function(
                             """() => document.querySelector('input[name="sidebarFavouriteScope"][value="map_view"]')?.checked
@@ -3553,7 +3857,7 @@ COPY (
                         page.locator('.map-palette-button[data-palette="spectral"]').click()
                         page.wait_for_function("""() => !document.querySelector(".saved-favourite-option.active")""", timeout=10_000)
 
-                        page.locator("#sidebarFavouriteAddBtn").click()
+                        self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                         page.locator("#sidebarFavouriteNameInput").fill("Map metrics")
                         page.locator('[data-favourite-scope-option="metrics"]').click()
                         page.locator('[data-favourite-action="save-add"]').click()
@@ -3601,7 +3905,7 @@ COPY (
                             age_heading.click()
                         page.locator('.saved-filter-option[data-filter-theme="AGE"]').click()
                         page.locator("#favouritesCollapseBtn").click()
-                        page.locator("#sidebarFavouriteAddBtn").click()
+                        self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                         page.locator("#sidebarFavouriteNameInput").fill("Map metric filter")
                         page.locator('[data-favourite-scope-option="metrics_filter"]').click()
                         page.locator('[data-favourite-action="save-add"]').click()
@@ -13017,7 +13321,7 @@ COPY (
                     '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
                     timeout=10_000,
                 )
-                page.locator("#sidebarFavouriteAddBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 page.wait_for_function(
                     """() => document.querySelector(".sidebar-favourite-scope-title")?.textContent.trim() === "Scope"
@@ -13065,7 +13369,7 @@ COPY (
                     timeout=10_000,
                 )
                 page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '300px')")
-                page.locator("#sidebarFavouriteAddBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 page.evaluate(
                     """
@@ -13092,14 +13396,14 @@ COPY (
                     timeout=10_000,
                 )
 
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.wait_for_function(
                     """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,
                 )
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 page.evaluate(
                     """
@@ -13112,7 +13416,7 @@ COPY (
                     """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,
                 )
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 self.assertTrue(page.locator('[data-favourite-action="move-up"]').is_disabled())
                 self.assertTrue(page.locator('[data-favourite-action="move-down"]').is_disabled())
@@ -13134,7 +13438,7 @@ COPY (
                     timeout=10_000,
                 )
 
-                page.locator("#sidebarFavouriteAddBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                 page.locator("#sidebarFavouriteNameInput").fill("Second view")
                 page.locator('[data-favourite-action="save-add"]').click()
                 page.wait_for_function(
@@ -13142,7 +13446,7 @@ COPY (
                       .some((node) => node.textContent.trim() === "Second view")""",
                     timeout=10_000,
                 )
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 move_up = page.locator('[data-favourite-action="move-up"]')
                 move_down = page.locator('[data-favourite-action="move-down"]')
@@ -13248,7 +13552,7 @@ COPY (
                     }""",
                     timeout=10_000,
                 )
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.wait_for_function(
                     """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,
@@ -13273,13 +13577,13 @@ COPY (
                 self.assertEqual(startup_errors, [])
                 startup_page.close()
 
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.locator('.line-bar-favourite-row [data-favourite-action="delete"]').first.click()
                 page.wait_for_function(
                     """() => document.querySelectorAll(".saved-favourite-option").length === 1""",
                     timeout=10_000,
                 )
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.wait_for_function(
                     """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,
@@ -13320,7 +13624,7 @@ COPY (
                     timeout=10_000,
                 )
 
-                page.locator("#sidebarFavouriteAddBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                 page.locator("#sidebarFavouriteNameInput").fill("Metric only")
                 page.locator('[data-favourite-scope-option="metrics"]').click()
                 page.wait_for_function(
@@ -13369,7 +13673,7 @@ COPY (
                     page.locator("#filterCollapseBtn").click()
                 age_row.click()
                 page.locator("#favouritesCollapseBtn").click()
-                page.locator("#sidebarFavouriteAddBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                 page.locator("#sidebarFavouriteNameInput").fill("Metric filter")
                 page.locator('[data-favourite-scope-option="metrics_filter"]').click()
                 page.wait_for_function(
@@ -13395,7 +13699,7 @@ COPY (
                 page.locator("#filterRowClearBtn").click()
                 page.locator("#tableTab").click()
                 page.locator("#tableWrap:not(.hidden)").wait_for(timeout=10_000)
-                page.locator("#sidebarFavouriteAddBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 page.wait_for_function(
                     """() => document.querySelector('input[name="sidebarFavouriteScope"][value="line_bar_view"]')?.checked
@@ -13420,7 +13724,7 @@ COPY (
                     """
                 )
                 self.assertTrue(table_favourite_id)
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                 manage_scroll_state = page.evaluate(
                     """
@@ -13465,7 +13769,7 @@ COPY (
                 self.assertTrue(manage_scroll_state["listScrolled"])
                 self.assertTrue(manage_scroll_state["deleteButtonsAligned"])
                 self.assertTrue(manage_scroll_state["scopeAfterDelete"])
-                page.locator("#sidebarFavouriteMenuBtn").click()
+                self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.wait_for_function(
                     """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
                     timeout=10_000,

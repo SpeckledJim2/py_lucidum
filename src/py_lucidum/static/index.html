@@ -120,16 +120,18 @@
 
           <div id="sidebarControlPane" class="sidebar-control-pane">
             <section class="section sidebar-favourites-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="favourites">
-              <button id="favouritesCollapseBtn" class="favourites-header sidebar-section-header" type="button" aria-label="Expand FAVOURITES" aria-expanded="false" title="Expand FAVOURITES">
-                <span class="filter-collapse-icon" aria-hidden="true"></span>
-                <span class="sidebar-section-title">FAVOURITES</span>
-                <span id="favouritesSelectedMeta" class="favourites-selected-meta"></span>
-              </button>
-              <div class="sidebar-section-body">
+              <div class="sidebar-favourites-header-row">
+                <button id="favouritesCollapseBtn" class="favourites-header sidebar-section-header" type="button" aria-label="Expand FAVOURITES" aria-expanded="false" title="Expand FAVOURITES">
+                  <span class="filter-collapse-icon" aria-hidden="true"></span>
+                  <span class="sidebar-section-title">FAVOURITES</span>
+                </button>
                 <div id="sidebarFavouritesControls" class="sidebar-favourites-controls">
-                  <button id="sidebarFavouriteMenuBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Edit favourites" aria-label="Edit favourites">Edit favourites</button>
-                  <button id="sidebarFavouriteAddBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Add favourite" aria-label="Add favourite">Add favourite</button>
+                  <button id="sidebarFavouriteAddBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Add favourite" aria-label="Add favourite">+</button>
+                  <button id="sidebarFavouriteMenuBtn" class="line-bar-favourite-icon-button sidebar-favourite-icon-button" type="button" title="Edit favourites" aria-label="Edit favourites">...</button>
                 </div>
+                <span id="favouritesSelectedMeta" class="favourites-selected-meta"></span>
+              </div>
+              <div class="sidebar-section-body">
                 <div id="favouritesSelect" class="feature-list favourites-list" role="listbox" aria-label="FAVOURITES"></div>
                 <div id="sidebarFavouritePopover" class="line-bar-favourite-popover sidebar-favourite-popover" hidden></div>
               </div>

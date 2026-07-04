@@ -263,6 +263,39 @@ export function createUkMapTool({
     }
   }
 
+  function cancelMapRequests() {
+    state.mapRequestSeq += 1;
+  }
+
+  function clearRenderedMap() {
+    state.lastMapData = null;
+    state.renderedMapLevel = null;
+    state.mapPolygonRenderContext = null;
+    if (ukMapLayer && ukMap) {
+      ukMap.removeLayer(ukMapLayer);
+      ukMapLayer = null;
+    }
+    if (ukMapPointLayer && ukMap) {
+      ukMap.removeLayer(ukMapPointLayer);
+      ukMapPointLayer = null;
+    }
+    if (ukMapLabelLayer && ukMap) {
+      ukMap.removeLayer(ukMapLabelLayer);
+      ukMapLabelLayer = null;
+    }
+    el("mapLegend").textContent = "";
+    el("mapLegend").classList.add("hidden");
+  }
+
+  function showPendingRestore() {
+    cancelMapRequests();
+    setStatus("");
+    setChartMessage("");
+    setGroupMeta("uk_map", "Computing map...");
+    clearRenderedMap();
+    syncFloatingMapControl();
+  }
+
   async function useCachedMapData(cache, options = {}) {
     state.lastMapData = cache.data;
     syncFloatingMapControl();
@@ -1905,6 +1938,8 @@ export function createUkMapTool({
     captureView: captureMapView,
     captureFavouriteState,
     applyFavouriteState,
+    showPendingRestore,
+    cancelRequests: cancelMapRequests,
     setMapLevel,
     syncViewport,
     resize,

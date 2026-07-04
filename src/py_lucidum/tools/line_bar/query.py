@@ -158,6 +158,7 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
                 "zero_weight_rows": json_number(result["denominator_summary"].get("zero_weight_rows")),
                 "negative_weight_rows": json_number(result["denominator_summary"].get("negative_weight_rows")),
             },
+            "response_summaries": result["response_summaries"],
             "rows": display_rows,
             "summary": transform_table_summary(table_result["summary"], result["responses"], transform, transform_metadata),
             "warnings": warnings,

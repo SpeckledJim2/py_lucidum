@@ -1152,10 +1152,63 @@
         renderMetricTitle(el("weightMetricTitle"), "Weight", data?.denominator?.value, formatWeightValue);
       }
 
+      function cancelMetricSummaryRequests() {
+        state.metricSummaryRequestSeq = (state.metricSummaryRequestSeq || 0) + 1;
+      }
+
+      function toolResponseSummaries(data) {
+        if (Array.isArray(data?.response_summaries)) return data.response_summaries;
+        if (Array.isArray(data?.summary?.responses)) {
+          return data.summary.responses.map((value) => ({ value }));
+        }
+        if (data?.response && Object.prototype.hasOwnProperty.call(data.response, "value")) {
+          return [{
+            value: data.response.value,
+            numerator: data.response.numerator_total,
+            denominator: data.response.denominator,
+          }];
+        }
+        return [];
+      }
+
+      function syncMetricSummaryFromToolData(data) {
+        if (!data) return;
+        const summary = {
+          response_summaries: toolResponseSummaries(data),
+          denominator: data.denominator || {},
+        };
+        const request = metricSummaryRequest();
+        state.metricSummaryRequestKey = request ? stableRequestKey(request) : null;
+        state.metricSummaryData = summary;
+        renderMetricSummary(summary);
+      }
+
+      function syncFilterRowMetaFromToolData(data) {
+        const rowCount = Number(data?.row_count);
+        const filteredRowCount = Number(data?.filtered_row_count);
+        if (!Number.isFinite(rowCount)) return;
+        setFilterRowMeta(rowCount, Number.isFinite(filteredRowCount) ? filteredRowCount : rowCount);
+      }
+
+      function beginFavouriteViewRestore() {
+        cancelMetricSummaryRequests();
+        cancelFilterRowCountRequests();
+        state.metricSummaryRequestKey = null;
+        state.metricSummaryData = null;
+        resetMetricSummaryTitles();
+        setStatus("");
+        setChartMessage("");
+      }
+
+      function syncSidebarSummariesFromToolData(data) {
+        syncMetricSummaryFromToolData(data);
+        syncFilterRowMetaFromToolData(data);
+      }
+
       async function refreshMetricSummary(options = {}) {
         const request = metricSummaryRequest();
         if (!request) {
-          state.metricSummaryRequestSeq = (state.metricSummaryRequestSeq || 0) + 1;
+          cancelMetricSummaryRequests();
           state.metricSummaryRequestKey = null;
           state.metricSummaryData = null;
           resetMetricSummaryTitles();
@@ -2776,9 +2829,10 @@
           ukMapTool.applyFavouriteState(view.map || {});
           renderFavourites();
           setTool("uk_map", false);
-          await refreshFilterRowCountMeta();
-          await refreshMetricSummary({ force: true });
-          await refreshUkMap({ force: true });
+          beginFavouriteViewRestore();
+          ukMapTool.showPendingRestore();
+          const data = await refreshUkMap({ force: true });
+          syncSidebarSummariesFromToolData(data);
         } finally {
           await finishMapFavouriteRestore();
         }
@@ -3162,9 +3216,11 @@
       function bindFavouriteControls() {
         el("sidebarFavouriteAddBtn")?.addEventListener("click", () => {
           if (!toolSupportsFavouriteAdd()) return;
+          setOpenSidebarSection("favourites");
           openFavouritePopover("add");
         });
         el("sidebarFavouriteMenuBtn")?.addEventListener("click", () => {
+          setOpenSidebarSection("favourites");
           const popover = el("sidebarFavouritePopover");
           if (popover && !popover.hidden && favouritePopoverMode === "manage") {
             closeFavouritePopover();
@@ -3579,12 +3635,16 @@
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
-        lineBarTool.setView(state.view);
         renderFavourites();
-        await refreshFilterRowCountMeta();
         if (options.refresh !== false) {
-          await refreshMetricSummary({ force: true });
-          await refreshLineBar({ force: true });
+          beginFavouriteViewRestore();
+          lineBarTool.showPendingRestore(state.view);
+          const data = state.view === "table"
+            ? await lineBarTool.refreshTable({ force: true, forceServer: true })
+            : await refreshLineBar({ force: true });
+          syncSidebarSummariesFromToolData(data);
+        } else {
+          lineBarTool.setView(state.view, { refresh: false });
         }
       }
 

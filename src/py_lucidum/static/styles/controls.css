@@ -251,6 +251,19 @@
         min-width: 0;
       }
 
+      .sidebar-favourites-header-row {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        min-height: 22px;
+        min-width: 0;
+      }
+
+      .sidebar-favourites-header-row .favourites-header.sidebar-section-header {
+        flex: 0 0 auto;
+        width: auto;
+      }
+
       .sidebar-section-header {
         width: 100%;
         border: 0;
@@ -277,6 +290,13 @@
       }
 
       .filter-header:hover .filter-collapse-button.sidebar-section-header {
+        color: var(--accent);
+      }
+
+      .sidebar-favourites-header-row:hover .favourites-header.sidebar-section-header,
+      .sidebar-favourites-header-row:focus-within .favourites-header.sidebar-section-header,
+      .sidebar-favourites-header-row:hover .favourites-selected-meta,
+      .sidebar-favourites-header-row:focus-within .favourites-selected-meta {
         color: var(--accent);
       }
 
@@ -375,14 +395,40 @@
         align-items: center;
         display: grid;
         flex: 0 0 auto;
-        gap: 4px;
+        gap: 0;
         grid-template-columns: max-content max-content;
-        justify-content: start;
-        padding: 4px 0 5px;
+        opacity: 0;
+        padding: 0;
+        pointer-events: none;
+        transition: opacity 120ms ease;
       }
 
-      .sidebar-favourite-icon-button {
-        height: 24px;
+      .sidebar-favourites-header-row:hover .sidebar-favourites-controls,
+      .sidebar-favourites-header-row:focus-within .sidebar-favourites-controls {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .sidebar-favourite-icon-button.line-bar-favourite-icon-button {
+        width: 18px;
+        height: 20px;
+        min-height: 20px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--accent);
+        display: grid;
+        place-items: center;
+        padding: 0;
+        font-size: 16px;
+        font-weight: 400;
+        line-height: 1;
+        transform: translateY(-1px);
+      }
+
+      .sidebar-favourite-icon-button.line-bar-favourite-icon-button:hover,
+      .sidebar-favourite-icon-button.line-bar-favourite-icon-button:focus-visible {
+        color: var(--accent);
       }
 
       .favourites-list .feature,

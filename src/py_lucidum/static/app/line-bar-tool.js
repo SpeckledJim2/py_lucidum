@@ -1082,7 +1082,33 @@ export function createLineBarTool({
     }
   }
 
+  function cancelLineBarRequests() {
+    state.chartRequestSeq += 1;
+    tableRequestSeq += 1;
+  }
+
+  function syncLineBarTablePresentation(data) {
+    const tableMeta = data?.table || {};
+    const groupCount = Math.max(0, Number(tableMeta.group_count ?? data?.rows?.length ?? 0) || 0);
+    const matchCount = Math.max(0, Number(tableMeta.match_count ?? groupCount) || 0);
+    const rowMeta = formatRowMeta(data?.row_count, data?.filtered_row_count);
+    const groupLabel = state.lineBarTableSearch && matchCount !== groupCount
+      ? `${matchCount.toLocaleString()} of ${groupCount.toLocaleString()} groups`
+      : `${groupCount.toLocaleString()} groups`;
+    const groupMeta = `${groupLabel} · ${rowMeta}`;
+    const chartMessage = [...(data?.warnings || [])].filter(Boolean).join(" ");
+    setGroupMeta("line_bar", groupMeta);
+    setStatus("");
+    setChartMessage(chartMessage);
+    saveToolPresentation("line_bar", { groupMeta, chartMessage });
+  }
+
+  function setChartPendingHidden(hidden) {
+    el("chart").style.visibility = hidden ? "hidden" : "";
+  }
+
   function renderChartData(data, options = {}) {
+    setChartPendingHidden(false);
     state.lastData = data;
     if (options.resetTablePage) {
       state.tablePage = 1;
@@ -2821,7 +2847,7 @@ export function createLineBarTool({
       measureToolRender("line_bar", () => renderLineBarTableContents(tableCacheData));
       return tableCacheData;
     }
-    if (applyClientLineBarTableFilter({ requestKey })) return tableCacheData;
+    if (!options.forceServer && applyClientLineBarTableFilter({ requestKey })) return tableCacheData;
     const requestSeq = tableRequestSeq + 1;
     tableRequestSeq = requestSeq;
     renderLineBarTableLoading();
@@ -2854,6 +2880,8 @@ export function createLineBarTool({
     const pageCount = Math.max(1, Number(tableMeta.page_count) || 1);
     const matchCount = Math.max(0, Number(tableMeta.match_count) || 0);
     state.tablePage = page;
+    updateMetricTitles(data);
+    syncLineBarTablePresentation(data);
     const start = matchCount ? (page - 1) * pageSize + 1 : 0;
     const end = matchCount ? Math.min((page - 1) * pageSize + rowsData.length, matchCount) : 0;
     const pager = `<div class="table-pagination">
@@ -2962,7 +2990,8 @@ export function createLineBarTool({
     });
   }
 
-  function setView(view) {
+  function setView(view, options = {}) {
+    const shouldRefresh = options.refresh !== false;
     state.view = view;
     if (state.tool !== "line_bar") return;
     el("chartTab").classList.toggle("active", view === "chart");
@@ -2973,6 +3002,11 @@ export function createLineBarTool({
     el("mapLegend").classList.add("hidden");
     el("chartMessage").classList.toggle("hidden", view !== "chart" || !el("chartMessage").textContent);
     if (view === "chart") {
+      if (!shouldRefresh) {
+        chart.resize();
+        refreshDateXAxisLabelsForCurrentZoom();
+        return;
+      }
       if (lineBarChartDirty) {
         lineBarChartDirty = false;
         if (!applyClientLineBarSort()) refreshChart();
@@ -2982,8 +3016,24 @@ export function createLineBarTool({
       refreshDateXAxisLabelsForCurrentZoom();
     } else {
       renderTableShell();
-      refreshLineBarTable();
+      if (shouldRefresh) refreshLineBarTable();
     }
+  }
+
+  function showPendingRestore(view) {
+    cancelLineBarRequests();
+    setView(view, { refresh: false });
+    setStatus("");
+    setChartMessage("");
+    renderMetricTitle(el("expectedMetricTitle"), "Expected");
+    if (view === "table") {
+      setGroupMeta("line_bar", "Loading table...");
+      renderTableShell();
+      renderLineBarTableLoading();
+      return;
+    }
+    setGroupMeta("line_bar", "Computing...");
+    setChartPendingHidden(true);
   }
 
   function bindControls() {
@@ -3109,6 +3159,9 @@ export function createLineBarTool({
     fetchData: fetchChartData,
     useCached: useCachedChartData,
     render: renderChartData,
+    refreshTable: refreshLineBarTable,
+    showPendingRestore,
+    cancelRequests: cancelLineBarRequests,
     bindControls,
     setView,
     resize,
