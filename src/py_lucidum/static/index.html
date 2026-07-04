@@ -119,17 +119,6 @@
           </section>
 
           <div id="sidebarControlPane" class="sidebar-control-pane">
-            <section class="section sidebar-metric-section">
-              <div class="metric-row">
-                <div id="actualMetricTitle" class="metric-title">Actual</div>
-                <select id="actualNumerator"></select>
-              </div>
-              <div class="metric-row">
-                <div id="weightMetricTitle" class="metric-title">Weight</div>
-                <select id="denominator"></select>
-              </div>
-            </section>
-
             <section class="section sidebar-favourites-section sidebar-accordion-section sidebar-section-closed" data-sidebar-section="favourites">
               <button id="favouritesCollapseBtn" class="favourites-header sidebar-section-header" type="button" aria-label="Expand FAVOURITES" aria-expanded="false" title="Expand FAVOURITES">
                 <span class="filter-collapse-icon" aria-hidden="true"></span>
@@ -207,6 +196,17 @@
                   </div>
                 </div>
                 <div id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox" aria-label="Saved filters" aria-multiselectable="true"></div>
+              </div>
+            </section>
+
+            <section class="section sidebar-metric-section">
+              <div class="metric-row">
+                <div id="actualMetricTitle" class="metric-title">Actual</div>
+                <select id="actualNumerator"></select>
+              </div>
+              <div class="metric-row">
+                <div id="weightMetricTitle" class="metric-title">Weight</div>
+                <select id="denominator"></select>
               </div>
             </section>
             <div id="sidebarVersion" class="sidebar-version" aria-label="Lucidum version" hidden></div>

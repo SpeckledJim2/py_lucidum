@@ -565,7 +565,7 @@
         border: 0;
         border-radius: 0;
         background: transparent;
-        color: #263241;
+        color: var(--muted);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -602,7 +602,7 @@
       }
 
       .tool-option:disabled {
-        color: #263241;
+        color: var(--muted);
         cursor: default;
         opacity: 0.38;
       }
@@ -631,7 +631,7 @@
         height: 30px;
         display: block;
         object-fit: contain;
-        filter: brightness(0) saturate(100%) invert(16%) sepia(14%) saturate(1038%) hue-rotate(175deg) brightness(91%) contrast(87%);
+        filter: grayscale(1) opacity(0.62);
       }
 
       .tool-option.active .tool-icon img {
@@ -639,7 +639,7 @@
       }
 
       body.dark .tool-option {
-        color: var(--text);
+        color: var(--muted);
       }
 
       body.dark .tool-option.active {
@@ -647,7 +647,7 @@
       }
 
       body.dark .tool-icon img {
-        filter: brightness(0) invert(1);
+        filter: grayscale(1) opacity(0.72);
       }
 
       body.dark .tool-option.active .tool-icon img {
@@ -656,7 +656,7 @@
 
       .tool-button-tooltip {
         position: fixed;
-        z-index: 120;
+        z-index: 1200;
         max-width: min(220px, calc(100vw - 12px));
         padding: 4px 7px;
         border-radius: 4px;
@@ -667,7 +667,7 @@
         font-weight: 650;
         line-height: 1.2;
         overflow: hidden;
-        pointer-events: none;
+        pointer-events: auto;
         text-overflow: ellipsis;
         white-space: nowrap;
       }

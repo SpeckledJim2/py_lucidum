@@ -99,6 +99,17 @@ COPY (
 class BrowserSmokeTests(unittest.TestCase):
     def assert_tool_button_tooltip_over_button(self, page: Any, selector: str, text: str) -> None:
         page.locator(selector).hover()
+        page.wait_for_timeout(250)
+        self.assertTrue(
+            page.evaluate(
+                """
+                () => {
+                  const tooltip = document.querySelector("#toolButtonTooltip");
+                  return !tooltip || tooltip.hidden;
+                }
+                """
+            )
+        )
         page.wait_for_function(
             """
             ({ selector, text }) => {
@@ -107,9 +118,57 @@ class BrowserSmokeTests(unittest.TestCase):
               if (!button || !tooltip || tooltip.hidden || tooltip.textContent.trim() !== text) return false;
               const buttonRect = button.getBoundingClientRect();
               const tooltipRect = tooltip.getBoundingClientRect();
+              const front = document.elementFromPoint(
+                tooltipRect.left + tooltipRect.width / 2,
+                tooltipRect.top + tooltipRect.height / 2,
+              );
               return tooltipRect.width > 0
                 && tooltipRect.height > 0
-                && tooltipRect.bottom <= buttonRect.top;
+                && tooltipRect.bottom <= buttonRect.top
+                && (front === tooltip || tooltip.contains(front));
+            }
+            """,
+            arg={"selector": selector, "text": text},
+            timeout=2_000,
+        )
+        self.assertIsNone(page.locator(selector).get_attribute("title"))
+        page.mouse.move(640, 400)
+        page.wait_for_function(
+            '() => document.querySelector("#toolButtonTooltip")?.hidden !== false',
+            timeout=2_000,
+        )
+
+    def assert_tool_button_tooltip_fronts_map(self, page: Any, selector: str, text: str) -> None:
+        page.locator(selector).hover()
+        page.wait_for_timeout(250)
+        self.assertTrue(
+            page.evaluate(
+                """
+                () => {
+                  const tooltip = document.querySelector("#toolButtonTooltip");
+                  return !tooltip || tooltip.hidden;
+                }
+                """
+            )
+        )
+        page.wait_for_function(
+            """
+            ({ selector, text }) => {
+              const button = document.querySelector(selector);
+              const tooltip = document.querySelector("#toolButtonTooltip");
+              const map = document.querySelector("#ukMap");
+              if (!button || !tooltip || !map || tooltip.hidden || tooltip.textContent.trim() !== text) return false;
+              const buttonRect = button.getBoundingClientRect();
+              const tooltipRect = tooltip.getBoundingClientRect();
+              const mapRect = map.getBoundingClientRect();
+              const x = Math.max(mapRect.left + 2, Math.min(tooltipRect.right - 2, tooltipRect.left + tooltipRect.width / 2));
+              const y = tooltipRect.top + tooltipRect.height / 2;
+              if (x <= tooltipRect.left || x >= tooltipRect.right || y <= mapRect.top || y >= mapRect.bottom) return false;
+              const front = document.elementFromPoint(x, y);
+              return tooltipRect.width > 0
+                && tooltipRect.height > 0
+                && tooltipRect.bottom <= buttonRect.top
+                && (front === tooltip || tooltip.contains(front));
             }
             """,
             arg={"selector": selector, "text": text},
@@ -371,12 +430,15 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertEqual(page.locator("#toolSelectorSection .tool-option:not(.hidden)").count(), 0)
                         self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                         sidebar_box = page.locator("#appSidebar").bounding_box()
+                        filter_box = page.locator(".sidebar-filter-section").bounding_box()
                         metric_box = page.locator(".sidebar-metric-section").bounding_box()
                         self.assertIsNotNone(sidebar_box)
+                        self.assertIsNotNone(filter_box)
                         self.assertIsNotNone(metric_box)
                         assert sidebar_box is not None
+                        assert filter_box is not None
                         assert metric_box is not None
-                        self.assertLessEqual(metric_box["y"] - sidebar_box["y"], 12)
+                        self.assertGreaterEqual(metric_box["y"], filter_box["y"] + filter_box["height"] - 1)
                         page.locator("#sidebarToggleBtn").click()
                         page.wait_for_function(
                             """
@@ -508,6 +570,9 @@ class BrowserSmokeTests(unittest.TestCase):
                         timeout=10_000,
                     )
                     self.assertGreaterEqual(map_requests, 1)
+                    page.locator("#sidebarToggleBtn").click()
+                    page.wait_for_function("() => document.body.classList.contains('sidebar-collapsed')", timeout=10_000)
+                    self.assert_tool_button_tooltip_fronts_map(page, "#ukMapTool", "UK mapping")
                     chart_requests_after_initial_render = chart_requests
                     map_requests_after_initial_render = map_requests
 
@@ -3350,8 +3415,19 @@ COPY (
 
                         page.locator("#lineBarTool").click()
                         page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
+                            timeout=10_000,
+                        )
+                        page.locator(".sidebar-metric-section").wait_for(state="visible", timeout=10_000)
                         page.locator("#actualNumerator").select_option("vehicle_age")
                         page.locator("#denominator").select_option("__none__")
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                            timeout=10_000,
+                        )
                         page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
                         page.wait_for_function(
                             """([id]) => document.querySelector("#ukMapTool")?.classList.contains("active")
@@ -3403,8 +3479,19 @@ COPY (
                         )
                         self.assertTrue(metric_id)
                         page.locator("#lineBarTool").click()
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
+                            timeout=10_000,
+                        )
+                        page.locator(".sidebar-metric-section").wait_for(state="visible", timeout=10_000)
                         page.locator("#actualNumerator").select_option("vehicle_age")
                         page.locator("#denominator").select_option("__none__")
+                        page.locator("#favouritesCollapseBtn").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                            timeout=10_000,
+                        )
                         page.locator(f'.saved-favourite-option[data-favourite-id="{metric_id}"]').click()
                         page.wait_for_function(
                             """() => document.querySelector("#lineBarTool")?.classList.contains("active")
@@ -4541,6 +4628,22 @@ COPY (
                     self.assertEqual(page.locator(selector).get_attribute("aria-expanded"), str(section == open_section).lower())
                 for section, selector in section_bodies.items():
                     self.assertEqual(page.locator(selector).is_visible(), section == open_section)
+                metrics_visible = open_section is None
+                page.locator(".sidebar-metric-section").wait_for(state="visible" if metrics_visible else "hidden", timeout=10_000)
+                self.assertEqual(page.locator(".sidebar-metric-section").is_visible(), metrics_visible)
+                self.assertEqual(page.locator("#actualNumerator").is_visible(), metrics_visible)
+                self.assertEqual(page.locator("#denominator").is_visible(), metrics_visible)
+                if metrics_visible:
+                    metric_layout = page.evaluate(
+                        """
+                        () => {
+                          const filter = document.querySelector(".sidebar-filter-section").getBoundingClientRect();
+                          const metric = document.querySelector(".sidebar-metric-section").getBoundingClientRect();
+                          return { filterBottom: filter.bottom, metricTop: metric.top };
+                        }
+                        """
+                    )
+                    self.assertGreaterEqual(metric_layout["metricTop"], metric_layout["filterBottom"] - 1)
 
             def assert_sidebar_headers_visible() -> None:
                 for selector in section_buttons.values():
@@ -4616,7 +4719,7 @@ COPY (
                         allButtonsBorderless: buttons.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
                         allButtonsTransparentWithActiveAccent: buttons.every((button) => {
                           const style = getComputedStyle(button);
-                          const expectedColor = button.classList.contains("active") ? "rgb(34, 118, 210)" : "rgb(38, 50, 65)";
+                          const expectedColor = button.classList.contains("active") ? "rgb(34, 118, 210)" : "rgb(102, 112, 133)";
                           return style.backgroundColor === "rgba(0, 0, 0, 0)" && style.color === expectedColor;
                         }),
                         allButtonsFullOpacity: buttons.every((button) => getComputedStyle(button).opacity === "1"),
@@ -4685,11 +4788,8 @@ COPY (
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
                 self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
-                page.locator(".sidebar-metric-section:not(.hidden)").wait_for(timeout=10_000)
                 assert_sidebar_headers_visible()
                 wait_accordion_state("filter")
-                self.assertTrue(page.locator("#actualNumerator").is_visible())
-                self.assertTrue(page.locator("#denominator").is_visible())
                 page.locator("#lineBarTool.active").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
@@ -9544,7 +9644,7 @@ COPY (
                         allButtonsBorderless: buttons.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
                         allButtonsTransparentWithActiveAccent: buttons.every((button) => {
                           const style = getComputedStyle(button);
-                          const expectedColor = button.classList.contains("active") ? "rgb(34, 118, 210)" : "rgb(38, 50, 65)";
+                          const expectedColor = button.classList.contains("active") ? "rgb(34, 118, 210)" : "rgb(102, 112, 133)";
                           return style.backgroundColor === "rgba(0, 0, 0, 0)" && style.color === expectedColor;
                         }),
                         allButtonsFullOpacity: buttons.every((button) => getComputedStyle(button).opacity === "1"),
@@ -11777,10 +11877,10 @@ COPY (
                 self.assertTrue(page.locator("#status").evaluate("node => node.classList.contains('hidden')"))
                 gbm_top_after_error = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
                 self.assertLessEqual(abs(gbm_top_before - gbm_top_after_error), 1)
-                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator(".sidebar-favourites-section").is_visible())
-                self.assertTrue(page.locator("#actualNumerator").is_visible())
-                self.assertTrue(page.locator("#denominator").is_visible())
+                self.assertFalse(page.locator("#actualNumerator").is_visible())
+                self.assertFalse(page.locator("#denominator").is_visible())
                 self.assertTrue(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#modelToolGroupMeta").is_visible())
                 self.assertFalse(page.locator("#modelToolFilter").is_visible())
@@ -13013,9 +13113,20 @@ COPY (
                     """
                 )
                 self.assertTrue(metric_only_id)
+                page.locator("#favouritesCollapseBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
+                    timeout=10_000,
+                )
+                page.locator(".sidebar-metric-section").wait_for(state="visible", timeout=10_000)
                 page.locator("#filterRowClearBtn").click()
                 page.locator("#actualNumerator").select_option("value")
                 page.locator("#denominator").select_option("__none__")
+                page.locator("#favouritesCollapseBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                    timeout=10_000,
+                )
                 page.locator(f'.saved-favourite-option[data-favourite-id="{metric_only_id}"]').click()
                 page.wait_for_function(
                     """() => document.querySelector("#actualNumerator")?.value === "price"
@@ -13189,6 +13300,12 @@ COPY (
                 if rate_heading.get_attribute("aria-expanded") == "false":
                     rate_heading.click()
                 rate_row.click()
+                page.locator("#kpiCollapseBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#kpiCollapseBtn")?.getAttribute("aria-expanded") === "false"',
+                    timeout=10_000,
+                )
+                page.locator(".sidebar-metric-section").wait_for(state="visible", timeout=10_000)
                 page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
                 page.locator("#weightMetricTitle").get_by_text("3").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#actualNumerator").input_value(), "rate")

@@ -58,6 +58,7 @@
       const TOOL_IDS = Object.keys(TOOL_BUTTON_IDS);
       const CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED = "collapsed";
       const MOBILE_LAYOUT_MAX_WIDTH = 760;
+      const TOOL_BUTTON_TOOLTIP_DELAY_MS = 500;
       const LINE_BAR_RATIO_COLUMN = "gbm_to_glm_ratio";
       const GLM_PREDICTION_COLUMNS = ["glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"];
       const GBM_PREDICTION_COLUMNS = ["gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction"];
@@ -211,6 +212,8 @@
       let clipboardToastTimer = null;
       let toolButtonTooltip = null;
       let toolButtonTooltipTarget = null;
+      let toolButtonTooltipPendingTarget = null;
+      let toolButtonTooltipTimer = null;
       let toolButtonTooltipKeydownBound = false;
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
@@ -709,8 +712,23 @@
         tooltip.style.top = `${Math.round(Math.max(margin, top))}px`;
       }
 
+      function toolButtonTooltipButtonAvailable(button) {
+        return Boolean(button && button.isConnected && !button.disabled && !button.classList.contains("hidden"));
+      }
+
+      function clearToolButtonTooltipTimer(target = null) {
+        if (target && toolButtonTooltipPendingTarget && target !== toolButtonTooltipPendingTarget) return;
+        if (toolButtonTooltipTimer) {
+          window.clearTimeout(toolButtonTooltipTimer);
+          toolButtonTooltipTimer = null;
+        }
+        if (!target || target === toolButtonTooltipPendingTarget) {
+          toolButtonTooltipPendingTarget = null;
+        }
+      }
+
       function showToolButtonTooltip(button) {
-        if (!button || button.disabled || button.classList.contains("hidden")) return;
+        if (!toolButtonTooltipButtonAvailable(button)) return;
         const text = toolButtonTooltipText(button);
         if (!text) return;
         const tooltip = ensureToolButtonTooltip();
@@ -720,10 +738,33 @@
         positionToolButtonTooltip(button);
       }
 
+      function scheduleToolButtonTooltip(button) {
+        if (!toolButtonTooltipButtonAvailable(button)) return;
+        const text = toolButtonTooltipText(button);
+        if (!text) return;
+        if (toolButtonTooltipTarget === button && toolButtonTooltip && !toolButtonTooltip.hidden) {
+          positionToolButtonTooltip(button);
+          return;
+        }
+        hideToolButtonTooltip();
+        toolButtonTooltipPendingTarget = button;
+        toolButtonTooltipTimer = window.setTimeout(() => {
+          toolButtonTooltipTimer = null;
+          if (toolButtonTooltipPendingTarget !== button) return;
+          toolButtonTooltipPendingTarget = null;
+          showToolButtonTooltip(button);
+        }, TOOL_BUTTON_TOOLTIP_DELAY_MS);
+      }
+
       function hideToolButtonTooltip(target = null) {
-        if (target && toolButtonTooltipTarget && target !== toolButtonTooltipTarget) return;
-        if (toolButtonTooltip) toolButtonTooltip.hidden = true;
-        toolButtonTooltipTarget = null;
+        const pendingMatches = toolButtonTooltipPendingTarget && (!target || target === toolButtonTooltipPendingTarget);
+        const visibleMatches = toolButtonTooltipTarget && (!target || target === toolButtonTooltipTarget);
+        if (target && !pendingMatches && !visibleMatches) return;
+        if (!target || pendingMatches) clearToolButtonTooltipTimer(target);
+        if (!target || visibleMatches) {
+          if (toolButtonTooltip) toolButtonTooltip.hidden = true;
+          if (!target || target === toolButtonTooltipTarget) toolButtonTooltipTarget = null;
+        }
       }
 
       function bindToolButtonTooltips() {
@@ -733,10 +774,10 @@
           if (tooltipText) button.dataset.tooltip = tooltipText;
           button.removeAttribute("title");
           button.dataset.tooltipBound = "true";
-          button.addEventListener("pointerenter", () => showToolButtonTooltip(button));
+          button.addEventListener("pointerenter", () => scheduleToolButtonTooltip(button));
           button.addEventListener("pointerleave", () => hideToolButtonTooltip(button));
           button.addEventListener("pointerdown", () => hideToolButtonTooltip(button));
-          button.addEventListener("focus", () => showToolButtonTooltip(button));
+          button.addEventListener("focus", () => scheduleToolButtonTooltip(button));
           button.addEventListener("blur", () => hideToolButtonTooltip(button));
         });
         if (!toolButtonTooltipKeydownBound) {
@@ -1360,7 +1401,10 @@
           button.classList.toggle("hidden", !showSelector || !enabled);
         });
         el("toolSelectorSection").classList.toggle("hidden", !showSelector);
-        if (toolButtonTooltipTarget?.disabled || toolButtonTooltipTarget?.classList.contains("hidden")) {
+        if (
+          (toolButtonTooltipTarget && !toolButtonTooltipButtonAvailable(toolButtonTooltipTarget))
+          || (toolButtonTooltipPendingTarget && !toolButtonTooltipButtonAvailable(toolButtonTooltipPendingTarget))
+        ) {
           hideToolButtonTooltip();
         }
         const glmEnabled = enabledSet.has("glm");
@@ -1525,6 +1569,7 @@
       }
 
       function setTool(tool, refresh = true) {
+        hideToolButtonTooltip();
         if (!toolEnabled(tool)) return;
         const previousTool = state.tool;
         if (previousTool === "uk_map" && tool !== "uk_map") ukMapTool.captureView("tool-switch");
@@ -1862,6 +1907,7 @@
       }
 
       function syncSidebarAccordion() {
+        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", state.openSidebarSection !== null);
         Object.entries(SIDEBAR_ACCORDION_SECTIONS).forEach(([section, config]) => {
           const open = state.openSidebarSection === section;
           const panel = document.querySelector(config.sectionSelector);
