@@ -97,6 +97,31 @@ COPY (
 
 
 class BrowserSmokeTests(unittest.TestCase):
+    def assert_tool_button_tooltip_over_button(self, page: Any, selector: str, text: str) -> None:
+        page.locator(selector).hover()
+        page.wait_for_function(
+            """
+            ({ selector, text }) => {
+              const button = document.querySelector(selector);
+              const tooltip = document.querySelector("#toolButtonTooltip");
+              if (!button || !tooltip || tooltip.hidden || tooltip.textContent.trim() !== text) return false;
+              const buttonRect = button.getBoundingClientRect();
+              const tooltipRect = tooltip.getBoundingClientRect();
+              return tooltipRect.width > 0
+                && tooltipRect.height > 0
+                && tooltipRect.bottom <= buttonRect.top;
+            }
+            """,
+            arg={"selector": selector, "text": text},
+            timeout=2_000,
+        )
+        self.assertIsNone(page.locator(selector).get_attribute("title"))
+        page.mouse.move(640, 400)
+        page.wait_for_function(
+            '() => document.querySelector("#toolButtonTooltip")?.hidden !== false',
+            timeout=2_000,
+        )
+
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_chart_and_map_tools_load_and_switch_without_extra_api_requests(self) -> None:
@@ -4208,7 +4233,10 @@ COPY (
 
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#lineBarTool.active").wait_for(timeout=10_000)
-                page.locator("#glmTool:not(.hidden)").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """() => !document.querySelector("#glmTool")?.classList.contains("hidden")""",
+                    timeout=10_000,
+                )
                 page.locator("#glmTool").click()
                 page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
                 page.get_by_role("button", name="Tabulations").click()
@@ -4491,6 +4519,80 @@ COPY (
                 assert_tool_order("column_profile|line_bar|uk_map|glm|gbm")
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
                 page.locator("#gbmSidebarPanel").wait_for(timeout=10_000)
+                tool_row_state = page.evaluate(
+                    """
+                    () => {
+                      const buttons = [...document.querySelectorAll("#toolSelectorSection .tool-option:not(.hidden)")];
+                      const selector = document.querySelector("#toolSelectorSection .tool-selector");
+                      const selectorStyle = getComputedStyle(selector);
+                      const originalWidth = selector.style.width;
+                      selector.style.width = "76px";
+                      const scrollsWhenNarrow = selector.scrollWidth > selector.clientWidth;
+                      selector.style.width = originalWidth;
+                      const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
+                      return {
+                        count: buttons.length,
+                        oneLine: new Set(tops).size === 1,
+                        gap: selectorStyle.gap,
+                        flexWrap: selectorStyle.flexWrap,
+                        overflowX: selectorStyle.overflowX,
+                        selectorMatchesSidebar: selectorStyle.backgroundColor === getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
+                        scrollsWhenNarrow,
+                        allButtonsVisible: buttons.every((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return rect.width > 0 && rect.height > 0 && getComputedStyle(button).display !== "none";
+                        }),
+                        allButtonsSquare: buttons.every((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.round(rect.width) === 36 && Math.round(rect.height) === 36;
+                        }),
+                        allButtonsBorderless: buttons.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
+                        allButtonsTransparentWithActiveAccent: buttons.every((button) => {
+                          const style = getComputedStyle(button);
+                          const expectedColor = button.classList.contains("active") ? "rgb(34, 118, 210)" : "rgb(38, 50, 65)";
+                          return style.backgroundColor === "rgba(0, 0, 0, 0)" && style.color === expectedColor;
+                        }),
+                        allButtonsFullOpacity: buttons.every((button) => getComputedStyle(button).opacity === "1"),
+                        allIconsLarge: buttons.every((button) => {
+                          const icon = button.querySelector(".tool-icon");
+                          const renderedIcon = button.querySelector(".tool-icon svg, .tool-icon img");
+                          const iconRect = icon?.getBoundingClientRect();
+                          const renderedRect = renderedIcon?.getBoundingClientRect();
+                          return Math.round(iconRect?.width || 0) === 30
+                            && Math.round(iconRect?.height || 0) === 30
+                            && Math.round(renderedRect?.width || 0) >= 28
+                            && Math.round(renderedRect?.height || 0) >= 28;
+                        }),
+                        labelsHidden: buttons.every((button) => {
+                          const label = button.querySelector(".tool-label");
+                          if (!label) return false;
+                          const style = getComputedStyle(label);
+                          return style.position === "absolute" && style.width === "1px" && style.overflow === "hidden";
+                        }),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    tool_row_state,
+                    {
+                        "count": 5,
+                        "oneLine": True,
+                        "gap": "2px",
+                        "flexWrap": "nowrap",
+                        "overflowX": "auto",
+                        "selectorMatchesSidebar": True,
+                        "scrollsWhenNarrow": True,
+                        "allButtonsVisible": True,
+                        "allButtonsSquare": True,
+                        "allButtonsBorderless": True,
+                        "allButtonsTransparentWithActiveAccent": True,
+                        "allButtonsFullOpacity": True,
+                        "allIconsLarge": True,
+                        "labelsHidden": True,
+                    },
+                )
+                self.assert_tool_button_tooltip_over_button(page, "#profileTool", "Column profile")
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
@@ -4510,11 +4612,17 @@ COPY (
 
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                self.assertTrue(page.locator("#lineBarTool").is_visible())
+                self.assertTrue(page.locator("#profileTool").is_visible())
+                self.assertTrue(page.locator("#ukMapTool").is_visible())
                 page.locator(".sidebar-metric-section:not(.hidden)").wait_for(timeout=10_000)
                 assert_sidebar_headers_visible()
                 wait_accordion_state("filter")
                 self.assertTrue(page.locator("#actualNumerator").is_visible())
                 self.assertTrue(page.locator("#denominator").is_visible())
+                page.locator("#lineBarTool.active").click()
+                self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "true")
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
@@ -9274,14 +9382,87 @@ COPY (
                 self.assertEqual(page.locator("#sidebarVersion").inner_text().strip(), f"lucidum v{__version__}")
                 self.assertEqual(page.locator("#collapsedSidebarVersion").inner_text().strip(), f"v{__version__}")
                 self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
+                self.assertTrue(page.locator("#toolSelectorSection .tool-option:not(.hidden)").first.is_visible())
+                expanded_first_tool_top = page.locator("#toolSelectorSection .tool-option:not(.hidden)").first.bounding_box()
+                self.assertIsNotNone(expanded_first_tool_top)
+                self.assertTrue(
+                    page.evaluate(
+                        """
+                        () => {
+                          const label = document.querySelector("#lineBarTool .tool-label");
+                          const style = label ? getComputedStyle(label) : null;
+                          return style?.position === "absolute" && style.width === "1px" && style.overflow === "hidden";
+                        }
+                        """
+                    )
+                )
                 page.locator("#sidebarToggleBtn").click()
                 self.assertEqual(page.locator("#sidebarToggleBtn").get_attribute("aria-expanded"), "false")
+                collapsed_first_tool_top = page.locator("#toolSelectorSection .tool-option:not(.hidden)").first.bounding_box()
+                self.assertIsNotNone(collapsed_first_tool_top)
+                assert expanded_first_tool_top is not None
+                assert collapsed_first_tool_top is not None
+                self.assertLessEqual(abs(collapsed_first_tool_top["y"] - expanded_first_tool_top["y"]), 1)
                 self.assertIsNone(page.locator("#appSidebar").get_attribute("aria-hidden"))
                 self.assertTrue(page.locator("#profileTool").is_visible())
                 self.assertTrue(page.locator("#datasetViewerTool").is_visible())
                 self.assertTrue(page.locator("#lineBarTool").is_visible())
                 self.assertTrue(page.locator("#histogramTool").is_visible())
                 self.assertTrue(page.locator("#ukMapTool").is_visible())
+                collapsed_tool_state = page.evaluate(
+                    """
+                    () => {
+                      const buttons = [...document.querySelectorAll("#toolSelectorSection .tool-option:not(.hidden)")];
+                      const selector = document.querySelector("#toolSelectorSection .tool-selector");
+                      const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
+                      const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
+                      return {
+                        count: buttons.length,
+                        selectorDisplay: getComputedStyle(selector).display,
+                        selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
+                        gap: getComputedStyle(selector).gap,
+                        vertical: new Set(lefts).size === 1 && new Set(tops).size === buttons.length,
+                        allButtonsSquare: buttons.every((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.round(rect.width) === 36 && Math.round(rect.height) === 36;
+                        }),
+                        allButtonsBorderless: buttons.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
+                        allButtonsTransparentWithActiveAccent: buttons.every((button) => {
+                          const style = getComputedStyle(button);
+                          const expectedColor = button.classList.contains("active") ? "rgb(34, 118, 210)" : "rgb(38, 50, 65)";
+                          return style.backgroundColor === "rgba(0, 0, 0, 0)" && style.color === expectedColor;
+                        }),
+                        allButtonsFullOpacity: buttons.every((button) => getComputedStyle(button).opacity === "1"),
+                        allIconsLarge: buttons.every((button) => {
+                          const icon = button.querySelector(".tool-icon");
+                          const renderedIcon = button.querySelector(".tool-icon svg, .tool-icon img");
+                          const iconRect = icon?.getBoundingClientRect();
+                          const renderedRect = renderedIcon?.getBoundingClientRect();
+                          return Math.round(iconRect?.width || 0) === 30
+                            && Math.round(iconRect?.height || 0) === 30
+                            && Math.round(renderedRect?.width || 0) >= 28
+                            && Math.round(renderedRect?.height || 0) >= 28;
+                        }),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    collapsed_tool_state,
+                    {
+                        "count": 6,
+                        "selectorDisplay": "grid",
+                        "selectorMatchesSidebar": True,
+                        "gap": "2px",
+                        "vertical": True,
+                        "allButtonsSquare": True,
+                        "allButtonsBorderless": True,
+                        "allButtonsTransparentWithActiveAccent": True,
+                        "allButtonsFullOpacity": True,
+                        "allIconsLarge": True,
+                    },
+                )
+                self.assert_tool_button_tooltip_over_button(page, "#ukMapTool", "UK mapping")
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-favourites-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())

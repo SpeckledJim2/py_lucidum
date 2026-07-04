@@ -178,6 +178,10 @@
 
       .sidebar-metric-section {
         flex: 0 0 auto;
+        margin: 0 0 10px;
+        padding: 7px 0 9px;
+        border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
       }
 
       .sidebar-metric-section .metric-row:last-child {
@@ -191,14 +195,19 @@
         gap: 8px;
         font-weight: 700;
         font-size: 12px;
+        min-width: 0;
       }
 
       .metric-value {
         color: var(--muted);
         margin-left: auto;
+        max-width: 52%;
+        overflow: hidden;
         text-align: right;
+        text-overflow: ellipsis;
         font-size: 12px;
         font-weight: 400;
+        white-space: nowrap;
       }
 
       .metric-value--first-expected {
@@ -509,51 +518,53 @@
       }
 
       .tool-selector-section {
-        margin-bottom: 14px;
-        padding-top: 2px;
+        margin-bottom: 8px;
+        padding-top: 0;
+        min-width: 0;
       }
 
       body.sidebar-collapsed .tool-selector-section {
         width: 100%;
         margin-bottom: 0;
-        padding-top: 2px;
+        padding-top: 0;
       }
 
       .tool-selector {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 5px;
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 2px;
+        max-width: 100%;
+        min-width: 0;
+        border-radius: 4px;
+        background: var(--sidebar-bg);
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
       }
 
       .tool-option {
-        width: 100%;
-        min-height: 30px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: var(--panel);
-        color: var(--text);
+        width: 36px;
+        height: 36px;
+        min-height: 36px;
+        flex: 0 0 36px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: #263241;
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 3px 8px;
+        justify-content: center;
+        padding: 0;
+        opacity: 1;
         cursor: pointer;
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 650;
         text-align: left;
         position: relative;
       }
 
-      body.sidebar-collapsed .tool-option {
-        width: 36px;
-        height: 30px;
-        min-height: 30px;
-        justify-content: flex-start;
-        gap: 0;
-        padding: 3px 8px;
-        border-radius: 6px;
-      }
-
-      body.sidebar-collapsed .tool-label {
+      .tool-label {
         position: absolute;
         width: 1px;
         height: 1px;
@@ -565,48 +576,138 @@
         border: 0;
       }
 
+      body.sidebar-collapsed .tool-selector {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 2px;
+        overflow: visible;
+        scrollbar-width: auto;
+      }
+
+      body.sidebar-collapsed .tool-option {
+        width: 36px;
+        height: 36px;
+        min-height: 36px;
+        flex-basis: 36px;
+        border: 0;
+        background: transparent;
+        justify-content: center;
+        gap: 0;
+        padding: 0;
+        border-radius: 0;
+      }
+
+      body.sidebar-collapsed .tool-icon {
+        width: 30px;
+        height: 30px;
+      }
+
+      body.sidebar-collapsed .tool-icon svg {
+        width: 28px;
+        height: 28px;
+      }
+
+      body.sidebar-collapsed .tool-icon img {
+        width: 30px;
+        height: 30px;
+      }
+
       .tool-option.active {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: white;
+        background: transparent;
+        color: var(--accent);
+        opacity: 1;
+      }
+
+      body.sidebar-collapsed .tool-option.active {
+        background: transparent;
+        color: var(--accent);
+        opacity: 1;
+      }
+
+      .tool-option:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--text) 50%, transparent);
+        outline-offset: -4px;
       }
 
       .tool-option:disabled {
-        color: var(--muted);
+        color: #263241;
         cursor: default;
-        opacity: 0.55;
+        opacity: 0.38;
       }
 
       .tool-icon {
-        width: 20px;
-        height: 20px;
+        width: 30px;
+        height: 30px;
         flex: 0 0 auto;
         display: grid;
         place-items: center;
       }
 
       .tool-icon svg {
-        width: 18px;
-        height: 18px;
+        width: 28px;
+        height: 28px;
         display: block;
         fill: none;
         stroke: currentColor;
-        stroke-width: 1.8;
+        stroke-width: 1.5;
         stroke-linecap: round;
         stroke-linejoin: round;
       }
 
       .tool-icon img {
-        width: 20px;
-        height: 20px;
+        width: 30px;
+        height: 30px;
         display: block;
         object-fit: contain;
-        filter: brightness(0);
+        filter: brightness(0) saturate(100%) invert(16%) sepia(14%) saturate(1038%) hue-rotate(175deg) brightness(91%) contrast(87%);
       }
 
-      body.dark .tool-icon img,
       .tool-option.active .tool-icon img {
+        filter: brightness(0) saturate(100%) invert(39%) sepia(70%) saturate(1097%) hue-rotate(185deg) brightness(91%) contrast(92%);
+      }
+
+      body.dark .tool-option {
+        color: var(--text);
+      }
+
+      body.dark .tool-option.active {
+        color: var(--accent);
+      }
+
+      body.dark .tool-icon img {
         filter: brightness(0) invert(1);
+      }
+
+      body.dark .tool-option.active .tool-icon img {
+        filter: brightness(0) saturate(100%) invert(72%) sepia(62%) saturate(1550%) hue-rotate(180deg) brightness(103%) contrast(104%);
+      }
+
+      .tool-button-tooltip {
+        position: fixed;
+        z-index: 120;
+        max-width: min(220px, calc(100vw - 12px));
+        padding: 4px 7px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--text) 92%, black);
+        color: var(--panel);
+        box-shadow: 0 8px 22px rgb(15 23 42 / 18%);
+        font-size: 11px;
+        font-weight: 650;
+        line-height: 1.2;
+        overflow: hidden;
+        pointer-events: none;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .tool-button-tooltip[hidden] {
+        display: none;
+      }
+
+      body.dark .tool-button-tooltip {
+        background: color-mix(in srgb, white 92%, var(--panel));
+        color: #0f172a;
+        box-shadow: 0 8px 22px rgb(0 0 0 / 30%);
       }
 
       .filter-collapse-icon {

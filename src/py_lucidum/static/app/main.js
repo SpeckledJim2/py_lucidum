@@ -204,6 +204,9 @@
       let startupTelemetryTimer = null;
       let startupProgressStartedAt = 0;
       let clipboardToastTimer = null;
+      let toolButtonTooltip = null;
+      let toolButtonTooltipTarget = null;
+      let toolButtonTooltipKeydownBound = false;
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
       let datasetMetaBase = "";
@@ -653,6 +656,87 @@
           toast.hidden = true;
           clipboardToastTimer = null;
         }, 1800);
+      }
+
+      function ensureToolButtonTooltip() {
+        if (!toolButtonTooltip) {
+          toolButtonTooltip = document.createElement("div");
+          toolButtonTooltip.id = "toolButtonTooltip";
+          toolButtonTooltip.className = "tool-button-tooltip";
+          toolButtonTooltip.hidden = true;
+          toolButtonTooltip.setAttribute("role", "tooltip");
+          document.body.append(toolButtonTooltip);
+        }
+        return toolButtonTooltip;
+      }
+
+      function toolButtonTooltipText(button) {
+        return String(
+          button?.dataset?.tooltip
+          || button?.getAttribute("aria-label")
+          || button?.querySelector(".tool-label")?.textContent
+          || "",
+        ).trim();
+      }
+
+      function positionToolButtonTooltip(target = toolButtonTooltipTarget) {
+        const tooltip = toolButtonTooltip;
+        if (!tooltip || tooltip.hidden || !target) return;
+        const targetRect = target.getBoundingClientRect();
+        const margin = 6;
+        const tooltipWidth = tooltip.offsetWidth;
+        const tooltipHeight = tooltip.offsetHeight;
+        const left = Math.max(
+          margin,
+          Math.min(
+            targetRect.left + targetRect.width / 2 - tooltipWidth / 2,
+            window.innerWidth - tooltipWidth - margin,
+          ),
+        );
+        let top = targetRect.top - tooltipHeight - margin;
+        if (top < margin) {
+          top = Math.min(window.innerHeight - tooltipHeight - margin, targetRect.bottom + margin);
+        }
+        tooltip.style.left = `${Math.round(left)}px`;
+        tooltip.style.top = `${Math.round(Math.max(margin, top))}px`;
+      }
+
+      function showToolButtonTooltip(button) {
+        if (!button || button.disabled || button.classList.contains("hidden")) return;
+        const text = toolButtonTooltipText(button);
+        if (!text) return;
+        const tooltip = ensureToolButtonTooltip();
+        toolButtonTooltipTarget = button;
+        tooltip.textContent = text;
+        tooltip.hidden = false;
+        positionToolButtonTooltip(button);
+      }
+
+      function hideToolButtonTooltip(target = null) {
+        if (target && toolButtonTooltipTarget && target !== toolButtonTooltipTarget) return;
+        if (toolButtonTooltip) toolButtonTooltip.hidden = true;
+        toolButtonTooltipTarget = null;
+      }
+
+      function bindToolButtonTooltips() {
+        document.querySelectorAll("#toolSelectorSection .tool-option").forEach((button) => {
+          if (button.dataset.tooltipBound === "true") return;
+          const tooltipText = String(button.getAttribute("title") || "").trim() || toolButtonTooltipText(button);
+          if (tooltipText) button.dataset.tooltip = tooltipText;
+          button.removeAttribute("title");
+          button.dataset.tooltipBound = "true";
+          button.addEventListener("pointerenter", () => showToolButtonTooltip(button));
+          button.addEventListener("pointerleave", () => hideToolButtonTooltip(button));
+          button.addEventListener("pointerdown", () => hideToolButtonTooltip(button));
+          button.addEventListener("focus", () => showToolButtonTooltip(button));
+          button.addEventListener("blur", () => hideToolButtonTooltip(button));
+        });
+        if (!toolButtonTooltipKeydownBound) {
+          document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") hideToolButtonTooltip();
+          });
+          toolButtonTooltipKeydownBound = true;
+        }
       }
 
       function setChartMessage(message) {
@@ -1268,6 +1352,9 @@
           button.classList.toggle("hidden", !showSelector || !enabled);
         });
         el("toolSelectorSection").classList.toggle("hidden", !showSelector);
+        if (toolButtonTooltipTarget?.disabled || toolButtonTooltipTarget?.classList.contains("hidden")) {
+          hideToolButtonTooltip();
+        }
         const glmEnabled = enabledSet.has("glm");
         const gbmEnabled = enabledSet.has("gbm");
         setModelSidebarPanelVisibility("gbmSidebarPanel", gbmEnabled);
@@ -1597,14 +1684,13 @@
       }
 
       function handleToolClick(tool) {
-        if (state.tool === tool) {
-          setSidebarVisible(!state.sidebarVisible);
-          return;
-        }
+        hideToolButtonTooltip();
+        if (state.tool === tool) return;
         setTool(tool);
       }
 
       function setSidebarVisible(visible) {
+        hideToolButtonTooltip();
         state.sidebarVisible = Boolean(visible);
         document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible);
         el("appSidebar").removeAttribute("aria-hidden");
@@ -3836,6 +3922,7 @@
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
         lineBarTool.bindControls();
         bindFavouriteControls();
+        bindToolButtonTooltips();
         document.querySelectorAll('.segmented[data-control="filterOperator"], .segmented[data-control="filterSelectionMode"]').forEach((group) => {
           group.addEventListener("click", (event) => {
             if (event.target.tagName !== "BUTTON") return;
@@ -3957,6 +4044,7 @@
           refreshActiveTool({ force: true });
         });
         window.addEventListener("resize", () => {
+          hideToolButtonTooltip();
           syncMobileSidebarLayout();
           scheduleDatasetMetaCompactCheck();
           if (state.tool === "line_bar") {
