@@ -647,7 +647,7 @@
       }
 
       body.dark .tool-icon img {
-        filter: grayscale(1) opacity(0.72);
+        filter: brightness(0) saturate(100%) invert(76%) sepia(10%) saturate(463%) hue-rotate(181deg) brightness(93%) contrast(89%);
       }
 
       body.dark .tool-option.active .tool-icon img {

@@ -1446,7 +1446,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".tool-icon img {\n        width: 30px;\n        height: 30px;", css)
         self.assertIn("filter: grayscale(1) opacity(0.62);", css)
         self.assertIn(".tool-option.active .tool-icon img {\n        filter: brightness(0) saturate(100%) invert(39%) sepia(70%)", css)
-        self.assertIn("body.dark .tool-icon img {\n        filter: grayscale(1) opacity(0.72);", css)
+        self.assertIn("body.dark .tool-icon img {\n        filter: brightness(0) saturate(100%) invert(76%) sepia(10%)", css)
         self.assertIn("body.dark .tool-option.active .tool-icon img {\n        filter: brightness(0) saturate(100%) invert(72%) sepia(62%)", css)
         self.assertNotIn("dataset-meta-uk-map-icon", css)
         self.assertIn("text-decoration-skip-ink: none;", css)
