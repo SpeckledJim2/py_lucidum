@@ -1695,7 +1695,7 @@
           el("histogramWrap").classList.add("hidden");
           el("ukMap").classList.add("hidden");
           el("mapLegend").classList.add("hidden");
-          lineBarTool.setView(state.view);
+          lineBarTool.setView(state.view, { refresh });
           lineBarTool.updateAxisControls();
           requestAnimationFrame(() => {
             applyStartupChartExpectedCollapse();
@@ -2838,6 +2838,18 @@
         }
       }
 
+      function applyMapFavouriteStateOnly(favourite) {
+        if (!toolEnabled("uk_map")) {
+          throw new Error("UK Mapping is not enabled for this app.");
+        }
+        const view = favourite?.view || {};
+        state.activeLineBarFavouriteId = favourite?.id || "";
+        applyFavouriteMetricState(favourite);
+        applyFavouriteFilterState(view);
+        ukMapTool.applyFavouriteState(view.map || {});
+        renderFavourites();
+      }
+
       async function refreshFavourites(options = {}) {
         try {
           const data = await api("/api/line-bar/favourites");
@@ -2900,19 +2912,90 @@
         }
       }
 
-      async function applyStartupFavourite() {
-        if (favouriteStartupApplied) return "";
-        favouriteStartupApplied = true;
+      function startupFavouriteForRestore() {
         const target = String(requestedDefault("line_bar_favourite") || "").trim();
-        if (!target) return "";
-        if (!lineBarFavouritesLoaded) await refreshFavourites();
-        const favourite = favouriteByStartupKey(target);
-        if (!favourite) {
-          const message = `Favourite not found: ${target}`;
-          setStatus(message, true);
-          return message;
+        if (target) {
+          return {
+            explicit: true,
+            target,
+            favourite: favouriteByStartupKey(target),
+          };
         }
-        return applySavedFavourite(favourite, { refresh: false });
+        return {
+          explicit: false,
+          target: "",
+          favourite: lineBarFavourites[0] || null,
+        };
+      }
+
+      function startupToolForFavourite(favourite, fallbackTool) {
+        const scope = favouriteScope(favourite);
+        if (scope === "line_bar_view" && toolEnabled("line_bar")) return "line_bar";
+        if (scope === "map_view" && toolEnabled("uk_map")) return "uk_map";
+        return fallbackTool;
+      }
+
+      async function applyStartupFavouriteState() {
+        if (favouriteStartupApplied) {
+          return { applied: false, favourite: null, filterApplied: false, message: "", statusError: false };
+        }
+        favouriteStartupApplied = true;
+        if (!lineBarFavouritesLoaded) await refreshFavourites();
+        const { explicit, target, favourite } = startupFavouriteForRestore();
+        if (!favourite) {
+          return {
+            applied: false,
+            favourite: null,
+            filterApplied: false,
+            message: explicit ? `Favourite not found: ${target}` : "",
+            statusError: explicit,
+          };
+        }
+        const errors = favouriteValidationErrors(favourite);
+        if (errors.length) {
+          return {
+            applied: false,
+            favourite,
+            filterApplied: false,
+            message: `Favourite "${favourite.name}" cannot be used. ${errors.join(" ")}`,
+            statusError: true,
+          };
+        }
+        try {
+          const scope = favouriteScope(favourite);
+          if (scope === "map_view") {
+            applyMapFavouriteStateOnly(favourite);
+          } else if (scope === "line_bar_view") {
+            if (!toolEnabled("line_bar")) {
+              throw new Error("Line/Bar is not enabled for this app.");
+            }
+            await applyLineBarFavouriteView(favourite, { refresh: false });
+          } else {
+            state.activeLineBarFavouriteId = favourite.id || "";
+            applyFavouriteMetricState(favourite);
+            if (scope === "metrics_filter") {
+              applyFavouriteFilterState(favourite.view || {});
+            }
+            renderFavourites();
+          }
+          const warnings = favouriteValidationWarnings(favourite);
+          const message = warnings.length ? warnings.join(" ") : "";
+          return {
+            applied: true,
+            favourite,
+            filterApplied: Boolean(state.activeFilter),
+            message,
+            statusError: Boolean(message),
+          };
+        } catch (error) {
+          return {
+            applied: false,
+            favourite,
+            filterApplied: false,
+            message: error.message || "Favourite could not be restored.",
+            statusError: true,
+          };
+        }
       }
 
       function syncFavouriteActionButtons() {
@@ -4277,14 +4360,18 @@
           lineBarTool.renderFeatures();
           lineBarTool.updateAxisControls();
           await refreshFavourites();
-          state.tool = chooseDefaultTool();
+          const defaultStartupTool = chooseDefaultTool();
+          const startupFavouriteResult = await applyStartupFavouriteState();
+          if (startupFavouriteResult.filterApplied) await refreshFilterRowCountMeta();
+          state.tool = startupFavouriteResult.applied
+            ? startupToolForFavourite(startupFavouriteResult.favourite, defaultStartupTool)
+            : defaultStartupTool;
           setTool(state.tool, false);
           syncMobileSidebarLayout({ initial: true });
-          const startupFavouriteError = await applyStartupFavourite();
           setStartupProgress("Loading initial dataset");
           await refreshMetricSummary({ force: true });
           await refreshActiveTool({ force: true });
-          if (startupFavouriteError) setStatus(startupFavouriteError, true);
+          if (startupFavouriteResult.message) setStatus(startupFavouriteResult.message, startupFavouriteResult.statusError);
           setStartupProgress("Ready", "ready");
           startServerHeartbeat();
         } catch (error) {

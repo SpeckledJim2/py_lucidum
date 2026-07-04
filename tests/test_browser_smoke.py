@@ -4035,6 +4035,32 @@ COPY (
                             '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
                             timeout=10_000,
                         )
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#actualNumerator")?.value === "ratio"
+                              && document.querySelector("#favouritesSelectedMeta")?.textContent === "Ratio view"
+                            """,
+                            timeout=10_000,
+                        )
+                        page.evaluate(
+                            """
+                            () => {
+                              const select = document.querySelector("#actualNumerator");
+                              select.value = "price";
+                              select.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#actualNumerator")?.value === "price"
+                              && !document.querySelector(".saved-favourite-option.active")
+                              && document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                              && echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.()
+                                .series?.find((series) => series.type === "line")?.data?.[0] > 1
+                            """,
+                            timeout=10_000,
+                        )
                         if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
                             page.locator("#lineBarToolbarToggleBtn").click()
                             page.wait_for_function(
@@ -8896,6 +8922,29 @@ COPY (
                 )
                 assert_filter_label_badge("#lineBarFilter", "line-bar-filter--applied", True)
                 assert_filter_badge_clear("#lineBarFilterClearBtn", "#lineBarFilterText", True)
+                legend_spacing = page.evaluate(
+                    """
+                    () => {
+                      const chartNode = document.querySelector("#chart");
+                      const filter = document.querySelector("#lineBarFilter");
+                      const chart = window.echarts?.getInstanceByDom(chartNode);
+                      const option = chart?.getOption?.() || {};
+                      const legend = Array.isArray(option.legend) ? option.legend[0] : option.legend;
+                      const grid = Array.isArray(option.grid) ? option.grid[0] : option.grid;
+                      const chartRect = chartNode?.getBoundingClientRect();
+                      const filterRect = filter?.getBoundingClientRect();
+                      return {
+                        filterVisible: Boolean(filter && getComputedStyle(filter).display !== "none" && filterRect.width > 0),
+                        filterBottomOffset: filterRect && chartRect ? filterRect.bottom - chartRect.top : 0,
+                        legendTop: Number(legend?.top),
+                        gridTop: Number(grid?.top),
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(legend_spacing["filterVisible"])
+                self.assertGreater(legend_spacing["legendTop"], legend_spacing["filterBottomOffset"])
+                self.assertGreaterEqual(legend_spacing["gridTop"], legend_spacing["legendTop"] + 40)
                 page.locator("#lineBarFilterClearBtn").click()
                 page.wait_for_function(
                     """
@@ -13576,6 +13625,45 @@ COPY (
                 )
                 self.assertEqual(startup_errors, [])
                 startup_page.close()
+
+                default_startup_page = browser.new_page(viewport={"width": 1280, "height": 800})
+                default_startup_errors: list[str] = []
+                default_startup_chart_requests: list[dict[str, Any]] = []
+                default_startup_page.on("pageerror", lambda error: default_startup_errors.append(str(error)))
+
+                def record_default_startup_chart(route: Any) -> None:
+                    if route.request.method == "POST":
+                        default_startup_chart_requests.append(json.loads(route.request.post_data or "{}"))
+                    route.continue_()
+
+                default_startup_page.route("**/api/chart", record_default_startup_chart)
+                default_startup_page.goto(base_url, wait_until="domcontentloaded")
+                default_startup_page.wait_for_function(
+                    """
+                    () => document.querySelector("#lineBarTool")?.classList.contains("active")
+                    """,
+                    timeout=10_000,
+                )
+                default_startup_page.wait_for_function(
+                    """() => document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Second view"
+                      && document.querySelector(".saved-favourite-option.active .saved-filter-name")?.textContent.trim() === "Second view"
+                      && document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
+                      && document.querySelector('.saved-filter-option[data-filter-theme="AGE"]')?.getAttribute("aria-selected") === "true"
+                      && document.querySelector('#expectedList .feature[data-value="expected"]')?.getAttribute("aria-pressed") === "true" """,
+                    timeout=10_000,
+                )
+                default_startup_page.wait_for_function(
+                    "() => document.querySelector('#lineBarGroupMeta')?.textContent.includes('groups')",
+                    timeout=10_000,
+                )
+                self.assertTrue(default_startup_chart_requests)
+                self.assertTrue(all(
+                    request.get("filter") == "vehicle_age >= 3"
+                    and [response.get("numerator") for response in request.get("responses", [])] == ["price", "expected"]
+                    for request in default_startup_chart_requests
+                ))
+                self.assertEqual(default_startup_errors, [])
+                default_startup_page.close()
 
                 self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.locator('.line-bar-favourite-row [data-favourite-action="delete"]').first.click()

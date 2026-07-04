@@ -73,6 +73,10 @@ export function createLineBarTool({
   const DATE_BUCKET_VALUES = new Set(["none", "hour", "day", "week", "month", "year"]);
   const RESPONSE_AXIS_PADDING = 0.08;
   const RESPONSE_AXIS_TARGET_INTERVALS = 15;
+  const LINE_BAR_MAIN_LEGEND_TOP = 52;
+  const LINE_BAR_OVERLAY_LEGEND_TOP = 78;
+  const LINE_BAR_GRID_TOP = 112;
+  const LINE_BAR_OVERLAY_GRID_TOP = 140;
   const SHAP_RIBBON_SERIES = [
     ["p0", "p100", "SHAP Min-Max", "rgba(209, 63, 63, 0.10)"],
     ["p5", "p95", "SHAP 5-95", "rgba(209, 63, 63, 0.16)"],
@@ -1267,7 +1271,7 @@ export function createLineBarTool({
           formatter: (params) => formatChartTooltip(params, weightLabel, formatChartResponseValue),
         },
         legend: lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection),
-        grid: { left: 72, right: 76, top: hasOverlaySeries ? 82 : 56, bottom: xLabelPolicy.bottom, containLabel: false },
+        grid: { left: 72, right: 76, top: hasOverlaySeries ? LINE_BAR_OVERLAY_GRID_TOP : LINE_BAR_GRID_TOP, bottom: xLabelPolicy.bottom, containLabel: false },
         xAxis: {
           type: "category",
           name: data.x || "",
@@ -1507,7 +1511,7 @@ export function createLineBarTool({
     const textStyle = { color: getCss("--text"), fontWeight: 700, fontSize: 13 };
     const overlayTextStyle = { color: getCss("--text"), fontWeight: 400, fontSize: 11 };
     const mainLegend = {
-      top: -4,
+      top: LINE_BAR_MAIN_LEGEND_TOP,
       data: legendData,
       selected: mainLegendSelection,
       textStyle,
@@ -1516,7 +1520,7 @@ export function createLineBarTool({
     return [
       mainLegend,
       {
-        top: 22,
+        top: LINE_BAR_OVERLAY_LEGEND_TOP,
         left: "center",
         type: "scroll",
         data: overlayLegendData,
