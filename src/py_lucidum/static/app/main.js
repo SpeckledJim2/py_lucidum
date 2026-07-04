@@ -252,6 +252,9 @@
       let favouriteStartupApplied = false;
       let selectedFavouriteManageId = "";
       let favouriteLoadError = "";
+      let favouriteOrderSaveSequence = 0;
+      let favouriteOrderSaveInFlight = false;
+      let pendingFavouriteOrderSave = null;
 
       async function ensureDatasetViewerTool() {
         if (!toolEnabled("dataset_viewer")) return null;
@@ -1539,6 +1542,7 @@
         glmTool.syncSidebarFromSchema();
         gbmTool.syncSidebarFromSchema();
         syncSidebarAccordion();
+        syncFavouriteActionButtons();
         el("histogramToolbar").classList.toggle("hidden", tool !== "histogram");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
         el("visualArea").classList.toggle("dataset-viewer-mode", tool === "dataset_viewer");
@@ -2806,8 +2810,16 @@
       function syncFavouriteActionButtons() {
         const addButton = el("sidebarFavouriteAddBtn");
         const menuButton = el("sidebarFavouriteMenuBtn");
-        if (addButton) addButton.disabled = !lineBarFavouritesLoaded;
+        const canAdd = toolSupportsFavouriteAdd();
+        if (addButton) {
+          addButton.classList.toggle("hidden", !canAdd);
+          addButton.toggleAttribute("aria-hidden", !canAdd);
+          addButton.disabled = !canAdd || !lineBarFavouritesLoaded;
+          if (!canAdd && addButton.contains(document.activeElement)) document.activeElement?.blur?.();
+        }
         if (menuButton) menuButton.disabled = !lineBarFavouritesLoaded;
+        const popover = el("sidebarFavouritePopover");
+        if (!canAdd && popover && !popover.hidden && favouritePopoverMode === "add") closeFavouritePopover();
       }
 
       function closeFavouritePopover() {
@@ -2861,6 +2873,45 @@
         input?.focus();
       }
 
+      function focusSelectedFavouriteManageInputAfterRender() {
+        requestAnimationFrame(() => focusSelectedFavouriteManageInput());
+      }
+
+      function queueFavouriteOrderSave(ids) {
+        pendingFavouriteOrderSave = { ids: [...ids], sequence: favouriteOrderSaveSequence + 1 };
+        favouriteOrderSaveSequence = pendingFavouriteOrderSave.sequence;
+        void flushFavouriteOrderSaves();
+      }
+
+      async function flushFavouriteOrderSaves() {
+        if (favouriteOrderSaveInFlight) return;
+        favouriteOrderSaveInFlight = true;
+        try {
+          while (pendingFavouriteOrderSave) {
+            const save = pendingFavouriteOrderSave;
+            pendingFavouriteOrderSave = null;
+            try {
+              await api("/api/line-bar/favourites/order", {
+                method: "PUT",
+                body: JSON.stringify({ ids: save.ids }),
+              });
+            } catch (error) {
+              if (save.sequence !== favouriteOrderSaveSequence || pendingFavouriteOrderSave) continue;
+              const popover = el("sidebarFavouritePopover");
+              const showManageError = Boolean(popover && !popover.hidden && favouritePopoverMode === "manage");
+              await refreshFavourites({ renderPopover: showManageError });
+              if (showManageError) {
+                renderFavouritePopover("manage", error.message || "Favourite order could not be saved", true);
+                focusSelectedFavouriteManageInputAfterRender();
+              }
+            }
+          }
+        } finally {
+          favouriteOrderSaveInFlight = false;
+          if (pendingFavouriteOrderSave) void flushFavouriteOrderSaves();
+        }
+      }
+
       function updateFavouriteMoveControls() {
         const popover = el("sidebarFavouritePopover");
         if (!popover) return;
@@ -2904,8 +2955,12 @@
         button.classList.toggle("active", ready);
       }
 
+      function toolSupportsFavouriteAdd(tool = state.tool) {
+        return tool === "line_bar" || tool === "uk_map";
+      }
+
       function defaultFavouriteAddScope() {
-        return state.tool === "uk_map" && toolEnabled("uk_map") ? "map_view" : DEFAULT_FAVOURITE_SCOPE;
+        return state.tool === "uk_map" ? "map_view" : DEFAULT_FAVOURITE_SCOPE;
       }
 
       function favouriteScopeOptionsForAdd() {
@@ -2950,6 +3005,7 @@
       function renderFavouritePopover(mode = "manage", message = "", isError = false) {
         const popover = el("sidebarFavouritePopover");
         if (!popover) return;
+        popover.classList.toggle("line-bar-favourite-popover--manage", mode !== "add");
         if (mode === "add") {
           const defaultScope = defaultFavouriteAddScope();
           popover.dataset.favouriteScope = defaultScope;
@@ -2976,16 +3032,16 @@
             <button class="line-bar-favourite-action-button line-bar-favourite-rename-button" type="button" data-favourite-action="rename" aria-label="Save name change" title="Save name change" disabled>&#10003;</button>
             <input class="line-bar-favourite-name-input" type="text" maxlength="120" value="${escapeHtml(favourite.name)}" aria-label="Favourite name" />
             <button class="line-bar-favourite-action-button line-bar-favourite-delete-button" type="button" data-favourite-action="delete" aria-label="Delete ${escapeHtml(favourite.name)}" title="Delete">&times;</button>
+            <div class="line-bar-favourite-row-scope">${escapeHtml(favouriteScopeLabel(favouriteScope(favourite)))}</div>
           </div>
-          <div class="line-bar-favourite-row-scope">${escapeHtml(favouriteScopeLabel(favouriteScope(favourite)))}</div>
           ${favouriteMessage(favourite) ? `<div class="line-bar-favourite-row-message">${escapeHtml(favouriteMessage(favourite))}</div>` : ""}
         `).join("");
         popover.innerHTML = `
-          <div class="line-bar-favourite-popover-list">${rows || '<div class="line-bar-favourite-empty">No favourites</div>'}</div>
           <div class="line-bar-favourite-move-controls" aria-label="Move selected favourite">
             <button class="line-bar-favourite-action-button" type="button" data-favourite-action="move-up" aria-label="Move selected favourite up" title="Move selected favourite up" disabled>&uarr;</button>
             <button class="line-bar-favourite-action-button" type="button" data-favourite-action="move-down" aria-label="Move selected favourite down" title="Move selected favourite down" disabled>&darr;</button>
           </div>
+          <div class="line-bar-favourite-popover-list">${rows || '<div class="line-bar-favourite-empty">No favourites</div>'}</div>
           <div class="line-bar-favourite-popover-message${isError ? " error" : ""}">${escapeHtml(message)}</div>
         `;
         popover.querySelectorAll(".line-bar-favourite-row").forEach(updateFavouriteRenameButton);
@@ -3018,13 +3074,12 @@
             if (index < 0 || nextIndex < 0 || nextIndex >= lineBarFavourites.length) return;
             const ordered = [...lineBarFavourites];
             [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
-            await api("/api/line-bar/favourites/order", {
-              method: "PUT",
-              body: JSON.stringify({ ids: ordered.map((favourite) => favourite.id) }),
-            });
+            lineBarFavourites = ordered;
             selectedFavouriteManageId = favouriteId;
-            await refreshFavourites({ renderPopover: true });
-            focusSelectedFavouriteManageInput();
+            renderFavourites();
+            renderFavouritePopover("manage");
+            focusSelectedFavouriteManageInputAfterRender();
+            queueFavouriteOrderSave(ordered.map((favourite) => favourite.id));
             return;
           }
           const row = favouritePopoverRow(button);
@@ -3051,7 +3106,10 @@
       }
 
       function bindFavouriteControls() {
-        el("sidebarFavouriteAddBtn")?.addEventListener("click", () => openFavouritePopover("add"));
+        el("sidebarFavouriteAddBtn")?.addEventListener("click", () => {
+          if (!toolSupportsFavouriteAdd()) return;
+          openFavouritePopover("add");
+        });
         el("sidebarFavouriteMenuBtn")?.addEventListener("click", () => {
           const popover = el("sidebarFavouritePopover");
           if (popover && !popover.hidden && favouritePopoverMode === "manage") {
@@ -3061,6 +3119,7 @@
           openFavouritePopover("manage");
         });
         el("sidebarFavouritePopover")?.addEventListener("click", (event) => {
+          event.stopPropagation();
           const scopeButton = event.target.closest("[data-favourite-scope-option]");
           if (scopeButton) {
             setFavouriteAddScope(scopeButton.dataset.favouriteScopeOption || defaultFavouriteAddScope());

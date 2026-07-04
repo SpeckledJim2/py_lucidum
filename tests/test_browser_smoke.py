@@ -12711,35 +12711,93 @@ COPY (
                     }""",
                     timeout=10_000,
                 )
-                move_down.click()
-                page.wait_for_function(
-                    """() => {
-                      const labels = [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")].map((node) => node.textContent.trim());
-                      const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
-                      const up = document.querySelector('[data-favourite-action="move-up"]');
-                      const down = document.querySelector('[data-favourite-action="move-down"]');
-                      return labels[0] === "Second view" &&
-                        labels[1] === "Renamed view" &&
-                        rows[1]?.classList.contains("selected") &&
-                        rows[1]?.querySelector("input") === document.activeElement &&
-                        up && !up.disabled &&
-                        down?.disabled;
-                    }""",
-                    timeout=10_000,
+                move_down_elapsed = page.evaluate(
+                    """
+                    async () => {
+                      const button = document.querySelector('[data-favourite-action="move-down"]');
+                      const start = performance.now();
+                      button?.click();
+                      while (performance.now() - start < 1000) {
+                        await new Promise((resolve) => requestAnimationFrame(resolve));
+                        const labels = [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")].map((node) => node.textContent.trim());
+                        const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
+                        const up = document.querySelector('[data-favourite-action="move-up"]');
+                        const down = document.querySelector('[data-favourite-action="move-down"]');
+                        if (labels[0] === "Second view" &&
+                          labels[1] === "Renamed view" &&
+                          rows[1]?.classList.contains("selected") &&
+                          rows[1]?.querySelector("input") === document.activeElement &&
+                          up && !up.disabled &&
+                          down?.disabled) {
+                          return performance.now() - start;
+                        }
+                      }
+                      return -1;
+                    }
+                    """
                 )
-                move_up.click()
-                page.wait_for_function(
-                    """() => {
+                self.assertGreaterEqual(move_down_elapsed, 0)
+                self.assertLess(move_down_elapsed, 100)
+                move_up_elapsed = page.evaluate(
+                    """
+                    async () => {
+                      const button = document.querySelector('[data-favourite-action="move-up"]');
+                      const start = performance.now();
+                      button?.click();
+                      while (performance.now() - start < 1000) {
+                        await new Promise((resolve) => requestAnimationFrame(resolve));
+                        const labels = [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")].map((node) => node.textContent.trim());
+                        const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
+                        const up = document.querySelector('[data-favourite-action="move-up"]');
+                        const down = document.querySelector('[data-favourite-action="move-down"]');
+                        if (labels[0] === "Renamed view" &&
+                          labels[1] === "Second view" &&
+                          rows[0]?.classList.contains("selected") &&
+                          rows[0]?.querySelector("input") === document.activeElement &&
+                          up?.disabled &&
+                          down && !down.disabled) {
+                          return performance.now() - start;
+                        }
+                      }
+                      return -1;
+                    }
+                    """
+                )
+                self.assertGreaterEqual(move_up_elapsed, 0)
+                self.assertLess(move_up_elapsed, 100)
+                rapid_move_state = page.evaluate(
+                    """
+                    async () => {
+                      const clickAction = (action) => document.querySelector(`[data-favourite-action="${action}"]`)?.click();
+                      clickAction("move-down");
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      clickAction("move-up");
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      clickAction("move-down");
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
                       const labels = [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")].map((node) => node.textContent.trim());
                       const rows = [...document.querySelectorAll(".line-bar-favourite-row")];
                       const up = document.querySelector('[data-favourite-action="move-up"]');
                       const down = document.querySelector('[data-favourite-action="move-down"]');
-                      return labels[0] === "Renamed view" &&
-                        labels[1] === "Second view" &&
-                        rows[0]?.classList.contains("selected") &&
-                        rows[0]?.querySelector("input") === document.activeElement &&
-                        up?.disabled &&
-                        down && !down.disabled;
+                      return {
+                        labels,
+                        selectedBottom: Boolean(rows[1]?.classList.contains("selected")),
+                        upEnabled: Boolean(up && !up.disabled),
+                        downDisabled: Boolean(down?.disabled),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(rapid_move_state["labels"][:2], ["Second view", "Renamed view"])
+                self.assertTrue(rapid_move_state["selectedBottom"])
+                self.assertTrue(rapid_move_state["upEnabled"])
+                self.assertTrue(rapid_move_state["downDisabled"])
+                page.wait_for_function(
+                    """async () => {
+                      const response = await fetch("/api/line-bar/favourites", { headers: { "x-lucidum-token": "" } });
+                      const data = await response.json();
+                      const names = (data.favourites || []).slice(0, 2).map((favourite) => favourite.name);
+                      return names[0] === "Second view" && names[1] === "Renamed view";
                     }""",
                     timeout=10_000,
                 )
@@ -12895,6 +12953,56 @@ COPY (
                     """
                 )
                 self.assertTrue(table_favourite_id)
+                page.locator("#sidebarFavouriteMenuBtn").click()
+                page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                manage_scroll_state = page.evaluate(
+                    """
+                    () => {
+                      const popover = document.querySelector("#sidebarFavouritePopover");
+                      const moveControls = popover?.querySelector(".line-bar-favourite-move-controls");
+                      const list = popover?.querySelector(".line-bar-favourite-popover-list");
+                      const row = popover?.querySelector(".line-bar-favourite-row");
+                      const deleteButton = row?.querySelector('[data-favourite-action="delete"]');
+                      const scope = row?.querySelector(".line-bar-favourite-row-scope");
+                      const deleteLefts = [...(popover?.querySelectorAll(".line-bar-favourite-delete-button") || [])]
+                        .map((button) => button.getBoundingClientRect().left);
+                      if (!popover || !moveControls || !list || !deleteButton || !scope) {
+                        return { missing: true };
+                      }
+                      popover.style.maxHeight = "96px";
+                      const before = moveControls.getBoundingClientRect();
+                      const listBefore = list.getBoundingClientRect();
+                      list.scrollTop = list.scrollHeight;
+                      const after = moveControls.getBoundingClientRect();
+                      const listAfter = list.getBoundingClientRect();
+                      return {
+                        missing: false,
+                        manageMode: popover.classList.contains("line-bar-favourite-popover--manage"),
+                        controlsBeforeList: before.bottom <= listBefore.top,
+                        controlsStayedPut: Math.abs(before.top - after.top) <= 1,
+                        listStayedPut: Math.abs(listBefore.top - listAfter.top) <= 1,
+                        listScrolled: list.scrollTop > 0,
+                        listScrollable: list.scrollHeight > list.clientHeight + 1,
+                        deleteButtonsAligned: deleteLefts.length > 1 && Math.max(...deleteLefts) - Math.min(...deleteLefts) <= 2,
+                        scopeAfterDelete: Boolean(deleteButton.compareDocumentPosition(scope) & Node.DOCUMENT_POSITION_FOLLOWING),
+                      };
+                    }
+                    """
+                )
+                self.assertFalse(manage_scroll_state.get("missing"))
+                self.assertTrue(manage_scroll_state["manageMode"])
+                self.assertTrue(manage_scroll_state["controlsBeforeList"])
+                self.assertTrue(manage_scroll_state["controlsStayedPut"])
+                self.assertTrue(manage_scroll_state["listStayedPut"])
+                self.assertTrue(manage_scroll_state["listScrollable"])
+                self.assertTrue(manage_scroll_state["listScrolled"])
+                self.assertTrue(manage_scroll_state["deleteButtonsAligned"])
+                self.assertTrue(manage_scroll_state["scopeAfterDelete"])
+                page.locator("#sidebarFavouriteMenuBtn").click()
+                page.wait_for_function(
+                    """() => document.querySelector("#sidebarFavouritePopover")?.hidden === true""",
+                    timeout=10_000,
+                )
                 page.locator("#chartTab").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                 page.locator(f'.saved-favourite-option[data-favourite-id="{table_favourite_id}"]').click()
