@@ -715,13 +715,16 @@ COPY (
                     "hotspots": 4,
                     "labelSize": 5,
                     "smoothingLevel": 2,
-                    "view": {"center": {"lat": 51.5, "lng": -0.1}, "zoom": 8},
+                    "center": {"lat": 51.5, "lng": -0.1},
+                    "zoom": 8,
                 },
             ),
         )
         self.assertEqual(map_view["view"]["scope"], "map_view")
         self.assertTrue(map_view["validation"]["valid"])
         self.assertEqual(map_view["view"]["map"]["level"], "sector")
+        self.assertEqual(map_view["view"]["map"]["center"], {"lat": 51.5, "lng": -0.1})
+        self.assertEqual(map_view["view"]["map"]["zoom"], 8)
 
         with self.assertRaises(ValueError) as context:
             store.create_favourite(

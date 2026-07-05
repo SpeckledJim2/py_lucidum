@@ -153,6 +153,8 @@ export function createUkMapTool({
   const MAP_UNIT_FIT_PADDING = [18, 18];
   const MAP_UNIT_POINT_RADIUS_MULTIPLIER = 0.85;
   const MAP_UNIT_POINT_MIN_RADIUS = 0.5;
+  const MAP_UNIT_POINT_MAX_RADIUS_MULTIPLIER = MAP_UNIT_POINT_RADIUS_MULTIPLIER * 4;
+  const MAP_DEFAULT_VIEW = { center: { lat: 54.5, lng: -3.2 }, zoom: 6 };
   const MAP_LABEL_MIN_FONT_SIZE = 6;
   const MAP_LABEL_MAX_FONT_SIZE = 20;
   const MAP_INITIAL_FIT_OPTIONS = { animate: false };
@@ -194,9 +196,7 @@ export function createUkMapTool({
   let ukMapPointLayer = null;
   let ukMapLabelLayer = null;
   let baseTileLayer = null;
-  let mapLayerControl = null;
-  let mapZoomControl = null;
-  let mapHomeControl = null;
+  let mapViewportControl = null;
   let mapResizeObserver = null;
 
   function clearActiveMapFavourite(options = {}) {
@@ -234,12 +234,13 @@ export function createUkMapTool({
     return refreshUkMap(options);
   }
 
-  async function fetchMapData(request, requestKey) {
+  async function fetchMapData(request, requestKey, options = {}) {
     const requestSeq = state.mapRequestSeq + 1;
     state.mapRequestSeq = requestSeq;
+    const quietPending = Boolean(options.preserveRenderedMap && options.suppressPendingMeta);
     setStatus("");
     setChartMessage("");
-    setGroupMeta("uk_map", "Computing map...");
+    if (!quietPending) setGroupMeta("uk_map", "Computing map...");
     startToolTiming("uk_map");
     try {
       const [data, geoJson] = await Promise.all([
@@ -258,13 +259,15 @@ export function createUkMapTool({
       if (requestSeq !== state.mapRequestSeq) return;
       setToolTimingFailed("uk_map");
       state.pendingMapZoom = null;
+      state.mapViewRestorePending = null;
       setGroupMeta("uk_map", "Map failed");
       setChartMessage(error.message);
     }
   }
 
-  function cancelMapRequests() {
+  function cancelMapRequests(options = {}) {
     state.mapRequestSeq += 1;
+    if (!options.preservePendingRestore) state.mapViewRestorePending = null;
   }
 
   function clearRenderedMap() {
@@ -288,7 +291,7 @@ export function createUkMapTool({
   }
 
   function showPendingRestore() {
-    cancelMapRequests();
+    cancelMapRequests({ preservePendingRestore: true });
     setStatus("");
     setChartMessage("");
     setGroupMeta("uk_map", "Computing map...");
@@ -393,16 +396,14 @@ export function createUkMapTool({
       zoomControl: false,
       zoomDelta: 0.5,
       zoomSnap: 0.25,
-    }).setView([54.5, -3.2], 6);
+    }).setView([MAP_DEFAULT_VIEW.center.lat, MAP_DEFAULT_VIEW.center.lng], MAP_DEFAULT_VIEW.zoom);
     ukMap.getContainer()._lucidumMap = ukMap;
     ukMap.on("moveend zoomend", () => captureMapView("leaflet"));
     ukMap.on("zoomend", () => {
       if (state.lastMapData?.level === "sector") restyleActiveMapPolygonLayer();
     });
     setBaseMap(state.baseMap);
-    addMapLayerControl();
-    addMapZoomControl();
-    addMapHomeControl();
+    addMapViewportControl();
     observeMapResize();
   }
 
@@ -463,8 +464,9 @@ export function createUkMapTool({
   function scheduleMapViewportSync({ mode = "preserve" } = {}) {
     if (!ukMap) return;
     const shouldPreserve = mode === "preserve";
-    let view = shouldPreserve ? state.mapView : null;
-    if (shouldPreserve && (state.mapStartupFitDone || state.mapView)) {
+    const pendingRestoreView = state.mapViewRestorePending || null;
+    let view = shouldPreserve ? pendingRestoreView || state.mapView : null;
+    if (shouldPreserve && !pendingRestoreView && (state.mapStartupFitDone || state.mapView)) {
       view = captureMapView("viewport-sync") || view;
     }
     if (state.mapViewportSyncFrame) cancelAnimationFrame(state.mapViewportSyncFrame);
@@ -490,13 +492,23 @@ export function createUkMapTool({
   }
 
   function setBaseMap(baseMap) {
-    state.baseMap = MAP_BASE_LAYERS[baseMap] ? baseMap : "blank";
+    const nextBaseMap = MAP_BASE_LAYERS[baseMap] ? baseMap : "blank";
+    const sameBaseMap = nextBaseMap === state.baseMap;
+    state.baseMap = nextBaseMap;
     if (!ukMap) return;
+    const config = MAP_BASE_LAYERS[nextBaseMap];
+    const tileLayerMatches = config.url
+      ? Boolean(baseTileLayer && ukMap.hasLayer(baseTileLayer))
+      : !baseTileLayer;
+    if (sameBaseMap && tileLayerMatches) {
+      syncBaseMapVisualState();
+      syncMapControls();
+      return;
+    }
     if (baseTileLayer) {
       ukMap.removeLayer(baseTileLayer);
       baseTileLayer = null;
     }
-    const config = MAP_BASE_LAYERS[state.baseMap];
     if (config.url) {
       baseTileLayer = L.tileLayer(config.url, {
         maxZoom: 19,
@@ -504,9 +516,30 @@ export function createUkMapTool({
       }).addTo(ukMap);
       baseTileLayer.bringToBack();
     }
-    ukMap.getContainer().classList.toggle("blank-base", state.baseMap === "blank");
-    applyMapBackground();
+    syncBaseMapVisualState();
     syncMapControls();
+  }
+
+  function syncBaseMapVisualState() {
+    if (!ukMap) return;
+    const container = ukMap.getContainer();
+    container._lucidumBaseMap = state.baseMap;
+    container._lucidumBaseTileLayer = baseTileLayer;
+    container.classList.toggle("blank-base", state.baseMap === "blank");
+    applyMapBackground();
+  }
+
+  function canUseRenderedMapLevel(level) {
+    if (!level || state.pendingMapZoom || state.renderedMapLevel !== level) return false;
+    return Boolean(level === "unit" ? ukMapPointLayer : ukMapLayer);
+  }
+
+  function canUseCachedMapData(cache) {
+    return canUseRenderedMapLevel(cache?.data?.level);
+  }
+
+  function canRefreshMapInPlace(request) {
+    return canUseRenderedMapLevel(request?.level);
   }
 
   function applyMapBackground() {
@@ -522,44 +555,6 @@ export function createUkMapTool({
     const pair = config?.themePair;
     if (!pair) return;
     setBaseMap(document.body.classList.contains("dark") ? pair.dark : pair.light);
-  }
-
-  function addMapLayerControl() {
-    if (!ukMap || mapLayerControl) return;
-    const LayerControl = L.Control.extend({
-      options: { position: "topleft" },
-      onAdd() {
-        const container = L.DomUtil.create("div", "map-layer-control leaflet-control");
-        container.innerHTML = `
-          ${Object.entries(MAP_BASE_LAYERS).map(([value, config]) => `
-            <label>
-              <input type="radio" name="baseMap" value="${escapeHtml(value)}">
-              <span>${escapeHtml(config.label)}</span>
-            </label>
-          `).join("")}
-          <div class="map-layer-separator"></div>
-          <label>
-            <input type="radio" name="mapLevel" value="area">
-            <span>Area</span>
-          </label>
-          <label>
-            <input type="radio" name="mapLevel" value="sector">
-            <span>Sector</span>
-          </label>
-          <label>
-            <input type="radio" name="mapLevel" value="unit">
-            <span>Units</span>
-          </label>
-        `;
-        L.DomEvent.disableClickPropagation(container);
-        L.DomEvent.disableScrollPropagation(container);
-        container.addEventListener("change", handleMapLayerControlChange);
-        return container;
-      },
-    });
-    mapLayerControl = new LayerControl();
-    mapLayerControl.addTo(ukMap);
-    syncMapControls();
   }
 
   function handleMapLayerControlChange(event) {
@@ -621,18 +616,19 @@ export function createUkMapTool({
       level,
       baseMap,
       palette,
-      lineWeight: clampMapNumber(payload.lineWeight, 1, 0, 5, { integer: true }),
-      dotSize: clampMapNumber(payload.dotSize, 1, 0, 5, { integer: true }),
+      lineWeight: clampMapNumber(payload.lineWeight, 1, 0, 10, { integer: true }),
+      dotSize: clampMapNumber(payload.dotSize, 1, 1, 10, { integer: true }),
       opacity: clampMapNumber(payload.opacity, 1, 0, 1),
       hotspots: clampMapNumber(payload.hotspots, 0, -9, 9, { integer: true }),
       labelSize: clampMapNumber(payload.labelSize, 0, 0, 10, { integer: true }),
       smoothingLevel: clampMapNumber(payload.smoothingLevel, 0, 0, 5, { integer: true }),
-      view: normaliseMapView(payload.view),
+      view: normaliseMapView({ center: payload.center, zoom: payload.zoom }),
     };
   }
 
   function captureFavouriteState() {
-    const view = captureMapView("favourite") || state.mapView;
+    const view = normaliseMapView(currentMapView() || state.mapView) || normaliseMapView(MAP_DEFAULT_VIEW);
+    if (view) state.mapView = view;
     return {
       level: state.mapLevel,
       baseMap: state.baseMap,
@@ -643,7 +639,8 @@ export function createUkMapTool({
       hotspots: Number(state.mapHotspots),
       labelSize: Number(state.mapLabelSize),
       smoothingLevel: Number(state.mapSmoothingLevel),
-      view: normaliseMapView(view),
+      center: view?.center || null,
+      zoom: view?.zoom ?? null,
     };
   }
 
@@ -658,6 +655,7 @@ export function createUkMapTool({
     state.mapLabelSize = next.labelSize;
     state.mapSmoothingLevel = next.smoothingLevel;
     state.mapView = next.view;
+    state.mapViewRestorePending = next.view;
     state.pendingMapZoom = null;
     state.mapStartupFitDone = Boolean(next.view);
     setBaseMap(next.baseMap);
@@ -667,63 +665,63 @@ export function createUkMapTool({
   }
 
   function syncMapControls() {
-    const container = document.querySelector(".map-layer-control");
-    if (!container) return;
-    container.querySelectorAll('input[name="baseMap"]').forEach((input) => {
+    document.querySelectorAll('input[name="baseMap"]').forEach((input) => {
       input.checked = input.value === state.baseMap;
     });
-    container.querySelectorAll('input[name="mapLevel"]').forEach((input) => {
+    document.querySelectorAll('input[name="mapLevel"]').forEach((input) => {
       input.disabled = !mapLevelSelectable(input.value);
       input.checked = input.value === state.mapLevel;
     });
   }
 
-  function addMapZoomControl() {
-    if (!ukMap || mapZoomControl) return;
-    mapZoomControl = L.control.zoom({ position: "topleft" });
-    mapZoomControl.addTo(ukMap);
+  function zoomMapBy(delta) {
+    if (!ukMap) return;
+    ukMap.setZoom(ukMap.getZoom() + delta, { animate: false });
+    state.mapStartupFitDone = true;
+    captureMapView("explicit");
   }
 
-  function addMapHomeControl() {
-    if (!ukMap || mapHomeControl) return;
-    const HomeControl = L.Control.extend({
+  function zoomMapToLondon() {
+    if (!ukMap) return;
+    ukMap.setView([51.5074, -0.1278], 10, { animate: false });
+    state.mapStartupFitDone = true;
+    captureMapView("explicit");
+  }
+
+  function addMapViewportControl() {
+    if (!ukMap || mapViewportControl) return;
+    const ViewportControl = L.Control.extend({
       options: { position: "topleft" },
       onAdd() {
-        const container = L.DomUtil.create("div", "map-place-control leaflet-control");
-        const ukButton = L.DomUtil.create("button", "map-place-button", container);
-        ukButton.type = "button";
-        ukButton.title = "Fit UK map layer";
-        ukButton.setAttribute("aria-label", "Fit UK map layer");
-        ukButton.innerHTML = '<img src="/tools/uk-map/static/icons/UK.png" alt="">';
-        const londonButton = L.DomUtil.create("button", "map-place-button", container);
-        londonButton.type = "button";
-        londonButton.title = "Zoom to London";
-        londonButton.setAttribute("aria-label", "Zoom to London");
-        londonButton.innerHTML = '<img class="map-place-icon-london" src="/tools/uk-map/static/icons/London.png" alt="">';
+        const container = L.DomUtil.create("div", "map-viewport-control leaflet-control");
+        container.innerHTML = `
+          <button id="mapZoomIn" class="map-viewport-button" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+          <button id="mapZoomOut" class="map-viewport-button" type="button" title="Zoom out" aria-label="Zoom out">&minus;</button>
+          <button id="mapFitUk" class="map-viewport-button" type="button" title="Fit UK map layer" aria-label="Fit UK map layer">
+            <img src="/tools/uk-map/static/icons/UK.png" alt="">
+          </button>
+          <button id="mapZoomLondon" class="map-viewport-button" type="button" title="Zoom to London" aria-label="Zoom to London">
+            <img class="map-viewport-icon-london" src="/tools/uk-map/static/icons/London.png" alt="">
+          </button>
+        `;
         L.DomEvent.disableClickPropagation(container);
-        ukButton.addEventListener("click", (event) => {
-          event.preventDefault();
-          fitMapToLayer();
-        });
-        londonButton.addEventListener("click", (event) => {
-          event.preventDefault();
-          if (!ukMap) return;
-          ukMap.setView([51.5074, -0.1278], 10, { animate: false });
-          state.mapStartupFitDone = true;
-          captureMapView("explicit");
-        });
+        L.DomEvent.disableScrollPropagation(container);
+        container.querySelector("#mapZoomIn").addEventListener("click", () => zoomMapBy(Number(ukMap?.options?.zoomDelta) || 1));
+        container.querySelector("#mapZoomOut").addEventListener("click", () => zoomMapBy(-(Number(ukMap?.options?.zoomDelta) || 1)));
+        container.querySelector("#mapFitUk").addEventListener("click", () => fitMapToLayer());
+        container.querySelector("#mapZoomLondon").addEventListener("click", () => zoomMapToLondon());
         return container;
       },
     });
-    mapHomeControl = new HomeControl();
-    mapHomeControl.addTo(ukMap);
+    mapViewportControl = new ViewportControl();
+    mapViewportControl.addTo(ukMap);
   }
 
   function fitMapToLayer(options = {}) {
     const bounds = activeMapBounds();
     if (!bounds) {
       if (!ukMap) return;
-      ukMap.setView([54.5, -3.2], 6, { animate: false });
+      ukMap.setView([MAP_DEFAULT_VIEW.center.lat, MAP_DEFAULT_VIEW.center.lng], MAP_DEFAULT_VIEW.zoom, { animate: false });
       state.mapStartupFitDone = true;
       captureMapView("explicit");
       return;
@@ -754,6 +752,14 @@ export function createUkMapTool({
 
   function activeMapPalette() {
     return MAP_PALETTES[state.mapPalette] || MAP_PALETTES.viridis;
+  }
+
+  function activeMapExtremeColors() {
+    const palette = activeMapPalette();
+    return {
+      low: palette[0] || MAP_MISSING_COLOR,
+      high: palette[palette.length - 1] || MAP_MISSING_COLOR,
+    };
   }
 
   function hexToRgb(hex) {
@@ -872,9 +878,15 @@ export function createUkMapTool({
     return 1;
   }
 
+  function mapStrokeWeightForLineWeight(value = state.mapLineWeight) {
+    const sliderValue = Number(value);
+    if (!Number.isFinite(sliderValue) || sliderValue <= 0) return 0;
+    return Math.min(10, sliderValue) / 2;
+  }
+
   function mapLineWeightForLevel(level) {
-    const baseWeight = Number(state.mapLineWeight);
-    if (!Number.isFinite(baseWeight) || baseWeight <= 0) return 0;
+    const baseWeight = mapStrokeWeightForLineWeight();
+    if (baseWeight <= 0) return 0;
     if (level !== "sector" || !ukMap) return baseWeight;
     return baseWeight * sectorLineWeightScaleForZoom(ukMap.getZoom());
   }
@@ -988,19 +1000,12 @@ export function createUkMapTool({
     return 4;
   }
 
-  function unitPointRadiusScale(value = state.mapDotSize) {
-    const sliderValue = Math.max(0, Math.min(5, Number(value)));
-    if (!Number.isFinite(sliderValue)) return MAP_UNIT_POINT_RADIUS_MULTIPLIER;
-    const scale = sliderValue <= 1
-      ? 0.4 + (sliderValue * 0.6)
-      : 1 + ((sliderValue - 1) / 4);
-    return scale * MAP_UNIT_POINT_RADIUS_MULTIPLIER;
-  }
-
   function unitPointRadiusForCurrentStyle(zoom) {
-    const sliderValue = Number(state.mapDotSize);
-    if (Number.isFinite(sliderValue) && sliderValue <= 0) return MAP_UNIT_POINT_MIN_RADIUS;
-    return unitPointRadiusForZoom(zoom) * unitPointRadiusScale(sliderValue);
+    const sliderValue = Math.max(1, Math.min(10, Number(state.mapDotSize)));
+    if (!Number.isFinite(sliderValue) || sliderValue <= 1) return MAP_UNIT_POINT_MIN_RADIUS;
+    const maxRadius = unitPointRadiusForZoom(zoom) * MAP_UNIT_POINT_MAX_RADIUS_MULTIPLIER;
+    const progress = (sliderValue - 1) / 9;
+    return MAP_UNIT_POINT_MIN_RADIUS + ((maxRadius - MAP_UNIT_POINT_MIN_RADIUS) * progress);
   }
 
   function unitPointHitRadius(radius) {
@@ -1264,8 +1269,10 @@ export function createUkMapTool({
       state.pendingMapZoom = null;
     }
     if (!explicitMove) {
-      if (state.mapView) {
-        restoreMapView(state.mapView);
+      const restoreView = state.mapViewRestorePending || state.mapView;
+      if (restoreView) {
+        const restored = restoreMapView(restoreView);
+        if (restored && state.mapViewRestorePending) state.mapViewRestorePending = null;
       } else if (!state.mapStartupFitDone) {
         fitMapBounds(bounds, level, MAP_INITIAL_FIT_OPTIONS);
       }
@@ -1448,6 +1455,34 @@ export function createUkMapTool({
     renderMap(state.lastMapData, geoJson);
   }
 
+  function updateMapSliderProgress(input) {
+    if (!input) return;
+    const min = Number(input.min || 0);
+    const max = Number(input.max || 100);
+    const value = Number(input.value || 0);
+    const span = max - min;
+    const progress = span ? ((value - min) / span) * 100 : 0;
+    input.style.setProperty("--map-slider-progress", `${Math.max(0, Math.min(100, progress))}%`);
+    if (input.id === "mapHotspots") {
+      input.classList.toggle("map-slider-thumb-centered", value === 0);
+    }
+  }
+
+  function syncMapSliderProgressStyles() {
+    ["mapLineWeight", "mapDotSize", "mapOpacity", "mapHotspots", "mapLabelSize", "mapSmoothing"]
+      .forEach((id) => updateMapSliderProgress(el(id)));
+  }
+
+  function syncMapExtremeLabels() {
+    const colors = activeMapExtremeColors();
+    const lowLabel = el("mapHotspotsMinLabel");
+    const highLabel = el("mapHotspotsMaxLabel");
+    lowLabel.textContent = "Low";
+    highLabel.textContent = "High";
+    lowLabel.style.setProperty("--map-extreme-color", colors.low);
+    highLabel.style.setProperty("--map-extreme-color", colors.high);
+  }
+
   function syncFloatingMapControl() {
     const actualLabel = el("actualNumerator").selectedOptions[0]?.textContent || el("actualNumerator").value || "Actual";
     const denominatorValue = el("denominator").value;
@@ -1462,16 +1497,15 @@ export function createUkMapTool({
     const unitMode = state.mapLevel === "unit";
     el("mapLineWeight").value = String(state.mapLineWeight);
     el("mapDotSize").value = String(state.mapDotSize);
-    el("mapOpacity").value = String(state.mapOpacity);
+    el("mapOpacity").value = String(opacitySliderValue(state.mapOpacity));
     el("mapHotspots").value = String(state.mapHotspots);
     el("mapLabelSize").value = String(state.mapLabelSize);
     el("mapSmoothing").value = String(state.mapSmoothingLevel);
     el("mapLineWeightValue").textContent = String(state.mapLineWeight);
     el("mapDotSizeValue").textContent = String(state.mapDotSize);
-    el("mapOpacityValue").textContent = formatCompactSliderValue(state.mapOpacity);
+    el("mapOpacityValue").textContent = formatOpacitySliderValue(state.mapOpacity);
     el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
-    el("mapHotspotsMinLabel").textContent = unitMode ? "Bottom 10%" : "Bot";
-    el("mapHotspotsMaxLabel").textContent = unitMode ? "Top 10%" : "Top";
+    syncMapExtremeLabels();
     el("mapLabelSizeValue").textContent = String(state.mapLabelSize);
     el("mapSmoothingValue").textContent = formatSmoothingLevel(state.mapSmoothingLevel);
     el("mapSliderGrid").classList.toggle("unit-mode", unitMode);
@@ -1493,12 +1527,27 @@ export function createUkMapTool({
     if (smoothingControl) smoothingControl.hidden = smoothingHidden;
     el("mapSmoothing").disabled = smoothingHidden;
     smoothingControl?.classList.toggle("disabled", smoothingHidden);
+    syncMapSliderProgressStyles();
   }
 
   function formatCompactSliderValue(value) {
     const number = Number(value);
     if (!Number.isFinite(number)) return "";
     return Number.isInteger(number) ? String(number) : String(Number(number.toFixed(1)));
+  }
+
+  function formatOpacitySliderValue(value) {
+    return String(opacitySliderValue(value));
+  }
+
+  function opacitySliderValue(value = state.mapOpacity) {
+    const number = Math.max(0, Math.min(1, Number(value) || 0));
+    return Math.round(number * 10);
+  }
+
+  function opacityFromSliderValue(value) {
+    const number = Math.max(0, Math.min(10, Number(value) || 0));
+    return number / 10;
   }
 
   function formatHotspotSliderValue(value) {
@@ -1650,8 +1699,10 @@ export function createUkMapTool({
 
   function setupMapFloatingControlDrag() {
     const panel = el("mapFloatingControl");
+    const dragThreshold = 3;
 
     let dragging = false;
+    let dragMoved = false;
     let startX = 0;
     let startY = 0;
     let startLeft = 0;
@@ -1660,10 +1711,7 @@ export function createUkMapTool({
       if (state.mapControlCollapsed || event.button !== 0 || isMapFloatingInteractiveTarget(event.target)) return;
       event.preventDefault();
       dragging = true;
-      if (!state.mapControlMoved) {
-        state.mapControlMoved = true;
-        setMapFloatingPosition(panel.offsetLeft, panel.offsetTop);
-      }
+      dragMoved = false;
       startX = event.clientX;
       startY = event.clientY;
       startLeft = panel.offsetLeft;
@@ -1676,7 +1724,12 @@ export function createUkMapTool({
     panel.addEventListener("pointermove", (event) => {
       if (!dragging) return;
       event.preventDefault();
-      setMapFloatingPosition(startLeft + event.clientX - startX, startTop + event.clientY - startY);
+      const deltaX = event.clientX - startX;
+      const deltaY = event.clientY - startY;
+      if (!dragMoved && Math.hypot(deltaX, deltaY) < dragThreshold) return;
+      dragMoved = true;
+      state.mapControlMoved = true;
+      setMapFloatingPosition(startLeft + deltaX, startTop + deltaY);
     });
     function finishDrag(event) {
       if (!dragging) return;
@@ -1734,7 +1787,7 @@ export function createUkMapTool({
   }
 
   function positionCollapsedMapFloatingControlTopRight() {
-    const position = mapFloatingTopRightPanelPosition();
+    const position = mapFloatingTopRightButtonPosition();
     if (position) setMapFloatingCollapsedPosition(position.left, position.top);
   }
 
@@ -1790,6 +1843,33 @@ export function createUkMapTool({
     };
   }
 
+  function mapFloatingTopRightButtonPosition() {
+    const panel = el("mapFloatingControl");
+    if (!panel) return null;
+    const wasCollapsed = panel.classList.contains("collapsed");
+    const previous = {
+      left: panel.style.left,
+      top: panel.style.top,
+      right: panel.style.right,
+    };
+    if (wasCollapsed) panel.classList.remove("collapsed");
+    const panelPosition = mapFloatingTopRightPanelPosition();
+    let buttonPosition = null;
+    if (panelPosition) {
+      setMapFloatingPosition(panelPosition.left, panelPosition.top, { updateState: false });
+      const buttonOffset = mapFloatingButtonOffset();
+      buttonPosition = {
+        left: panelPosition.left + buttonOffset.left,
+        top: panelPosition.top + buttonOffset.top,
+      };
+    }
+    panel.style.left = previous.left;
+    panel.style.top = previous.top;
+    panel.style.right = previous.right;
+    if (wasCollapsed) panel.classList.add("collapsed");
+    return buttonPosition;
+  }
+
   function setMapFloatingCollapsedPosition(rawLeft, rawTop) {
     const position = setMapFloatingPosition(rawLeft, rawTop, { updateState: false });
     if (position) state.mapControlCollapsedPosition = position;
@@ -1808,8 +1888,8 @@ export function createUkMapTool({
   function collapseMapFloatingControl() {
     const panelPosition = mapFloatingTopRightPanelPosition();
     if (!panelPosition) return;
-    state.mapControlMoved = true;
-    state.mapControlPosition = panelPosition;
+    state.mapControlMoved = false;
+    state.mapControlPosition = null;
     state.mapControlCollapsed = true;
     el("mapFloatingControl").classList.add("collapsed");
     syncMapControlCollapseButton();
@@ -1842,6 +1922,8 @@ export function createUkMapTool({
   function bindMapFloatingControls() {
     syncMapControlCollapseButton();
     el("mapControlReset").addEventListener("click", toggleMapFloatingControlCollapsed);
+    el("mapBaseLayerTiles").addEventListener("change", handleMapLayerControlChange);
+    el("mapLevelTiles").addEventListener("change", handleMapLayerControlChange);
     document.querySelectorAll(".map-palette-button").forEach((button) => {
       button.addEventListener("click", () => {
         state.mapPalette = button.dataset.palette || "viridis";
@@ -1857,7 +1939,8 @@ export function createUkMapTool({
       ["mapLabelSize", "mapLabelSize"],
     ].forEach(([id, stateKey]) => {
       el(id).addEventListener("input", (event) => {
-        state[stateKey] = Number(event.target.value);
+        state[stateKey] = id === "mapOpacity" ? opacityFromSliderValue(event.target.value) : Number(event.target.value);
+        updateMapSliderProgress(event.target);
         clearActiveMapFavourite({ force: true });
         if (
           (id === "mapLineWeight" && state.mapLevel === "unit")
@@ -1872,6 +1955,7 @@ export function createUkMapTool({
     });
     el("mapSmoothing").addEventListener("input", (event) => {
       state.mapSmoothingLevel = Number(event.target.value);
+      updateMapSliderProgress(event.target);
       clearActiveMapFavourite({ force: true });
       syncFloatingMapControl();
       if (state.mapLevel !== "sector") return;
@@ -1932,6 +2016,8 @@ export function createUkMapTool({
     buildRequest: buildMapRequest,
     fetchData: fetchMapData,
     useCached: useCachedMapData,
+    canUseCached: canUseCachedMapData,
+    canRefreshInPlace: canRefreshMapInPlace,
     showMissingRequest: showMapMissingNumerator,
     activate,
     bindControls,

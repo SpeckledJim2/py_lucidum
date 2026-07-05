@@ -3881,7 +3881,50 @@ COPY (
                     browser = playwright.chromium.launch()
                     page = browser.new_page(viewport={"width": 1280, "height": 800})
                     page_errors: list[str] = []
+                    summary_requests: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: summary_requests.append(request.url)
+                        if request.url.endswith("/api/uk-map/summary")
+                        else None,
+                    )
+                    page.add_init_script(
+                        """
+                        (() => {
+                          const originalFetch = window.fetch.bind(window);
+                          window.__lucidumDelayPaths = new Set();
+                          window.__lucidumDelayedResolvers = {};
+                          window.__lucidumReleaseDelayedFetch = (path) => {
+                            window.__lucidumDelayPaths.delete(path);
+                            const resolve = window.__lucidumDelayedResolvers[path];
+                            if (resolve) {
+                              delete window.__lucidumDelayedResolvers[path];
+                              resolve();
+                            }
+                          };
+                          window.fetch = async (...args) => {
+                            const input = args[0];
+                            const rawUrl = typeof input === "string" ? input : input?.url || "";
+                            const path = new URL(rawUrl, window.location.href).pathname;
+                            const responsePromise = originalFetch(...args);
+                            if (window.__lucidumDelayPaths.has(path)) {
+                              await new Promise((resolve) => {
+                                window.__lucidumDelayedResolvers[path] = resolve;
+                              });
+                            }
+                            return responsePromise;
+                          };
+                        })();
+                        """
+                    )
+
+                    def delay_path(path: str) -> None:
+                        page.evaluate("(path) => window.__lucidumDelayPaths.add(path)", path)
+
+                    def release_path(path: str) -> None:
+                        page.evaluate("(path) => window.__lucidumReleaseDelayedFetch(path)", path)
+
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
                         page.locator("#ukMapTool").click()
@@ -3890,17 +3933,24 @@ COPY (
                         page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
 
                         with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                            page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').check()
+                            page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
                         page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
-                        page.locator('.map-layer-control input[name="baseMap"][value="grey"]').check()
+                        page.locator('#mapBaseLayerTiles input[name="baseMap"][value="grey"]').check()
                         page.locator('.map-palette-button[data-palette="viridis"]').click()
+                        page.wait_for_function(
+                            """() => document.querySelector("#mapHotspotsMinLabel")?.textContent.trim() === "Low"
+                              && document.querySelector("#mapHotspotsMaxLabel")?.textContent.trim() === "High"
+                              && document.querySelector("#mapHotspotsMinLabel")?.style.getPropertyValue("--map-extreme-color") === "#fde725"
+                              && document.querySelector("#mapHotspotsMaxLabel")?.style.getPropertyValue("--map-extreme-color") === "#440154" """,
+                            timeout=10_000,
+                        )
                         page.eval_on_selector("#mapLineWeight", "(input) => { input.value = '3'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
-                        page.eval_on_selector("#mapOpacity", "(input) => { input.value = '0.4'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
+                        page.eval_on_selector("#mapOpacity", "(input) => { input.value = '4'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
                         with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
                             page.eval_on_selector("#mapSmoothing", "(input) => { input.value = '2'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
                         page.wait_for_function(
                             """() => document.querySelector("#mapLineWeight")?.value === "3"
-                              && document.querySelector("#mapOpacity")?.value === "0.4"
+                              && document.querySelector("#mapOpacity")?.value === "4"
                               && document.querySelector("#mapSmoothing")?.value === "2" """,
                             timeout=10_000,
                         )
@@ -3942,6 +3992,151 @@ COPY (
                             'button => button?.dataset.favouriteId || ""',
                         )
                         self.assertTrue(map_favourite_id)
+                        self.assertTrue(favourites_path.exists())
+                        saved_payload = json.loads(favourites_path.read_text(encoding="utf-8"))
+                        saved_map_favourite = next(
+                            item for item in saved_payload["favourites"]
+                            if item["id"] == map_favourite_id
+                        )
+                        saved_map = saved_map_favourite["view"]["map"]
+                        self.assertEqual(saved_map_favourite["view"]["scope"], "map_view")
+                        self.assertAlmostEqual(saved_map["center"]["lat"], 51.5, delta=0.01)
+                        self.assertAlmostEqual(saved_map["center"]["lng"], -0.12, delta=0.01)
+                        self.assertAlmostEqual(saved_map["zoom"], 9, delta=0.01)
+                        self.assertNotIn("view", saved_map)
+
+                        def base_tile_id() -> str | None:
+                            return page.evaluate(
+                                """
+                                () => {
+                                  const layer = document.querySelector("#ukMap")?._lucidumBaseTileLayer;
+                                  if (!layer) return null;
+                                  if (!layer._lucidumTestId) layer._lucidumTestId = `tile-${Math.random()}`;
+                                  return layer._lucidumTestId;
+                                }
+                                """
+                            )
+
+                        grey_tile_id = base_tile_id()
+                        self.assertTrue(grey_tile_id)
+                        with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                            page.eval_on_selector("#mapSmoothing", "(input) => { input.value = '0'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
+                        page.wait_for_function(
+                            """() => document.querySelector("#mapSmoothing")?.value === "0"
+                              && (document.querySelector("#mapGroupMeta")?.textContent || "").includes("sectors matched") """,
+                            timeout=10_000,
+                        )
+                        unsmoothed_meta = page.locator("#mapGroupMeta").inner_text()
+                        self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                        page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                        page.locator("#sidebarFavouriteNameInput").fill("Sector map N0")
+                        page.locator('[data-favourite-action="save-add"]').click()
+                        page.wait_for_function(
+                            """() => [...document.querySelectorAll(".saved-favourite-option")]
+                              .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Sector map N0"
+                                && button.classList.contains("active")) """,
+                            timeout=10_000,
+                        )
+                        unsmoothed_favourite_id = page.eval_on_selector(
+                            ".saved-favourite-option.active",
+                            'button => button?.dataset.favouriteId || ""',
+                        )
+                        self.assertTrue(unsmoothed_favourite_id)
+                        delay_path("/api/uk-map/summary")
+                        summary_count_before_in_place_restore = len(summary_requests)
+                        page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
+                        page.wait_for_function(
+                            """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
+                              && document.querySelector("#mapSmoothing")?.value === "2" """,
+                            arg=[map_favourite_id],
+                            timeout=10_000,
+                        )
+                        page.wait_for_function("() => window.__lucidumDelayedResolvers['/api/uk-map/summary']", timeout=10_000)
+                        self.assertEqual(page.locator("#mapGroupMeta").inner_text(), unsmoothed_meta)
+                        self.assertEqual(len(summary_requests), summary_count_before_in_place_restore + 1)
+                        release_path("/api/uk-map/summary")
+                        page.wait_for_function(
+                            """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
+                              && document.querySelector("#mapSmoothing")?.value === "2"
+                              && (document.querySelector("#mapGroupMeta")?.textContent || "").includes("sectors matched") """,
+                            arg=[map_favourite_id],
+                            timeout=10_000,
+                        )
+                        self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                        page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                        page.locator("#sidebarFavouriteNameInput").fill("Sector map copy")
+                        page.locator('[data-favourite-action="save-add"]').click()
+                        page.wait_for_function(
+                            """() => [...document.querySelectorAll(".saved-favourite-option")]
+                              .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Sector map copy"
+                                && button.classList.contains("active")) """,
+                            timeout=10_000,
+                        )
+                        map_favourite_copy_id = page.eval_on_selector(
+                            ".saved-favourite-option.active",
+                            'button => button?.dataset.favouriteId || ""',
+                        )
+                        self.assertTrue(map_favourite_copy_id)
+                        self.assertNotEqual(map_favourite_copy_id, map_favourite_id)
+                        summary_count_before_cached_restore = len(summary_requests)
+                        page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
+                        page.wait_for_function(
+                            """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")""",
+                            arg=[map_favourite_id],
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(250)
+                        self.assertEqual(len(summary_requests), summary_count_before_cached_restore)
+                        self.assertEqual(base_tile_id(), grey_tile_id)
+
+                        page.locator('#mapBaseLayerTiles input[name="baseMap"][value="osm"]').check()
+                        page.wait_for_function("""() => document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="osm"]')?.checked""", timeout=10_000)
+                        osm_tile_id = base_tile_id()
+                        self.assertTrue(osm_tile_id)
+                        self.assertNotEqual(osm_tile_id, grey_tile_id)
+                        self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                        page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                        page.locator("#sidebarFavouriteNameInput").fill("Sector map OSM")
+                        page.locator('[data-favourite-action="save-add"]').click()
+                        page.wait_for_function(
+                            """() => [...document.querySelectorAll(".saved-favourite-option")]
+                              .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Sector map OSM"
+                                && button.classList.contains("active")) """,
+                            timeout=10_000,
+                        )
+                        summary_count_before_base_restore = len(summary_requests)
+                        page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
+                        page.wait_for_function(
+                            """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
+                              && document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="grey"]')?.checked """,
+                            arg=[map_favourite_id],
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(250)
+                        self.assertEqual(len(summary_requests), summary_count_before_base_restore)
+                        self.assertNotEqual(base_tile_id(), osm_tile_id)
+
+                        page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              map.setView([54.5, -3.2], 6, { animate: false });
+                            }
+                            """
+                        )
+                        page.wait_for_timeout(100)
+                        current_camera = page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const center = map.getCenter();
+                              return { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+                            }
+                            """
+                        )
+                        self.assertAlmostEqual(current_camera["lat"], 54.5, delta=0.25)
+                        self.assertAlmostEqual(current_camera["lng"], -3.2, delta=0.25)
+                        self.assertAlmostEqual(current_camera["zoom"], 6, delta=0.5)
 
                         page.locator("#lineBarTool").click()
                         page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
@@ -3963,11 +4158,11 @@ COPY (
                             """([id]) => document.querySelector("#ukMapTool")?.classList.contains("active")
                               && document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")
                               && document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
-                              && document.querySelector('.map-layer-control input[name="mapLevel"][value="sector"]')?.checked
-                              && document.querySelector('.map-layer-control input[name="baseMap"][value="grey"]')?.checked
+                              && document.querySelector('#mapLevelTiles input[name="mapLevel"][value="sector"]')?.checked
+                              && document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="grey"]')?.checked
                               && document.querySelector('.map-palette-button[data-palette="viridis"]')?.classList.contains("active")
                               && document.querySelector("#mapLineWeight")?.value === "3"
-                              && document.querySelector("#mapOpacity")?.value === "0.4"
+                              && document.querySelector("#mapOpacity")?.value === "4"
                               && document.querySelector("#mapSmoothing")?.value === "2"
                               && document.querySelector("#actualNumerator")?.value === "price"
                               && document.querySelector("#denominator")?.value === "value" """,
@@ -3988,7 +4183,12 @@ COPY (
                         self.assertAlmostEqual(restored_camera["zoom"], 9, delta=0.5)
 
                         page.locator('.map-palette-button[data-palette="spectral"]').click()
-                        page.wait_for_function("""() => !document.querySelector(".saved-favourite-option.active")""", timeout=10_000)
+                        page.wait_for_function(
+                            """() => !document.querySelector(".saved-favourite-option.active")
+                              && document.querySelector("#mapHotspotsMinLabel")?.style.getPropertyValue("--map-extreme-color") === "#2c7bb6"
+                              && document.querySelector("#mapHotspotsMaxLabel")?.style.getPropertyValue("--map-extreme-color") === "#a50026" """,
+                            timeout=10_000,
+                        )
 
                         self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                         page.locator("#sidebarFavouriteNameInput").fill("Map metrics")
@@ -10392,23 +10592,26 @@ COPY (
                             const panel = document.querySelector("#mapFloatingControl");
                             const button = document.querySelector("#mapControlReset");
                             const container = panel.offsetParent || panel.closest(".workspace");
+                            const wasCollapsed = panel.classList.contains("collapsed");
+                            const previous = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
+                            if (wasCollapsed) panel.classList.remove("collapsed");
                             const rect = container.getBoundingClientRect();
                             const frame = {
                                 left: rect.left + container.clientLeft,
                                 top: rect.top + container.clientTop,
                                 width: container.clientWidth,
                             };
-                            const panelRect = panel.getBoundingClientRect();
-                            const buttonRect = button.getBoundingClientRect();
-                            const buttonOffset = {
-                                left: buttonRect.left - panelRect.left,
-                                top: buttonRect.top - panelRect.top,
-                            };
                             const panelLeft = Math.max(8, frame.width - panel.offsetWidth - 8);
-                            return {
-                                x: frame.left + panelLeft + buttonOffset.left,
-                                y: frame.top + 4 + buttonOffset.top,
-                            };
+                            panel.style.left = `${panelLeft}px`;
+                            panel.style.top = "4px";
+                            panel.style.right = "auto";
+                            const buttonRect = button.getBoundingClientRect();
+                            const result = { x: buttonRect.x, y: buttonRect.y };
+                            panel.style.left = previous.left;
+                            panel.style.top = previous.top;
+                            panel.style.right = previous.right;
+                            if (wasCollapsed) panel.classList.add("collapsed");
+                            return result;
                         }
                         """
                     )
@@ -10422,16 +10625,28 @@ COPY (
                             if (!panel || !button) return false;
                             const container = panel.offsetParent || panel.closest(".workspace");
                             if (!container) return false;
+                            const wasCollapsed = panel.classList.contains("collapsed");
+                            const previous = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
+                            if (wasCollapsed) panel.classList.remove("collapsed");
                             const rect = container.getBoundingClientRect();
                             const frameLeft = rect.left + container.clientLeft;
                             const frameTop = rect.top + container.clientTop;
-                            const panelRect = panel.getBoundingClientRect();
-                            const buttonRect = button.getBoundingClientRect();
                             const panelLeft = Math.max(8, container.clientWidth - panel.offsetWidth - 8);
-                            const expectedX = frameLeft + panelLeft + (buttonRect.left - panelRect.left);
-                            const expectedY = frameTop + 4 + (buttonRect.top - panelRect.top);
+                            panel.style.left = `${panelLeft}px`;
+                            panel.style.top = "4px";
+                            panel.style.right = "auto";
+                            const expectedRect = button.getBoundingClientRect();
+                            const expectedX = expectedRect.x;
+                            const expectedY = expectedRect.y;
+                            panel.style.left = previous.left;
+                            panel.style.top = previous.top;
+                            panel.style.right = previous.right;
+                            if (wasCollapsed) panel.classList.add("collapsed");
+                            const buttonRect = button.getBoundingClientRect();
                             return Math.abs(buttonRect.x - expectedX) <= 1
-                                && Math.abs(buttonRect.y - expectedY) <= 1;
+                                && Math.abs(buttonRect.y - expectedY) <= 1
+                                && expectedX >= frameLeft
+                                && expectedY >= frameTop;
                         }
                         """,
                         timeout=10_000,
@@ -10454,6 +10669,12 @@ COPY (
                 page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
                 self.assertEqual(map_toggle.get_attribute("aria-expanded"), "true")
                 expanded_again_button_box = wait_for_map_toggle_top_right()
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"')
+                wait_for_map_toggle_top_right()
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"')
+                wait_for_map_toggle_top_right()
                 header_box = page.locator(".map-floating-header").bounding_box()
                 self.assertIsNotNone(header_box)
                 page.mouse.move(header_box["x"] + 12, header_box["y"] + 10)
@@ -10484,7 +10705,7 @@ COPY (
                 map_toggle.click()
                 page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
                 wait_for_map_toggle_top_right()
-                self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="area"]').is_checked())
+                self.assertTrue(page.locator('#mapLevelTiles input[name="mapLevel"][value="area"]').is_checked())
                 self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
                 self.assertFalse(page.locator("#mapLineWeight").is_disabled())
                 self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
@@ -10494,8 +10715,9 @@ COPY (
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("max"), "9")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("step"), "1")
                 self.assertEqual(page.locator("#mapHotspotsValue").text_content().strip(), "All")
-                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Bot")
-                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "Top")
+                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
+                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "High")
+                self.assertTrue(page.locator("#mapHotspots").evaluate("input => input.classList.contains('map-slider-thumb-centered')"))
                 page.evaluate(
                     """
                     () => {
@@ -10506,6 +10728,7 @@ COPY (
                     """
                 )
                 page.wait_for_function('() => document.querySelector("#mapHotspotsValue")?.textContent === "B90"')
+                self.assertFalse(page.locator("#mapHotspots").evaluate("input => input.classList.contains('map-slider-thumb-centered')"))
                 page.evaluate(
                     """
                     () => {
@@ -10516,6 +10739,7 @@ COPY (
                     """
                 )
                 page.wait_for_function('() => document.querySelector("#mapHotspotsValue")?.textContent === "T90"')
+                self.assertFalse(page.locator("#mapHotspots").evaluate("input => input.classList.contains('map-slider-thumb-centered')"))
                 self.assertNotIn("100", page.locator("#mapHotspotsValue").text_content())
                 page.evaluate(
                     """
@@ -10527,6 +10751,7 @@ COPY (
                     """
                 )
                 page.wait_for_function('() => document.querySelector("#mapHotspotsValue")?.textContent === "All"')
+                self.assertTrue(page.locator("#mapHotspots").evaluate("input => input.classList.contains('map-slider-thumb-centered')"))
                 self.assertFalse(page.locator("#mapLabelControl").is_hidden())
                 self.assertFalse(page.locator("#mapLabelSize").is_disabled())
                 self.assertEqual(page.locator("#mapLabelSize").get_attribute("max"), "10")
@@ -10864,16 +11089,16 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                    page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').check()
+                    page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
-                self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="sector"]').is_checked())
+                self.assertTrue(page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').is_checked())
                 self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
                 self.assertFalse(page.locator("#mapLineWeight").is_disabled())
                 self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
                 self.assertTrue(page.locator("#mapDotSize").is_disabled())
                 self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Line width")
-                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Bot")
-                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "Top")
+                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
+                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "High")
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
@@ -10894,16 +11119,16 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                    page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').check()
+                    page.locator('#mapLevelTiles input[name="mapLevel"][value="unit"]').check()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")')
-                self.assertTrue(page.locator('.map-layer-control input[name="mapLevel"][value="unit"]').is_checked())
+                self.assertTrue(page.locator('#mapLevelTiles input[name="mapLevel"][value="unit"]').is_checked())
                 self.assertTrue(page.locator("#mapLineWeightControl").is_hidden())
                 self.assertTrue(page.locator("#mapLineWeight").is_disabled())
                 self.assertFalse(page.locator("#mapDotSizeControl").is_hidden())
                 self.assertFalse(page.locator("#mapDotSize").is_disabled())
                 self.assertEqual(page.locator("#mapDotSizeControl > span:first-child").text_content().strip(), "Dot size")
-                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Bottom 10%")
-                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "Top 10%")
+                self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
+                self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "High")
                 self.assertIn("unit-mode", page.locator("#mapSliderGrid").get_attribute("class") or "")
                 wait_for_map_view(stable_map_view)
 
@@ -10916,12 +11141,12 @@ COPY (
                     """
                     () => {
                         const input = document.querySelector("#mapDotSize");
-                        input.value = "5";
+                        input.value = "10";
                         input.dispatchEvent(new Event("input", { bubbles: true }));
                     }
                     """
                 )
-                page.wait_for_function('() => document.querySelector("#mapDotSizeValue")?.textContent === "5"')
+                page.wait_for_function('() => document.querySelector("#mapDotSizeValue")?.textContent === "10"')
                 large_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(large_dot_pixels, 0)
                 page.evaluate(
@@ -10939,27 +11164,27 @@ COPY (
                     """
                     () => {
                         const input = document.querySelector("#mapOpacity");
-                        input.value = "1";
+                        input.value = "10";
                         input.dispatchEvent(new Event("input", { bubbles: true }));
                     }
                     """
                 )
-                page.wait_for_function('() => document.querySelector("#mapOpacityValue")?.textContent === "1"')
+                page.wait_for_function('() => document.querySelector("#mapOpacityValue")?.textContent === "10"')
                 restored_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(restored_dot_pixels, 0)
                 page.evaluate(
                     """
                     () => {
                         const input = document.querySelector("#mapDotSize");
-                        input.value = "0";
+                        input.value = "1";
                         input.dispatchEvent(new Event("input", { bubbles: true }));
                     }
                     """
                 )
-                page.wait_for_function('() => document.querySelector("#mapDotSizeValue")?.textContent === "0"')
+                page.wait_for_function('() => document.querySelector("#mapDotSizeValue")?.textContent === "1"')
                 small_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(small_dot_pixels, 0)
-                self.assertGreater(restored_dot_pixels, small_dot_pixels)
+                self.assertGreater(large_dot_pixels, small_dot_pixels)
                 wait_for_map_view(stable_map_view)
                 assert_filter_label_badge("#mapControlFilter", "map-filter--applied", True)
                 assert_filter_badge_clear("#mapControlFilterClearBtn", "#mapControlFilterText", True)

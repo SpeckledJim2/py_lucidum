@@ -448,57 +448,140 @@
                     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 17 17 7"></path><path d="M10 7h7v7"></path></svg>
                   </button>
                 </div>
-                <div class="map-floating-row">
-                  <div class="postcode-search">
-                    <input id="mapPostcodeInput" placeholder="postcode..." />
-                    <button id="mapPostcodeClear" type="button" title="Clear postcode" aria-label="Clear postcode">&times;</button>
-                    <button id="mapPostcodeSearch" type="button" title="Search postcode" aria-label="Search postcode">
-                      <svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path></svg>
-                    </button>
+                <div class="map-control-panel-body">
+                  <div class="map-tile-section">
+                    <span class="map-tile-section-title">Base</span>
+                    <div id="mapBaseLayerTiles" class="map-tile-grid map-base-layer-tiles" aria-label="Base map layer">
+                      <label class="map-control-tile" title="Blank">
+                        <input type="radio" name="baseMap" value="blank" checked />
+                        <span class="map-control-tile-card">
+                          <img src="/tools/uk-map/static/icons/map-controls/base-blank.png" alt="" />
+                          <span class="map-control-tile-text">Blank</span>
+                        </span>
+                      </label>
+                      <label class="map-control-tile" title="Esri">
+                        <input type="radio" name="baseMap" value="esri" />
+                        <span class="map-control-tile-card">
+                          <img src="/tools/uk-map/static/icons/map-controls/base-esri.png" alt="" />
+                          <span class="map-control-tile-text">Esri</span>
+                        </span>
+                      </label>
+                      <label class="map-control-tile" title="OSM">
+                        <input type="radio" name="baseMap" value="osm" />
+                        <span class="map-control-tile-card">
+                          <img src="/tools/uk-map/static/icons/map-controls/base-osm.png" alt="" />
+                          <span class="map-control-tile-text">OSM</span>
+                        </span>
+                      </label>
+                      <label class="map-control-tile" title="Aerial">
+                        <input type="radio" name="baseMap" value="satellite" />
+                        <span class="map-control-tile-card">
+                          <img src="/tools/uk-map/static/icons/map-controls/base-aerial.png" alt="" />
+                          <span class="map-control-tile-text">Aerial</span>
+                        </span>
+                      </label>
+                      <label class="map-control-tile" title="Light">
+                        <input type="radio" name="baseMap" value="grey" />
+                        <span class="map-control-tile-card">
+                          <img src="/tools/uk-map/static/icons/map-controls/base-light.png" alt="" />
+                          <span class="map-control-tile-text">Light</span>
+                        </span>
+                      </label>
+                      <label class="map-control-tile" title="Dark">
+                        <input type="radio" name="baseMap" value="darkGrey" />
+                        <span class="map-control-tile-card">
+                          <img src="/tools/uk-map/static/icons/map-controls/base-dark.png" alt="" />
+                          <span class="map-control-tile-text">Dark</span>
+                        </span>
+                      </label>
+                    </div>
                   </div>
-                  <div class="map-palette-buttons" aria-label="Choropleth colour scheme">
-                    <button class="map-palette-button active" type="button" data-palette="divergent" title="Divergent">
-                      <span class="palette-swatch palette-divergent"></span>
-                    </button>
-                    <button class="map-palette-button" type="button" data-palette="spectral" title="Spectral">
-                      <span class="palette-swatch palette-spectral"></span>
-                    </button>
-                    <button class="map-palette-button" type="button" data-palette="viridis" title="Viridis">
-                      <span class="palette-swatch palette-viridis"></span>
-                    </button>
+                  <div class="map-level-palette-row">
+                    <div class="map-tile-section">
+                      <span class="map-tile-section-title">Level</span>
+                      <div id="mapLevelTiles" class="map-tile-grid map-level-tiles" aria-label="Map level">
+                        <label class="map-control-tile" title="Area">
+                          <input type="radio" name="mapLevel" value="area" checked />
+                          <span class="map-control-tile-card">
+                            <img src="/tools/uk-map/static/icons/map-controls/level-area.png" alt="" />
+                            <span class="map-control-tile-text">Area</span>
+                          </span>
+                        </label>
+                        <label class="map-control-tile" title="Sector">
+                          <input type="radio" name="mapLevel" value="sector" />
+                          <span class="map-control-tile-card">
+                            <img src="/tools/uk-map/static/icons/map-controls/level-sector.png" alt="" />
+                            <span class="map-control-tile-text">Sector</span>
+                          </span>
+                        </label>
+                        <label class="map-control-tile" title="Units">
+                          <input type="radio" name="mapLevel" value="unit" />
+                          <span class="map-control-tile-card">
+                            <img src="/tools/uk-map/static/icons/map-controls/level-unit.png" alt="" />
+                            <span class="map-control-tile-text">Units</span>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="map-tile-section">
+                      <span class="map-tile-section-title">Palette</span>
+                      <div class="map-palette-buttons map-palette-tiles" aria-label="Choropleth colour scheme">
+                        <button class="map-palette-button active" type="button" data-palette="divergent" title="Split">
+                          <span class="palette-swatch palette-divergent"></span>
+                          <span class="map-control-tile-text">Split</span>
+                        </button>
+                        <button class="map-palette-button" type="button" data-palette="spectral" title="Spectral">
+                          <span class="palette-swatch palette-spectral"></span>
+                          <span class="map-control-tile-text">Spectral</span>
+                        </button>
+                        <button class="map-palette-button" type="button" data-palette="viridis" title="Viridis">
+                          <span class="palette-swatch palette-viridis"></span>
+                          <span class="map-control-tile-text">Viridis</span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div id="mapSliderGrid" class="map-slider-grid">
-                  <label id="mapLineWeightControl" class="map-slider-control">
-                    <span>Line width</span>
-                    <span class="slider-scale"><b>0</b><b id="mapLineWeightValue">1</b><b>5</b></span>
-                    <input id="mapLineWeight" type="range" min="0" max="5" step="1" value="1" />
-                  </label>
-                  <label id="mapDotSizeControl" class="map-slider-control" hidden>
-                    <span>Dot size</span>
-                    <span class="slider-scale"><b>0</b><b id="mapDotSizeValue">1</b><b>5</b></span>
-                    <input id="mapDotSize" type="range" min="0" max="5" step="1" value="1" />
-                  </label>
-                  <label class="map-slider-control">
-                    <span>Opacity</span>
-                    <span class="slider-scale"><b>0</b><b id="mapOpacityValue">1</b><b>1</b></span>
-                    <input id="mapOpacity" type="range" min="0" max="1" step="0.2" value="1" />
-                  </label>
-                  <label id="mapHotspotsControl" class="map-slider-control">
-                    <span>Extremes</span>
-                    <span class="slider-scale"><b id="mapHotspotsMinLabel">Bot</b><b id="mapHotspotsValue">All</b><b id="mapHotspotsMaxLabel">Top</b></span>
-                    <input id="mapHotspots" type="range" min="-9" max="9" step="1" value="0" />
-                  </label>
-                  <label id="mapLabelControl" class="map-slider-control">
-                    <span>Labels</span>
-                    <span class="slider-scale"><b>0</b><b id="mapLabelSizeValue">0</b><b>10</b></span>
-                    <input id="mapLabelSize" type="range" min="0" max="10" step="1" value="0" />
-                  </label>
-                  <label id="mapSmoothingControl" class="map-slider-control" hidden>
-                    <span>Smooth</span>
-                    <span class="slider-scale"><b>N0</b><b id="mapSmoothingValue">None</b><b>N5</b></span>
-                    <input id="mapSmoothing" type="range" min="0" max="5" step="1" value="0" />
-                  </label>
+                  <div class="map-floating-row">
+                    <div class="postcode-search">
+                      <input id="mapPostcodeInput" placeholder="postcode..." />
+                      <button id="mapPostcodeClear" type="button" title="Clear postcode" aria-label="Clear postcode">&times;</button>
+                      <button id="mapPostcodeSearch" type="button" title="Search postcode" aria-label="Search postcode">
+                        <svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div id="mapSliderGrid" class="map-slider-grid">
+                    <label id="mapLineWeightControl" class="map-slider-control">
+                      <span>Line width</span>
+                      <span class="slider-scale"><b>0</b><b id="mapLineWeightValue">1</b><b>10</b></span>
+                      <input id="mapLineWeight" type="range" min="0" max="10" step="1" value="1" />
+                    </label>
+                    <label id="mapDotSizeControl" class="map-slider-control" hidden>
+                      <span>Dot size</span>
+                      <span class="slider-scale"><b>1</b><b id="mapDotSizeValue">1</b><b>10</b></span>
+                      <input id="mapDotSize" type="range" min="1" max="10" step="1" value="1" />
+                    </label>
+                    <label class="map-slider-control">
+                      <span>Opacity</span>
+                      <span class="slider-scale"><b>0</b><b id="mapOpacityValue">10</b><b>10</b></span>
+                      <input id="mapOpacity" type="range" min="0" max="10" step="1" value="10" />
+                    </label>
+                    <label id="mapHotspotsControl" class="map-slider-control">
+                      <span>Extremes</span>
+                      <span class="slider-scale"><b id="mapHotspotsMinLabel" class="map-extreme-label">Low</b><b id="mapHotspotsValue">All</b><b id="mapHotspotsMaxLabel" class="map-extreme-label">High</b></span>
+                      <input id="mapHotspots" type="range" min="-9" max="9" step="1" value="0" />
+                    </label>
+                    <label id="mapLabelControl" class="map-slider-control">
+                      <span>Labels</span>
+                      <span class="slider-scale"><b>0</b><b id="mapLabelSizeValue">0</b><b>10</b></span>
+                      <input id="mapLabelSize" type="range" min="0" max="10" step="1" value="0" />
+                    </label>
+                    <label id="mapSmoothingControl" class="map-slider-control" hidden>
+                      <span>Smooth</span>
+                      <span class="slider-scale"><b>N0</b><b id="mapSmoothingValue">None</b><b>N5</b></span>
+                      <input id="mapSmoothing" type="range" min="0" max="5" step="1" value="0" />
+                    </label>
+                  </div>
                 </div>
               </div>
               <div id="mapLegend" class="map-legend hidden"></div>

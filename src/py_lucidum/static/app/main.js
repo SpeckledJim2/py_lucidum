@@ -177,6 +177,7 @@
         mapStartupFitDone: false,
         renderedMapLevel: null,
         mapView: null,
+        mapViewRestorePending: null,
         mapFavouriteRestoreInProgress: false,
         mapViewportSyncFrame: null,
         restoringMapView: false,
@@ -1296,7 +1297,7 @@
         if (tool === "uk_map") {
           return {
             buildRequest: () => ukMapTool.buildRequest(),
-            fetch: (request, requestKey) => ukMapTool.fetchData(request, requestKey),
+            fetch: (request, requestKey, options) => ukMapTool.fetchData(request, requestKey, options),
             useCached: (cache, options) => ukMapTool.useCached(cache, options),
             handleMissingRequest: () => ukMapTool.showMissingRequest(),
           };
@@ -1338,7 +1339,7 @@
           markToolCacheThemeSynced(tool);
           return cache.data;
         }
-        const data = await handler.fetch(request, requestKey);
+        const data = await handler.fetch(request, requestKey, options);
         if (data && toolCache(tool).requestKey === requestKey) markToolCacheThemeSynced(tool);
         return data;
       }
@@ -2818,6 +2819,26 @@
         state.mapFavouriteRestoreInProgress = false;
       }
 
+      async function refreshMapFavouriteViewData() {
+        const request = ukMapTool.buildRequest();
+        const cache = toolCache("uk_map");
+        const requestKey = request ? stableRequestKey(request) : "";
+        const canUseCachedMap = Boolean(
+          request
+          && cache.data
+          && cache.requestKey === requestKey
+          && ukMapTool.canUseCached(cache)
+        );
+        if (canUseCachedMap) {
+          return refreshUkMap({ renderIfCached: true });
+        }
+        if (request && ukMapTool.canRefreshInPlace(request)) {
+          return refreshUkMap({ force: true, preserveRenderedMap: true, suppressPendingMeta: true });
+        }
+        ukMapTool.showPendingRestore();
+        return refreshUkMap({ force: true });
+      }
+
       async function applyMapFavouriteView(favourite) {
         if (!toolEnabled("uk_map")) {
           throw new Error("UK Mapping is not enabled for this app.");
@@ -2832,8 +2853,7 @@
           renderFavourites();
           setTool("uk_map", false);
           beginFavouriteViewRestore();
-          ukMapTool.showPendingRestore();
-          const data = await refreshUkMap({ force: true });
+          const data = await refreshMapFavouriteViewData();
           syncSidebarSummariesFromToolData(data);
         } finally {
           await finishMapFavouriteRestore();
