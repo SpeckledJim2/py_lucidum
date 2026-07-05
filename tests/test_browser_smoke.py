@@ -408,6 +408,25 @@ class BrowserSmokeTests(unittest.TestCase):
                             )
                             if tool_button == "#ukMapTool":
                                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                                page.wait_for_function(
+                                    """
+                                    () => {
+                                      const control = document.querySelector("#mapFloatingControl");
+                                      const controlButton = document.querySelector("#mapControlReset");
+                                      const legend = document.querySelector("#mapLegend");
+                                      const legendButton = document.querySelector("#mapLegendToggle");
+                                      const legendBody = document.querySelector("#mapLegendBody");
+                                      if (!control || !controlButton || !legend || !legendButton || !legendBody) return false;
+                                      return control.classList.contains("collapsed")
+                                        && controlButton.getAttribute("aria-expanded") === "false"
+                                        && !legend.classList.contains("hidden")
+                                        && legend.classList.contains("collapsed")
+                                        && legendButton.getAttribute("aria-expanded") === "false"
+                                        && getComputedStyle(legendBody).display === "none";
+                                    }
+                                    """,
+                                    timeout=20_000,
+                                )
                                 assert_mobile_sidebar_fronts_map(page)
                     finally:
                         page.close()

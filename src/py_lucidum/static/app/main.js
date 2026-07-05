@@ -88,6 +88,12 @@
         return !document.body.classList.contains("sidebar-collapsed");
       }
 
+      function initialMobileLayoutActive() {
+        return window.innerWidth <= MOBILE_LAYOUT_MAX_WIDTH;
+      }
+
+      const startedInMobileLayout = initialMobileLayoutActive();
+
       const state = {
         schema: null,
         x: null,
@@ -184,8 +190,9 @@
         pendingMapZoom: null,
         mapControlPosition: null,
         mapControlMoved: false,
-        mapControlCollapsed: false,
+        mapControlCollapsed: startedInMobileLayout,
         mapControlCollapsedPosition: null,
+        mapLegendCollapsed: startedInMobileLayout,
         tablePage: 1,
         bandFeature: null,
         bandSuggestionPendingKey: null,
@@ -1667,7 +1674,7 @@
         el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");
         el("modelToolFilter").classList.add("hidden");
         el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
-        el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegend").textContent);
+        el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegendBody").textContent);
         el("datasetViewerWrap").classList.toggle("hidden", tool !== "dataset_viewer");
         el("profileWrap").classList.toggle("hidden", tool !== "column_profile");
         el("modelToolWrap").classList.toggle("hidden", !isModelTool(tool));

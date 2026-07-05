@@ -286,7 +286,7 @@ export function createUkMapTool({
       ukMap.removeLayer(ukMapLabelLayer);
       ukMapLabelLayer = null;
     }
-    el("mapLegend").textContent = "";
+    el("mapLegendBody").textContent = "";
     el("mapLegend").classList.add("hidden");
   }
 
@@ -1669,9 +1669,10 @@ export function createUkMapTool({
 
   function renderMapLegend(scale, title) {
     const legend = el("mapLegend");
+    const legendBody = el("mapLegendBody");
     if (state.tool !== "uk_map" || !scale.values.length) {
       legend.classList.add("hidden");
-      legend.innerHTML = "";
+      legendBody.innerHTML = "";
       return;
     }
     const rows = [];
@@ -1683,10 +1684,11 @@ export function createUkMapTool({
       lower = upper;
     }
     if (mapHotspotSelection()) {
-      rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MUTED_COLOR}"></span><span>Not selected</span></div>`);
+      rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MUTED_COLOR}"></span><span>Hidden</span></div>`);
     }
     rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MISSING_COLOR}"></span><span>No data</span></div>`);
-    legend.innerHTML = rows.join("");
+    legendBody.innerHTML = rows.join("");
+    syncMapLegendCollapseButton();
     legend.classList.remove("hidden");
   }
 
@@ -1695,6 +1697,22 @@ export function createUkMapTool({
     if (lower === null) return `≤ ${formatLineValue(upper)}`;
     if (upper === null || isLast) return `> ${formatLineValue(lower)}`;
     return `${formatLineValue(lower)}–${formatLineValue(upper)}`;
+  }
+
+  function syncMapLegendCollapseButton() {
+    const collapsed = Boolean(state.mapLegendCollapsed);
+    const legend = el("mapLegend");
+    const button = el("mapLegendToggle");
+    const label = collapsed ? "Expand legend" : "Collapse legend";
+    legend.classList.toggle("collapsed", collapsed);
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-expanded", String(!collapsed));
+  }
+
+  function toggleMapLegendCollapsed() {
+    state.mapLegendCollapsed = !state.mapLegendCollapsed;
+    syncMapLegendCollapseButton();
   }
 
   function setupMapFloatingControlDrag() {
@@ -1885,6 +1903,11 @@ export function createUkMapTool({
     button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${collapsed ? MAP_CONTROL_COLLAPSED_ICON : MAP_CONTROL_EXPANDED_ICON}</svg>`;
   }
 
+  function syncMapFloatingControlCollapsedState() {
+    el("mapFloatingControl").classList.toggle("collapsed", Boolean(state.mapControlCollapsed));
+    syncMapControlCollapseButton();
+  }
+
   function collapseMapFloatingControl() {
     const panelPosition = mapFloatingTopRightPanelPosition();
     if (!panelPosition) return;
@@ -1920,8 +1943,10 @@ export function createUkMapTool({
   }
 
   function bindMapFloatingControls() {
-    syncMapControlCollapseButton();
+    syncMapFloatingControlCollapsedState();
+    syncMapLegendCollapseButton();
     el("mapControlReset").addEventListener("click", toggleMapFloatingControlCollapsed);
+    el("mapLegendToggle").addEventListener("click", toggleMapLegendCollapsed);
     el("mapBaseLayerTiles").addEventListener("change", handleMapLayerControlChange);
     el("mapLevelTiles").addEventListener("change", handleMapLayerControlChange);
     document.querySelectorAll(".map-palette-button").forEach((button) => {
@@ -1977,6 +2002,7 @@ export function createUkMapTool({
 
   function activate() {
     initMap();
+    syncMapFloatingControlCollapsedState();
     syncFloatingMapControl();
     syncMapControls();
     clampMapFloatingControl();

@@ -584,7 +584,15 @@
                   </div>
                 </div>
               </div>
-              <div id="mapLegend" class="map-legend hidden"></div>
+              <div id="mapLegend" class="map-legend hidden">
+                <div class="map-legend-header">
+                  <h3>Legend</h3>
+                  <button id="mapLegendToggle" class="map-legend-toggle" type="button" title="Collapse legend" aria-label="Collapse legend" aria-controls="mapLegendBody" aria-expanded="true">
+                    <span class="map-legend-chevron" aria-hidden="true"></span>
+                  </button>
+                </div>
+                <div id="mapLegendBody" class="map-legend-body"></div>
+              </div>
             </section>
           </div>
         </main>
