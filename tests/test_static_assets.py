@@ -4940,7 +4940,7 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         self.assertNotIn("body.sidebar-collapsed aside > .section:not(#toolSelectorSection)", css)
         self.assertNotIn("aside {\n        background: var(--sidebar-bg);", css)
         self.assertIn("grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);", css)
-        self.assertIn(".shell {\n        display: grid;\n        grid-template-columns: var(--sidebar-width, 300px) 3px minmax(0, 1fr);", css)
+        self.assertIn(".shell {\n        display: grid;\n        grid-template-columns: var(--sidebar-width, 400px) 3px minmax(0, 1fr);", css)
         self.assertIn(".sidebar-control-pane {\n        border-left: 1px solid var(--line);\n        display: flex;\n        flex-direction: column;\n        grid-column: 2;", css)
         self.assertIn("body.single-tool-mode .sidebar-control-pane {\n        border-left: 0;\n        grid-column: 1;", css)
         self.assertIn(".sidebar-resizer {\n        background: linear-gradient(to right, var(--line), transparent);\n        cursor: col-resize;\n        min-width: 3px;", css)
@@ -5007,9 +5007,9 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
         css = self.app_css_contract()
         js = self.app_js_contract()
 
-        self.assertIn('window.matchMedia("(max-width: 760px)").matches', html)
+        self.assertIn('window.matchMedia("(max-width: 640px)").matches', html)
         self.assertIn('document.body.classList.add("sidebar-collapsed");', html)
-        self.assertIn("@media (max-width: 760px) {\n        header {", css)
+        self.assertIn("@media (max-width: 640px) {\n        header {", css)
         self.assertIn(
             ".shell,\n"
             "        body.sidebar-collapsed .shell {\n"
@@ -5064,7 +5064,7 @@ if (longPolicy.rotate !== 65) throw new Error("long labels should still rotate")
             css,
         )
 
-        self.assertIn("const MOBILE_LAYOUT_MAX_WIDTH = 760;", js)
+        self.assertIn("const MOBILE_LAYOUT_MAX_WIDTH = 640;", js)
         self.assertIn("let mobileLayoutActive = null;", js)
         self.assertIn("function syncMobileSidebarLayout({ initial = false } = {})", js)
         self.assertIn("const enteredMobile = mobile && mobileLayoutActive !== true;", js)

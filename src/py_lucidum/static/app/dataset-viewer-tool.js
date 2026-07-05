@@ -1512,7 +1512,7 @@ export function createDatasetViewerTool({
     window.addEventListener("pointerdown", handleDatasetViewerContextPointerDown, true);
     window.addEventListener("keydown", handleDatasetViewerContextKeydown, true);
     window.addEventListener("resize", closeDatasetViewerCellContextMenu, true);
-    window.addEventListener("scroll", closeDatasetViewerCellContextMenu, true);
+    window.addEventListener("scroll", closeDatasetViewerCellContextMenu);
   }
 
   function positionDatasetViewerContextMenu(menu, clientX, clientY) {
@@ -1580,7 +1580,7 @@ export function createDatasetViewerTool({
     window.removeEventListener("pointerdown", handleDatasetViewerContextPointerDown, true);
     window.removeEventListener("keydown", handleDatasetViewerContextKeydown, true);
     window.removeEventListener("resize", closeDatasetViewerCellContextMenu, true);
-    window.removeEventListener("scroll", closeDatasetViewerCellContextMenu, true);
+    window.removeEventListener("scroll", closeDatasetViewerCellContextMenu);
   }
 
   function countMeta(data) {

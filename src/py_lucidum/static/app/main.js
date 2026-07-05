@@ -57,7 +57,7 @@
       };
       const TOOL_IDS = Object.keys(TOOL_BUTTON_IDS);
       const CHART_FEATURE_CONTROLS_HEIGHT_COLLAPSED = "collapsed";
-      const MOBILE_LAYOUT_MAX_WIDTH = 760;
+      const MOBILE_LAYOUT_MAX_WIDTH = 640;
       const TOOL_BUTTON_TOOLTIP_DELAY_MS = 500;
       const LINE_BAR_RATIO_COLUMN = "gbm_to_glm_ratio";
       const GLM_PREDICTION_COLUMNS = ["glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"];

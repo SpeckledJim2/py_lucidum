@@ -240,7 +240,7 @@
 
       .shell {
         display: grid;
-        grid-template-columns: var(--sidebar-width, 300px) 3px minmax(0, 1fr);
+        grid-template-columns: var(--sidebar-width, 400px) 3px minmax(0, 1fr);
         min-height: 0;
         min-width: 0;
       }
@@ -568,7 +568,7 @@
         font-size: 13px;
       }
 
-      @media (max-width: 760px) {
+      @media (max-width: 640px) {
         header {
           gap: 8px;
           padding: 0 8px;
