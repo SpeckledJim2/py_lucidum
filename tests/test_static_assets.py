@@ -4047,6 +4047,9 @@ if (label !== "18:12:59") throw new Error(`expected local time label, got ${labe
         favourites_js = js[favourites_start:favourites_end]
         self.assertNotIn("kpi-option", favourites_js)
         self.assertNotIn("favourite-theme", favourites_js)
+        self.assertIn("const favouritesLoading = !lineBarFavouritesLoaded && !favouriteLoadError;", favourites_js)
+        self.assertIn('list.toggleAttribute("aria-busy", favouritesLoading);', favourites_js)
+        self.assertIn("if (!favouriteLoadError && lineBarFavouritesLoaded) {", favourites_js)
         self.assertIn('button.className = `feature favourite-option saved-favourite-option${active ? " active" : ""}${invalid ? " favourite-option-invalid" : ""}`;', favourites_js)
         self.assertIn('heading.className = "saved-filter-theme kpi-theme";', js)
         self.assertIn('button.className = `feature kpi-option${active ? " active" : ""}`;', js)

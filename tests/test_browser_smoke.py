@@ -3428,6 +3428,139 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_favourites_startup_does_not_show_empty_state_while_loading(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            data_path.write_text(
+                "vehicle_age,segment,price,expected,value\n"
+                "1,A,100,90,10\n"
+                "2,A,200,210,20\n"
+                "3,B,300,290,30\n"
+                "4,B,400,410,40\n",
+                encoding="utf-8",
+            )
+            favourite_view = {
+                "version": 1,
+                "source": "dataset",
+                "scope": "line_bar_view",
+                "view": "chart",
+                "x": "vehicle_age",
+                "xSource": "dataset",
+                "sort": "alpha",
+                "lowGroup": "0",
+                "labels": "none",
+                "bandWidth": "1",
+                "quantileMode": "off",
+                "dateBucket": "none",
+                "transform": "none",
+                "sigma": "0",
+                "partialDependence": "none",
+                "featureSort": "alpha",
+                "expectedSort": "alpha",
+                "actual": {"value": "price", "sourceId": "dataset", "metricKind": "metric"},
+                "denominator": "value",
+                "expectedSelections": [],
+                "filter": "",
+                "filterSelectionMode": "grouped",
+                "filterOperator": "and",
+                "savedFilterRows": [],
+            }
+            favourites_path = root / "favourites.json"
+            favourites_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "favourites": [
+                            {
+                                "id": "startup-view",
+                                "name": "Startup view",
+                                "view": favourite_view,
+                            },
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                line_bar_favourites_path=favourites_path,
+                defaults={"x": "segment", "actual": "expected", "denominator": "value"},
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    try:
+                        page = browser.new_page(viewport={"width": 1280, "height": 800})
+                        page_errors: list[str] = []
+                        page.on("pageerror", lambda error: page_errors.append(str(error)))
+                        page.add_init_script(
+                            """
+                            (() => {
+                              const originalFetch = window.fetch.bind(window);
+                              window.__lucidumDelayedResolvers = {};
+                              window.__lucidumReleaseDelayedFetch = (path) => {
+                                const resolve = window.__lucidumDelayedResolvers[path];
+                                if (resolve) {
+                                  delete window.__lucidumDelayedResolvers[path];
+                                  resolve();
+                                }
+                              };
+                              window.fetch = async (...args) => {
+                                const input = args[0];
+                                const rawUrl = typeof input === "string" ? input : input?.url || "";
+                                const path = new URL(rawUrl, window.location.href).pathname;
+                                if (path === "/api/line-bar/favourites") {
+                                  await new Promise((resolve) => {
+                                    window.__lucidumDelayedResolvers[path] = resolve;
+                                  });
+                                }
+                                return originalFetch(...args);
+                              };
+                            })();
+                            """
+                        )
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.wait_for_function(
+                            """() => Boolean(window.__lucidumDelayedResolvers?.["/api/line-bar/favourites"])""",
+                            timeout=10000,
+                        )
+                        pending_text = page.locator("#favouritesSelect").inner_text().strip()
+                        self.assertEqual(pending_text, "")
+                        self.assertNotIn("No favourites", pending_text)
+                        self.assertTrue(
+                            page.locator("#favouritesSelect").evaluate(
+                                """(node) => node.hasAttribute("aria-busy")"""
+                            )
+                        )
+
+                        page.evaluate(
+                            """() => window.__lucidumReleaseDelayedFetch("/api/line-bar/favourites")"""
+                        )
+                        page.wait_for_function(
+                            """() => document.querySelector("#favouritesSelect .saved-favourite-option")?.textContent.includes("Startup view")
+                              && document.querySelector("#favouritesSelectedMeta")?.textContent === "Startup view" """,
+                            timeout=10000,
+                        )
+                        self.assertFalse(
+                            page.locator("#favouritesSelect").evaluate(
+                                """(node) => node.hasAttribute("aria-busy")"""
+                            )
+                        )
+                        self.assertNotIn("No favourites", page.locator("#favouritesSelect").inner_text())
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_view_favourites_restore_with_single_data_request_and_no_stale_kpi(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

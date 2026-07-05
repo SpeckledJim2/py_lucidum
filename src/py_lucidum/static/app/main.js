@@ -2646,6 +2646,8 @@
       function renderFavourites() {
         const list = el("favouritesSelect");
         if (!list) return;
+        const favouritesLoading = !lineBarFavouritesLoaded && !favouriteLoadError;
+        list.toggleAttribute("aria-busy", favouritesLoading);
         list.innerHTML = "";
         if (favouriteLoadError) {
           const message = document.createElement("div");
@@ -2654,7 +2656,7 @@
           list.append(message);
         }
         if (!lineBarFavourites.length) {
-          if (!favouriteLoadError) {
+          if (!favouriteLoadError && lineBarFavouritesLoaded) {
             const empty = document.createElement("div");
             empty.className = "favourites-list-message";
             empty.textContent = "No favourites";
