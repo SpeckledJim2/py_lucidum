@@ -702,22 +702,19 @@
         const tooltip = toolButtonTooltip;
         if (!tooltip || tooltip.hidden || !target) return;
         const targetRect = target.getBoundingClientRect();
+        const iconRect = target.querySelector(".tool-icon")?.getBoundingClientRect() || targetRect;
         const margin = 6;
         const tooltipWidth = tooltip.offsetWidth;
         const tooltipHeight = tooltip.offsetHeight;
         const left = Math.max(
           margin,
-          Math.min(
-            targetRect.left + targetRect.width / 2 - tooltipWidth / 2,
-            window.innerWidth - tooltipWidth - margin,
-          ),
+          Math.min(iconRect.right + margin, window.innerWidth - tooltipWidth - margin),
         );
-        let top = targetRect.top - tooltipHeight - margin;
-        if (top < margin) {
-          top = Math.min(window.innerHeight - tooltipHeight - margin, targetRect.bottom + margin);
-        }
+        const top = iconRect.top + iconRect.height / 2 - tooltipHeight / 2;
         tooltip.style.left = `${Math.round(left)}px`;
-        tooltip.style.top = `${Math.round(Math.max(margin, top))}px`;
+        tooltip.style.top = `${Math.round(
+          Math.max(margin, Math.min(top, window.innerHeight - tooltipHeight - margin)),
+        )}px`;
       }
 
       function toolButtonTooltipButtonAvailable(button) {

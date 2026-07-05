@@ -114,7 +114,7 @@ class BrowserSmokeTests(unittest.TestCase):
         )
         page.locator(selector).click()
 
-    def assert_tool_button_tooltip_over_button(self, page: Any, selector: str, text: str) -> None:
+    def assert_tool_button_tooltip_right_of_icon(self, page: Any, selector: str, text: str) -> None:
         page.locator(selector).hover()
         page.wait_for_timeout(250)
         self.assertTrue(
@@ -133,7 +133,7 @@ class BrowserSmokeTests(unittest.TestCase):
               const button = document.querySelector(selector);
               const tooltip = document.querySelector("#toolButtonTooltip");
               if (!button || !tooltip || tooltip.hidden || tooltip.textContent.trim() !== text) return false;
-              const buttonRect = button.getBoundingClientRect();
+              const iconRect = button.querySelector(".tool-icon")?.getBoundingClientRect();
               const tooltipRect = tooltip.getBoundingClientRect();
               const front = document.elementFromPoint(
                 tooltipRect.left + tooltipRect.width / 2,
@@ -141,7 +141,9 @@ class BrowserSmokeTests(unittest.TestCase):
               );
               return tooltipRect.width > 0
                 && tooltipRect.height > 0
-                && tooltipRect.bottom <= buttonRect.top
+                && iconRect
+                && tooltipRect.left >= iconRect.right
+                && Math.abs((tooltipRect.top + tooltipRect.height / 2) - (iconRect.top + iconRect.height / 2)) <= 2
                 && (front === tooltip || tooltip.contains(front));
             }
             """,
@@ -175,7 +177,7 @@ class BrowserSmokeTests(unittest.TestCase):
               const tooltip = document.querySelector("#toolButtonTooltip");
               const map = document.querySelector("#ukMap");
               if (!button || !tooltip || !map || tooltip.hidden || tooltip.textContent.trim() !== text) return false;
-              const buttonRect = button.getBoundingClientRect();
+              const iconRect = button.querySelector(".tool-icon")?.getBoundingClientRect();
               const tooltipRect = tooltip.getBoundingClientRect();
               const mapRect = map.getBoundingClientRect();
               const x = Math.max(mapRect.left + 2, Math.min(tooltipRect.right - 2, tooltipRect.left + tooltipRect.width / 2));
@@ -184,7 +186,9 @@ class BrowserSmokeTests(unittest.TestCase):
               const front = document.elementFromPoint(x, y);
               return tooltipRect.width > 0
                 && tooltipRect.height > 0
-                && tooltipRect.bottom <= buttonRect.top
+                && iconRect
+                && tooltipRect.left >= iconRect.right
+                && Math.abs((tooltipRect.top + tooltipRect.height / 2) - (iconRect.top + iconRect.height / 2)) <= 2
                 && (front === tooltip || tooltip.contains(front));
             }
             """,
@@ -5542,7 +5546,7 @@ COPY (
                     {
                         "count": 5,
                         "selectorDisplay": "grid",
-                        "gap": "2px",
+                        "gap": "12px",
                         "overflowX": "hidden",
                         "overflowY": "auto",
                         "selectorMatchesSidebar": True,
@@ -5559,7 +5563,7 @@ COPY (
                         "labelsHidden": True,
                     },
                 )
-                self.assert_tool_button_tooltip_over_button(page, "#profileTool", "Column profile")
+                self.assert_tool_button_tooltip_right_of_icon(page, "#profileTool", "Column profile")
                 assert_sidebar_headers_visible()
                 wait_accordion_state("favourites")
 
@@ -10485,7 +10489,7 @@ COPY (
                         "count": 6,
                         "selectorDisplay": "grid",
                         "selectorMatchesSidebar": True,
-                        "gap": "2px",
+                        "gap": "12px",
                         "overflowX": "hidden",
                         "overflowY": "auto",
                         "vertical": True,
@@ -10554,7 +10558,7 @@ COPY (
                         "count": 6,
                         "selectorDisplay": "grid",
                         "selectorMatchesSidebar": True,
-                        "gap": "2px",
+                        "gap": "12px",
                         "overflowX": "hidden",
                         "overflowY": "auto",
                         "vertical": True,
@@ -10565,7 +10569,7 @@ COPY (
                         "allIconsLarge": True,
                     },
                 )
-                self.assert_tool_button_tooltip_over_button(page, "#ukMapTool", "UK mapping")
+                self.assert_tool_button_tooltip_right_of_icon(page, "#ukMapTool", "UK mapping")
                 self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-favourites-section").is_visible())
                 self.assertFalse(page.locator(".sidebar-filter-section").is_visible())
