@@ -431,6 +431,41 @@ class BrowserSmokeTests(unittest.TestCase):
                                     """,
                                     timeout=20_000,
                                 )
+                                page.locator("#mapControlReset").click()
+                                page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")', timeout=10_000)
+                                mobile_map_panel = page.evaluate(
+                                    """
+                                    () => {
+                                      const columnCount = (selector) => {
+                                        const columns = getComputedStyle(document.querySelector(selector)).gridTemplateColumns;
+                                        return columns.split(" ").filter(Boolean).length;
+                                      };
+                                      const visibleControls = [...document.querySelectorAll(".map-slider-control")]
+                                        .filter((control) => control.offsetParent !== null);
+                                      const endpointLabels = visibleControls.flatMap((control) => [
+                                        control.querySelector(".slider-scale b:first-child"),
+                                        control.querySelector(".slider-scale b:last-child"),
+                                      ]).filter(Boolean);
+                                      return {
+                                        width: document.querySelector("#mapFloatingControl").getBoundingClientRect().width,
+                                        baseColumns: columnCount("#mapBaseLayerTiles"),
+                                        levelColumns: columnCount("#mapLevelTiles"),
+                                        paletteColumns: columnCount(".map-palette-buttons"),
+                                        sliderEndpointsVisible: endpointLabels.length > 0 && endpointLabels.every((label) => {
+                                          const rect = label.getBoundingClientRect();
+                                          return getComputedStyle(label).display !== "none" && rect.width > 0 && rect.height > 0;
+                                        }),
+                                      };
+                                    }
+                                    """
+                                )
+                                self.assertAlmostEqual(mobile_map_panel["width"], 244, delta=2)
+                                self.assertEqual(mobile_map_panel["baseColumns"], 3)
+                                self.assertEqual(mobile_map_panel["levelColumns"], 3)
+                                self.assertEqual(mobile_map_panel["paletteColumns"], 3)
+                                self.assertTrue(mobile_map_panel["sliderEndpointsVisible"], mobile_map_panel)
+                                page.locator("#mapControlReset").click()
+                                page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")', timeout=10_000)
                                 assert_mobile_sidebar_fronts_map(page)
                     finally:
                         page.close()
@@ -9340,6 +9375,41 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                map_panel_layout = page.evaluate(
+                    """
+                    () => {
+                      const columnCount = (selector) => {
+                        const columns = getComputedStyle(document.querySelector(selector)).gridTemplateColumns;
+                        return columns.split(" ").filter(Boolean).length;
+                      };
+                      const visibleControls = [...document.querySelectorAll(".map-slider-control")]
+                        .filter((control) => control.offsetParent !== null);
+                      const endpointLabels = visibleControls.flatMap((control) => [
+                        control.querySelector(".slider-scale b:first-child"),
+                        control.querySelector(".slider-scale b:last-child"),
+                      ]).filter(Boolean);
+                      return {
+                        width: document.querySelector("#mapFloatingControl").getBoundingClientRect().width,
+                        groupMeta: document.querySelector("#mapGroupMeta")?.textContent.trim() || "",
+                        rowMeta: document.querySelector("#mapRowMeta")?.textContent.trim() || "",
+                        baseColumns: columnCount("#mapBaseLayerTiles"),
+                        levelColumns: columnCount("#mapLevelTiles"),
+                        paletteColumns: columnCount(".map-palette-buttons"),
+                        sliderEndpointsVisible: endpointLabels.length > 0 && endpointLabels.every((label) => {
+                          const rect = label.getBoundingClientRect();
+                          return getComputedStyle(label).display !== "none" && rect.width > 0 && rect.height > 0;
+                        }),
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(map_panel_layout["width"], 244, delta=2)
+                self.assertNotIn("rows", map_panel_layout["groupMeta"])
+                self.assertEqual(map_panel_layout["rowMeta"], "3 / 4 rows")
+                self.assertEqual(map_panel_layout["baseColumns"], 3)
+                self.assertEqual(map_panel_layout["levelColumns"], 3)
+                self.assertEqual(map_panel_layout["paletteColumns"], 3)
+                self.assertTrue(map_panel_layout["sliderEndpointsVisible"], map_panel_layout)
                 assert_filter_label_badge("#mapControlFilter", "map-filter--applied", True)
                 assert_filter_badge_clear("#mapControlFilterClearBtn", "#mapControlFilterText", True)
                 page.wait_for_function(
@@ -10733,7 +10803,7 @@ COPY (
                 self.assertFalse(page.locator("#mapLineWeight").is_disabled())
                 self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
                 self.assertTrue(page.locator("#mapDotSize").is_disabled())
-                self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Line width")
+                self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Width")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("min"), "-9")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("max"), "9")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("step"), "1")
@@ -11119,7 +11189,7 @@ COPY (
                 self.assertFalse(page.locator("#mapLineWeight").is_disabled())
                 self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
                 self.assertTrue(page.locator("#mapDotSize").is_disabled())
-                self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Line width")
+                self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Width")
                 self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
                 self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "High")
                 wait_for_map_view(stable_map_view)

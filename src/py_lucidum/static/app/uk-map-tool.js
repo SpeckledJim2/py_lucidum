@@ -227,7 +227,16 @@ export function createUkMapTool({
 
   function showMapMissingNumerator() {
     setGroupMeta("uk_map", "Choose an Actual column");
+    setMapRowMeta("");
     setChartMessage("UK mapping needs a numeric Actual column.");
+  }
+
+  function setMapRowMeta(message) {
+    el("mapRowMeta").textContent = message || "";
+  }
+
+  function mapRowMetaForData(data) {
+    return formatRowMeta(data?.row_count, data?.filtered_row_count);
   }
 
   async function refreshMap(options = {}) {
@@ -240,7 +249,10 @@ export function createUkMapTool({
     const quietPending = Boolean(options.preserveRenderedMap && options.suppressPendingMeta);
     setStatus("");
     setChartMessage("");
-    if (!quietPending) setGroupMeta("uk_map", "Computing map...");
+    if (!quietPending) {
+      setGroupMeta("uk_map", "Computing map...");
+      setMapRowMeta("");
+    }
     startToolTiming("uk_map");
     try {
       const [data, geoJson] = await Promise.all([
@@ -261,6 +273,7 @@ export function createUkMapTool({
       state.pendingMapZoom = null;
       state.mapViewRestorePending = null;
       setGroupMeta("uk_map", "Map failed");
+      setMapRowMeta("");
       setChartMessage(error.message);
     }
   }
@@ -288,6 +301,7 @@ export function createUkMapTool({
     }
     el("mapLegendBody").textContent = "";
     el("mapLegend").classList.add("hidden");
+    setMapRowMeta("");
   }
 
   function showPendingRestore() {
@@ -295,6 +309,7 @@ export function createUkMapTool({
     setStatus("");
     setChartMessage("");
     setGroupMeta("uk_map", "Computing map...");
+    setMapRowMeta("");
     clearRenderedMap();
     syncFloatingMapControl();
   }
@@ -303,6 +318,7 @@ export function createUkMapTool({
     state.lastMapData = cache.data;
     syncFloatingMapControl();
     applyToolPresentation("uk_map");
+    setMapRowMeta(mapRowMetaForData(cache.data));
     const geoJson = state.mapGeoJsonCache[cache.data.level];
     const activeLayer = cache.data.level === "unit" ? ukMapPointLayer : ukMapLayer;
     if (options.renderIfCached) {
@@ -1321,9 +1337,10 @@ export function createUkMapTool({
 
     const searchWarning = applyRenderedMapCamera(data.level, ukMapLayer.getBounds());
     renderMapLegend(scale, data.response?.label || "Actual");
-    const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
-    const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched · ${rowMeta}`;
+    const rowMeta = mapRowMetaForData(data);
+    const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched`;
     setGroupMeta("uk_map", groupMeta);
+    setMapRowMeta(rowMeta);
     const warnings = [...(data.warnings || [])];
     if (searchWarning) {
       warnings.push(searchWarning);
@@ -1361,12 +1378,13 @@ export function createUkMapTool({
 
     applyRenderedMapCamera(data.level, ukMapPointLayer.getBounds());
     renderMapLegend(scale, data.response?.label || "Actual");
-    const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
+    const rowMeta = mapRowMetaForData(data);
     const pointSummary = data.point_summary || {};
     const summaryCount = Number(pointSummary.summary_count ?? unitPointCount(data));
     const plottedCount = Number(pointSummary.plotted_count ?? unitPointCount(data));
-    const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted · ${rowMeta}`;
+    const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted`;
     setGroupMeta("uk_map", groupMeta);
+    setMapRowMeta(rowMeta);
     const warnings = [...(data.warnings || [])];
     const missingValueCount = Number(pointSummary.missing_value_count || 0);
     const missingCoordinateCount = Number(pointSummary.missing_coordinate_count || 0);

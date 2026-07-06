@@ -107,7 +107,7 @@
         right: var(--map-floating-right);
         left: auto;
         z-index: 700;
-        width: min(400px, calc(100% - 64px));
+        width: min(244px, calc(100% - 24px));
         border: 2px solid rgb(255 255 255 / 82%);
         border-radius: 6px;
         background: rgb(244 245 247 / 90%);
@@ -149,6 +149,7 @@
 
       .map-floating-header strong,
       .map-floating-header #mapGroupMeta,
+      .map-floating-header #mapRowMeta,
       .map-floating-header #mapControlFilter {
         grid-column: 1;
       }
@@ -167,7 +168,8 @@
         white-space: nowrap;
       }
 
-      .map-floating-header #mapGroupMeta {
+      .map-floating-header #mapGroupMeta,
+      .map-floating-header #mapRowMeta {
         font-size: 10px;
         line-height: 1.1;
         overflow: hidden;
@@ -175,7 +177,12 @@
         white-space: nowrap;
       }
 
+      .map-floating-header #mapRowMeta {
+        min-height: 1.1em;
+      }
+
       .map-floating-header #mapGroupMeta,
+      .map-floating-header #mapRowMeta,
       #mapControlFilter {
         color: grey;
       }
@@ -185,7 +192,7 @@
         border: 1px solid transparent;
         border-radius: 4px;
         display: inline-flex;
-        align-items: center;
+        align-items: flex-start;
         gap: 4px;
         font-size: 10px;
         justify-self: start;
@@ -194,6 +201,7 @@
         min-width: 0;
         padding: 1px 4px;
         text-align: left;
+        white-space: normal;
         width: fit-content;
       }
 
@@ -205,8 +213,15 @@
       }
 
       #mapControlFilter .filter-badge-text {
+        display: -webkit-box;
         font-size: inherit;
         line-height: inherit;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+        text-overflow: ellipsis;
+        white-space: normal;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
       }
 
       #mapControlFilter.map-filter--applied {
@@ -217,7 +232,7 @@
 
       .map-control-reset {
         grid-column: 2;
-        grid-row: 1 / span 3;
+        grid-row: 1 / span 4;
         align-self: start;
         justify-self: end;
         width: 36px;
@@ -259,6 +274,7 @@
 
       .map-floating-control.collapsed .map-floating-header strong,
       .map-floating-control.collapsed .map-floating-header #mapGroupMeta,
+      .map-floating-control.collapsed .map-floating-header #mapRowMeta,
       .map-floating-control.collapsed .map-floating-header #mapControlFilter,
       .map-floating-control.collapsed .map-control-panel-body,
       .map-floating-control.collapsed .map-floating-row,
@@ -276,7 +292,7 @@
       }
 
       .map-control-panel-body {
-        --map-control-tile-size: 58px;
+        --map-control-tile-size: 70px;
         display: grid;
         gap: 9px;
       }
@@ -302,7 +318,7 @@
       }
 
       .map-base-layer-tiles {
-        grid-template-columns: repeat(6, minmax(0, var(--map-control-tile-size)));
+        grid-template-columns: repeat(3, minmax(0, var(--map-control-tile-size)));
       }
 
       .map-level-tiles {
@@ -311,9 +327,13 @@
 
       .map-level-palette-row {
         display: grid;
-        grid-template-columns: repeat(2, max-content);
+        grid-template-columns: max-content;
         align-items: start;
         gap: 6px;
+      }
+
+      .map-level-palette-row .map-tile-section + .map-tile-section {
+        padding-top: 2px;
       }
 
       .map-control-tile {
@@ -522,9 +542,9 @@
         --map-slider-thumb-size: 22px;
         --map-slider-track-height: 6px;
         display: grid;
-        grid-template-columns: 66px max-content minmax(0, 1fr) max-content;
+        grid-template-columns: 58px max-content minmax(0, 1fr) max-content;
         align-items: center;
-        gap: 8px;
+        gap: 4px;
         font-size: 12px;
         min-width: 0;
       }
@@ -692,50 +712,12 @@
       @media (max-width: 980px) {
         .map-floating-control {
           --map-floating-right: 11px;
-          width: min(400px, calc(100% - 24px));
         }
       }
 
       @media (max-width: 720px) {
-        .map-floating-control {
-          width: min(208px, calc(100% - 16px));
-        }
-
-        .map-control-panel-body {
-          --map-control-tile-size: 58px;
-        }
-
-        .map-base-layer-tiles {
-          grid-template-columns: repeat(3, minmax(0, var(--map-control-tile-size)));
-        }
-
-        .map-level-palette-row {
-          grid-template-columns: max-content;
-        }
-
-        .map-control-tile-card {
-          min-height: 46px;
-        }
-
-        .map-floating-row {
-          grid-template-columns: minmax(0, 1fr);
-        }
-
         .postcode-search {
           grid-template-columns: minmax(0, 1fr) 28px 28px;
-        }
-
-        .map-slider-control {
-          grid-template-columns: 62px minmax(0, 1fr);
-        }
-
-        .slider-scale b:first-child,
-        .slider-scale b:last-child {
-          display: none;
-        }
-
-        .map-slider-control input[type="range"] {
-          grid-column: 2;
         }
       }
 
