@@ -61,13 +61,33 @@
 
       .dataset-viewer-count {
         color: var(--muted);
-        flex: 0 1 auto;
         font-size: 10px;
         line-height: 1.1;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .dataset-viewer-summary-meta {
+        align-items: center;
+        display: flex;
+        flex: 0 1 auto;
+        gap: 4px;
+        justify-content: flex-end;
+        max-width: 100%;
+        min-width: 0;
+      }
+
+      .dataset-viewer-meta-separator {
+        color: var(--muted);
+        flex: 0 0 auto;
+        font-size: 10px;
+        line-height: 1.1;
+      }
+
+      .dataset-viewer-count:empty + .dataset-viewer-meta-separator {
+        display: none;
       }
 
       .dataset-viewer-meta {
@@ -84,11 +104,21 @@
       }
 
       .dataset-viewer-meta .workspace-meta,
+      .dataset-viewer-meta .dataset-viewer-count,
       .dataset-viewer-meta #datasetViewerFilter {
         max-width: 100%;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      main:has(> #visualArea.dataset-viewer-mode) {
+        background: var(--panel);
+      }
+
+      .visual-area.dataset-viewer-mode .workspace {
+        background: var(--panel);
       }
 
       .dataset-viewer-grid {
@@ -415,7 +445,11 @@
           padding-right: 0;
         }
 
-        .dataset-viewer-count {
+        .dataset-viewer-search-row {
+          flex: 1 1 100%;
+        }
+
+        .dataset-viewer-summary-meta {
           flex: 1 1 auto;
         }
 

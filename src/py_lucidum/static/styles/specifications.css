@@ -9,6 +9,23 @@
         padding: 12px;
       }
 
+      main:has(> #visualArea.specs-mode) {
+        background: var(--panel);
+        padding: 0;
+      }
+
+      .visual-area.specs-mode .workspace {
+        background: var(--panel);
+        border-color: transparent;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 0;
+      }
+
+      .visual-area.specs-mode .specifications-wrap {
+        padding: 8px;
+      }
+
       .spec-tool {
         background: var(--panel);
         border: 0;

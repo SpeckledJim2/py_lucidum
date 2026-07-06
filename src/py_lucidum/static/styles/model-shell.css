@@ -9,6 +9,23 @@
         padding: 12px;
       }
 
+      main:has(> #visualArea.model-mode) {
+        background: var(--panel);
+        padding: 0;
+      }
+
+      .visual-area.model-mode .workspace {
+        background: var(--panel);
+        border-color: transparent;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 0;
+      }
+
+      .visual-area.model-mode .model-tool-wrap {
+        padding: 8px;
+      }
+
       .model-shell {
         max-width: 720px;
         border: 1px solid var(--line);

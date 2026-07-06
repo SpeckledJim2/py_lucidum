@@ -86,7 +86,7 @@
       .histogram-grid {
         background: var(--panel);
         border: solid var(--line);
-        border-width: 1px 0 0 1px;
+        border-width: 1px 0 0;
         border-radius: 0;
         color: var(--text);
         flex: 1 1 auto;
@@ -110,7 +110,7 @@
 
       .histogram-grid.tabulator {
         border: solid var(--line);
-        border-width: 1px 0 0 1px;
+        border-width: 1px 0 0;
       }
 
       .histogram-grid.tabulator .tabulator-header .tabulator-col {
@@ -118,6 +118,10 @@
         justify-content: center;
         line-height: 1.15;
         min-height: 20px;
+      }
+
+      .histogram-grid.tabulator .tabulator-header .tabulator-col[tabulator-field="statistic"] {
+        border-left: 1px solid var(--line) !important;
       }
 
       .histogram-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content {
@@ -152,6 +156,10 @@
         padding: 1px 6px;
       }
 
+      .histogram-grid .tabulator-row .tabulator-cell[tabulator-field="statistic"] {
+        border-left: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+      }
+
       .histogram-grid .tabulator-row .tabulator-cell[tabulator-field="value"] {
         justify-content: flex-end;
         text-align: right;
@@ -169,5 +177,9 @@
         .histogram-wrap {
           grid-template-columns: minmax(0, 1fr);
           grid-template-rows: minmax(160px, 34%) minmax(0, 1fr);
+        }
+
+        .histogram-stats-panel {
+          padding-top: 22px;
         }
       }

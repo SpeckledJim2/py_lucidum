@@ -124,8 +124,12 @@ export function createDatasetViewerTool({
             <input id="datasetViewerAlphabeticalColumns" type="checkbox" />
             <span>Alphabetical columns</span>
           </label>
-          <div id="datasetViewerCount" class="dataset-viewer-count"></div>
-          <div id="datasetViewerMeta" class="dataset-viewer-meta"></div>
+          <div id="datasetViewerMeta" class="dataset-viewer-meta">
+            <div id="datasetViewerSummaryMeta" class="dataset-viewer-summary-meta">
+              <div id="datasetViewerCount" class="dataset-viewer-count"></div>
+              <span id="datasetViewerCountSeparator" class="dataset-viewer-meta-separator" aria-hidden="true">&middot;</span>
+            </div>
+          </div>
         </div>
         <div id="datasetViewerGrid" class="dataset-viewer-grid"></div>`;
       attachDatasetViewerMeta();
@@ -162,10 +166,15 @@ export function createDatasetViewerTool({
 
   function attachDatasetViewerMeta() {
     const meta = document.getElementById("datasetViewerMeta");
+    const summary = document.getElementById("datasetViewerSummaryMeta");
+    const count = document.getElementById("datasetViewerCount");
+    const separator = document.getElementById("datasetViewerCountSeparator");
     const groupMeta = document.getElementById("datasetViewerGroupMeta");
     const filter = document.getElementById("datasetViewerFilter");
-    if (!meta || !groupMeta || !filter) return;
-    if (groupMeta.parentElement !== meta) meta.append(groupMeta);
+    if (!meta || !summary || !count || !separator || !groupMeta || !filter) return;
+    if (count.parentElement !== summary) summary.prepend(count);
+    if (separator.parentElement !== summary || separator.previousElementSibling !== count) count.after(separator);
+    if (groupMeta.parentElement !== summary) summary.append(groupMeta);
     if (filter.parentElement !== meta) meta.append(filter);
   }
 

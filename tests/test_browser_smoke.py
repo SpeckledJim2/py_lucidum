@@ -410,6 +410,70 @@ class BrowserSmokeTests(unittest.TestCase):
                                 arg=wrapper_selector,
                                 timeout=10_000,
                             )
+                            if tool_button == "#datasetViewerTool":
+                                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                                dataset_viewer_mobile_toolbar = page.evaluate(
+                                    """
+                                    () => {
+                                      const rectFor = (selector) => {
+                                        const rect = document.querySelector(selector).getBoundingClientRect();
+                                        return { bottom: rect.bottom, left: rect.left, top: rect.top, width: rect.width };
+                                      };
+                                      return {
+                                        alphabetical: rectFor('label:has(#datasetViewerAlphabeticalColumns)'),
+                                        search: rectFor(".dataset-viewer-search-row"),
+                                        toolbar: rectFor(".dataset-viewer-toolbar"),
+                                        transpose: rectFor('label:has(#datasetViewerTranspose)'),
+                                      };
+                                    }
+                                    """
+                                )
+                                self.assertGreaterEqual(
+                                    dataset_viewer_mobile_toolbar["search"]["width"],
+                                    dataset_viewer_mobile_toolbar["toolbar"]["width"] - 2,
+                                )
+                                self.assertGreaterEqual(
+                                    dataset_viewer_mobile_toolbar["transpose"]["top"],
+                                    dataset_viewer_mobile_toolbar["search"]["bottom"] - 1,
+                                )
+                                self.assertGreaterEqual(
+                                    dataset_viewer_mobile_toolbar["alphabetical"]["top"],
+                                    dataset_viewer_mobile_toolbar["search"]["bottom"] - 1,
+                                )
+                            if tool_button == "#profileTool":
+                                page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                                profile_mobile_layout = page.evaluate(
+                                    """
+                                    () => {
+                                      const content = document.querySelector("#profileWrap .profile-content").getBoundingClientRect();
+                                      const summary = document.querySelector("#profileWrap .profile-summary-pane").getBoundingClientRect();
+                                      const detail = document.querySelector("#profileDetailPane").getBoundingClientRect();
+                                      const contentStyle = getComputedStyle(document.querySelector("#profileWrap .profile-content"));
+                                      const detailStyle = getComputedStyle(document.querySelector("#profileDetailPane"));
+                                      return {
+                                        detailBottomBorder: detailStyle.borderBottomWidth,
+                                        detailHeightRatio: detail.height / content.height,
+                                        detailLeftBorder: detailStyle.borderLeftWidth,
+                                        detailStartsAtTop: Math.abs(detail.top - content.top) <= 2,
+                                        detailTop: detail.top,
+                                        gridColumns: contentStyle.gridTemplateColumns,
+                                        gridRows: contentStyle.gridTemplateRows,
+                                        mobile: window.matchMedia("(max-width: 640px)").matches,
+                                        summaryBottomAligned: Math.abs(summary.bottom - content.bottom) <= 2,
+                                        summaryHeightRatio: summary.height / content.height,
+                                        summaryTop: summary.top,
+                                      };
+                                    }
+                                    """
+                                )
+                                self.assertTrue(profile_mobile_layout["mobile"])
+                                self.assertTrue(profile_mobile_layout["detailStartsAtTop"], profile_mobile_layout)
+                                self.assertTrue(profile_mobile_layout["summaryBottomAligned"], profile_mobile_layout)
+                                self.assertLess(profile_mobile_layout["detailTop"], profile_mobile_layout["summaryTop"])
+                                self.assertGreaterEqual(profile_mobile_layout["detailHeightRatio"], 0.38)
+                                self.assertGreaterEqual(profile_mobile_layout["summaryHeightRatio"], 0.38)
+                                self.assertEqual(profile_mobile_layout["detailLeftBorder"], "0px")
+                                self.assertEqual(profile_mobile_layout["detailBottomBorder"], "1px")
                             if tool_button == "#ukMapTool":
                                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                                 page.wait_for_function(
@@ -724,6 +788,32 @@ class BrowserSmokeTests(unittest.TestCase):
                         page.goto(base_url, wait_until="domcontentloaded")
                         page.locator("#datasetMeta").get_by_text("many_profile_columns.csv").wait_for(timeout=10_000)
                         page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                        profile_surface = page.evaluate(
+                            """
+                            () => {
+                              const main = document.querySelector("main");
+                              const visual = document.querySelector("#visualArea");
+                              const workspace = document.querySelector(".workspace");
+                              const panel = getComputedStyle(document.documentElement).getPropertyValue("--panel").trim();
+                              const probe = document.createElement("div");
+                              probe.style.background = panel;
+                              probe.style.position = "absolute";
+                              probe.style.visibility = "hidden";
+                              document.body.appendChild(probe);
+                              const panelBackground = getComputedStyle(probe).backgroundColor;
+                              probe.remove();
+                              return {
+                                mainBackground: getComputedStyle(main).backgroundColor,
+                                panelBackground,
+                                profileMode: visual.classList.contains("profile-mode"),
+                                workspaceBackground: getComputedStyle(workspace).backgroundColor,
+                              };
+                            }
+                            """
+                        )
+                        self.assertTrue(profile_surface["profileMode"])
+                        self.assertEqual(profile_surface["mainBackground"], profile_surface["panelBackground"])
+                        self.assertEqual(profile_surface["workspaceBackground"], profile_surface["panelBackground"])
                         page.locator('#profileWrap [data-profile-sort="missing"]').click()
                         page.locator('#profileWrap th[aria-sort="ascending"] [data-profile-sort="missing"]').wait_for(timeout=10_000)
                         before_scroll = page.evaluate(
@@ -7681,35 +7771,165 @@ COPY (
             page_errors: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-            def tab_rect(selector: str) -> dict[str, float]:
-                locator = page.locator(selector).first
-                locator.wait_for(timeout=10_000)
-                return locator.evaluate(
+            def assert_model_workspace_style(tool_selector: str) -> None:
+                page.locator(f"#modelToolWrap:not(.hidden) {tool_selector}").wait_for(timeout=10_000)
+                style = page.evaluate(
                     """
-                    node => {
-                      const rect = node.getBoundingClientRect();
-                      return {left: rect.left, top: rect.top};
+                    () => {
+                      const main = document.querySelector("main");
+                      const visual = document.querySelector("#visualArea");
+                      const workspace = document.querySelector(".workspace");
+                      const modelWrap = document.querySelector("#modelToolWrap");
+                      const mainStyle = getComputedStyle(main);
+                      const workspaceStyle = getComputedStyle(workspace);
+                      const modelWrapStyle = getComputedStyle(modelWrap);
+                      const panel = getComputedStyle(document.documentElement).getPropertyValue("--panel").trim();
+                      const probe = document.createElement("div");
+                      probe.style.background = panel;
+                      probe.style.position = "absolute";
+                      probe.style.visibility = "hidden";
+                      document.body.appendChild(probe);
+                      const panelBackground = getComputedStyle(probe).backgroundColor;
+                      probe.remove();
+                      const borderColors = [
+                        workspaceStyle.borderTopColor,
+                        workspaceStyle.borderRightColor,
+                        workspaceStyle.borderBottomColor,
+                        workspaceStyle.borderLeftColor,
+                      ];
+                      const borderRadii = [
+                        workspaceStyle.borderTopLeftRadius,
+                        workspaceStyle.borderTopRightRadius,
+                        workspaceStyle.borderBottomRightRadius,
+                        workspaceStyle.borderBottomLeftRadius,
+                      ];
+                      const mainPadding = [
+                        mainStyle.paddingTop,
+                        mainStyle.paddingRight,
+                        mainStyle.paddingBottom,
+                        mainStyle.paddingLeft,
+                      ];
+                      const workspacePadding = [
+                        workspaceStyle.paddingTop,
+                        workspaceStyle.paddingRight,
+                        workspaceStyle.paddingBottom,
+                        workspaceStyle.paddingLeft,
+                      ];
+                      const modelWrapPadding = [
+                        modelWrapStyle.paddingTop,
+                        modelWrapStyle.paddingRight,
+                        modelWrapStyle.paddingBottom,
+                        modelWrapStyle.paddingLeft,
+                      ];
+                      return {
+                        borderColors,
+                        borderRadii,
+                        mainPadding,
+                        modelWrapPadding,
+                        mainBackground: mainStyle.backgroundColor,
+                        panelBackground,
+                        visualModelMode: visual.classList.contains("model-mode"),
+                        workspaceBackground: workspaceStyle.backgroundColor,
+                        workspaceBorderTransparent: borderColors.every((color) => color === "transparent" || color === "rgba(0, 0, 0, 0)"),
+                        workspaceBoxShadow: workspaceStyle.boxShadow,
+                        workspacePadding,
+                      };
                     }
                     """
                 )
+                self.assertTrue(style["visualModelMode"])
+                self.assertEqual(style["mainBackground"], style["panelBackground"])
+                self.assertEqual(style["workspaceBackground"], style["panelBackground"])
+                self.assertTrue(style["workspaceBorderTransparent"], style["borderColors"])
+                self.assertEqual(style["borderRadii"], ["0px", "0px", "0px", "0px"])
+                self.assertEqual(style["mainPadding"], ["0px", "0px", "0px", "0px"])
+                self.assertEqual(style["workspacePadding"], ["0px", "0px", "0px", "0px"])
+                self.assertEqual(style["modelWrapPadding"], ["8px", "8px", "8px", "8px"])
+                self.assertEqual(style["workspaceBoxShadow"], "none")
 
-            def assert_specs_first_tab_aligns_with_model_tabs() -> None:
+            def assert_model_tools_use_compact_workspace() -> None:
                 page.locator("#glmTool:not(.hidden)").click()
                 page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
-                glm = tab_rect('[data-glm-tab="builder"]')
+                assert_model_workspace_style(".glm-tool")
 
                 page.locator("#gbmTool:not(.hidden)").click()
                 page.locator("#modelToolWrap:not(.hidden) .gbm-tool").wait_for(timeout=10_000)
-                gbm = tab_rect('[data-gbm-tab="features"]')
+                assert_model_workspace_style(".gbm-tool")
 
                 page.locator("#specsTool:not(.hidden)").click()
                 page.locator("#specificationsWrap:not(.hidden) .spec-tool").wait_for(timeout=10_000)
                 page.locator("#specGrid .tabulator-row").first.wait_for(timeout=10_000)
-                specs = tab_rect('[data-spec-kind="feature"]')
 
-                for model in (glm, gbm):
-                    self.assertLessEqual(abs(specs["left"] - model["left"]), 0.5)
-                    self.assertLessEqual(abs(specs["top"] - model["top"]), 0.5)
+            def assert_specs_workspace_style() -> None:
+                style = page.evaluate(
+                    """
+                    () => {
+                      const main = document.querySelector("main");
+                      const visual = document.querySelector("#visualArea");
+                      const workspace = document.querySelector(".workspace");
+                      const specsWrap = document.querySelector("#specificationsWrap");
+                      const mainStyle = getComputedStyle(main);
+                      const workspaceStyle = getComputedStyle(workspace);
+                      const specsWrapStyle = getComputedStyle(specsWrap);
+                      const panel = getComputedStyle(document.documentElement).getPropertyValue("--panel").trim();
+                      const probe = document.createElement("div");
+                      probe.style.background = panel;
+                      probe.style.position = "absolute";
+                      probe.style.visibility = "hidden";
+                      document.body.appendChild(probe);
+                      const panelBackground = getComputedStyle(probe).backgroundColor;
+                      probe.remove();
+                      const borderColors = [
+                        workspaceStyle.borderTopColor,
+                        workspaceStyle.borderRightColor,
+                        workspaceStyle.borderBottomColor,
+                        workspaceStyle.borderLeftColor,
+                      ];
+                      return {
+                        borderColors,
+                        mainBackground: mainStyle.backgroundColor,
+                        mainPadding: [
+                          mainStyle.paddingTop,
+                          mainStyle.paddingRight,
+                          mainStyle.paddingBottom,
+                          mainStyle.paddingLeft,
+                        ],
+                        panelBackground,
+                        specsMode: visual.classList.contains("specs-mode"),
+                        specsWrapPadding: [
+                          specsWrapStyle.paddingTop,
+                          specsWrapStyle.paddingRight,
+                          specsWrapStyle.paddingBottom,
+                          specsWrapStyle.paddingLeft,
+                        ],
+                        workspaceBackground: workspaceStyle.backgroundColor,
+                        workspaceBorderTransparent: borderColors.every((color) => color === "transparent" || color === "rgba(0, 0, 0, 0)"),
+                        workspaceBoxShadow: workspaceStyle.boxShadow,
+                        workspacePadding: [
+                          workspaceStyle.paddingTop,
+                          workspaceStyle.paddingRight,
+                          workspaceStyle.paddingBottom,
+                          workspaceStyle.paddingLeft,
+                        ],
+                        workspaceRadii: [
+                          workspaceStyle.borderTopLeftRadius,
+                          workspaceStyle.borderTopRightRadius,
+                          workspaceStyle.borderBottomRightRadius,
+                          workspaceStyle.borderBottomLeftRadius,
+                        ],
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(style["specsMode"])
+                self.assertEqual(style["mainBackground"], style["panelBackground"])
+                self.assertEqual(style["workspaceBackground"], style["panelBackground"])
+                self.assertTrue(style["workspaceBorderTransparent"], style["borderColors"])
+                self.assertEqual(style["workspaceRadii"], ["0px", "0px", "0px", "0px"])
+                self.assertEqual(style["workspaceBoxShadow"], "none")
+                self.assertEqual(style["mainPadding"], ["0px", "0px", "0px", "0px"])
+                self.assertEqual(style["workspacePadding"], ["0px", "0px", "0px", "0px"])
+                self.assertEqual(style["specsWrapPadding"], ["8px", "8px", "8px", "8px"])
 
             def assert_specs_full_width() -> None:
                 layout = page.evaluate(
@@ -8186,7 +8406,7 @@ COPY (
                     """
                 )
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
-                assert_specs_first_tab_aligns_with_model_tabs()
+                assert_model_tools_use_compact_workspace()
                 if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "true":
                     page.locator("#favouritesCollapseBtn").click()
                     page.wait_for_function(
@@ -8199,6 +8419,7 @@ COPY (
                 self.assertTrue(page.locator("#visualArea").evaluate("node => node.classList.contains('specs-mode')"))
                 self.assertFalse(page.locator("#chartSideControls").is_visible())
                 self.assertFalse(page.locator("#chartControlsResizer").is_visible())
+                assert_specs_workspace_style()
                 assert_specs_full_width()
                 assert_specs_table_style()
                 assert_spec_row_numbers()
@@ -8647,6 +8868,32 @@ COPY (
                 page.goto(f"{base_url}?tool=dataset_viewer", wait_until="domcontentloaded")
                 page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                dataset_viewer_surface = page.evaluate(
+                    """
+                    () => {
+                      const main = document.querySelector("main");
+                      const visual = document.querySelector("#visualArea");
+                      const workspace = document.querySelector(".workspace");
+                      const panel = getComputedStyle(document.documentElement).getPropertyValue("--panel").trim();
+                      const probe = document.createElement("div");
+                      probe.style.background = panel;
+                      probe.style.position = "absolute";
+                      probe.style.visibility = "hidden";
+                      document.body.appendChild(probe);
+                      const panelBackground = getComputedStyle(probe).backgroundColor;
+                      probe.remove();
+                      return {
+                        datasetViewerMode: visual.classList.contains("dataset-viewer-mode"),
+                        mainBackground: getComputedStyle(main).backgroundColor,
+                        panelBackground,
+                        workspaceBackground: getComputedStyle(workspace).backgroundColor,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(dataset_viewer_surface["datasetViewerMode"])
+                self.assertEqual(dataset_viewer_surface["mainBackground"], dataset_viewer_surface["panelBackground"])
+                self.assertEqual(dataset_viewer_surface["workspaceBackground"], dataset_viewer_surface["panelBackground"])
                 page.wait_for_function(
                     """
                     () => typeof window.Tabulator?.prototype?.redraw === "function"
@@ -9172,15 +9419,31 @@ COPY (
                     () => {
                       const toolbar = document.querySelector(".dataset-viewer-toolbar");
                       const meta = document.querySelector("#datasetViewerMeta");
+                      const summary = document.querySelector("#datasetViewerSummaryMeta");
+                      const count = document.querySelector("#datasetViewerCount");
+                      const separator = document.querySelector("#datasetViewerCountSeparator");
                       const group = document.querySelector("#datasetViewerGroupMeta");
                       const filter = document.querySelector("#datasetViewerFilter");
+                      const countRect = count?.getBoundingClientRect();
+                      const groupRect = group?.getBoundingClientRect();
                       return Boolean(
                         toolbar
                         && !toolbar.hidden
                         && meta
+                        && summary
+                        && count
+                        && separator
                         && toolbar.contains(meta)
-                        && meta.contains(group)
+                        && meta.contains(summary)
+                        && summary.contains(count)
+                        && summary.contains(separator)
+                        && summary.contains(group)
                         && meta.contains(filter)
+                        && (count.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING)
+                        && countRect
+                        && groupRect
+                        && Math.abs(countRect.top - groupRect.top) < 3
+                        && countRect.left < groupRect.left
                         && !document.querySelector("#datasetViewerGrid .dataset-viewer-state")
                       );
                     }
@@ -10528,15 +10791,23 @@ COPY (
                       const rail = document.querySelector("#toolSelectorSection");
                       const pane = document.querySelector("#sidebarControlPane");
                       const sidebar = document.querySelector("#appSidebar");
+                      const sidebarResizer = document.querySelector("#sidebarResizer");
+                      const lineBarSidePanel = document.querySelector(".chart-side-section");
                       const railRect = rail.getBoundingClientRect();
                       const paneRect = pane.getBoundingClientRect();
                       const sidebarRect = sidebar.getBoundingClientRect();
+                      const sidebarResizerRect = sidebarResizer.getBoundingClientRect();
+                      const sidebarResizerStyle = getComputedStyle(sidebarResizer);
+                      const sidebarResizerLineStyle = getComputedStyle(sidebarResizer, "::before");
+                      const paneStyle = getComputedStyle(pane);
                       const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
+                      const sidebarBackground = getComputedStyle(sidebar).backgroundColor;
                       return {
                         count: buttons.length,
                         selectorDisplay: getComputedStyle(selector).display,
-                        selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === getComputedStyle(sidebar).backgroundColor,
+                        selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === sidebarBackground,
+                        sidebarMatchesLineBarSidePanel: sidebarBackground === getComputedStyle(lineBarSidePanel).backgroundColor,
                         gap: getComputedStyle(selector).gap,
                         overflowX: getComputedStyle(selector).overflowX,
                         overflowY: getComputedStyle(selector).overflowY,
@@ -10544,6 +10815,11 @@ COPY (
                         railWidth: Math.round(railRect.width),
                         railAtSidebarLeft: Math.round(railRect.left) === Math.round(sidebarRect.left),
                         paneRightOfRail: Math.round(paneRect.left) >= Math.round(railRect.right),
+                        sidebarResizerFillTransparent: sidebarResizerStyle.backgroundColor === "rgba(0, 0, 0, 0)",
+                        sidebarResizerLineWidth: Math.round(parseFloat(sidebarResizerLineStyle.width)),
+                        sidebarResizerMatchesSiderailLine: sidebarResizerLineStyle.backgroundColor === paneStyle.borderLeftColor
+                          && Math.round(parseFloat(sidebarResizerLineStyle.width)) === Math.round(parseFloat(paneStyle.borderLeftWidth)),
+                        sidebarResizerWidth: Math.round(sidebarResizerRect.width),
                         labelsHidden: buttons.every((button) => {
                           const label = button.querySelector(".tool-label");
                           const style = label ? getComputedStyle(label) : null;
@@ -10559,6 +10835,7 @@ COPY (
                         "count": 6,
                         "selectorDisplay": "grid",
                         "selectorMatchesSidebar": True,
+                        "sidebarMatchesLineBarSidePanel": True,
                         "gap": "12px",
                         "overflowX": "visible",
                         "overflowY": "visible",
@@ -10566,6 +10843,10 @@ COPY (
                         "railWidth": 50,
                         "railAtSidebarLeft": True,
                         "paneRightOfRail": True,
+                        "sidebarResizerFillTransparent": True,
+                        "sidebarResizerLineWidth": 1,
+                        "sidebarResizerMatchesSiderailLine": True,
+                        "sidebarResizerWidth": 9,
                         "labelsHidden": True,
                     },
                 )
@@ -10587,12 +10868,16 @@ COPY (
                     () => {
                       const buttons = [...document.querySelectorAll("#toolSelectorSection .tool-option:not(.hidden)")];
                       const selector = document.querySelector("#toolSelectorSection .tool-selector");
+                      const sidebar = document.querySelector("#appSidebar");
+                      const lineBarSidePanel = document.querySelector(".chart-side-section");
                       const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
+                      const sidebarBackground = getComputedStyle(sidebar).backgroundColor;
                       return {
                         count: buttons.length,
                         selectorDisplay: getComputedStyle(selector).display,
-                        selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
+                        selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === sidebarBackground,
+                        sidebarMatchesLineBarSidePanel: sidebarBackground === getComputedStyle(lineBarSidePanel).backgroundColor,
                         gap: getComputedStyle(selector).gap,
                         overflowX: getComputedStyle(selector).overflowX,
                         overflowY: getComputedStyle(selector).overflowY,
@@ -10628,6 +10913,7 @@ COPY (
                         "count": 6,
                         "selectorDisplay": "grid",
                         "selectorMatchesSidebar": True,
+                        "sidebarMatchesLineBarSidePanel": True,
                         "gap": "12px",
                         "overflowX": "visible",
                         "overflowY": "visible",
@@ -10933,6 +11219,32 @@ COPY (
                 page.locator("#histogramWrap:not(.hidden)").wait_for(timeout=10_000)
                 page.locator("#histogramChart canvas").wait_for(timeout=10_000)
                 page.locator("#histogramStatsGrid .tabulator-row").first.wait_for(timeout=10_000)
+                histogram_grid_border = page.evaluate(
+                    """
+                    () => {
+                        const gridStyle = getComputedStyle(document.querySelector("#histogramStatsGrid"));
+                        const headerStyle = getComputedStyle(
+                            document.querySelector('#histogramStatsGrid .tabulator-col[tabulator-field="statistic"]')
+                        );
+                        const firstCellStyle = getComputedStyle(
+                            document.querySelector('#histogramStatsGrid .tabulator-row .tabulator-cell[tabulator-field="statistic"]')
+                        );
+                        return {
+                            firstCellLeft: firstCellStyle.borderLeftWidth,
+                            grid: [
+                                gridStyle.borderTopWidth,
+                                gridStyle.borderRightWidth,
+                                gridStyle.borderBottomWidth,
+                                gridStyle.borderLeftWidth,
+                            ],
+                            headerLeft: headerStyle.borderLeftWidth,
+                        };
+                    }
+                    """
+                )
+                self.assertEqual(histogram_grid_border["grid"], ["1px", "0px", "0px", "0px"])
+                self.assertEqual(histogram_grid_border["headerLeft"], "1px")
+                self.assertEqual(histogram_grid_border["firstCellLeft"], "1px")
                 histogram_reference_colors = page.evaluate(
                     """
                     () => {
@@ -11057,6 +11369,52 @@ COPY (
                 self.assertEqual(histogram_filter_payload["filter"], "vehicle_age >= 0")
                 assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", True)
                 assert_filter_badge_clear("#histogramFilterClearBtn", "#histogramFilterText", True)
+                page.set_viewport_size({"width": 420, "height": 800})
+                page.wait_for_function(
+                    """
+                    () => window.matchMedia("(max-width: 900px)").matches
+                      && !document.querySelector("#histogramWrap")?.classList.contains("hidden")
+                      && document.querySelector("#histogramFilter")?.classList.contains("histogram-filter--applied")
+                    """,
+                    timeout=10_000,
+                )
+                histogram_mobile_filter_layout = page.evaluate(
+                    """
+                    () => {
+                      const group = document.querySelector("#histogramGroupMeta").getBoundingClientRect();
+                      const filter = document.querySelector("#histogramFilter").getBoundingClientRect();
+                      const header = document.querySelector("#histogramStatsGrid .tabulator-header").getBoundingClientRect();
+                      const statsPanel = document.querySelector(".histogram-stats-panel").getBoundingClientRect();
+                      return {
+                        filterBottom: filter.bottom,
+                        groupBottom: group.bottom,
+                        headerTop: header.top,
+                        statsPanelTop: statsPanel.top,
+                      };
+                    }
+                    """
+                )
+                self.assertGreaterEqual(
+                    histogram_mobile_filter_layout["headerTop"],
+                    max(
+                        histogram_mobile_filter_layout["filterBottom"],
+                        histogram_mobile_filter_layout["groupBottom"],
+                    ) + 4,
+                    histogram_mobile_filter_layout,
+                )
+                self.assertGreater(
+                    histogram_mobile_filter_layout["headerTop"],
+                    histogram_mobile_filter_layout["statsPanelTop"] + 18,
+                    histogram_mobile_filter_layout,
+                )
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.wait_for_function(
+                    """
+                    () => !window.matchMedia("(max-width: 900px)").matches
+                      && !document.querySelector("#histogramWrap")?.classList.contains("hidden")
+                    """,
+                    timeout=10_000,
+                )
 
                 with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_clear_filter_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):

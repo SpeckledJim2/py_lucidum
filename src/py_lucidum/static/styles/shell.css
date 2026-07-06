@@ -240,7 +240,7 @@
 
       .shell {
         display: grid;
-        grid-template-columns: var(--sidebar-width, 400px) 3px minmax(0, 1fr);
+        grid-template-columns: var(--sidebar-width, 400px) 1px minmax(0, 1fr);
         min-height: 0;
         min-width: 0;
       }
@@ -328,17 +328,35 @@
       }
 
       .sidebar-resizer {
-        background: linear-gradient(to right, var(--line), transparent);
+        background: transparent;
         cursor: col-resize;
-        min-width: 3px;
+        inline-size: 9px;
+        margin-inline: -4px;
+        min-width: 9px;
+        position: relative;
         touch-action: none;
         user-select: none;
         -webkit-user-select: none;
+        z-index: 2;
+      }
+
+      .sidebar-resizer::before {
+        background: var(--line);
+        content: "";
+        inset-block: 0;
+        inset-inline-start: 4px;
+        position: absolute;
+        width: 1px;
       }
 
       .sidebar-resizer:hover,
       .sidebar-resizer.dragging {
-        background: var(--accent);
+        background: transparent;
+      }
+
+      .sidebar-resizer:hover::before,
+      .sidebar-resizer.dragging::before {
+        background: var(--line);
       }
 
       main {
