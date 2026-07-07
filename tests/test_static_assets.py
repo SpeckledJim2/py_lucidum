@@ -6048,6 +6048,8 @@ if (continuousPolicy.axisOptions.minInterval !== undefined) throw new Error("con
         self.assertIn('legendBody.innerHTML = rows.join("");', js)
         self.assertIn('el("mapLegendToggle").addEventListener("click", toggleMapLegendCollapsed);', js)
         self.assertIn('button.setAttribute("aria-expanded", String(!collapsed));', js)
+        self.assertIn(".map-legend {\n        position: absolute;\n        left: 12px;\n        bottom: 12px;", css)
+        self.assertNotIn(".map-legend {\n        position: absolute;\n        right: 12px;", css)
         self.assertIn(".map-legend.collapsed .map-legend-body", css)
         self.assertIn('<span class="map-control-tile-text">Units</span>', html)
 

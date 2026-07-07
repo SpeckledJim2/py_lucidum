@@ -723,8 +723,8 @@
 
       .map-legend {
         position: absolute;
-        right: 12px;
-        bottom: 22px;
+        left: 12px;
+        bottom: 12px;
         z-index: 500;
         width: max-content;
         min-width: 0;
