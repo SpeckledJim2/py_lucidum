@@ -98,15 +98,24 @@ COPY (
 
 class BrowserSmokeTests(unittest.TestCase):
     def click_sidebar_favourite_action(self, page: Any, selector: str) -> None:
+        if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") != "true":
+            page.locator("#favouritesCollapseBtn").click()
+            page.wait_for_function(
+                '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                timeout=10_000,
+            )
         page.locator(".sidebar-favourites-header-row").hover()
         page.wait_for_function(
             """
             (selector) => {
               const button = document.querySelector(selector);
               const controls = button?.closest(".sidebar-favourites-controls");
+              const header = document.querySelector("#favouritesCollapseBtn");
               if (!controls) return false;
               const style = getComputedStyle(controls);
-              return style.opacity === "1" && style.pointerEvents !== "none";
+              return style.display !== "none"
+                && style.pointerEvents !== "none"
+                && getComputedStyle(button).color === getComputedStyle(header).color;
             }
             """,
             arg=selector,
@@ -5551,6 +5560,10 @@ COPY (
                     self.assertEqual(page.locator(selector).get_attribute("aria-expanded"), str(section == open_section).lower())
                 for section, selector in section_bodies.items():
                     self.assertEqual(page.locator(selector).is_visible(), section == open_section)
+                self.assertEqual(
+                    page.locator("#sidebarFavouritesControls").evaluate("node => getComputedStyle(node).display !== 'none'"),
+                    open_section == "favourites",
+                )
                 metrics_visible = page.evaluate(
                     """
                     () => {

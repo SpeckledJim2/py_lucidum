@@ -1718,16 +1718,6 @@
         padding: 16px 0;
       }
 
-      .gbm-model-list .gbm-empty-state {
-        align-items: center;
-        background: color-mix(in srgb, var(--muted) 6%, transparent);
-        border-bottom: 1px solid var(--line);
-        display: flex;
-        font-size: 10px;
-        min-height: 24px;
-        padding: 3px 6px;
-      }
-
       @media (max-width: 1180px) {
         .shell {
           grid-template-columns: var(--sidebar-width, 280px) 3px 1fr;
