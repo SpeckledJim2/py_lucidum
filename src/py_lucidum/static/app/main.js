@@ -1964,8 +1964,12 @@
         syncSidebarAccordion();
       }
 
+      function activeToolUsesSidebarMetrics() {
+        return ["line_bar", "histogram", "uk_map", "glm", "gbm"].includes(state.tool);
+      }
+
       function syncSidebarAccordion() {
-        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", state.openSidebarSection !== null);
+        document.querySelector(".sidebar-metric-section")?.classList.toggle("hidden", !activeToolUsesSidebarMetrics());
         Object.entries(SIDEBAR_ACCORDION_SECTIONS).forEach(([section, config]) => {
           const open = state.openSidebarSection === section;
           const panel = document.querySelector(config.sectionSelector);

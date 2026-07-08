@@ -584,7 +584,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         )
                         self.assertFalse(page.locator("#toolSelectorSection").is_visible())
                         self.assertEqual(page.locator("#toolSelectorSection .tool-option:not(.hidden)").count(), 0)
-                        self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                        self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                         self.assertEqual(page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded"), "true")
                         page.locator("#favouritesCollapseBtn").click()
                         page.wait_for_function(
@@ -593,15 +593,15 @@ class BrowserSmokeTests(unittest.TestCase):
                         )
                         self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                         sidebar_box = page.locator("#appSidebar").bounding_box()
-                        filter_box = page.locator(".sidebar-filter-section").bounding_box()
+                        favourites_box = page.locator(".sidebar-favourites-section").bounding_box()
                         metric_box = page.locator(".sidebar-metric-section").bounding_box()
                         self.assertIsNotNone(sidebar_box)
-                        self.assertIsNotNone(filter_box)
+                        self.assertIsNotNone(favourites_box)
                         self.assertIsNotNone(metric_box)
                         assert sidebar_box is not None
-                        assert filter_box is not None
+                        assert favourites_box is not None
                         assert metric_box is not None
-                        self.assertGreaterEqual(metric_box["y"], filter_box["y"] + filter_box["height"] - 1)
+                        self.assertLessEqual(metric_box["y"] + metric_box["height"], favourites_box["y"] + 1)
                         page.locator("#sidebarToggleBtn").click()
                         page.wait_for_function(
                             """
@@ -5551,7 +5551,14 @@ COPY (
                     self.assertEqual(page.locator(selector).get_attribute("aria-expanded"), str(section == open_section).lower())
                 for section, selector in section_bodies.items():
                     self.assertEqual(page.locator(selector).is_visible(), section == open_section)
-                metrics_visible = open_section is None
+                metrics_visible = page.evaluate(
+                    """
+                    () => {
+                      const tool = document.querySelector("#toolSelectorSection .tool-option.active")?.dataset.tool || "";
+                      return ["line_bar", "histogram", "uk_map", "glm", "gbm"].includes(tool);
+                    }
+                    """
+                )
                 page.locator(".sidebar-metric-section").wait_for(state="visible" if metrics_visible else "hidden", timeout=10_000)
                 self.assertEqual(page.locator(".sidebar-metric-section").is_visible(), metrics_visible)
                 self.assertEqual(page.locator("#actualNumerator").is_visible(), metrics_visible)
@@ -5560,13 +5567,30 @@ COPY (
                     metric_layout = page.evaluate(
                         """
                         () => {
-                          const filter = document.querySelector(".sidebar-filter-section").getBoundingClientRect();
+                          const favourites = document.querySelector(".sidebar-favourites-section").getBoundingClientRect();
                           const metric = document.querySelector(".sidebar-metric-section").getBoundingClientRect();
-                          return { filterBottom: filter.bottom, metricTop: metric.top };
+                          return { favouritesTop: favourites.top, metricBottom: metric.bottom };
                         }
                         """
                     )
-                    self.assertGreaterEqual(metric_layout["metricTop"], metric_layout["filterBottom"] - 1)
+                    self.assertLessEqual(metric_layout["metricBottom"], metric_layout["favouritesTop"] + 1)
+                icon_layout = page.evaluate(
+                    """
+                    (buttons) => {
+                      const icons = Object.values(buttons)
+                        .map((selector) => document.querySelector(`${selector} .filter-collapse-icon`))
+                        .filter(Boolean);
+                      const rects = icons.map((icon) => icon.getBoundingClientRect());
+                      return {
+                        count: rects.length,
+                        leftSpread: Math.max(...rects.map((rect) => Math.round(rect.left))) - Math.min(...rects.map((rect) => Math.round(rect.left))),
+                        allSameSize: rects.every((rect) => Math.round(rect.width) === 14 && Math.round(rect.height) === 14),
+                      };
+                    }
+                    """,
+                    arg=section_buttons,
+                )
+                self.assertEqual(icon_layout, {"count": 5, "leftSpread": 0, "allSameSize": True})
 
             def assert_sidebar_headers_visible() -> None:
                 for selector in section_buttons.values():
@@ -8413,9 +8437,9 @@ COPY (
                         '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
                         timeout=10_000,
                     )
-                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
-                self.assertTrue(page.locator("#actualNumerator").is_visible())
-                self.assertTrue(page.locator("#denominator").is_visible())
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertFalse(page.locator("#actualNumerator").is_visible())
+                self.assertFalse(page.locator("#denominator").is_visible())
                 self.assertTrue(page.locator("#visualArea").evaluate("node => node.classList.contains('specs-mode')"))
                 self.assertFalse(page.locator("#chartSideControls").is_visible())
                 self.assertFalse(page.locator("#chartControlsResizer").is_visible())
@@ -9410,9 +9434,9 @@ COPY (
                         '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
                         timeout=10_000,
                     )
-                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
-                self.assertTrue(page.locator("#actualNumerator").is_visible())
-                self.assertTrue(page.locator("#denominator").is_visible())
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertFalse(page.locator("#actualNumerator").is_visible())
+                self.assertFalse(page.locator("#denominator").is_visible())
                 self.assertTrue(page.locator("#datasetViewerFilter").is_visible())
                 page.wait_for_function(
                     """
@@ -13252,10 +13276,10 @@ COPY (
                 self.assertTrue(page.locator("#status").evaluate("node => node.classList.contains('hidden')"))
                 gbm_top_after_error = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
                 self.assertLessEqual(abs(gbm_top_before - gbm_top_after_error), 1)
-                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 self.assertTrue(page.locator(".sidebar-favourites-section").is_visible())
-                self.assertFalse(page.locator("#actualNumerator").is_visible())
-                self.assertFalse(page.locator("#denominator").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertTrue(page.locator(".sidebar-filter-section").is_visible())
                 self.assertFalse(page.locator("#modelToolGroupMeta").is_visible())
                 self.assertFalse(page.locator("#modelToolFilter").is_visible())
@@ -14748,24 +14772,29 @@ COPY (
 
                 page.locator("#profileTool").click()
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
-                page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
-                page.locator("#weightMetricTitle").get_by_text("3").wait_for(timeout=10_000)
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertIn("20.0%", page.locator("#actualMetricTitle").text_content())
+                self.assertIn("3", page.locator("#weightMetricTitle").text_content())
 
                 page.locator("#datasetViewerTool").click()
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
-                page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
-                page.locator("#weightMetricTitle").get_by_text("3").wait_for(timeout=10_000)
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertIn("20.0%", page.locator("#actualMetricTitle").text_content())
+                self.assertIn("3", page.locator("#weightMetricTitle").text_content())
 
                 page.locator("#specsTool").click()
                 page.locator("#specificationsWrap:not(.hidden)").wait_for(timeout=10_000)
-                page.locator("#actualMetricTitle").get_by_text("20.0%").wait_for(timeout=10_000)
-                page.locator("#weightMetricTitle").get_by_text("3").wait_for(timeout=10_000)
+                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertIn("20.0%", page.locator("#actualMetricTitle").text_content())
+                self.assertIn("3", page.locator("#weightMetricTitle").text_content())
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
 
                 self.assertEqual(page_errors, [])
             finally:

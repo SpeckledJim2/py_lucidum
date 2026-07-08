@@ -178,9 +178,8 @@
 
       .sidebar-metric-section {
         flex: 0 0 auto;
-        margin: 0 0 10px;
-        padding: 7px 0 9px;
-        border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+        margin: 0 -8px 10px;
+        padding: 0 8px 9px;
         border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
       }
 
@@ -243,14 +242,7 @@
         display: none;
       }
 
-      .filter-header {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        min-height: 22px;
-        min-width: 0;
-      }
-
+      .sidebar-section-header-row,
       .sidebar-favourites-header-row {
         display: flex;
         align-items: center;
@@ -259,7 +251,7 @@
         min-width: 0;
       }
 
-      .sidebar-favourites-header-row .favourites-header.sidebar-section-header {
+      .sidebar-section-header-row .sidebar-section-header {
         flex: 0 0 auto;
         width: auto;
       }
@@ -284,27 +276,25 @@
         color: var(--accent);
       }
 
-      .filter-collapse-button.sidebar-section-header {
-        flex: 1 1 auto;
-        width: auto;
-      }
-
-      .filter-header:hover .filter-collapse-button.sidebar-section-header {
+      .sidebar-section-header-row:hover .sidebar-section-header,
+      .sidebar-section-header-row:focus-within .sidebar-section-header,
+      .sidebar-favourites-header-row:hover .favourites-header.sidebar-section-header,
+      .sidebar-favourites-header-row:focus-within .favourites-header.sidebar-section-header {
         color: var(--accent);
       }
 
-      .sidebar-favourites-header-row:hover .favourites-header.sidebar-section-header,
-      .sidebar-favourites-header-row:focus-within .favourites-header.sidebar-section-header,
+      .sidebar-section-header-row:hover .favourites-selected-meta,
+      .sidebar-section-header-row:focus-within .favourites-selected-meta,
+      .sidebar-section-header-row:hover .kpi-selected-meta,
+      .sidebar-section-header-row:focus-within .kpi-selected-meta,
+      .sidebar-section-header-row:hover .gbm-model-selected-meta,
+      .sidebar-section-header-row:focus-within .gbm-model-selected-meta,
+      .sidebar-section-header-row:hover .glm-model-selected-meta,
+      .sidebar-section-header-row:focus-within .glm-model-selected-meta,
+      .sidebar-section-header-row:hover .filter-row-meta,
+      .sidebar-section-header-row:focus-within .filter-row-meta,
       .sidebar-favourites-header-row:hover .favourites-selected-meta,
       .sidebar-favourites-header-row:focus-within .favourites-selected-meta {
-        color: var(--accent);
-      }
-
-      .sidebar-section-header:hover .favourites-selected-meta,
-      .sidebar-section-header:hover .kpi-selected-meta,
-      .sidebar-section-header:hover .gbm-model-selected-meta,
-      .sidebar-section-header:hover .glm-model-selected-meta,
-      .filter-header:hover .filter-row-meta {
         color: var(--accent);
       }
 
