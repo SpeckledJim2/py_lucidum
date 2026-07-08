@@ -65,12 +65,13 @@
       const MODEL_RATIO_SOURCE_RE = /^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/;
       const GLM_PREDICTION_SOURCE_RE = /^glm:[A-Za-z0-9_.-]+:predictions$/;
       const GBM_PREDICTION_SOURCE_RE = /^gbm:[A-Za-z0-9_.-]+:predictions$/;
-      const FAVOURITE_SCOPES = new Set(["metrics", "metrics_filter", "line_bar_view", "map_view"]);
+      const FAVOURITE_SCOPES = new Set(["metrics", "metrics_filter", "line_bar_view", "histogram_view", "map_view"]);
       const DEFAULT_FAVOURITE_SCOPE = "line_bar_view";
       const FAVOURITE_SCOPE_LABELS = {
         metrics: "Metrics",
         metrics_filter: "Metrics + filter",
         line_bar_view: "Line/Bar view",
+        histogram_view: "Histogram view",
         map_view: "Map view",
       };
       const LINE_BAR_FAVOURITE_SCOPE_OPTIONS = [
@@ -80,6 +81,11 @@
       ];
       const MAP_FAVOURITE_SCOPE_OPTIONS = [
         ["map_view", FAVOURITE_SCOPE_LABELS.map_view],
+        ["metrics_filter", FAVOURITE_SCOPE_LABELS.metrics_filter],
+        ["metrics", FAVOURITE_SCOPE_LABELS.metrics],
+      ];
+      const HISTOGRAM_FAVOURITE_SCOPE_OPTIONS = [
+        ["histogram_view", FAVOURITE_SCOPE_LABELS.histogram_view],
         ["metrics_filter", FAVOURITE_SCOPE_LABELS.metrics_filter],
         ["metrics", FAVOURITE_SCOPE_LABELS.metrics],
       ];
@@ -396,6 +402,7 @@
         toolCache,
         getCss,
         refreshActiveTool,
+        clearActiveFavouriteSelection: () => clearActiveFavouriteSelectionForScope("histogram_view"),
       });
       const ukMapTool = createUkMapTool({
         api,
@@ -1176,16 +1183,24 @@
         return [];
       }
 
-      function syncMetricSummaryFromToolData(data) {
-        if (!data) return;
-        const summary = {
-          response_summaries: toolResponseSummaries(data),
+      function metricSummaryFromToolData(data) {
+        if (!data) return null;
+        const responseSummaries = toolResponseSummaries(data);
+        if (!responseSummaries.some((summary) => summary && Object.prototype.hasOwnProperty.call(summary, "value"))) return null;
+        return {
+          response_summaries: responseSummaries,
           denominator: data.denominator || {},
         };
+      }
+
+      function syncMetricSummaryFromToolData(data) {
+        const summary = metricSummaryFromToolData(data);
+        if (!summary) return false;
         const request = metricSummaryRequest();
         state.metricSummaryRequestKey = request ? stableRequestKey(request) : null;
         state.metricSummaryData = summary;
         renderMetricSummary(summary);
+        return true;
       }
 
       function syncFilterRowMetaFromToolData(data) {
@@ -1208,6 +1223,11 @@
       function syncSidebarSummariesFromToolData(data) {
         syncMetricSummaryFromToolData(data);
         syncFilterRowMetaFromToolData(data);
+      }
+
+      function refreshMetricSummaryForVisibleControls(options = {}) {
+        if (!activeToolUsesSidebarMetrics()) return Promise.resolve(null);
+        return refreshMetricSummary(options);
       }
 
       async function refreshMetricSummary(options = {}) {
@@ -1636,6 +1656,7 @@
         state.tool = tool;
         if (previousTool && previousTool !== tool) {
           if (previousTool === "line_bar") clearActiveFavouriteSelectionForScope("line_bar_view");
+          if (previousTool === "histogram") clearActiveFavouriteSelectionForScope("histogram_view");
           if (previousTool === "uk_map") clearActiveFavouriteSelectionForScope("map_view");
         }
         el("visualArea").classList.remove("startup-mode");
@@ -1753,7 +1774,10 @@
             el("profileWrap").classList.remove("hidden");
           }
         }
-        if (refresh && state.schema) refreshActiveTool();
+        if (refresh && state.schema) {
+          refreshMetricSummaryForVisibleControls();
+          refreshActiveTool();
+        }
       }
 
       let activeToolResizeFrame = null;
@@ -2589,8 +2613,9 @@
 
       function favouriteScopeIncludesChange(scope, change) {
         if (change === "metrics") return true;
-        if (change === "filter") return scope === "metrics_filter" || scope === "line_bar_view" || scope === "map_view";
+        if (change === "filter") return scope === "metrics_filter" || scope === "line_bar_view" || scope === "histogram_view" || scope === "map_view";
         if (change === "line_bar_view") return scope === "line_bar_view";
+        if (change === "histogram_view") return scope === "histogram_view";
         if (change === "map_view") return scope === "map_view";
         return false;
       }
@@ -2880,6 +2905,45 @@
         renderFavourites();
       }
 
+      async function applyHistogramFavouriteView(favourite) {
+        if (!toolEnabled("histogram")) {
+          throw new Error("Histogram is not enabled for this app.");
+        }
+        const validation = favourite?.validation || {};
+        if (Array.isArray(validation.errors) && validation.errors.length) {
+          throw new Error(validation.errors.join(" "));
+        }
+        const view = favourite?.view || {};
+        state.activeLineBarFavouriteId = favourite?.id || "";
+        state.source = resolveFavouriteSourceId("", view.source || "dataset") || "dataset";
+        fillMetricSelect(el("actualNumerator"));
+        fillDenominatorSelect(el("denominator"));
+        applyFavouriteMetricState(favourite);
+        applyFavouriteFilterState(view);
+        histogramTool.applyFavouriteState(view.histogram || {});
+        renderFavourites();
+        setTool("histogram", false);
+        beginFavouriteViewRestore();
+        const data = await refreshTool("histogram", { force: true });
+        syncFilterRowMetaFromToolData(data);
+        await refreshMetricSummaryForVisibleControls({ force: true });
+      }
+
+      function applyHistogramFavouriteStateOnly(favourite) {
+        if (!toolEnabled("histogram")) {
+          throw new Error("Histogram is not enabled for this app.");
+        }
+        const view = favourite?.view || {};
+        state.activeLineBarFavouriteId = favourite?.id || "";
+        state.source = resolveFavouriteSourceId("", view.source || "dataset") || "dataset";
+        fillMetricSelect(el("actualNumerator"));
+        fillDenominatorSelect(el("denominator"));
+        applyFavouriteMetricState(favourite);
+        applyFavouriteFilterState(view);
+        histogramTool.applyFavouriteState(view.histogram || {});
+        renderFavourites();
+      }
+
       async function refreshFavourites(options = {}) {
         try {
           const data = await api("/api/line-bar/favourites");
@@ -2911,6 +2975,8 @@
         try {
           if (scope === "map_view") {
             await applyMapFavouriteView(favourite);
+          } else if (scope === "histogram_view") {
+            await applyHistogramFavouriteView(favourite);
           } else if (scope === "line_bar_view") {
             if (toolEnabled("line_bar")) setTool("line_bar", false);
             await applyLineBarFavouriteView(favourite, options);
@@ -2961,6 +3027,7 @@
       function startupToolForFavourite(favourite, fallbackTool) {
         const scope = favouriteScope(favourite);
         if (scope === "line_bar_view" && toolEnabled("line_bar")) return "line_bar";
+        if (scope === "histogram_view" && toolEnabled("histogram")) return "histogram";
         if (scope === "map_view" && toolEnabled("uk_map")) return "uk_map";
         return fallbackTool;
       }
@@ -2995,6 +3062,8 @@
           const scope = favouriteScope(favourite);
           if (scope === "map_view") {
             applyMapFavouriteStateOnly(favourite);
+          } else if (scope === "histogram_view") {
+            applyHistogramFavouriteStateOnly(favourite);
           } else if (scope === "line_bar_view") {
             if (!toolEnabled("line_bar")) {
               throw new Error("Line/Bar is not enabled for this app.");
@@ -3177,15 +3246,17 @@
       }
 
       function toolSupportsFavouriteAdd(tool = state.tool) {
-        return tool === "line_bar" || tool === "uk_map";
+        return tool === "line_bar" || tool === "histogram" || tool === "uk_map";
       }
 
       function defaultFavouriteAddScope() {
+        if (state.tool === "histogram") return "histogram_view";
         return state.tool === "uk_map" ? "map_view" : DEFAULT_FAVOURITE_SCOPE;
       }
 
       function favouriteScopeOptionsForAdd() {
         if (defaultFavouriteAddScope() === "map_view") return MAP_FAVOURITE_SCOPE_OPTIONS;
+        if (defaultFavouriteAddScope() === "histogram_view") return HISTOGRAM_FAVOURITE_SCOPE_OPTIONS;
         return LINE_BAR_FAVOURITE_SCOPE_OPTIONS.map(([scope, label]) => (
           scope === "line_bar_view" ? [scope, lineBarCurrentViewScopeLabel()] : [scope, label]
         ));
@@ -3281,7 +3352,7 @@
             const scope = selectedFavouriteAddScope();
             const name = input?.value.trim() || "";
             if (!name) return;
-            const view = captureLineBarFavouriteView({ scope });
+            const view = captureFavouriteView({ scope });
             const data = await api("/api/line-bar/favourites", { method: "POST", body: JSON.stringify({ name, view }) });
             state.activeLineBarFavouriteId = data?.favourite?.id || "";
             await refreshFavourites();
@@ -3625,13 +3696,49 @@
           : null;
       }
 
-      function captureLineBarFavouriteView(options = {}) {
+      function normaliseFavouriteScopeValue(rawScope) {
+        const requestedScope = String(rawScope || DEFAULT_FAVOURITE_SCOPE);
+        return FAVOURITE_SCOPES.has(requestedScope) ? requestedScope : DEFAULT_FAVOURITE_SCOPE;
+      }
+
+      function captureMetricFilterFavouriteView(scope) {
         const actualOption = el("actualNumerator").selectedOptions[0];
-        const requestedScope = String(options.scope || DEFAULT_FAVOURITE_SCOPE);
-        const scope = FAVOURITE_SCOPES.has(requestedScope) ? requestedScope : DEFAULT_FAVOURITE_SCOPE;
-        const view = {
+        return {
           version: 1,
           scope,
+          source: state.source || "dataset",
+          actual: {
+            value: el("actualNumerator").value,
+            sourceId: actualOption?.dataset.sourceId || state.source || "dataset",
+            metricKind: actualOption?.dataset.metricKind || "metric",
+          },
+          denominator: el("denominator").value || "__none__",
+          kpi: currentKpiSnapshot(),
+          filter: state.activeFilter || "",
+          filterSelectionMode: state.filterSelectionMode,
+          filterOperator: state.filterOperator,
+          savedFilterRows: selectedSavedFilterRows(),
+        };
+      }
+
+      function captureHistogramFavouriteView(options = {}) {
+        const scope = normaliseFavouriteScopeValue(options.scope || "histogram_view");
+        return {
+          ...captureMetricFilterFavouriteView(scope),
+          histogram: histogramTool.captureFavouriteState(),
+        };
+      }
+
+      function captureFavouriteView(options = {}) {
+        const scope = normaliseFavouriteScopeValue(options.scope);
+        if (scope === "histogram_view") return captureHistogramFavouriteView({ scope });
+        return captureLineBarFavouriteView({ scope });
+      }
+
+      function captureLineBarFavouriteView(options = {}) {
+        const scope = normaliseFavouriteScopeValue(options.scope);
+        const view = {
+          ...captureMetricFilterFavouriteView(scope),
           source: state.source || "dataset",
           x: state.x || "",
           xSource: state.xSource || "",
@@ -3647,18 +3754,7 @@
           partialDependence: state.partialDependence,
           featureSort: state.featureSort,
           expectedSort: state.expectedSort,
-          actual: {
-            value: el("actualNumerator").value,
-            sourceId: actualOption?.dataset.sourceId || state.source || "dataset",
-            metricKind: actualOption?.dataset.metricKind || "metric",
-          },
-          denominator: el("denominator").value || "__none__",
           expectedSelections: expectedSelectionsSnapshot(),
-          kpi: currentKpiSnapshot(),
-          filter: state.activeFilter || "",
-          filterSelectionMode: state.filterSelectionMode,
-          filterOperator: state.filterOperator,
-          savedFilterRows: selectedSavedFilterRows(),
         };
         if (scope === "map_view") {
           view.map = ukMapTool.captureFavouriteState();

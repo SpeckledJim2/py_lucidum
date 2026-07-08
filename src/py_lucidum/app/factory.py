@@ -485,6 +485,10 @@ def create_app(
 
     context = AppContext(dataset=dataset, check_token=check_token)
     register_tools(app, context, enabled_tools)
+    if "line_bar" not in enabled_tools and any(tool_id in enabled_tools for tool_id in ("histogram", "uk_map")):
+        from py_lucidum.tools.line_bar.routes import register_favourite_routes
+
+        register_favourite_routes(app, context)
     if "line_bar" in enabled_tools:
         from py_lucidum.tools.line_bar.model_ratio import register_model_ratio_source_provider
 

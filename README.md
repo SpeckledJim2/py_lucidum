@@ -12,7 +12,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
   ![lucidum line and bar tool](docs/assets/line_and_bar.png)
 
-- **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution with configurable bins, integer-aware bins for discrete numeric Actuals, sampled 100k previews or exact all-row mode, cumulative/probability modes, log axes, mean/median reference lines, and a compact metrics table.
+- **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution with configurable bins, integer-aware bins for discrete numeric Actuals, sampled 100k previews or exact all-row mode, cumulative/probability modes, log axes, mean/median reference lines, saved Histogram view favourites, and a compact metrics table.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, including optional sector neighbour smoothing, or postcode units when unit and coordinate columns are available.
 
   ![UK Postcode Area mapping tool](docs/assets/postcode_area.png)
@@ -23,7 +23,7 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
 - **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables with XLSX export, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, SHAP plotting when SHAP rows are saved during training, and XLSX export for saved tabulations.
-- **Filters, Favourites, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, sidebar Favourites for saved metric/filter/Line/Bar/Map views, separate KPI metric presets, and GBM feature scenarios/interaction constraints.
+- **Filters, Favourites, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, sidebar Favourites for saved metric/filter/Line/Bar/Histogram/Map views, separate KPI metric presets, and GBM feature scenarios/interaction constraints.
 - **Specifications**: default editor tab for feature, KPI, and filter specification CSV files, with continuous validation and save actions against the app's current metadata contracts.
 
 Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skipped by the shared schema used by normal selectors. Column Profile reports them as skipped, and the GBM feature chooser shows them as disabled invalid rows.
@@ -155,7 +155,7 @@ By default, saved Favourites are saved beside those workspaces but one level abo
 
 They persist across replacements of the dataset at the same path. For server deployments, `--line-bar-favourites path/to/favourites.json` overrides that default and makes Lucidum read and write exactly that JSON file instead; the parent folder is created on first save if needed. If the configured JSON is malformed, favourites are reported as unavailable and Lucidum does not overwrite the bad file during that request.
 
-The sidebar FAVOURITES accordion shows only user-saved favourites. New saved favourites choose a restore scope: Metrics, Metrics + filter, Line/Bar view, or Map view when UK Mapping is active. Older favourites without a scope are treated as Line/Bar view favourites. When a saved view references a column, data source, filter expression, KPI row, or saved FILTER row that is no longer valid, Lucidum validates the view against the current dataset before restoring it and reports the stale fields in the browser. Map view favourites restore UK map level, base map, palette, sliders, and camera where possible, falling back safely for stale map presentation values.
+The sidebar FAVOURITES accordion shows only user-saved favourites. New saved favourites choose a restore scope: Metrics, Metrics + filter, Line/Bar view, Histogram view, or Map view when UK Mapping is active. Older favourites without a scope are treated as Line/Bar view favourites. When a saved view references a column, data source, filter expression, KPI row, or saved FILTER row that is no longer valid, Lucidum validates the view against the current dataset before restoring it and reports the stale fields in the browser. Histogram view favourites restore bins, distribution, y-axis type, log scale, sample mode, metrics, and filter state. Map view favourites restore UK map level, base map, palette, sliders, and camera where possible, falling back safely for stale map presentation values.
 
 On startup, when saved favourites exist and no `--line-bar-favourite` or `line_bar_favourite` URL/default value is supplied, Lucidum opens the first favourite in the saved order. The favourite is applied before the initial chart or map request, so startup opens directly in the saved state.
 

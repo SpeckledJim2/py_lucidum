@@ -32,6 +32,7 @@ export function createHistogramTool({
   toolCache,
   getCss,
   refreshActiveTool,
+  clearActiveFavouriteSelection = () => {},
 }) {
   const chart = echartsImpl.init(el("histogramChart"));
   let statsTable = null;
@@ -49,6 +50,50 @@ export function createHistogramTool({
   function histogramBinsValue() {
     const raw = String(el("histogramBins")?.value || "").trim();
     return raw || "auto";
+  }
+
+  function normaliseHistogramBinsValue(value) {
+    const raw = String(value ?? "auto").trim();
+    return raw || "auto";
+  }
+
+  function normaliseHistogramControlValue(value, allowed, fallback) {
+    const raw = String(value || fallback).trim();
+    return allowed.includes(raw) ? raw : fallback;
+  }
+
+  function captureFavouriteState() {
+    return {
+      bins: histogramBinsValue(),
+      distribution: state.histogramDistribution || "incremental",
+      yAxis: state.histogramYAxis || "sum",
+      logScale: state.histogramLogScale || "none",
+      sampleMode: state.histogramSampleMode || "100k",
+    };
+  }
+
+  function applyFavouriteState(payload = {}) {
+    if (histogramBinsRefreshTimer) {
+      window.clearTimeout(histogramBinsRefreshTimer);
+      histogramBinsRefreshTimer = null;
+    }
+    el("histogramBins").value = normaliseHistogramBinsValue(payload.bins);
+    setSegmentedValue(
+      "histogramDistribution",
+      normaliseHistogramControlValue(payload.distribution, ["incremental", "cumulative"], "incremental"),
+    );
+    setSegmentedValue(
+      "histogramYAxis",
+      normaliseHistogramControlValue(payload.yAxis, ["sum", "probability"], "sum"),
+    );
+    setSegmentedValue(
+      "histogramLogScale",
+      normaliseHistogramControlValue(payload.logScale, ["none", "x", "y", "both"], "none"),
+    );
+    setSegmentedValue(
+      "histogramSampleMode",
+      normaliseHistogramControlValue(payload.sampleMode, ["100k", "all"], "100k"),
+    );
   }
 
   function buildHistogramRequest() {
@@ -471,11 +516,16 @@ export function createHistogramTool({
       if (!group) return;
       group.addEventListener("click", (event) => {
         if (event.target.tagName !== "BUTTON") return;
+        const previousValue = state[control];
         setSegmentedValue(control, event.target.dataset.value);
+        if (state[control] !== previousValue) clearActiveFavouriteSelection();
         refreshHistogram();
       });
     });
-    el("histogramBins").addEventListener("input", () => scheduleHistogramBinsRefresh());
+    el("histogramBins").addEventListener("input", () => {
+      clearActiveFavouriteSelection();
+      scheduleHistogramBinsRefresh();
+    });
     el("histogramBins").addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       event.preventDefault();
@@ -532,5 +582,7 @@ export function createHistogramTool({
     activate,
     resize,
     refreshTheme,
+    captureFavouriteState,
+    applyFavouriteState,
   };
 }

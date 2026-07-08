@@ -3585,6 +3585,142 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_histogram_favourites_save_and_restore_histogram_view(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            data_path.write_text(
+                "vehicle_age,segment,price,value\n"
+                "1,A,100,10\n"
+                "2,A,200,20\n"
+                "3,B,300,30\n"
+                "4,B,400,40\n",
+                encoding="utf-8",
+            )
+            filters_path = root / "filter_spec.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "SEG,B segment,segment = 'B'\n",
+                encoding="utf-8",
+            )
+            favourites_path = root / "config" / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path,
+                filters_path=filters_path,
+                use_saved_filters=True,
+                line_bar_favourites_path=favourites_path,
+                defaults={"actual": "price", "denominator": "value"},
+                tools=["histogram", "line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.wait_for_function(
+                        """() => document.querySelector("#histogramTool")?.classList.contains("active")
+                          && (document.querySelector("#histogramGroupMeta")?.textContent || "").includes("bins")""",
+                        timeout=10_000,
+                    )
+
+                    if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#favouritesCollapseBtn").click()
+                    page.locator("#filterCollapseBtn").click()
+                    segment_heading = page.locator('.saved-filter-theme[data-filter-theme="SEG"]')
+                    if segment_heading.get_attribute("aria-expanded") == "false":
+                        segment_heading.click()
+                    page.locator('.saved-filter-option[data-filter-theme="SEG"]').click()
+                    page.wait_for_function("""() => document.querySelector("#filterInput")?.value === "segment = 'B'" """, timeout=10_000)
+
+                    page.locator("#histogramBins").fill("3")
+                    page.locator('.segmented[data-control="histogramDistribution"] button[data-value="cumulative"]').click()
+                    page.locator('.segmented[data-control="histogramYAxis"] button[data-value="probability"]').click()
+                    page.locator('.segmented[data-control="histogramLogScale"] button[data-value="y"]').click()
+                    page.locator('.segmented[data-control="histogramSampleMode"] button[data-value="all"]').click()
+
+                    self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                    page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """() => document.querySelector('input[name="sidebarFavouriteScope"][value="histogram_view"]')?.checked
+                          && [...document.querySelectorAll(".sidebar-favourite-scope-option span")]
+                            .map((node) => node.textContent.trim()).join("|") === "Histogram view|Metrics + filter|Metrics" """,
+                        timeout=10_000,
+                    )
+                    page.locator("#sidebarFavouriteNameInput").fill("Histogram view")
+                    page.locator('[data-favourite-action="save-add"]').click()
+                    page.wait_for_function(
+                        """() => [...document.querySelectorAll(".saved-favourite-option")]
+                          .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Histogram view"
+                            && button.querySelector(".favourite-detail")?.textContent.trim() === "Histogram view"
+                            && button.classList.contains("active")) """,
+                        timeout=10_000,
+                    )
+                    self.assertTrue(favourites_path.exists())
+                    saved_payload = json.loads(favourites_path.read_text(encoding="utf-8"))
+                    saved_view = saved_payload["favourites"][0]["view"]
+                    self.assertEqual(saved_view["scope"], "histogram_view")
+                    self.assertEqual(saved_view["filter"], "segment = 'B'")
+                    self.assertEqual(
+                        saved_view["histogram"],
+                        {
+                            "bins": "3",
+                            "distribution": "cumulative",
+                            "yAxis": "probability",
+                            "logScale": "y",
+                            "sampleMode": "all",
+                        },
+                    )
+
+                    page.locator("#filterRowClearBtn").click()
+                    page.locator("#histogramBins").fill("8")
+                    page.locator('.segmented[data-control="histogramDistribution"] button[data-value="incremental"]').click()
+                    page.locator('.segmented[data-control="histogramYAxis"] button[data-value="sum"]').click()
+                    page.locator('.segmented[data-control="histogramLogScale"] button[data-value="none"]').click()
+                    page.locator('.segmented[data-control="histogramSampleMode"] button[data-value="100k"]').click()
+                    page.wait_for_function("""() => !document.querySelector(".saved-favourite-option.active")""", timeout=10_000)
+
+                    page.locator(".saved-favourite-option").filter(has_text="Histogram view").click()
+                    page.wait_for_function(
+                        """() => document.querySelector("#histogramTool")?.classList.contains("active")
+                          && document.querySelector("#histogramBins")?.value === "3"
+                          && document.querySelector('.segmented[data-control="histogramDistribution"] button[data-value="cumulative"]')?.classList.contains("active")
+                          && document.querySelector('.segmented[data-control="histogramYAxis"] button[data-value="probability"]')?.classList.contains("active")
+                          && document.querySelector('.segmented[data-control="histogramLogScale"] button[data-value="y"]')?.classList.contains("active")
+                          && document.querySelector('.segmented[data-control="histogramSampleMode"] button[data-value="all"]')?.classList.contains("active")
+                          && document.querySelector("#filterInput")?.value === "segment = 'B'"
+                          && document.querySelector("#actualMetricTitle .metric-value")?.textContent.trim()
+                          && document.querySelector("#weightMetricTitle .metric-value")?.textContent.trim()
+                          && document.querySelector(".saved-favourite-option.active .saved-filter-name")?.textContent.trim() === "Histogram view" """,
+                        timeout=10_000,
+                    )
+                    restored_metric_titles = page.evaluate(
+                        """() => ({
+                          actual: document.querySelector("#actualMetricTitle .metric-value")?.textContent.trim() || "",
+                          weight: document.querySelector("#weightMetricTitle .metric-value")?.textContent.trim() || "",
+                        })"""
+                    )
+                    self.assertTrue(restored_metric_titles["actual"])
+                    self.assertTrue(restored_metric_titles["weight"])
+                    page.locator("#lineBarTool").click()
+                    page.wait_for_function(
+                        """(expected) => document.querySelector("#lineBarTool")?.classList.contains("active")
+                          && document.querySelector("#actualMetricTitle .metric-value")?.textContent.trim() === expected.actual
+                          && document.querySelector("#weightMetricTitle .metric-value")?.textContent.trim() === expected.weight """,
+                        arg=restored_metric_titles,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_favourites_startup_does_not_show_empty_state_while_loading(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

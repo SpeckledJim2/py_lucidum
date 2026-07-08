@@ -93,6 +93,49 @@ class HistogramToolTests(unittest.TestCase):
         self.assertIsInstance(payload["timings"]["duckdb_ns"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
 
+    def test_histogram_only_app_registers_favourites_api(self) -> None:
+        favourites_path = Path(self.tmp.name) / "favourites.json"
+        app = create_app(self.data_path, token="", tools=["histogram"], line_bar_favourites_path=favourites_path)
+        paths = {route.path for route in app.routes}
+
+        self.assertEqual(app.state.enabled_tools, ["histogram"])
+        self.assertIn("/api/histogram/chart", paths)
+        self.assertIn("/api/line-bar/favourites", paths)
+        self.assertIn("/api/line-bar/favourites/{favourite_id}", paths)
+        self.assertIn("/api/line-bar/favourites/order", paths)
+
+        favourite_view = {
+            "version": 1,
+            "scope": "histogram_view",
+            "source": "dataset",
+            "actual": {"value": "Actual", "sourceId": "dataset", "metricKind": "metric"},
+            "denominator": "Weight",
+            "filter": "Segment = 'A'",
+            "filterSelectionMode": "grouped",
+            "filterOperator": "and",
+            "savedFilterRows": [],
+            "histogram": {
+                "bins": "3",
+                "distribution": "cumulative",
+                "yAxis": "probability",
+                "logScale": "y",
+                "sampleMode": "all",
+            },
+        }
+        status, _, body = asgi_post_json(
+            app,
+            "/api/line-bar/favourites",
+            {"name": "Histogram view", "view": favourite_view},
+        )
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["favourite"]["name"], "Histogram view")
+        self.assertEqual(payload["favourite"]["view"]["scope"], "histogram_view")
+        self.assertTrue(payload["favourite"]["validation"]["valid"])
+        self.assertEqual(payload["favourite"]["view"]["histogram"]["bins"], "3")
+        self.assertTrue(favourites_path.exists())
+
     def test_unweighted_actual_histogram_uses_row_count_volume(self) -> None:
         result = histogram(Dataset(self.data_path), self.request(denominator="Average row value"))
 

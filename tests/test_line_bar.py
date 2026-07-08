@@ -698,6 +698,33 @@ COPY (
         self.assertEqual(metric_only["view"]["scope"], "metrics")
         self.assertTrue(metric_only["validation"]["valid"])
 
+        histogram_view = store.create_favourite(
+            "Histogram view",
+            self.favourite_view(
+                scope="histogram_view",
+                x="",
+                xSource="",
+                expectedSelections=[],
+                histogram={
+                    "bins": "12",
+                    "distribution": "cumulative",
+                    "yAxis": "probability",
+                    "logScale": "y",
+                    "sampleMode": "all",
+                },
+            ),
+        )
+        self.assertEqual(histogram_view["view"]["scope"], "histogram_view")
+        self.assertTrue(histogram_view["validation"]["valid"])
+        self.assertEqual(histogram_view["view"]["histogram"]["distribution"], "cumulative")
+
+        with self.assertRaises(ValueError) as context:
+            store.create_favourite(
+                "Broken histogram filter",
+                self.favourite_view(scope="histogram_view", x="", xSource="", expectedSelections=[], filter="not valid sql"),
+            )
+        self.assertIn("Favourite filter is invalid", str(context.exception))
+
         map_view = store.create_favourite(
             "Map view",
             self.favourite_view(

@@ -16,7 +16,7 @@ from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 FAVOURITES_VERSION = 1
 FAVOURITES_FILENAME = "favourites.json"
 FAVOURITE_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
-FAVOURITE_SCOPES = {"metrics", "metrics_filter", "line_bar_view", "map_view"}
+FAVOURITE_SCOPES = {"metrics", "metrics_filter", "line_bar_view", "histogram_view", "map_view"}
 DEFAULT_FAVOURITE_SCOPE = "line_bar_view"
 GLM_PREDICTION_COLUMNS = {"glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"}
 GBM_PREDICTION_COLUMNS = {"gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction"}
@@ -210,7 +210,7 @@ class LineBarFavouriteStore:
                         continue
                     expected_source = self.validate_favourite_source(selection.get("sourceId") or source, selection.get("value"), errors, label=f"Expected {index} source")
                     self.validate_column(expected_source, selection.get("value"), errors, label=f"Expected {index}", numeric=True)
-        if scope in {"metrics_filter", "line_bar_view", "map_view"}:
+        if scope in {"metrics_filter", "line_bar_view", "histogram_view", "map_view"}:
             filter_sql = str(view.get("filter") or "").strip()
             if filter_sql and source:
                 try:
