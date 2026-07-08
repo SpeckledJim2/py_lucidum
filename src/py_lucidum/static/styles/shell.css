@@ -283,7 +283,6 @@
       }
 
       .sidebar-control-pane {
-        border-left: 1px solid var(--line);
         display: flex;
         flex-direction: column;
         grid-column: 2;
@@ -294,7 +293,6 @@
       }
 
       body.single-tool-mode .sidebar-control-pane {
-        border-left: 0;
         grid-column: 1;
         padding: 8px;
       }

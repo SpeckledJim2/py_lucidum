@@ -577,6 +577,7 @@
 
       .tool-selector-section {
         align-items: center;
+        border-right: 1px solid var(--line);
         display: flex;
         flex-direction: column;
         grid-column: 1;

@@ -10799,7 +10799,7 @@ COPY (
                       const sidebarResizerRect = sidebarResizer.getBoundingClientRect();
                       const sidebarResizerStyle = getComputedStyle(sidebarResizer);
                       const sidebarResizerLineStyle = getComputedStyle(sidebarResizer, "::before");
-                      const paneStyle = getComputedStyle(pane);
+                      const railStyle = getComputedStyle(rail);
                       const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
                       const sidebarBackground = getComputedStyle(sidebar).backgroundColor;
@@ -10816,9 +10816,10 @@ COPY (
                         railAtSidebarLeft: Math.round(railRect.left) === Math.round(sidebarRect.left),
                         paneRightOfRail: Math.round(paneRect.left) >= Math.round(railRect.right),
                         sidebarResizerFillTransparent: sidebarResizerStyle.backgroundColor === "rgba(0, 0, 0, 0)",
+                        siderailLineWidth: Math.round(parseFloat(railStyle.borderRightWidth)),
                         sidebarResizerLineWidth: Math.round(parseFloat(sidebarResizerLineStyle.width)),
-                        sidebarResizerMatchesSiderailLine: sidebarResizerLineStyle.backgroundColor === paneStyle.borderLeftColor
-                          && Math.round(parseFloat(sidebarResizerLineStyle.width)) === Math.round(parseFloat(paneStyle.borderLeftWidth)),
+                        sidebarResizerMatchesSiderailLine: sidebarResizerLineStyle.backgroundColor === railStyle.borderRightColor
+                          && Math.round(parseFloat(sidebarResizerLineStyle.width)) === Math.round(parseFloat(railStyle.borderRightWidth)),
                         sidebarResizerWidth: Math.round(sidebarResizerRect.width),
                         labelsHidden: buttons.every((button) => {
                           const label = button.querySelector(".tool-label");
@@ -10844,6 +10845,7 @@ COPY (
                         "railAtSidebarLeft": True,
                         "paneRightOfRail": True,
                         "sidebarResizerFillTransparent": True,
+                        "siderailLineWidth": 1,
                         "sidebarResizerLineWidth": 1,
                         "sidebarResizerMatchesSiderailLine": True,
                         "sidebarResizerWidth": 9,
