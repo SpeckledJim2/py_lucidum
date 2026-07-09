@@ -135,7 +135,7 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
                 smoothing = smoothing_metadata(0, smoothing_level, len(rows))
                 smoothing_warning = None
-        warnings = denominator_warnings(denominator, denominator_summary)
+        warnings = denominator_warnings(denominator, denominator_summary, [response])
         if smoothing_warning:
             warnings.append(smoothing_warning)
         plotted_count = int(point_summary["plotted_count"]) if point_summary else len(rows)

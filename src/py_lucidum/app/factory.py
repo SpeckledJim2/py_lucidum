@@ -364,7 +364,7 @@ def create_app(
             "row_count": row_count,
             "filtered_row_count": filtered_row_count,
             "filter": filter_sql,
-            "warnings": denominator_warnings(denominator, denominator_summary),
+            "warnings": denominator_warnings(denominator, denominator_summary, responses),
             "timings": {
                 "duckdb_ns": elapsed_ns,
                 "duckdb_ms": round(elapsed_ns / 1_000_000),

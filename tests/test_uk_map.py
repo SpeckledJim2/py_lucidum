@@ -202,7 +202,7 @@ class UkMapToolTests(unittest.TestCase):
             [(row["key"], row["value"], row["denominator"]) for row in result["rows"]],
             [("AL1 1", 10, 30), ("AL1 2", None, 0)],
         )
-        self.assertIn("1 row excluded from Weight because Weight was missing.", result["warnings"])
+        self.assertIn("1 row excluded due to missing Weight", result["warnings"])
 
     def test_sector_summary_accepts_smoothing_level(self) -> None:
         dataset = Dataset(self.data_path)
@@ -527,7 +527,7 @@ class UkMapToolTests(unittest.TestCase):
             [(row["key"], row["value"], row["denominator"], row["latitude"], row["longitude"]) for row in result["rows"]],
             [("AL1 1AA", 10, 30, 51.7, -0.4)],
         )
-        self.assertIn("1 row excluded from Weight because Weight was missing.", result["warnings"])
+        self.assertIn("1 row excluded due to missing Weight", result["warnings"])
 
     def test_custom_unit_point_column_defaults(self) -> None:
         dataset = Dataset(self.data_path)

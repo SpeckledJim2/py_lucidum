@@ -7,6 +7,7 @@ from .kpis import load_kpis, resolve_kpis_path
 from .metrics import (
     build_denominator_summary_sql,
     build_response_summary_sql,
+    denominator_exclusion_warnings,
     denominator_valid_condition,
     denominator_value_sql,
     denominator_warnings,
@@ -30,6 +31,7 @@ __all__ = [
     "dataset_slug",
     "dataset_workspace_metadata",
     "dataset_workspace_root",
+    "denominator_exclusion_warnings",
     "denominator_valid_condition",
     "denominator_value_sql",
     "denominator_warnings",

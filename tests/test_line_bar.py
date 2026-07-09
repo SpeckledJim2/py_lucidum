@@ -1168,6 +1168,87 @@ COPY (
         self.assertEqual(payload["summary"]["volume"], 2)
         self.assertEqual(payload["table"]["match_count"], 1)
 
+    def test_line_bar_weighted_table_returns_row_count_separately_from_volume(self) -> None:
+        data_path = self.root / "weighted_table_counts.csv"
+        data_path.write_text(
+            "Category,Actual,Weight\n"
+            "A,10,2\n"
+            "A,,3\n"
+            "A,30,\n"
+            "B,40,5\n"
+            "C,50,1\n"
+            "D,60,11\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        request = {
+            "x": "Category",
+            "bandWidth": "0",
+            "dateBucket": "none",
+            "lowGroup": "0",
+            "sort": "alpha",
+            "sigma": 0,
+            "transform": "none",
+            "filter": "Category != 'D'",
+            "denominator": "Weight",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "tableSearch": "",
+            "tablePage": 1,
+            "tablePageSize": 10000,
+        }
+
+        payload = table(dataset, request)
+
+        by_x = {row["x"]: row for row in payload["rows"]}
+        self.assertEqual([row["x"] for row in payload["rows"]], ["A", "B", "C"])
+        self.assertEqual(by_x["A"]["row_count"], 3)
+        self.assertEqual(by_x["A"]["volume"], 2)
+        self.assertEqual(by_x["B"]["row_count"], 1)
+        self.assertEqual(by_x["B"]["volume"], 5)
+        self.assertEqual(payload["summary"]["row_count"], 5)
+        self.assertEqual(payload["summary"]["volume"], 8)
+
+    def test_line_bar_weighted_table_row_count_survives_low_weight_grouping(self) -> None:
+        data_path = self.root / "weighted_table_grouped_counts.csv"
+        data_path.write_text(
+            "Category,Actual,Weight\n"
+            "A,10,2\n"
+            "A,,3\n"
+            "A,30,\n"
+            "B,40,5\n"
+            "C,50,1\n"
+            "D,60,11\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        request = {
+            "x": "Category",
+            "bandWidth": "0",
+            "dateBucket": "none",
+            "lowGroup": "3",
+            "sort": "alpha",
+            "sigma": 0,
+            "transform": "none",
+            "filter": "Category != 'D'",
+            "denominator": "Weight",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "tableSearch": "",
+            "tablePage": 1,
+            "tablePageSize": 10000,
+        }
+
+        payload = table(dataset, request)
+
+        by_x = {row["x"]: row for row in payload["rows"]}
+        self.assertEqual([row["x"] for row in payload["rows"]], ["B", "Other"])
+        self.assertEqual(by_x["B"]["row_count"], 1)
+        self.assertEqual(by_x["B"]["volume"], 5)
+        self.assertEqual(by_x["Other"]["row_count"], 4)
+        self.assertEqual(by_x["Other"]["volume"], 3)
+        self.assertTrue(by_x["Other"]["is_tail"])
+        self.assertEqual(payload["summary"]["row_count"], 5)
+        self.assertEqual(payload["summary"]["volume"], 8)
+
     def test_schema_exposes_feature_bases_from_feature_spec(self) -> None:
         self.features_path.write_text(
             "Feature,Grouping,Base,scenario1\n"
@@ -2993,14 +3074,37 @@ COPY (
 
         self.assertEqual(result["denominator"]["value"], 2)
         self.assertEqual(result["denominator"]["missing_response_rows"], 1)
-        self.assertIn(
-            "1 row excluded from Weight because one or more selected response values were missing.",
-            result["warnings"],
-        )
+        self.assertIn("1 row excluded due to missing Actual", result["warnings"])
+        self.assertEqual(result["exclusion_warnings"], ["1 row excluded due to missing Actual"])
+        table_result = table(dataset, {**request, "tablePage": 1, "tablePageSize": 10000})
+        self.assertEqual(table_result["exclusion_warnings"], ["1 row excluded due to missing Actual"])
         social = next(row for row in result["rows"] if row["x"] == "Social")
         self.assertEqual(social["volume"], 1)
         self.assertEqual(social["resp0"], 100)
         self.assertEqual(social["resp1"], 90)
+
+    def test_missing_response_exclusions_report_each_selected_column(self) -> None:
+        self.data_path.write_text(
+            "UseofVan,Actual,Expected\n"
+            "Social,,90\n"
+            "Social,100,\n"
+            "Business,,\n"
+            "Business,200,210\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        request = self.request()
+        request["x"] = "UseofVan"
+
+        result = chart(dataset, request)
+
+        self.assertEqual(result["denominator"]["missing_response_rows"], 3)
+        self.assertEqual(result["exclusion_warnings"], [
+            "2 rows excluded due to missing Actual",
+            "2 rows excluded due to missing Expected",
+        ])
+        self.assertIn("2 rows excluded due to missing Actual", result["warnings"])
+        self.assertIn("2 rows excluded due to missing Expected", result["warnings"])
 
     def test_weight_column_reports_missing_zero_and_negative_values(self) -> None:
         self.data_path.write_text(
@@ -3022,7 +3126,8 @@ COPY (
         self.assertEqual(result["denominator"]["missing_weight_rows"], 1)
         self.assertEqual(result["denominator"]["zero_weight_rows"], 1)
         self.assertEqual(result["denominator"]["negative_weight_rows"], 1)
-        self.assertIn("1 row excluded from Weight because Weight was missing.", result["warnings"])
+        self.assertIn("1 row excluded due to missing Weight", result["warnings"])
+        self.assertEqual(result["exclusion_warnings"], ["1 row excluded due to missing Weight"])
         self.assertIn("1 row has zero Weight.", result["warnings"])
         self.assertIn("1 row has negative Weight.", result["warnings"])
 

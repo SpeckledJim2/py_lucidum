@@ -1091,6 +1091,21 @@ export function createLineBarTool({
     tableRequestSeq += 1;
   }
 
+  function lineBarExclusionWarnings(data) {
+    return Array.isArray(data?.exclusion_warnings) ? data.exclusion_warnings.filter(Boolean) : [];
+  }
+
+  function lineBarDisplayWarnings(data) {
+    const exclusionSet = new Set(lineBarExclusionWarnings(data));
+    return [...(data?.warnings || [])].filter((warning) => warning && !exclusionSet.has(warning));
+  }
+
+  function lineBarGroupMetaWithExclusions(groupLabel, rowMeta, data) {
+    const base = `${groupLabel} · ${rowMeta}`;
+    const exclusions = lineBarExclusionWarnings(data);
+    return exclusions.length ? `${base}. ${exclusions.join(". ")}` : base;
+  }
+
   function syncLineBarTablePresentation(data) {
     const tableMeta = data?.table || {};
     const groupCount = Math.max(0, Number(tableMeta.group_count ?? data?.rows?.length ?? 0) || 0);
@@ -1099,8 +1114,8 @@ export function createLineBarTool({
     const groupLabel = state.lineBarTableSearch && matchCount !== groupCount
       ? `${matchCount.toLocaleString()} of ${groupCount.toLocaleString()} groups`
       : `${groupCount.toLocaleString()} groups`;
-    const groupMeta = `${groupLabel} · ${rowMeta}`;
-    const chartMessage = [...(data?.warnings || [])].filter(Boolean).join(" ");
+    const groupMeta = lineBarGroupMetaWithExclusions(groupLabel, rowMeta, data);
+    const chartMessage = lineBarDisplayWarnings(data).join(" ");
     setGroupMeta("line_bar", groupMeta);
     setStatus("");
     setChartMessage(chartMessage);
@@ -1124,8 +1139,9 @@ export function createLineBarTool({
     if (state.view === "table") refreshLineBarTable({ force: true });
     const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
     const groupCount = Number.isFinite(Number(data.group_count)) ? Number(data.group_count) : data.rows.length;
-    const groupMeta = `${groupCount.toLocaleString()} groups · ${rowMeta}`;
-    const warnings = [...(data.warnings || [])].filter(Boolean).join(" ");
+    const groupLabel = `${groupCount.toLocaleString()} groups`;
+    const groupMeta = lineBarGroupMetaWithExclusions(groupLabel, rowMeta, data);
+    const warnings = lineBarDisplayWarnings(data).join(" ");
     const chartMessage = [warnings, labelMessage].filter(Boolean).join(" ");
     setGroupMeta("line_bar", groupMeta);
     setStatus("");
@@ -1737,6 +1753,7 @@ export function createLineBarTool({
         values: Array.isArray(data?.transform?.values) ? [...data.transform.values] : data?.transform?.values,
       },
       warnings: Array.isArray(data?.warnings) ? [...data.warnings] : data?.warnings,
+      exclusion_warnings: Array.isArray(data?.exclusion_warnings) ? [...data.exclusion_warnings] : data?.exclusion_warnings,
     };
   }
 
@@ -1829,6 +1846,10 @@ export function createLineBarTool({
     const responseCount = Array.isArray(data?.responses) ? data.responses.length : 0;
     const summary = {
       volume: rows.reduce((total, row) => total + (finiteNumberOrNull(row?.volume) || 0), 0),
+      row_count: rows.reduce((total, row) => {
+        const rowCount = finiteNumberOrNull(row?.row_count);
+        return total + (rowCount === null ? (finiteNumberOrNull(row?.volume) || 0) : rowCount);
+      }, 0),
       responses: [],
     };
     for (let responseIndex = 0; responseIndex < responseCount; responseIndex += 1) {
@@ -2876,8 +2897,10 @@ export function createLineBarTool({
   function renderLineBarTableContents(data) {
     const rowsData = Array.isArray(data.rows) ? data.rows : [];
     const weightLabel = data.denominator?.bar_label || "Weight";
+    const weightedMode = Boolean(data.denominator?.column);
     const summaryResponses = Array.isArray(data.summary?.responses) ? data.summary.responses : [];
     const summaryVolume = Number.isFinite(Number(data.summary?.volume)) ? Number(data.summary.volume) : 0;
+    const summaryRowCount = Number.isFinite(Number(data.summary?.row_count)) ? Number(data.summary.row_count) : summaryVolume;
     const tableMeta = data.table || {};
     const page = Math.max(1, Number(tableMeta.page) || 1);
     const pageSize = Math.max(1, Number(tableMeta.page_size) || TABLE_PAGE_SIZE);
@@ -2911,9 +2934,11 @@ export function createLineBarTool({
       refreshLineBarTable({ force: true });
     });
     const tableRows = rowsData.map((row, index) => {
+      const rowCount = finiteNumberOrNull(row.row_count);
       const displayRow = {
         __id: `${page}:${index}`,
         x: formatTableXLabel(row, data),
+        row_count: formatNumber(rowCount === null ? row.volume : rowCount),
         volume: formatNumber(row.volume),
       };
       data.responses.forEach((_, responseIndex) => {
@@ -2924,11 +2949,13 @@ export function createLineBarTool({
     lineBarTableCopyRows = tableRows.map((row) => ({ ...row }));
     lineBarTableCopyColumns = [
       { title: data.x, field: "x" },
+      ...(weightedMode ? [{ title: "Row count", field: "row_count" }] : []),
       { title: weightLabel, field: "volume" },
       ...data.responses.map((response, responseIndex) => ({ title: response.label, field: `resp${responseIndex}` })),
     ];
     lineBarTableCopyFooterRow = {
       x: "Total",
+      ...(weightedMode ? { row_count: formatNumber(summaryRowCount) } : {}),
       volume: formatNumber(summaryVolume),
     };
     data.responses.forEach((_, responseIndex) => {
@@ -2945,6 +2972,16 @@ export function createLineBarTool({
         hozAlign: "left",
         bottomCalc: () => "Total",
       },
+      ...(weightedMode ? [{
+        title: "Row count",
+        field: "row_count",
+        headerSort: false,
+        headerHozAlign: "right",
+        hozAlign: "right",
+        minWidth: 90,
+        widthGrow: 0.7,
+        bottomCalc: () => formatNumber(summaryRowCount),
+      }] : []),
       {
         title: weightLabel,
         field: "volume",

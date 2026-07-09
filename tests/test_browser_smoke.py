@@ -1770,6 +1770,61 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_missing_exclusions_render_in_top_meta_for_chart_and_table(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_missing_exclusions.csv"
+            data_path.write_text(
+                "MAKE,PREMIUM\n"
+                "ALFA ROMEO,100\n"
+                "ALFA ROMEO,\n"
+                "BMW,300\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "MAKE",
+                    "actual": "PREMIUM",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("line_bar_missing_exclusions.csv").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarGroupMeta")?.textContent.trim() ===
+                          "2 groups · 3 rows. 1 row excluded due to missing PREMIUM"
+                          && !(document.querySelector("#chartMessage")?.textContent || "").includes("missing PREMIUM")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#tableTab").click()
+                    page.locator("#tableWrap:not(.hidden) #lineBarTableGrid").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarGroupMeta")?.textContent.trim() ===
+                          "2 groups · 3 rows. 1 row excluded due to missing PREMIUM"
+                          && !(document.querySelector("#chartMessage")?.textContent || "").includes("missing PREMIUM")
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_table_search_filters_complete_table_client_side(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "line_bar_table.csv"
@@ -2377,6 +2432,73 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_table_weighted_shows_row_count_column(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "weighted_line_bar_table.csv"
+            data_path.write_text(
+                "MAKE,PREMIUM,Weight\n"
+                "ALFA ROMEO,100,1\n"
+                "ALFA ROMEO,200,2\n"
+                "BMW,300,10\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "MAKE",
+                    "actual": "PREMIUM",
+                    "denominator": "Weight",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("weighted_line_bar_table.csv").wait_for(timeout=10_000)
+                    page.locator("#tableTab").click()
+                    page.locator("#tableWrap:not(.hidden) #lineBarTableGrid").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const headers = [...document.querySelectorAll("#lineBarTableGrid .tabulator-col[tabulator-field] .tabulator-col-title")]
+                            .map((cell) => cell.textContent.trim());
+                          return headers.join("|") === "MAKE|Row count|Weight|PREMIUM";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    table_state = page.evaluate(
+                        """
+                        () => {
+                          const fields = ["x", "row_count", "volume", "resp0"];
+                          const cellText = (selector) => document.querySelector(selector)?.textContent.trim() || "";
+                          const rows = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs)")].map((row) => (
+                            fields.map((field) => row.querySelector(`.tabulator-cell[tabulator-field="${field}"]`)?.textContent.trim() || "")
+                          )).filter((row) => row[0]);
+                          const footer = fields.map((field) => cellText(`#lineBarTableGrid .tabulator-row.tabulator-calcs .tabulator-cell[tabulator-field="${field}"]`));
+                          return { rows, footer };
+                        }
+                        """
+                    )
+                    self.assertEqual(table_state["rows"], [
+                        ["ALFA ROMEO", "2", "3", "100.00"],
+                        ["BMW", "1", "10", "30.00"],
+                    ])
+                    self.assertEqual(table_state["footer"], ["Total", "3", "13", "46.15"])
                     self.assertEqual(page_errors, [])
                     browser.close()
             finally:

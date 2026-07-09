@@ -10,6 +10,7 @@ from py_lucidum.core import (
     ModelPredictionSource,
     build_denominator_summary_sql,
     build_response_summary_sql,
+    denominator_exclusion_warnings,
     denominator_valid_condition,
     denominator_warnings,
     normalise_denominator,
@@ -105,6 +106,7 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             },
             "response_summaries": result["response_summaries"],
             "rows": display_rows,
+            "exclusion_warnings": result["exclusion_warnings"],
             "warnings": warnings,
             "transform": transform_metadata,
         }
@@ -161,6 +163,7 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             "response_summaries": result["response_summaries"],
             "rows": display_rows,
             "summary": transform_table_summary(table_result["summary"], result["responses"], transform, transform_metadata),
+            "exclusion_warnings": result["exclusion_warnings"],
             "warnings": warnings,
             "transform": transform_metadata,
             "table": {
@@ -324,7 +327,8 @@ def build_grouped_result(
         "grouped_sql": grouped_sql,
         "sigma_multiplier": sigma_multiplier,
         "partial_dependence": partial_dependence,
-        "warnings": denominator_warnings(denominator, denominator_summary),
+        "exclusion_warnings": denominator_exclusion_warnings(denominator, denominator_summary, responses),
+        "warnings": denominator_warnings(denominator, denominator_summary, responses),
         "request": request,
     }
 
@@ -388,7 +392,8 @@ matched AS (
 match_summary AS (
   SELECT
     COUNT(*) AS match_count,
-    COALESCE(SUM(volume), 0) AS summary_volume{summary_selects}
+    COALESCE(SUM(volume), 0) AS summary_volume,
+    COALESCE(SUM(row_count), 0) AS summary_row_count{summary_selects}
   FROM matched
 ),
 page_info_base AS (
@@ -466,6 +471,7 @@ def normalise_grouped_sql_row(row: dict[str, Any], responses: list[dict[str, str
         "x_sort": row.get("x_sort"),
         "original_order": int(row.get("original_order") or 0),
         "volume": json_number(row.get("volume")) or 0,
+        "row_count": json_number(row.get("row_count")) or 0,
         "is_tail": bool(row.get("is_tail")),
         "sigma_se": json_number(row.get("sigma_se")),
         "valid_folds": json_number(row.get("valid_folds")),
@@ -497,6 +503,7 @@ def table_summary_selects(responses: list[dict[str, str]]) -> str:
 def table_summary_from_sql_row(row: dict[str, Any], responses: list[dict[str, str]]) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "volume": json_number(row.get("summary_volume")) or 0,
+        "row_count": json_number(row.get("summary_row_count")) or 0,
         "responses": [],
     }
     for index, _ in enumerate(responses):
@@ -515,6 +522,7 @@ def transform_table_summary(
     references = transform_metadata.get("values") if isinstance(transform_metadata, dict) else []
     transformed = {
         "volume": summary.get("volume", 0),
+        "row_count": summary.get("row_count", 0),
         "responses": [],
     }
     for index, _ in enumerate(responses):
@@ -614,7 +622,8 @@ initial_agg AS (
     x_label,
     MIN(x_sort) AS x_sort,
     MIN(__rownum) AS original_order,
-    COALESCE(SUM(__weight_value), 0) AS volume{x_bound_agg}
+    COALESCE(SUM(__weight_value), 0) AS volume,
+    COUNT(*) AS row_count{x_bound_agg}
     {metric_sql}
   FROM weighted
   GROUP BY x_key, x_label
@@ -800,6 +809,7 @@ final_rows AS (
     initial_values.x_sort,
     initial_values.original_order,
     initial_values.volume,
+    initial_values.row_count,
     initial_values.x_start,
     initial_values.x_end,
     FALSE AS is_tail{response_selects}
@@ -1004,6 +1014,7 @@ grouped_final AS (
     MIN(group_map.final_x_sort) AS x_sort,
     MIN(group_map.final_original_order) AS original_order,
     COALESCE(SUM(initial_values.volume), 0) AS volume,
+    COALESCE(SUM(initial_values.row_count), 0) AS row_count,
     CASE WHEN BOOL_OR(group_map.final_is_tail) THEN NULL ELSE MIN(initial_values.x_start) END AS x_start,
     CASE WHEN BOOL_OR(group_map.final_is_tail) THEN NULL ELSE MAX(initial_values.x_end) END AS x_end,
     BOOL_OR(group_map.final_is_tail) AS is_tail{response_selects}
@@ -1275,6 +1286,7 @@ def build_table_summary(
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "volume": json_number(sum(float(row.get("volume") or 0) for row in rows)) or 0,
+        "row_count": json_number(sum(float(row.get("row_count") or 0) for row in rows)) or 0,
         "responses": [],
     }
     references = transform_metadata.get("values") if isinstance(transform_metadata, dict) else []
@@ -1755,7 +1767,8 @@ agg AS (
     x_label,
     MIN(x_sort) AS x_sort,
     MIN(__rownum) AS original_order,
-    COALESCE(SUM(__weight_value), 0) AS volume{x_bound_agg_sql}
+    COALESCE(SUM(__weight_value), 0) AS volume,
+    COUNT(*) AS row_count{x_bound_agg_sql}
     {metric_sql}
   FROM keyed
   GROUP BY x_key, x_label
@@ -1848,6 +1861,7 @@ def normalise_row(row: dict[str, Any], responses: list[dict[str, str]]) -> dict[
         "x_sort": row.get("x_sort"),
         "original_order": int(row.get("original_order") or 0),
         "volume": json_number(row.get("volume")) or 0,
+        "row_count": json_number(row.get("row_count")) or 0,
         "is_tail": False,
         "sigma_se": json_number(row.get("sigma_se")),
         "valid_folds": json_number(row.get("valid_folds")),
@@ -1873,6 +1887,7 @@ def combine_rows(rows: list[dict[str, Any]], label: str, responses: list[dict[st
         "x_sort": rows[0].get("x_sort"),
         "original_order": min(int(row.get("original_order") or 0) for row in rows),
         "volume": json_number(sum(float(row.get("volume") or 0) for row in rows)) or 0,
+        "row_count": json_number(sum(float(row.get("row_count") or 0) for row in rows)) or 0,
         "is_tail": is_tail,
         "sigma_se": sigma_se,
         "valid_folds": valid_folds,
@@ -2669,6 +2684,7 @@ def apply_transform(
         out = {
             "x": row["x"],
             "volume": row["volume"],
+            "row_count": row.get("row_count", 0),
             "is_tail": bool(row.get("is_tail")),
             "valid_folds": row.get("valid_folds"),
         }

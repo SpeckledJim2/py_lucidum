@@ -147,6 +147,7 @@ def build_denominator_summary_sql(
     valid_condition = denominator_valid_condition(responses, denominator)
     weight_expr = weighted_value_sql(denominator, valid_condition)
     response_missing = missing_response_condition(responses)
+    response_missing_selects = response_missing_column_selects(responses)
     where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
     column = denominator.get("column")
     if column:
@@ -172,22 +173,49 @@ weighted AS (
 )
 SELECT
     COALESCE(SUM(__weight_value), 0) AS value,
-    SUM(CASE WHEN {response_missing} THEN 1 ELSE 0 END) AS missing_response_rows
+    SUM(CASE WHEN {response_missing} THEN 1 ELSE 0 END) AS missing_response_rows{response_missing_selects}
     {extra_selects}
 FROM weighted
 """
 
 
-def denominator_warnings(denominator: dict[str, str | None], summary: dict[str, Any]) -> list[str]:
+def response_missing_column_selects(responses: list[dict[str, str]]) -> str:
+    if not responses:
+        return ""
+    selects = [
+        f"SUM(CASE WHEN {response_value_sql(response)} IS NULL THEN 1 ELSE 0 END) AS missing_response_{index}_rows"
+        for index, response in enumerate(responses)
+    ]
+    return ",\n    " + ",\n    ".join(selects)
+
+
+def denominator_exclusion_warnings(
+    denominator: dict[str, str | None],
+    summary: dict[str, Any],
+    responses: list[dict[str, str]] | None = None,
+) -> list[str]:
     warnings: list[str] = []
-    missing_response_rows = int(summary.get("missing_response_rows") or 0)
-    if missing_response_rows:
-        warnings.append(
-            f"{format_rows(missing_response_rows)} excluded from Weight because one or more selected response values were missing."
-        )
+    if responses:
+        for index, response in enumerate(responses):
+            missing_response_rows = int(summary.get(f"missing_response_{index}_rows") or 0)
+            if missing_response_rows:
+                warnings.append(f"{format_rows(missing_response_rows)} excluded due to missing {response['numerator']}")
+    else:
+        missing_response_rows = int(summary.get("missing_response_rows") or 0)
+        if missing_response_rows:
+            warnings.append(f"{format_rows(missing_response_rows)} excluded due to missing response value")
     missing_weight_rows = int(summary.get("missing_weight_rows") or 0)
     if missing_weight_rows:
-        warnings.append(f"{format_rows(missing_weight_rows)} excluded from Weight because {denominator['label']} was missing.")
+        warnings.append(f"{format_rows(missing_weight_rows)} excluded due to missing {denominator['label']}")
+    return warnings
+
+
+def denominator_warnings(
+    denominator: dict[str, str | None],
+    summary: dict[str, Any],
+    responses: list[dict[str, str]] | None = None,
+) -> list[str]:
+    warnings = denominator_exclusion_warnings(denominator, summary, responses)
     zero_weight_rows = int(summary.get("zero_weight_rows") or 0)
     if zero_weight_rows:
         warnings.append(f"{format_rows(zero_weight_rows)} {row_verb(zero_weight_rows)} zero {denominator['label']}.")
@@ -209,6 +237,7 @@ def row_verb(count: int) -> str:
 __all__ = [
     "build_denominator_summary_sql",
     "build_response_summary_sql",
+    "denominator_exclusion_warnings",
     "denominator_valid_condition",
     "denominator_value_sql",
     "denominator_warnings",
