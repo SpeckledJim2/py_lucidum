@@ -458,13 +458,13 @@
       }
 
       .line-bar-table-grid {
-        flex: 1 1 auto;
+        flex: 0 1 auto;
         min-height: 0;
       }
 
       .line-bar-table-grid.tabulator {
         background: var(--panel);
-        border: 0;
+        border: 1px solid var(--line);
         color: var(--text);
         font-size: 12px;
         line-height: 1.15;
@@ -481,6 +481,12 @@
         color: var(--text) !important;
         font-size: 12px;
         font-weight: 700;
+      }
+
+      .line-bar-table-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content .tabulator-col-title {
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+        white-space: normal;
       }
 
       .line-bar-table-grid.tabulator .tabulator-header .tabulator-frozen.tabulator-frozen-left,

@@ -2268,9 +2268,15 @@ class BrowserSmokeTests(unittest.TestCase):
                                 row.querySelector(".tabulator-cell[tabulator-field='resp0']")?.textContent.trim(),
                               ])
                               .filter((row) => row[0]);
+                            const dataRows = [...document.querySelectorAll("#lineBarTableGrid .tabulator-tableholder .tabulator-row:not(.tabulator-calcs)")].filter((row) => (
+                              row.querySelector(".tabulator-cell[tabulator-field='x']")?.textContent.trim()
+                            ));
+                            const finalDataRowRect = dataRows.at(-1)?.getBoundingClientRect();
+                            const totalRowRect = document.querySelector("#lineBarTableGrid .tabulator-footer .tabulator-row.tabulator-calcs")?.getBoundingClientRect();
                             return {
                               footerCells: calcCells,
                               visibleRows,
+                              totalGap: finalDataRowRect && totalRowRect ? totalRowRect.top - finalDataRowRect.bottom : null,
                               search: rectFor(".line-bar-table-search-row"),
                               messages: rectFor(".workspace-messages"),
                             };
@@ -2281,6 +2287,9 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(table_search_state["footerCells"][0], "Total")
                     self.assertEqual(table_search_state["footerCells"][1], table_search_state["visibleRows"][0][1])
                     self.assertEqual(table_search_state["footerCells"][2], table_search_state["visibleRows"][0][2])
+                    self.assertIsNotNone(table_search_state["totalGap"])
+                    self.assertGreaterEqual(table_search_state["totalGap"], -1)
+                    self.assertLessEqual(table_search_state["totalGap"], 6)
                     self.assertGreaterEqual(table_search_state["search"]["top"], table_search_state["messages"]["bottom"])
                     light_total_theme = wait_for_total_row_theme(False)
                     self.assertEqual(light_total_theme["holderBackground"], light_total_theme["panelColor"])
@@ -2444,7 +2453,7 @@ class BrowserSmokeTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "weighted_line_bar_table.csv"
             data_path.write_text(
-                "MAKE,PREMIUM,Weight\n"
+                "MAKE,theft_claims_count,earned_exposure_in_period\n"
                 "ALFA ROMEO,100,1\n"
                 "ALFA ROMEO,200,2\n"
                 "BMW,300,10\n",
@@ -2454,8 +2463,8 @@ class BrowserSmokeTests(unittest.TestCase):
                 data_path,
                 defaults={
                     "x": "MAKE",
-                    "actual": "PREMIUM",
-                    "denominator": "Weight",
+                    "actual": "theft_claims_count",
+                    "denominator": "earned_exposure_in_period",
                 },
                 tools=["line_bar"],
             )
@@ -2476,7 +2485,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         () => {
                           const headers = [...document.querySelectorAll("#lineBarTableGrid .tabulator-col[tabulator-field] .tabulator-col-title")]
                             .map((cell) => cell.textContent.trim());
-                          return headers.join("|") === "MAKE|Row count|Weight|PREMIUM";
+                          return headers.join("|") === "MAKE|Row count|earned_exposure_in_period|theft_claims_count";
                         }
                         """,
                         timeout=10_000,
@@ -2486,14 +2495,54 @@ class BrowserSmokeTests(unittest.TestCase):
                         () => {
                           const fields = ["x", "row_count", "volume", "resp0"];
                           const cellText = (selector) => document.querySelector(selector)?.textContent.trim() || "";
+                          const headers = [...document.querySelectorAll("#lineBarTableGrid .tabulator-col[tabulator-field] .tabulator-col-title")]
+                            .map((cell) => {
+                              const style = getComputedStyle(cell);
+                              return {
+                                text: cell.textContent.trim(),
+                                textOverflow: style.textOverflow,
+                                whiteSpace: style.whiteSpace,
+                              };
+                            });
+                          const gridStyle = getComputedStyle(document.querySelector("#lineBarTableGrid"));
                           const rows = [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs)")].map((row) => (
                             fields.map((field) => row.querySelector(`.tabulator-cell[tabulator-field="${field}"]`)?.textContent.trim() || "")
                           )).filter((row) => row[0]);
                           const footer = fields.map((field) => cellText(`#lineBarTableGrid .tabulator-row.tabulator-calcs .tabulator-cell[tabulator-field="${field}"]`));
-                          return { rows, footer };
+                          const dataRows = [...document.querySelectorAll("#lineBarTableGrid .tabulator-tableholder .tabulator-row:not(.tabulator-calcs)")].filter((row) => (
+                            row.querySelector(".tabulator-cell[tabulator-field='x']")?.textContent.trim()
+                          ));
+                          const finalDataRowRect = dataRows.at(-1)?.getBoundingClientRect();
+                          const totalRowRect = document.querySelector("#lineBarTableGrid .tabulator-footer .tabulator-row.tabulator-calcs")?.getBoundingClientRect();
+                          return {
+                            headers,
+                            rows,
+                            footer,
+                            gridBorderLeftWidth: gridStyle.borderLeftWidth,
+                            gridBorderLeftStyle: gridStyle.borderLeftStyle,
+                            gridBorderTopWidth: gridStyle.borderTopWidth,
+                            gridBorderTopStyle: gridStyle.borderTopStyle,
+                            totalGap: finalDataRowRect && totalRowRect ? totalRowRect.top - finalDataRowRect.bottom : null,
+                          };
                         }
                         """
                     )
+                    self.assertEqual(
+                        [header["text"] for header in table_state["headers"]],
+                        ["MAKE", "Row count", "earned_exposure_in_period", "theft_claims_count"],
+                    )
+                    for header in table_state["headers"]:
+                        self.assertNotIn("...", header["text"])
+                        self.assertNotIn("…", header["text"])
+                        self.assertEqual(header["textOverflow"], "clip")
+                        self.assertEqual(header["whiteSpace"], "normal")
+                    self.assertEqual(table_state["gridBorderLeftWidth"], "1px")
+                    self.assertEqual(table_state["gridBorderLeftStyle"], "solid")
+                    self.assertEqual(table_state["gridBorderTopWidth"], "1px")
+                    self.assertEqual(table_state["gridBorderTopStyle"], "solid")
+                    self.assertIsNotNone(table_state["totalGap"])
+                    self.assertGreaterEqual(table_state["totalGap"], -1)
+                    self.assertLessEqual(table_state["totalGap"], 6)
                     self.assertEqual(table_state["rows"], [
                         ["ALFA ROMEO", "2", "3", "100.00"],
                         ["BMW", "1", "10", "30.00"],
@@ -2761,11 +2810,14 @@ COPY (
                         """
                         () => ({
                           renderedRows: document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs)").length,
+                          holderClientHeight: document.querySelector("#lineBarTableGrid .tabulator-tableholder")?.clientHeight || 0,
+                          holderScrollHeight: document.querySelector("#lineBarTableGrid .tabulator-tableholder")?.scrollHeight || 0,
                           pager: document.querySelector("#tableWrap .table-pagination")?.textContent || "",
                         })
                         """
                     )
                     self.assertLess(virtual_state["renderedRows"], 500)
+                    self.assertGreater(virtual_state["holderScrollHeight"], virtual_state["holderClientHeight"])
                     self.assertIn("1-10,000 of 10,005 groups", virtual_state["pager"])
                     chart_requests_before_sort = chart_requests
                     if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":

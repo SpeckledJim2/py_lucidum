@@ -2862,6 +2862,39 @@ export function createLineBarTool({
     content.innerHTML = `<div class="line-bar-table-state line-bar-table-state-error">${escapeHtml(message || "Table query failed")}</div>`;
   }
 
+  function lineBarTableMaxHeight() {
+    const content = document.getElementById("lineBarTableContent");
+    if (!content) return 240;
+    const contentRect = content.getBoundingClientRect();
+    const contentStyle = window.getComputedStyle(content);
+    const padding = (parseFloat(contentStyle.paddingTop) || 0) + (parseFloat(contentStyle.paddingBottom) || 0);
+    const pager = content.querySelector(".table-pagination");
+    let pagerSpace = 0;
+    if (pager) {
+      const pagerRect = pager.getBoundingClientRect();
+      const pagerStyle = window.getComputedStyle(pager);
+      pagerSpace = pagerRect.height
+        + (parseFloat(pagerStyle.marginTop) || 0)
+        + (parseFloat(pagerStyle.marginBottom) || 0);
+    }
+    const available = Math.floor((contentRect.height || content.clientHeight || 0) - padding - pagerSpace);
+    return Math.max(140, available || 240);
+  }
+
+  function syncLineBarTableMaxHeight() {
+    const target = document.getElementById("lineBarTableGrid");
+    if (!target) return 240;
+    const maxHeight = lineBarTableMaxHeight();
+    target.style.maxHeight = `${maxHeight}px`;
+    return maxHeight;
+  }
+
+  function lineBarTableHeaderMinWidth(label, minimum) {
+    const text = String(label || "");
+    const estimated = Math.ceil(text.length * 7 + 18);
+    return Math.max(minimum, Math.min(240, estimated));
+  }
+
   async function refreshLineBarTable(options = {}) {
     if (state.tool !== "line_bar" || state.view !== "table") return null;
     renderTableShell();
@@ -2967,7 +3000,7 @@ export function createLineBarTool({
         field: "x",
         headerSort: false,
         frozen: true,
-        minWidth: 130,
+        minWidth: lineBarTableHeaderMinWidth(data.x, 130),
         widthGrow: 2,
         hozAlign: "left",
         bottomCalc: () => "Total",
@@ -2978,7 +3011,7 @@ export function createLineBarTool({
         headerSort: false,
         headerHozAlign: "right",
         hozAlign: "right",
-        minWidth: 90,
+        minWidth: lineBarTableHeaderMinWidth("Row count", 90),
         widthGrow: 0.7,
         bottomCalc: () => formatNumber(summaryRowCount),
       }] : []),
@@ -2988,7 +3021,7 @@ export function createLineBarTool({
         headerSort: false,
         headerHozAlign: "right",
         hozAlign: "right",
-        minWidth: 90,
+        minWidth: lineBarTableHeaderMinWidth(weightLabel, 90),
         widthGrow: 0.7,
         bottomCalc: () => formatNumber(summaryVolume),
       },
@@ -2998,7 +3031,7 @@ export function createLineBarTool({
         headerSort: false,
         headerHozAlign: "right",
         hozAlign: "right",
-        minWidth: 110,
+        minWidth: lineBarTableHeaderMinWidth(response.label, 110),
         widthGrow: 0.8,
         bottomCalc: () => formatResponseValue(summaryResponses[responseIndex]),
       })),
@@ -3007,10 +3040,11 @@ export function createLineBarTool({
       if (renderToken !== tableRenderToken) return;
       const target = document.getElementById("lineBarTableGrid");
       if (!target) return;
+      const maxHeight = syncLineBarTableMaxHeight();
       lineBarTable = new Tabulator(target, {
         data: tableRows,
         index: "__id",
-        height: "100%",
+        maxHeight,
         layout: "fitColumns",
         placeholder: "No matching rows",
         reactiveData: false,
@@ -3020,6 +3054,7 @@ export function createLineBarTool({
         columnDefaults: {
           resizable: false,
           headerSort: false,
+          headerWordWrap: true,
           formatter: (cell) => escapeHtml(cell.getValue() ?? ""),
         },
         columns,
@@ -3187,6 +3222,11 @@ export function createLineBarTool({
   }
 
   function resize() {
+    if (state.view === "table") {
+      syncLineBarTableMaxHeight();
+      lineBarTable?.redraw?.(true);
+      return;
+    }
     chart.resize();
     refreshDateXAxisLabelsForCurrentZoom();
   }
