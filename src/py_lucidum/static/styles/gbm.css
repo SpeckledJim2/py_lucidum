@@ -1020,7 +1020,8 @@
       .tabulator-popup-container.tabulator-edit-list {
         font-size: 11px;
         line-height: 1.15;
-        max-height: none;
+        max-height: min(360px, calc(100vh - 32px));
+        overflow-y: auto;
       }
 
       .tabulator-popup-container.tabulator-edit-list .tabulator-edit-list-item {

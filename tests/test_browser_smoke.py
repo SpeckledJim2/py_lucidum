@@ -3087,6 +3087,114 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_init_score_long_dropdown_stays_in_viewport(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "many_init_score_columns.csv"
+            numeric_columns = [f"score_{index:03d}" for index in range(70)]
+            headers = ["actualNumerator", "denominator", *numeric_columns, "SAMPLE"]
+            rows = [",".join(headers)]
+            for row_index, sample in enumerate(("training", "test", "training"), start=1):
+                values = [
+                    str(row_index * 10),
+                    str(row_index * 100),
+                    *[str(row_index * 1000 + column_index) for column_index, _ in enumerate(numeric_columns)],
+                    sample,
+                ]
+                rows.append(",".join(values))
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "score_000", "actual": "actualNumerator", "denominator": "denominator"},
+                tools=["line_bar", "gbm"],
+                use_features=False,
+                use_kpis=False,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
+                        page.get_by_text("Features and parameters").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            """
+                            () => [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                              .some((row) => row.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.trim() === "init_score")
+                            """,
+                            timeout=10_000,
+                        )
+                        page.locator("#gbmParameterGrid .tabulator-row", has_text="init_score").locator(".tabulator-cell[tabulator-field='value']").click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const popup = document.querySelector(".tabulator-popup-container.tabulator-edit-list");
+                              const rect = popup?.getBoundingClientRect();
+                              return Boolean(popup && rect.width > 0 && rect.height > 0);
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        dropdown_state = page.evaluate(
+                            """
+                            () => {
+                              const row = [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                                .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.trim() === "init_score");
+                              const cell = row?.querySelector(".tabulator-cell[tabulator-field='value']");
+                              const input = cell?.querySelector("input.gbm-parameter-list-editor");
+                              const popup = document.querySelector(".tabulator-popup-container.tabulator-edit-list");
+                              const inputRect = input?.getBoundingClientRect();
+                              const popupRect = popup?.getBoundingClientRect();
+                              return {
+                                editing: Boolean(cell?.classList.contains("tabulator-editing")),
+                                inputValue: input?.value || "",
+                                input: inputRect ? { top: inputRect.top, bottom: inputRect.bottom } : null,
+                                popup: popupRect ? { top: popupRect.top, bottom: popupRect.bottom, height: popupRect.height } : null,
+                                viewportHeight: window.innerHeight,
+                                popupClientHeight: popup?.clientHeight || 0,
+                                popupScrollHeight: popup?.scrollHeight || 0,
+                                popupText: popup?.textContent || "",
+                                groupTexts: [...(popup?.querySelectorAll(".tabulator-edit-list-group") || [])].map((node) => node.textContent.trim()),
+                                itemTexts: [...(popup?.querySelectorAll(".tabulator-edit-list-item") || [])].map((node) => node.textContent.trim()),
+                              };
+                            }
+                            """
+                        )
+                        self.assertTrue(dropdown_state["editing"])
+                        self.assertEqual(dropdown_state["inputValue"], "none")
+                        self.assertIsNotNone(dropdown_state["input"])
+                        self.assertIsNotNone(dropdown_state["popup"])
+                        popup = dropdown_state["popup"]
+                        input_rect = dropdown_state["input"]
+                        assert popup is not None
+                        assert input_rect is not None
+                        self.assertGreaterEqual(popup["top"], 0)
+                        self.assertLessEqual(popup["bottom"], dropdown_state["viewportHeight"])
+                        self.assertGreaterEqual(popup["top"], input_rect["bottom"] - 1)
+                        self.assertLessEqual(popup["height"], 362)
+                        self.assertGreater(dropdown_state["popupScrollHeight"], dropdown_state["popupClientHeight"] + 1)
+                        self.assertIn("DATASET COLUMNS", dropdown_state["groupTexts"])
+                        self.assertIn("score_059", dropdown_state["itemTexts"])
+                        page.locator("#gbmParameterGrid input.gbm-parameter-list-editor").fill("score_059")
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#gbmParameterGrid input.gbm-parameter-list-editor")?.value === "score_059"
+                              && document.querySelector(".tabulator-popup-container.tabulator-edit-list")?.textContent.includes("score_059")
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_tool_loads_feature_grid(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
