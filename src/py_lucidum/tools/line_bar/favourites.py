@@ -16,7 +16,7 @@ from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 FAVOURITES_VERSION = 1
 FAVOURITES_FILENAME = "favourites.json"
 FAVOURITE_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
-FAVOURITE_SCOPES = {"metrics", "metrics_filter", "line_bar_view", "histogram_view", "map_view"}
+FAVOURITE_SCOPES = {"metrics", "metrics_filter", "line_bar_view", "histogram_view", "map_view", "dataset_view"}
 DEFAULT_FAVOURITE_SCOPE = "line_bar_view"
 GLM_PREDICTION_COLUMNS = {"glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"}
 GBM_PREDICTION_COLUMNS = {"gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction"}
@@ -193,6 +193,14 @@ class LineBarFavouriteStore:
         errors: list[str] = []
         warnings: list[str] = []
         scope = favourite_scope(view, errors)
+        if scope == "dataset_view":
+            self.validate_filter_state(view, errors, warnings, saved_filters=saved_filters, source="dataset")
+            self.validate_dataset_view(view, warnings)
+            return {
+                "valid": not errors,
+                "errors": errors,
+                "warnings": warnings,
+            }
         source = self.validate_favourite_source(view.get("source"), "", errors, label="data source")
         actual = view.get("actual") if isinstance(view.get("actual"), dict) else {}
         actual_source = self.validate_favourite_source(actual.get("sourceId") or source, actual.get("value"), errors, label="Actual source")
@@ -211,21 +219,7 @@ class LineBarFavouriteStore:
                     expected_source = self.validate_favourite_source(selection.get("sourceId") or source, selection.get("value"), errors, label=f"Expected {index} source")
                     self.validate_column(expected_source, selection.get("value"), errors, label=f"Expected {index}", numeric=True)
         if scope in {"metrics_filter", "line_bar_view", "histogram_view", "map_view"}:
-            filter_sql = str(view.get("filter") or "").strip()
-            if filter_sql and source:
-                try:
-                    active_dataset(self.dataset_path, self.dataset).normalise_filter(filter_sql, source_id=source)
-                except (ValueError, duckdb.Error) as exc:
-                    errors.append(f"Favourite filter is invalid: {exc}")
-            saved_rows = view.get("savedFilterRows")
-            if isinstance(saved_rows, list) and saved_rows:
-                available = {saved_filter_key(row) for row in saved_filters or []}
-                missing = [
-                    row for row in saved_rows
-                    if isinstance(row, dict) and saved_filter_key(row) not in available
-                ]
-                if missing:
-                    warnings.append(f"{len(missing)} saved FILTER selection{'s' if len(missing) != 1 else ''} no longer exist.")
+            self.validate_filter_state(view, errors, warnings, saved_filters=saved_filters, source=source)
         kpi = view.get("kpi") if isinstance(view.get("kpi"), dict) else {}
         if kpi:
             available_kpis = {kpi_key(row) for row in kpis or []}
@@ -236,6 +230,60 @@ class LineBarFavouriteStore:
             "errors": errors,
             "warnings": warnings,
         }
+
+    def validate_filter_state(
+        self,
+        view: dict[str, Any],
+        errors: list[str],
+        warnings: list[str],
+        *,
+        saved_filters: list[dict[str, Any]] | None = None,
+        source: str = "dataset",
+    ) -> None:
+        filter_sql = str(view.get("filter") or "").strip()
+        if filter_sql and source:
+            try:
+                active_dataset(self.dataset_path, self.dataset).normalise_filter(filter_sql, source_id=source)
+            except (ValueError, duckdb.Error) as exc:
+                errors.append(f"Favourite filter is invalid: {exc}")
+        saved_rows = view.get("savedFilterRows")
+        if isinstance(saved_rows, list) and saved_rows:
+            available = {saved_filter_key(row) for row in saved_filters or []}
+            missing = [
+                row for row in saved_rows
+                if isinstance(row, dict) and saved_filter_key(row) not in available
+            ]
+            if missing:
+                warnings.append(f"{len(missing)} saved FILTER selection{'s' if len(missing) != 1 else ''} no longer exist.")
+
+    def validate_dataset_view(self, view: dict[str, Any], warnings: list[str]) -> None:
+        dataset_view = view.get("datasetView") if isinstance(view.get("datasetView"), dict) else {}
+        available_columns = {
+            column.name
+            for column in active_dataset(self.dataset_path, self.dataset).valid_schema_columns()
+        }
+        pinned_columns = dataset_view.get("pinnedColumns")
+        if isinstance(pinned_columns, list) and pinned_columns:
+            missing = [
+                name for name in dict.fromkeys(str(item or "").strip() for item in pinned_columns)
+                if name and name not in available_columns
+            ]
+            if missing:
+                warnings.append(f"{len(missing)} pinned Dataset column{'s' if len(missing) != 1 else ''} no longer exist.")
+        sort = dataset_view.get("sort") if isinstance(dataset_view.get("sort"), dict) else {}
+        normal_sort = sort.get("normal")
+        if isinstance(normal_sort, list) and normal_sort:
+            sorted_columns = [
+                str(item.get("column") or "").strip()
+                for item in normal_sort
+                if isinstance(item, dict)
+            ]
+            missing = [
+                name for name in dict.fromkeys(sorted_columns)
+                if name and name not in available_columns
+            ]
+            if missing:
+                warnings.append(f"{len(missing)} sorted Dataset column{'s' if len(missing) != 1 else ''} no longer exist.")
 
     def validate_source(self, raw_source: Any, errors: list[str], *, label: str) -> str:
         raw = str(raw_source or "dataset").strip() or "dataset"

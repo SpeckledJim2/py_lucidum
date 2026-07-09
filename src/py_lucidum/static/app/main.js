@@ -65,7 +65,7 @@
       const MODEL_RATIO_SOURCE_RE = /^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/;
       const GLM_PREDICTION_SOURCE_RE = /^glm:[A-Za-z0-9_.-]+:predictions$/;
       const GBM_PREDICTION_SOURCE_RE = /^gbm:[A-Za-z0-9_.-]+:predictions$/;
-      const FAVOURITE_SCOPES = new Set(["metrics", "metrics_filter", "line_bar_view", "histogram_view", "map_view"]);
+      const FAVOURITE_SCOPES = new Set(["metrics", "metrics_filter", "line_bar_view", "histogram_view", "map_view", "dataset_view"]);
       const DEFAULT_FAVOURITE_SCOPE = "line_bar_view";
       const FAVOURITE_SCOPE_LABELS = {
         metrics: "Metrics",
@@ -73,6 +73,7 @@
         line_bar_view: "Line/Bar view",
         histogram_view: "Histogram view",
         map_view: "Map view",
+        dataset_view: "Dataset view",
       };
       const LINE_BAR_FAVOURITE_SCOPE_OPTIONS = [
         ["line_bar_view", FAVOURITE_SCOPE_LABELS.line_bar_view],
@@ -88,6 +89,9 @@
         ["histogram_view", FAVOURITE_SCOPE_LABELS.histogram_view],
         ["metrics_filter", FAVOURITE_SCOPE_LABELS.metrics_filter],
         ["metrics", FAVOURITE_SCOPE_LABELS.metrics],
+      ];
+      const DATASET_VIEW_FAVOURITE_SCOPE_OPTIONS = [
+        ["dataset_view", FAVOURITE_SCOPE_LABELS.dataset_view],
       ];
 
       function initialSidebarVisible() {
@@ -286,6 +290,7 @@
             .then(({ createDatasetViewerTool }) => {
               datasetViewerTool = createDatasetViewerTool({
                 api,
+                clearActiveFavouriteSelection: () => clearActiveFavouriteSelectionForScope("dataset_view"),
                 copyTextToClipboard,
                 el,
                 escapeHtml,
@@ -1655,6 +1660,7 @@
         if (previousTool === "specs" && tool !== "specs") specificationsTool.closeMenus();
         state.tool = tool;
         if (previousTool && previousTool !== tool) {
+          if (previousTool === "dataset_viewer") clearActiveFavouriteSelectionForScope("dataset_view");
           if (previousTool === "line_bar") clearActiveFavouriteSelectionForScope("line_bar_view");
           if (previousTool === "histogram") clearActiveFavouriteSelectionForScope("histogram_view");
           if (previousTool === "uk_map") clearActiveFavouriteSelectionForScope("map_view");
@@ -1989,7 +1995,7 @@
       }
 
       function activeToolUsesSidebarMetrics() {
-        return ["line_bar", "histogram", "uk_map", "glm", "gbm"].includes(state.tool);
+        return true;
       }
 
       function syncSidebarAccordion() {
@@ -2613,10 +2619,11 @@
 
       function favouriteScopeIncludesChange(scope, change) {
         if (change === "metrics") return true;
-        if (change === "filter") return scope === "metrics_filter" || scope === "line_bar_view" || scope === "histogram_view" || scope === "map_view";
+        if (change === "filter") return scope === "metrics_filter" || scope === "line_bar_view" || scope === "histogram_view" || scope === "map_view" || scope === "dataset_view";
         if (change === "line_bar_view") return scope === "line_bar_view";
         if (change === "histogram_view") return scope === "histogram_view";
         if (change === "map_view") return scope === "map_view";
+        if (change === "dataset_view") return scope === "dataset_view";
         return false;
       }
 
@@ -2944,6 +2951,41 @@
         renderFavourites();
       }
 
+      async function applyDatasetFavouriteView(favourite) {
+        if (!toolEnabled("dataset_viewer")) {
+          throw new Error("Dataset Viewer is not enabled for this app.");
+        }
+        const validation = favourite?.validation || {};
+        if (Array.isArray(validation.errors) && validation.errors.length) {
+          throw new Error(validation.errors.join(" "));
+        }
+        const view = favourite?.view || {};
+        const loadedDatasetViewerTool = await ensureDatasetViewerTool();
+        state.activeLineBarFavouriteId = favourite?.id || "";
+        applyFavouriteFilterState(view);
+        loadedDatasetViewerTool?.applyFavouriteState(view.datasetView || {});
+        renderFavourites();
+        setTool("dataset_viewer", false);
+        beginFavouriteViewRestore();
+        const data = await refreshTool("dataset_viewer", { force: true });
+        state.activeLineBarFavouriteId = favourite?.id || "";
+        renderFavourites();
+        await refreshFilterRowCountMeta();
+        return data;
+      }
+
+      async function applyDatasetFavouriteStateOnly(favourite) {
+        if (!toolEnabled("dataset_viewer")) {
+          throw new Error("Dataset Viewer is not enabled for this app.");
+        }
+        const view = favourite?.view || {};
+        const loadedDatasetViewerTool = await ensureDatasetViewerTool();
+        state.activeLineBarFavouriteId = favourite?.id || "";
+        applyFavouriteFilterState(view);
+        loadedDatasetViewerTool?.applyFavouriteState(view.datasetView || {});
+        renderFavourites();
+      }
+
       async function refreshFavourites(options = {}) {
         try {
           const data = await api("/api/line-bar/favourites");
@@ -2977,6 +3019,8 @@
             await applyMapFavouriteView(favourite);
           } else if (scope === "histogram_view") {
             await applyHistogramFavouriteView(favourite);
+          } else if (scope === "dataset_view") {
+            await applyDatasetFavouriteView(favourite);
           } else if (scope === "line_bar_view") {
             if (toolEnabled("line_bar")) setTool("line_bar", false);
             await applyLineBarFavouriteView(favourite, options);
@@ -3029,6 +3073,7 @@
         if (scope === "line_bar_view" && toolEnabled("line_bar")) return "line_bar";
         if (scope === "histogram_view" && toolEnabled("histogram")) return "histogram";
         if (scope === "map_view" && toolEnabled("uk_map")) return "uk_map";
+        if (scope === "dataset_view" && toolEnabled("dataset_viewer")) return "dataset_viewer";
         return fallbackTool;
       }
 
@@ -3064,6 +3109,8 @@
             applyMapFavouriteStateOnly(favourite);
           } else if (scope === "histogram_view") {
             applyHistogramFavouriteStateOnly(favourite);
+          } else if (scope === "dataset_view") {
+            await applyDatasetFavouriteStateOnly(favourite);
           } else if (scope === "line_bar_view") {
             if (!toolEnabled("line_bar")) {
               throw new Error("Line/Bar is not enabled for this app.");
@@ -3246,15 +3293,17 @@
       }
 
       function toolSupportsFavouriteAdd(tool = state.tool) {
-        return tool === "line_bar" || tool === "histogram" || tool === "uk_map";
+        return tool === "line_bar" || tool === "histogram" || tool === "uk_map" || tool === "dataset_viewer";
       }
 
       function defaultFavouriteAddScope() {
+        if (state.tool === "dataset_viewer") return "dataset_view";
         if (state.tool === "histogram") return "histogram_view";
         return state.tool === "uk_map" ? "map_view" : DEFAULT_FAVOURITE_SCOPE;
       }
 
       function favouriteScopeOptionsForAdd() {
+        if (defaultFavouriteAddScope() === "dataset_view") return DATASET_VIEW_FAVOURITE_SCOPE_OPTIONS;
         if (defaultFavouriteAddScope() === "map_view") return MAP_FAVOURITE_SCOPE_OPTIONS;
         if (defaultFavouriteAddScope() === "histogram_view") return HISTOGRAM_FAVOURITE_SCOPE_OPTIONS;
         return LINE_BAR_FAVOURITE_SCOPE_OPTIONS.map(([scope, label]) => (
@@ -3721,6 +3770,17 @@
         };
       }
 
+      function captureFilterFavouriteView(scope) {
+        return {
+          version: 1,
+          scope,
+          filter: state.activeFilter || "",
+          filterSelectionMode: state.filterSelectionMode,
+          filterOperator: state.filterOperator,
+          savedFilterRows: selectedSavedFilterRows(),
+        };
+      }
+
       function captureHistogramFavouriteView(options = {}) {
         const scope = normaliseFavouriteScopeValue(options.scope || "histogram_view");
         return {
@@ -3729,8 +3789,24 @@
         };
       }
 
+      function captureDatasetFavouriteView(options = {}) {
+        const scope = normaliseFavouriteScopeValue(options.scope || "dataset_view");
+        return {
+          ...captureFilterFavouriteView(scope),
+          datasetView: datasetViewerTool?.captureFavouriteState?.() || {
+            transpose: Boolean(state.datasetViewerTranspose),
+            alphabeticalColumns: Boolean(state.datasetViewerAlphabeticalColumns),
+            selectColumns: state.datasetViewerSearch || "",
+            pinnedColumns: [],
+            columnWidths: { normal: {}, transposed: {} },
+            sort: { normal: [], transposed: null },
+          },
+        };
+      }
+
       function captureFavouriteView(options = {}) {
         const scope = normaliseFavouriteScopeValue(options.scope);
+        if (scope === "dataset_view") return captureDatasetFavouriteView({ scope });
         if (scope === "histogram_view") return captureHistogramFavouriteView({ scope });
         return captureLineBarFavouriteView({ scope });
       }

@@ -3539,6 +3539,284 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_dataset_viewer_favourites_save_and_restore_dataset_view(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            data_path.write_text(
+                "vehicle_age,segment,price,value,postcode\n"
+                "1,A,100,10,AB10 1AA\n"
+                "2,A,200,20,AB10 1AB\n"
+                "3,B,300,30,AL1 1AA\n"
+                "4,B,400,40,AL1 2AA\n",
+                encoding="utf-8",
+            )
+            filters_path = root / "filter_spec.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "AGE,Older,vehicle_age >= 3\n",
+                encoding="utf-8",
+            )
+            favourites_path = root / "config" / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path,
+                filters_path=filters_path,
+                use_saved_filters=True,
+                line_bar_favourites_path=favourites_path,
+                tools=["dataset_viewer", "line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+
+                def resize_tabulator_column(page: Any, column_selector: str, delta: int = 48) -> dict[str, float]:
+                    probe = page.evaluate(
+                        """
+                        ({ selector }) => {
+                          const column = document.querySelector(selector);
+                          if (!column) return null;
+                          const handles = [...column.parentElement?.querySelectorAll(".tabulator-col-resize-handle") || []];
+                          const columnRect = column.getBoundingClientRect();
+                          const handle = handles.find((candidate) => Math.abs(candidate.getBoundingClientRect().left - columnRect.right) <= 8) || null;
+                          if (!handle) return null;
+                          const handleRect = handle.getBoundingClientRect();
+                          return {
+                            before: columnRect.width,
+                            x: handleRect.left + handleRect.width / 2,
+                            y: handleRect.top + handleRect.height / 2,
+                          };
+                        }
+                        """,
+                        arg={"selector": column_selector},
+                    )
+                    self.assertIsNotNone(probe)
+                    assert probe is not None
+                    page.mouse.move(probe["x"], probe["y"])
+                    page.mouse.down()
+                    page.mouse.move(probe["x"] + delta, probe["y"], steps=6)
+                    page.mouse.up()
+                    page.wait_for_function(
+                        """
+                        ({ selector, minimum }) => {
+                          const column = document.querySelector(selector);
+                          return Boolean(column && column.getBoundingClientRect().width >= minimum);
+                        }
+                        """,
+                        arg={"selector": column_selector, "minimum": probe["before"] + 16},
+                        timeout=10_000,
+                    )
+                    after = page.evaluate(
+                        "selector => document.querySelector(selector)?.getBoundingClientRect().width || 0",
+                        arg=column_selector,
+                    )
+                    return {"before": float(probe["before"]), "after": float(after)}
+
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetViewerTool.active").wait_for(timeout=10_000)
+                    page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+
+                    if page.locator("#filterCollapseBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#filterCollapseBtn").click()
+                    age_heading = page.locator('.saved-filter-theme[data-filter-theme="AGE"]')
+                    if age_heading.get_attribute("aria-expanded") == "false":
+                        age_heading.click()
+                    page.locator('.saved-filter-option[data-filter-theme="AGE"]').click()
+                    page.wait_for_function("""() => document.querySelector("#filterInput")?.value === "vehicle_age >= 3" """, timeout=10_000)
+
+                    page.locator("#datasetViewerAlphabeticalColumns").check()
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c4"]').click(button="right")
+                    page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_role("menuitem", name="Pin column").click()
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]').click(button="right")
+                    page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_role("menuitem", name="Pin column").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#datasetViewerCount")?.textContent.includes("postcode, vehicle_age pinned")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#datasetViewerSearch").fill("price, post")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                            .filter((cell) => cell.offsetParent !== null)
+                            .map((cell) => cell.getAttribute('tabulator-field'))
+                            .filter(Boolean);
+                          return headers.join(",") === "c4,c0,c2";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .tabulator-col-sorter').click()
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .tabulator-col-sorter').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c2"]')?.textContent.trim() === "400"
+                        """,
+                        timeout=10_000,
+                    )
+                    normal_width = resize_tabulator_column(page, '#datasetViewerGrid .tabulator-col[tabulator-field="c2"]', 52)
+                    page.locator("#datasetViewerTranspose").check()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                          const rows = [...grid?.querySelectorAll('.tabulator-row') || []].filter((row) => row.offsetParent !== null);
+                          const names = rows.map((row) => {
+                            const cell = row.querySelector('.tabulator-cell[tabulator-field="__field"]');
+                            return (cell?.querySelector('.dataset-viewer-pinned-field-text') || cell)?.textContent.trim();
+                          }).filter(Boolean);
+                          return names.slice(0, 3).join(",") === "postcode,vehicle_age,price";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    transposed_width = resize_tabulator_column(page, '#datasetViewerGrid .tabulator-col[tabulator-field="__field"]', 44)
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === "asc"
+                        """,
+                        timeout=10_000,
+                    )
+
+                    if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#favouritesCollapseBtn").click()
+                    self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                    page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """() => document.querySelector('input[name="sidebarFavouriteScope"][value="dataset_view"]')?.checked
+                          && [...document.querySelectorAll(".sidebar-favourite-scope-option span")]
+                            .map((node) => node.textContent.trim()).join("|") === "Dataset view" """,
+                        timeout=10_000,
+                    )
+                    page.locator("#sidebarFavouriteNameInput").fill("Dataset favourite")
+                    page.locator('[data-favourite-action="save-add"]').click()
+                    page.wait_for_function(
+                        """() => [...document.querySelectorAll(".saved-favourite-option")]
+                          .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Dataset favourite"
+                            && button.querySelector(".favourite-detail")?.textContent.trim() === "Dataset view"
+                            && button.classList.contains("active")) """,
+                        timeout=10_000,
+                    )
+                    saved_payload = json.loads(favourites_path.read_text(encoding="utf-8"))
+                    saved_view = saved_payload["favourites"][0]["view"]
+                    self.assertEqual(saved_view["scope"], "dataset_view")
+                    self.assertEqual(saved_view["filter"], "vehicle_age >= 3")
+                    self.assertEqual(saved_view["filterSelectionMode"], "grouped")
+                    self.assertEqual(saved_view["savedFilterRows"][0]["name"], "Older")
+                    dataset_view = saved_view["datasetView"]
+                    self.assertTrue(dataset_view["transpose"])
+                    self.assertTrue(dataset_view["alphabeticalColumns"])
+                    self.assertEqual(dataset_view["selectColumns"], "price, post")
+                    self.assertEqual(dataset_view["pinnedColumns"], ["postcode", "vehicle_age"])
+                    self.assertGreaterEqual(dataset_view["columnWidths"]["normal"]["price"], normal_width["after"] - 2)
+                    self.assertGreaterEqual(dataset_view["columnWidths"]["transposed"]["__field"], transposed_width["after"] - 2)
+                    self.assertEqual(dataset_view["sort"]["normal"], [{"column": "price", "dir": "desc"}])
+                    self.assertEqual(dataset_view["sort"]["transposed"], {"field": "__field", "dir": "asc"})
+
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button').click()
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#datasetViewerTranspose").uncheck()
+                    page.wait_for_function(
+                        """
+                        () => Boolean(document.querySelector('#datasetViewerGrid:not(.dataset-viewer-grid-transposed) .tabulator-row .tabulator-cell[tabulator-field="c2"]'))
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .tabulator-col-sorter').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c2"]')?.textContent.trim() === "300"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#datasetViewerSearchClear").click()
+                    page.locator("#datasetViewerAlphabeticalColumns").uncheck()
+                    page.locator("#filterRowClearBtn").click()
+                    page.locator("#lineBarTool").click()
+                    page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                    page.locator('.saved-favourite-option[data-favourite-scope="dataset_view"]').click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                          const rows = [...grid?.querySelectorAll('.tabulator-row') || []].filter((row) => row.offsetParent !== null);
+                          const names = rows.map((row) => {
+                            const cell = row.querySelector('.tabulator-cell[tabulator-field="__field"]');
+                            return (cell?.querySelector('.dataset-viewer-pinned-field-text') || cell)?.textContent.trim();
+                          }).filter(Boolean);
+                          return document.querySelector("#datasetViewerTool")?.classList.contains("active")
+                            && document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
+                            && document.querySelector("#datasetViewerSearch")?.value === "price, post"
+                            && document.querySelector("#datasetViewerTranspose")?.checked
+                            && document.querySelector("#datasetViewerAlphabeticalColumns")?.checked
+                            && document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === "asc"
+                            && names.slice(0, 3).join(",") === "postcode,vehicle_age,price";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    restored_transposed_width = page.evaluate(
+                        """() => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"]')?.getBoundingClientRect().width || 0"""
+                    )
+                    self.assertGreaterEqual(float(restored_transposed_width), transposed_width["after"] - 2)
+                    page.locator("#datasetViewerTranspose").uncheck()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const grid = document.querySelector('#datasetViewerGrid:not(.dataset-viewer-grid-transposed)');
+                          const headers = [...grid?.querySelectorAll('.tabulator-col') || []]
+                            .filter((cell) => cell.offsetParent !== null)
+                            .map((cell) => cell.getAttribute('tabulator-field'))
+                            .filter(Boolean);
+                          const priceWidth = grid?.querySelector('.tabulator-col[tabulator-field="c2"]')?.getBoundingClientRect().width || 0;
+                          const firstPrice = grid?.querySelector('.tabulator-row .tabulator-cell[tabulator-field="c2"]')?.textContent.trim();
+                          return headers.slice(0, 3).join(",") === "c4,c0,c2" && priceWidth > 0 && firstPrice === "400";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    restored_normal_width = page.evaluate(
+                        """() => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="c2"]')?.getBoundingClientRect().width || 0"""
+                    )
+                    self.assertGreaterEqual(float(restored_normal_width), normal_width["after"] - 2)
+
+                    startup_page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    startup_errors: list[str] = []
+                    startup_page.on("pageerror", lambda error: startup_errors.append(str(error)))
+                    startup_page.goto(f"{base_url}?line_bar_favourite=Dataset%20favourite", wait_until="domcontentloaded")
+                    startup_page.wait_for_function(
+                        """
+                        () => document.querySelector("#datasetViewerTool")?.classList.contains("active")
+                          && document.querySelector("#datasetViewerTranspose")?.checked
+                          && document.querySelector("#datasetViewerSearch")?.value === "price, post"
+                          && document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
+                          && document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === "asc"
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(startup_errors, [])
+                    startup_page.close()
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_favourites_ui_flow(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -5700,29 +5978,20 @@ COPY (
                     page.locator("#sidebarFavouritesControls").evaluate("node => getComputedStyle(node).display !== 'none'"),
                     open_section == "favourites",
                 )
-                metrics_visible = page.evaluate(
+                page.locator(".sidebar-metric-section").wait_for(state="visible", timeout=10_000)
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
+                metric_layout = page.evaluate(
                     """
                     () => {
-                      const tool = document.querySelector("#toolSelectorSection .tool-option.active")?.dataset.tool || "";
-                      return ["line_bar", "histogram", "uk_map", "glm", "gbm"].includes(tool);
+                      const favourites = document.querySelector(".sidebar-favourites-section").getBoundingClientRect();
+                      const metric = document.querySelector(".sidebar-metric-section").getBoundingClientRect();
+                      return { favouritesTop: favourites.top, metricBottom: metric.bottom };
                     }
                     """
                 )
-                page.locator(".sidebar-metric-section").wait_for(state="visible" if metrics_visible else "hidden", timeout=10_000)
-                self.assertEqual(page.locator(".sidebar-metric-section").is_visible(), metrics_visible)
-                self.assertEqual(page.locator("#actualNumerator").is_visible(), metrics_visible)
-                self.assertEqual(page.locator("#denominator").is_visible(), metrics_visible)
-                if metrics_visible:
-                    metric_layout = page.evaluate(
-                        """
-                        () => {
-                          const favourites = document.querySelector(".sidebar-favourites-section").getBoundingClientRect();
-                          const metric = document.querySelector(".sidebar-metric-section").getBoundingClientRect();
-                          return { favouritesTop: favourites.top, metricBottom: metric.bottom };
-                        }
-                        """
-                    )
-                    self.assertLessEqual(metric_layout["metricBottom"], metric_layout["favouritesTop"] + 1)
+                self.assertLessEqual(metric_layout["metricBottom"], metric_layout["favouritesTop"] + 1)
                 icon_layout = page.evaluate(
                     """
                     (buttons) => {
@@ -8586,9 +8855,9 @@ COPY (
                         '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
                         timeout=10_000,
                     )
-                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
-                self.assertFalse(page.locator("#actualNumerator").is_visible())
-                self.assertFalse(page.locator("#denominator").is_visible())
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertTrue(page.locator("#visualArea").evaluate("node => node.classList.contains('specs-mode')"))
                 self.assertFalse(page.locator("#chartSideControls").is_visible())
                 self.assertFalse(page.locator("#chartControlsResizer").is_visible())
@@ -9583,9 +9852,9 @@ COPY (
                         '() => document.querySelector("#favouritesCollapseBtn")?.getAttribute("aria-expanded") === "false"',
                         timeout=10_000,
                     )
-                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
-                self.assertFalse(page.locator("#actualNumerator").is_visible())
-                self.assertFalse(page.locator("#denominator").is_visible())
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertTrue(page.locator("#datasetViewerFilter").is_visible())
                 page.wait_for_function(
                     """
@@ -14921,19 +15190,25 @@ COPY (
 
                 page.locator("#profileTool").click()
                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
-                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertIn("20.0%", page.locator("#actualMetricTitle").text_content())
                 self.assertIn("3", page.locator("#weightMetricTitle").text_content())
 
                 page.locator("#datasetViewerTool").click()
                 page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
-                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertIn("20.0%", page.locator("#actualMetricTitle").text_content())
                 self.assertIn("3", page.locator("#weightMetricTitle").text_content())
 
                 page.locator("#specsTool").click()
                 page.locator("#specificationsWrap:not(.hidden)").wait_for(timeout=10_000)
-                self.assertFalse(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                self.assertTrue(page.locator("#actualNumerator").is_visible())
+                self.assertTrue(page.locator("#denominator").is_visible())
                 self.assertIn("20.0%", page.locator("#actualMetricTitle").text_content())
                 self.assertIn("3", page.locator("#weightMetricTitle").text_content())
 

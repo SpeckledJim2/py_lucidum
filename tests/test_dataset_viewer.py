@@ -97,6 +97,16 @@ class DatasetViewerToolTests(unittest.TestCase):
         status, _, _ = asgi_post_json(app, "/api/dataset-viewer/table", {"filter": "", "limit": 1000})
         self.assertEqual(status, 404)
 
+    def test_dataset_viewer_only_app_registers_favourites_api(self) -> None:
+        app = create_app(self.data_path, token="", tools=["dataset-viewer"], use_saved_filters=False, use_kpis=False)
+        paths = {route.path for route in app.routes}
+
+        self.assertEqual(app.state.enabled_tools, ["dataset_viewer"])
+        self.assertIn("/api/dataset-viewer/table", paths)
+        self.assertIn("/api/line-bar/favourites", paths)
+        self.assertIn("/api/line-bar/favourites/{favourite_id}", paths)
+        self.assertIn("/api/line-bar/favourites/order", paths)
+
     def test_metric_summary_route_returns_filtered_values(self) -> None:
         app = create_app(self.data_path, token="", use_saved_filters=False, use_kpis=False)
 

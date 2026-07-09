@@ -17,6 +17,7 @@ function ensureDatasetViewerStyles() {
 
 export function createDatasetViewerTool({
   api,
+  clearActiveFavouriteSelection = () => false,
   copyTextToClipboard,
   el,
   escapeHtml,
@@ -50,15 +51,26 @@ export function createDatasetViewerTool({
   let selectedColumnFields = new Set();
   let selectionAxis = "";
   let suppressRowSelectionSync = false;
+  let suppressNormalSortChangeCount = 0;
+  let normalSorters = [];
+  let restoredFavouriteNormalSorters = [];
   let transposedSort = { field: "", dir: "none" };
   let renderedRequestKey = null;
   let renderedSearch = null;
   let renderedTranspose = null;
   let renderedAlphabeticalColumns = null;
   let renderedPinnedColumns = null;
+  let renderedSort = null;
   let renderedWidthMode = "";
   let normalColumnWidths = new Map();
   let transposedColumnWidths = new Map();
+  let normalUserColumnWidths = new Map();
+  let transposedUserColumnWidths = new Map();
+  let pendingFavouritePinnedColumnNames = null;
+  let pendingFavouriteNormalColumnWidths = null;
+  let pendingFavouriteNormalSorters = null;
+  let pendingFavouriteTransposedSort = null;
+  let suppressNextWidthSnapshot = false;
   let resizeFrame = null;
   let resizeHard = false;
 
@@ -136,20 +148,24 @@ export function createDatasetViewerTool({
       el("datasetViewerSearch").addEventListener("input", () => {
         state.datasetViewerSearch = el("datasetViewerSearch").value;
         applySearch();
+        markDatasetViewChanged();
       });
       el("datasetViewerSearchClear").addEventListener("click", () => {
         state.datasetViewerSearch = "";
         el("datasetViewerSearch").value = "";
         applySearch();
+        markDatasetViewChanged();
         el("datasetViewerSearch").focus();
       });
       el("datasetViewerTranspose").addEventListener("change", () => {
         state.datasetViewerTranspose = el("datasetViewerTranspose").checked;
         rerenderCachedData();
+        markDatasetViewChanged();
       });
       el("datasetViewerAlphabeticalColumns").addEventListener("change", () => {
         state.datasetViewerAlphabeticalColumns = el("datasetViewerAlphabeticalColumns").checked;
         rerenderCachedData();
+        markDatasetViewChanged();
       });
       el("datasetViewerGrid").addEventListener("click", handleDatasetViewerGridClick);
       el("datasetViewerGrid").addEventListener("contextmenu", handleDatasetViewerGridContextMenu);
@@ -193,7 +209,12 @@ export function createDatasetViewerTool({
 
   function clearTable({ resetSelection = false } = {}) {
     closeDatasetViewerCellContextMenu();
-    snapshotDatasetViewerColumnWidths();
+    if (suppressNextWidthSnapshot) {
+      suppressNextWidthSnapshot = false;
+    } else {
+      snapshotDatasetViewerColumnWidths();
+    }
+    snapshotNormalTableSorters();
     if (resizeFrame !== null) {
       cancelAnimationFrame(resizeFrame);
       resizeFrame = null;
@@ -209,7 +230,6 @@ export function createDatasetViewerTool({
     datasetTable = null;
     if (resetSelection) {
       resetSelections();
-      transposedSort = { field: "", dir: "none" };
     }
     currentRows = [];
     currentRenderedRows = [];
@@ -224,6 +244,7 @@ export function createDatasetViewerTool({
     renderedTranspose = null;
     renderedAlphabeticalColumns = null;
     renderedPinnedColumns = null;
+    renderedSort = null;
     renderedWidthMode = "";
   }
 
@@ -312,6 +333,7 @@ export function createDatasetViewerTool({
         renderHorizontal: "virtual",
         renderVertical: "virtual",
         rowHeight: 22,
+        initialSort: normalSorters.length ? tabulatorNormalSorters(normalSorters) : false,
         selectableRows: true,
         selectableRowsPersistence: true,
         headerSortClickElement: "icon",
@@ -328,7 +350,10 @@ export function createDatasetViewerTool({
       const reconcileSearch = () => {
         if (searchReconciled) return;
         searchReconciled = true;
-        reconcileRenderedSearch(token, requestKey, syncNormalRenderedSelection);
+        reconcileRenderedSearch(token, requestKey, () => {
+          applyNormalSortersForRender();
+          syncNormalRenderedSelection();
+        });
       };
       if (typeof datasetTable.on === "function") {
         datasetTable.on("rowSelectionChanged", handleNormalRowSelectionChanged);
@@ -338,11 +363,13 @@ export function createDatasetViewerTool({
           syncNormalRenderedSelection();
           reconcileSearch();
         });
-        datasetTable.on("dataSorted", syncNormalRenderedSelection);
+        datasetTable.on("dataSorted", handleNormalDataSorted);
         datasetTable.on("dataFiltered", syncNormalRenderedSelection);
         datasetTable.on("columnResized", rememberNormalColumnWidth);
       }
       applySearch({ mark: false });
+      applyNormalSortersForRender();
+      scheduleNormalSortersForRender(token, requestKey);
       syncNormalRenderedSelection();
     }).catch((error) => {
       if (token !== renderToken) return;
@@ -471,23 +498,30 @@ export function createDatasetViewerTool({
     return mode === "transposed" ? transposedColumnWidths : normalColumnWidths;
   }
 
+  function datasetViewerUserColumnWidthMap(mode) {
+    return mode === "transposed" ? transposedUserColumnWidths : normalUserColumnWidths;
+  }
+
   function rememberNormalColumnWidth(column) {
-    rememberDatasetViewerColumnWidth("normal", column);
+    rememberDatasetViewerColumnWidth("normal", column, { user: true });
+    markDatasetViewChanged();
   }
 
   function rememberTransposedColumnWidth(column) {
-    rememberDatasetViewerColumnWidth("transposed", column);
+    rememberDatasetViewerColumnWidth("transposed", column, { user: true });
+    markDatasetViewChanged();
   }
 
-  function rememberDatasetViewerColumnWidth(mode, column) {
-    rememberDatasetViewerFieldWidth(mode, datasetViewerColumnField(column), datasetViewerColumnRenderedWidth(column));
+  function rememberDatasetViewerColumnWidth(mode, column, options = {}) {
+    rememberDatasetViewerFieldWidth(mode, datasetViewerColumnField(column), datasetViewerColumnRenderedWidth(column), options);
   }
 
-  function rememberDatasetViewerFieldWidth(mode, field, width) {
+  function rememberDatasetViewerFieldWidth(mode, field, width, options = {}) {
     const key = String(field || "");
     const value = Math.round(Number(width));
     if (!key || !Number.isFinite(value) || value <= 0) return;
     datasetViewerColumnWidthMap(mode).set(key, value);
+    if (options.user) datasetViewerUserColumnWidthMap(mode).set(key, value);
   }
 
   function datasetViewerColumnField(column) {
@@ -549,6 +583,11 @@ export function createDatasetViewerTool({
         node.getBoundingClientRect().width,
       );
     });
+  }
+
+  function snapshotNormalTableSorters() {
+    if (renderedWidthMode !== "normal") return;
+    rememberNormalTableSorters(normalTableSorters());
   }
 
   function transposedTableData(data) {
@@ -753,8 +792,71 @@ export function createDatasetViewerTool({
     if (fields.length !== currentFields.length) state.datasetViewerPinnedColumns = fields;
   }
 
+  function resolvePendingFavouriteDatasetView(sourceColumns) {
+    const columns = Array.isArray(sourceColumns) ? sourceColumns : [];
+    const fieldByName = new Map(columns.map((column) => [String(column?.name || ""), String(column?.field || "")]));
+    if (pendingFavouritePinnedColumnNames !== null) {
+      const fields = [];
+      const seen = new Set();
+      pendingFavouritePinnedColumnNames.forEach((name) => {
+        const field = fieldByName.get(name) || "";
+        if (!field || seen.has(field)) return;
+        seen.add(field);
+        fields.push(field);
+      });
+      state.datasetViewerPinnedColumns = fields;
+      pendingFavouritePinnedColumnNames = null;
+    }
+    if (pendingFavouriteNormalColumnWidths !== null) {
+      normalColumnWidths = new Map();
+      normalUserColumnWidths = new Map();
+      Object.entries(pendingFavouriteNormalColumnWidths).forEach(([name, width]) => {
+        const field = fieldByName.get(String(name)) || "";
+        const value = Math.round(Number(width));
+        if (!field || !Number.isFinite(value) || value <= 0) return;
+        normalColumnWidths.set(field, value);
+        normalUserColumnWidths.set(field, value);
+      });
+      pendingFavouriteNormalColumnWidths = null;
+    }
+    const favouriteSorters = pendingFavouriteNormalSorters !== null
+      ? pendingFavouriteNormalSorters
+      : restoredFavouriteNormalSorters;
+    if (favouriteSorters.length) {
+      normalSorters = resolveFavouriteNormalSorters(favouriteSorters, fieldByName);
+      restoredFavouriteNormalSorters = favouriteNormalSortEntries(favouriteSorters);
+      pendingFavouriteNormalSorters = null;
+    } else if (pendingFavouriteNormalSorters !== null) {
+      normalSorters = [];
+      restoredFavouriteNormalSorters = [];
+      pendingFavouriteNormalSorters = null;
+    } else {
+      const validFields = new Set(columns.map((column) => String(column?.field || "")).filter(Boolean));
+      normalSorters = normalSorters.filter((sorter) => validFields.has(sorter.field));
+    }
+    if (pendingFavouriteTransposedSort !== null) {
+      transposedSort = pendingFavouriteTransposedSort;
+      pendingFavouriteTransposedSort = null;
+    }
+  }
+
+  function resolveFavouriteNormalSorters(sorters, fieldByName) {
+    const seen = new Set();
+    return favouriteNormalSortEntries(sorters)
+      .map((sorter) => ({
+        field: fieldByName.get(String(sorter.column || "")) || "",
+        dir: normaliseSortDirection(sorter.dir),
+      }))
+      .filter((sorter) => {
+        if (!sorter.field || !sorter.dir || seen.has(sorter.field)) return false;
+        seen.add(sorter.field);
+        return true;
+      });
+  }
+
   function orderedDatasetViewerColumns(data) {
     const sourceColumns = Array.isArray(data?.columns) ? data.columns : [];
+    resolvePendingFavouriteDatasetView(sourceColumns);
     pruneDatasetViewerPinnedColumns(sourceColumns);
     const pinnedFields = datasetViewerPinnedColumnSet();
     const indexedColumns = sourceColumns.map((column, index) => ({ column, index }));
@@ -877,6 +979,10 @@ export function createDatasetViewerTool({
     return Boolean(key && !key.startsWith("__") && currentDatasetColumnByField.has(key));
   }
 
+  function markDatasetViewChanged() {
+    clearActiveFavouriteSelection();
+  }
+
   function toggleDatasetViewerPinnedColumn(field) {
     const key = String(field || "");
     if (!validDatasetViewerColumnField(key)) return;
@@ -885,6 +991,7 @@ export function createDatasetViewerTool({
       ? fields.filter((candidate) => candidate !== key)
       : [...fields, key];
     rerenderCachedData();
+    markDatasetViewChanged();
   }
 
   function cycleTransposedSort(field) {
@@ -893,6 +1000,7 @@ export function createDatasetViewerTool({
     const next = current === "none" ? "asc" : current === "asc" ? "desc" : "none";
     transposedSort = next === "none" ? { field: "", dir: "none" } : { field, dir: next };
     rerenderCachedData();
+    markDatasetViewChanged();
   }
 
   function resetSelections() {
@@ -1248,18 +1356,90 @@ export function createDatasetViewerTool({
     if (!datasetTable || typeof datasetTable.getSorters !== "function") return [];
     try {
       const sorters = datasetTable.getSorters();
-      return Array.isArray(sorters) ? sorters : [];
+      return normaliseNormalTableSorters(sorters);
     } catch (_) {
       return [];
     }
   }
 
-  function restoreNormalTableSorters(sorters) {
-    if (!sorters.length || !datasetTable || typeof datasetTable.setSort !== "function") return;
+  function normaliseNormalTableSorters(sorters) {
+    const result = [];
+    const seen = new Set();
+    (Array.isArray(sorters) ? sorters : []).forEach((sorter) => {
+      const field = String(sorter?.field || sorter?.column || "").trim();
+      const dir = normaliseSortDirection(sorter?.dir);
+      if (!field || !dir || seen.has(field)) return;
+      seen.add(field);
+      result.push({ field, dir });
+    });
+    return result;
+  }
+
+  function normaliseSortDirection(dir) {
+    const value = String(dir || "").toLowerCase();
+    return value === "asc" || value === "desc" ? value : "";
+  }
+
+  function rememberNormalTableSorters(sorters = normalTableSorters()) {
+    const validFields = new Set(currentDatasetColumns.map((column) => String(column?.field || "")));
+    normalSorters = normaliseNormalTableSorters(sorters)
+      .filter((sorter) => !validFields.size || validFields.has(sorter.field));
+  }
+
+  function withNormalSortChangeSuppressed(callback) {
+    suppressNormalSortChangeCount += 1;
     try {
-      datasetTable.setSort(sorters);
+      return callback();
+    } finally {
+      window.setTimeout(() => {
+        suppressNormalSortChangeCount = Math.max(0, suppressNormalSortChangeCount - 1);
+      }, 0);
+    }
+  }
+
+  function restoreNormalTableSorters(sorters) {
+    const nextSorters = normaliseNormalTableSorters(sorters);
+    rememberNormalTableSorters(nextSorters);
+    if (!datasetTable || typeof datasetTable.setSort !== "function") return;
+    try {
+      withNormalSortChangeSuppressed(() => {
+        datasetTable.setSort(tabulatorNormalSorters(nextSorters));
+      });
     } catch (_) {
       // Search should remain useful even if a stale sorter references a replaced column.
+    }
+  }
+
+  function tabulatorNormalSorters(sorters) {
+    return normaliseNormalTableSorters(sorters).map((sorter) => ({ column: sorter.field, dir: sorter.dir }));
+  }
+
+  function applyNormalSortersForRender() {
+    if (!normalSorters.length || state.datasetViewerTranspose) return;
+    restoreNormalTableSorters(normalSorters);
+  }
+
+  function scheduleNormalSortersForRender(token, requestKey, attempt = 0) {
+    if (!normalSorters.length || state.datasetViewerTranspose) return;
+    window.requestAnimationFrame(() => {
+      if (token !== renderToken || !datasetTable || state.datasetViewerTranspose) return;
+      if (datasetTable.initialized !== true && attempt < 8) {
+        scheduleNormalSortersForRender(token, requestKey, attempt + 1);
+        return;
+      }
+      applyNormalSortersForRender();
+      syncNormalRenderedSelection();
+      markRendered(requestKey);
+    });
+  }
+
+  function handleNormalDataSorted() {
+    rememberNormalTableSorters(normalTableSorters());
+    syncNormalRenderedSelection();
+    markRendered(toolCache(TOOL_ID).requestKey);
+    if (suppressNormalSortChangeCount <= 0) {
+      restoredFavouriteNormalSorters = [];
+      markDatasetViewChanged();
     }
   }
 
@@ -1605,12 +1785,181 @@ export function createDatasetViewerTool({
     return String(state.datasetViewerSearch || "");
   }
 
+  function currentSortKey() {
+    return JSON.stringify({
+      normal: favouriteNormalSorters(),
+      transposed: favouriteTransposedSort(),
+    });
+  }
+
+  function uniqueFavouriteStrings(values) {
+    const result = [];
+    const seen = new Set();
+    (Array.isArray(values) ? values : []).forEach((item) => {
+      const value = String(item || "").trim();
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      result.push(value);
+    });
+    return result;
+  }
+
+  function favouriteWidthEntries(payload) {
+    const source = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+    const entries = {};
+    Object.entries(source).forEach(([key, width]) => {
+      const field = String(key || "").trim();
+      const value = Math.round(Number(width));
+      if (!field || !Number.isFinite(value) || value <= 0) return;
+      entries[field] = value;
+    });
+    return entries;
+  }
+
+  function favouriteWidthObject(widths) {
+    const payload = {};
+    widths.forEach((width, field) => {
+      const key = String(field || "").trim();
+      const value = Math.round(Number(width));
+      if (!key || !Number.isFinite(value) || value <= 0) return;
+      payload[key] = value;
+    });
+    return payload;
+  }
+
+  function normalFavouriteColumnWidths() {
+    const payload = {};
+    normalUserColumnWidths.forEach((width, field) => {
+      const column = currentDatasetColumnByField.get(field);
+      const name = String(column?.name || "").trim();
+      const value = Math.round(Number(width));
+      if (!name || !Number.isFinite(value) || value <= 0) return;
+      payload[name] = value;
+    });
+    return payload;
+  }
+
+  function favouritePinnedColumnNames() {
+    if (pendingFavouritePinnedColumnNames !== null) return [...pendingFavouritePinnedColumnNames];
+    return datasetViewerPinnedColumnFields()
+      .map((field) => currentDatasetColumnByField.get(field)?.name || "")
+      .filter(Boolean);
+  }
+
+  function favouriteNormalSorters() {
+    if (pendingFavouriteNormalSorters !== null) return pendingFavouriteNormalSorters.map((sorter) => ({ ...sorter }));
+    if (restoredFavouriteNormalSorters.length) {
+      return restoredFavouriteNormalSorters.map((sorter) => ({ ...sorter }));
+    }
+    if (!state.datasetViewerTranspose) rememberNormalTableSorters(normalTableSorters());
+    const result = [];
+    const seen = new Set();
+    normalSorters.forEach((sorter) => {
+      const column = currentDatasetColumnByField.get(sorter.field);
+      const name = String(column?.name || "").trim();
+      const dir = normaliseSortDirection(sorter.dir);
+      if (!name || !dir || seen.has(name)) return;
+      seen.add(name);
+      result.push({ column: name, dir });
+    });
+    return result;
+  }
+
+  function favouriteTransposedSort() {
+    return normaliseFavouriteTransposedSort(transposedSort);
+  }
+
+  function favouriteNormalSortEntries(values) {
+    const result = [];
+    const seen = new Set();
+    (Array.isArray(values) ? values : []).forEach((item) => {
+      const column = String(item?.column || "").trim();
+      const dir = normaliseSortDirection(item?.dir);
+      if (!column || !dir || seen.has(column)) return;
+      seen.add(column);
+      result.push({ column, dir });
+    });
+    return result;
+  }
+
+  function normaliseFavouriteTransposedSort(value) {
+    const payload = value && typeof value === "object" ? value : null;
+    if (!payload) return null;
+    const field = String(payload.field || "").trim();
+    const dir = normaliseSortDirection(payload.dir);
+    if (!dir || (field !== "__field" && !/^r\d+$/.test(field))) return null;
+    return { field, dir };
+  }
+
+  function normaliseDatasetFavouriteState(datasetView = {}) {
+    const payload = datasetView && typeof datasetView === "object" ? datasetView : {};
+    const columnWidths = payload.columnWidths && typeof payload.columnWidths === "object" ? payload.columnWidths : {};
+    const sort = payload.sort && typeof payload.sort === "object" ? payload.sort : {};
+    return {
+      transpose: Boolean(payload.transpose),
+      alphabeticalColumns: Boolean(payload.alphabeticalColumns),
+      selectColumns: String(payload.selectColumns || ""),
+      pinnedColumns: uniqueFavouriteStrings(payload.pinnedColumns),
+      columnWidths: {
+        normal: favouriteWidthEntries(columnWidths.normal),
+        transposed: favouriteWidthEntries(columnWidths.transposed),
+      },
+      sort: {
+        normal: favouriteNormalSortEntries(sort.normal),
+        transposed: normaliseFavouriteTransposedSort(sort.transposed),
+      },
+    };
+  }
+
+  function captureFavouriteState() {
+    return {
+      transpose: Boolean(state.datasetViewerTranspose),
+      alphabeticalColumns: Boolean(state.datasetViewerAlphabeticalColumns),
+      selectColumns: state.datasetViewerSearch || "",
+      pinnedColumns: favouritePinnedColumnNames(),
+      columnWidths: {
+        normal: normalFavouriteColumnWidths(),
+        transposed: favouriteWidthObject(transposedUserColumnWidths),
+      },
+      sort: {
+        normal: favouriteNormalSorters(),
+        transposed: favouriteTransposedSort(),
+      },
+    };
+  }
+
+  function applyFavouriteState(datasetView = {}) {
+    const next = normaliseDatasetFavouriteState(datasetView);
+    state.datasetViewerTranspose = next.transpose;
+    state.datasetViewerAlphabeticalColumns = next.alphabeticalColumns;
+    state.datasetViewerSearch = next.selectColumns;
+    pendingFavouritePinnedColumnNames = next.pinnedColumns;
+    pendingFavouriteNormalColumnWidths = next.columnWidths.normal;
+    pendingFavouriteNormalSorters = next.sort.normal;
+    restoredFavouriteNormalSorters = next.sort.normal.map((sorter) => ({ ...sorter }));
+    pendingFavouriteTransposedSort = next.sort.transposed;
+    transposedColumnWidths = new Map(Object.entries(next.columnWidths.transposed));
+    transposedUserColumnWidths = new Map(Object.entries(next.columnWidths.transposed));
+    resetSelections();
+    normalSorters = [];
+    transposedSort = next.sort.transposed || { field: "", dir: "none" };
+    suppressNextWidthSnapshot = true;
+    const search = document.getElementById("datasetViewerSearch");
+    if (search) search.value = state.datasetViewerSearch || "";
+    const transpose = document.getElementById("datasetViewerTranspose");
+    if (transpose) transpose.checked = Boolean(state.datasetViewerTranspose);
+    const alphabetical = document.getElementById("datasetViewerAlphabeticalColumns");
+    if (alphabetical) alphabetical.checked = Boolean(state.datasetViewerAlphabeticalColumns);
+    if (toolCache(TOOL_ID).data) rerenderCachedData();
+  }
+
   function markRendered(requestKey) {
     renderedRequestKey = requestKey || null;
     renderedSearch = currentSearchKey();
     renderedTranspose = Boolean(state.datasetViewerTranspose);
     renderedAlphabeticalColumns = Boolean(state.datasetViewerAlphabeticalColumns);
     renderedPinnedColumns = datasetViewerPinnedColumnsKey();
+    renderedSort = currentSortKey();
   }
 
   function cacheIsRendered(cache) {
@@ -1623,6 +1972,7 @@ export function createDatasetViewerTool({
         && renderedTranspose === Boolean(state.datasetViewerTranspose)
         && renderedAlphabeticalColumns === Boolean(state.datasetViewerAlphabeticalColumns)
         && renderedPinnedColumns === datasetViewerPinnedColumnsKey()
+        && renderedSort === currentSortKey()
         && grid
         && grid.children.length
     );
@@ -1654,7 +2004,9 @@ export function createDatasetViewerTool({
   }
 
   return {
+    applyFavouriteState,
     buildRequest,
+    captureFavouriteState,
     fetchData,
     refreshTheme,
     resize,

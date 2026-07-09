@@ -760,6 +760,53 @@ COPY (
             )
         self.assertIn("Favourite filter is invalid", str(context.exception))
 
+        dataset_view = store.create_favourite(
+            "Dataset view",
+            {
+                "version": 1,
+                "scope": "dataset_view",
+                "filter": "YoungestDriverAge > 40",
+                "filterSelectionMode": "single",
+                "filterOperator": "and",
+                "savedFilterRows": [
+                    {"theme": "Driver age", "name": "Missing saved row", "expression": "YoungestDriverAge > 40"},
+                ],
+                "datasetView": {
+                    "transpose": True,
+                    "alphabeticalColumns": True,
+                    "selectColumns": "Actual",
+                    "pinnedColumns": ["UseofVan", "MissingPinned"],
+                    "columnWidths": {
+                        "normal": {"Actual": 240},
+                        "transposed": {"__field": 280},
+                    },
+                    "sort": {
+                        "normal": [{"column": "Actual", "dir": "desc"}, {"column": "MissingSorted", "dir": "asc"}],
+                        "transposed": {"field": "__field", "dir": "asc"},
+                    },
+                },
+            },
+            saved_filters=[],
+        )
+        self.assertEqual(dataset_view["view"]["scope"], "dataset_view")
+        self.assertTrue(dataset_view["validation"]["valid"])
+        self.assertEqual(dataset_view["validation"]["errors"], [])
+        self.assertIn("saved FILTER selection", " ".join(dataset_view["validation"]["warnings"]))
+        self.assertIn("pinned Dataset column", " ".join(dataset_view["validation"]["warnings"]))
+        self.assertIn("sorted Dataset column", " ".join(dataset_view["validation"]["warnings"]))
+        self.assertEqual(dataset_view["view"]["datasetView"]["pinnedColumns"], ["UseofVan", "MissingPinned"])
+        self.assertEqual(
+            dataset_view["view"]["datasetView"]["sort"]["normal"],
+            [{"column": "Actual", "dir": "desc"}, {"column": "MissingSorted", "dir": "asc"}],
+        )
+
+        with self.assertRaises(ValueError) as context:
+            store.create_favourite(
+                "Broken dataset filter",
+                {"version": 1, "scope": "dataset_view", "filter": "not valid sql", "datasetView": {}},
+            )
+        self.assertIn("Favourite filter is invalid", str(context.exception))
+
     def test_line_bar_favourite_store_uses_explicit_json_path(self) -> None:
         dataset = Dataset(self.data_path)
         explicit_path = self.root / "config" / "monthly_favourites.json"
