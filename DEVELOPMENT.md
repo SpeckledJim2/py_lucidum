@@ -309,39 +309,40 @@ Use these tiers to keep iteration focused while preserving the full suite.
 Narrow tiers are for local speed only; do not delete, skip, or weaken tests just
 to reduce count.
 
-- Syntax checks:
+- Broad development checks are the normal between-commit loop. Test modules are
+  discovered dynamically, so new modules join this tier automatically. Only
+  `test_glm.py` and `test_browser_smoke.py` are excluded; the fast packaging
+  contract in `test_pipx_install.py` runs while its environment-gated install
+  test remains skipped. This tier currently takes about 23 seconds:
 
 ```bash
-.venv/bin/python -m compileall src tests
-find src/py_lucidum/static -path '*/vendor/*' -prune -o -name '*.js' -print0 | xargs -0 -n1 node --check
+.venv/bin/python scripts/run_tests.py dev
 ```
 
-- Fast non-model backend tests, normally the quickest local feedback loop for
-  non-modelling backend changes:
+- Focused unittest areas accept the test filename without its `test_` prefix;
+  hyphens and underscores are interchangeable. Exact unittest module or method
+  targets also pass through:
 
 ```bash
-.venv/bin/python -m unittest \
-  tests/test_cli.py \
-  tests/test_column_profile.py \
-  tests/test_dataset_viewer.py \
-  tests/test_demo_dataset.py \
-  tests/test_features.py \
-  tests/test_histogram.py \
-  tests/test_line_bar.py \
-  tests/test_telemetry.py \
-  tests/test_uk_map.py
+.venv/bin/python scripts/run_tests.py focus line-bar
+.venv/bin/python scripts/run_tests.py focus glm gbm
+.venv/bin/python scripts/run_tests.py focus tests.test_glm.GlmToolTests.test_glm_formula_drop_first_policy_tracks_regularization
 ```
 
-- Model tests, which include the slower GLM fit/tabulation coverage:
+- Syntax-only checks compile Python and discover every non-vendored JavaScript
+  file dynamically before running `node --check`:
 
 ```bash
-.venv/bin/python -m unittest tests/test_glm.py tests/test_gbm.py
+.venv/bin/python scripts/run_tests.py syntax
 ```
 
-- Static frontend contract tests:
+- Browser smoke tests continue to use the Dropbox-safe local mirror. Arguments
+  after `--` are forwarded to pytest, so frontend work can target one scenario:
 
 ```bash
-.venv/bin/python -m unittest tests/test_static_assets.py
+.venv/bin/python scripts/run_tests.py browser
+.venv/bin/python scripts/run_tests.py browser -- --durations=20 -q
+.venv/bin/python scripts/run_tests.py browser -- tests/test_browser_smoke.py::BrowserSmokeTests::test_gbm_tool_loads_feature_grid -q
 ```
 
 Prefer future behavior tests over exact JS/CSS string-contract tests where
@@ -349,77 +350,50 @@ practical. Exact asset-string checks are still acceptable for stable contracts
 such as asset registration, cache-control behavior, and intentionally documented
 UI text or selectors.
 
-- Browser smoke tests. The helper mirrors Dropbox CloudStorage checkouts before
-  launching Playwright and defaults to `tests/test_browser_smoke.py` so it does
-  not rerun the full backend suite:
+- The full pre-commit gate is deliberately comprehensive and currently takes
+  about three minutes. It checks unstaged and staged diffs, performs dynamic
+  Python and JavaScript syntax checks, runs full unittest discovery including
+  GLM coverage, then runs all browser smoke tests sequentially:
 
 ```bash
-.venv/bin/python scripts/run_browser_smoke.py
+.venv/bin/python scripts/run_tests.py precommit
 ```
+
+Enable the versioned hook once per clone so normal `git commit` calls cannot
+skip the gate accidentally:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook uses `.venv/bin/python` by default. Set
+`PY_LUCIDUM_TEST_PYTHON=/absolute/path/to/python` when the test environment
+lives elsewhere. `git commit --no-verify` remains Git's explicit emergency
+bypass; it is not the normal development workflow. Version bumps remain a
+separate step performed before committing.
+
+The isolated pipx installation test is environment-sensitive and stays outside
+the normal commit gate. Run it for packaging or release changes:
+
+```bash
+.venv/bin/python scripts/run_tests.py pipx
+```
+
+Use `PY_LUCIDUM_PIPX_PYTHON=python3.13` when the default pipx interpreter is
+not Python 3.13.
+
+Current timings recorded on macOS arm64 with Python 3.13.13 and Node 26.3.0:
+
+- Full unittest discovery: 585 tests, 40 expected skips, about 85 seconds.
+- GLM tests: 61 tests, about 67 seconds.
+- Browser smoke: 39 tests, about 89 seconds.
+- Broad development lane: 485 tests, one expected skip, and all syntax checks
+  in about 24 seconds.
+- Complete pre-commit gate: about 2 minutes 56 seconds.
 
 Browser smoke coverage should include cross-tool focus and listener regressions
 after visiting tools that install global listeners, especially document/window
 capture handlers.
-
-- Full pre-commit checks: run the complete command block below.
-
-Standard checks before committing:
-
-```bash
-.venv/bin/python -m unittest discover -s tests
-.venv/bin/python -m compileall src tests
-node --check src/py_lucidum/static/app.js
-node --check src/py_lucidum/static/app/main.js
-node --check src/py_lucidum/static/app/dataset-viewer-tool.js
-node --check src/py_lucidum/static/app/column-profile-tool.js
-node --check src/py_lucidum/static/app/line-bar-tool.js
-node --check src/py_lucidum/static/app/histogram-tool.js
-node --check src/py_lucidum/static/app/uk-map-tool.js
-node --check src/py_lucidum/static/app/shared/api.js
-node --check src/py_lucidum/static/app/shared/format.js
-node --check src/py_lucidum/static/app/shared/model-ui.js
-node --check src/py_lucidum/static/app/shared/schema.js
-node --check src/py_lucidum/static/app/shared/tabulator.js
-node --check src/py_lucidum/static/app/shared/timing.js
-node --check src/py_lucidum/static/app/glm-tool.js
-node --check src/py_lucidum/static/app/glm-formula-builder.js
-node --check src/py_lucidum/static/app/glm-model-navigator.js
-node --check src/py_lucidum/static/app/glm-tabulations.js
-node --check src/py_lucidum/static/app/gbm-tool.js
-node --check src/py_lucidum/static/app/gbm-evaluation-chart.js
-node --check src/py_lucidum/static/app/gbm-feature-parameter-controls.js
-node --check src/py_lucidum/static/app/gbm-model-navigator.js
-node --check src/py_lucidum/static/app/gbm-tab-orchestration.js
-node --check src/py_lucidum/static/app/gbm-shap-tool.js
-node --check src/py_lucidum/static/app/gbm-shap-chart.js
-node --check src/py_lucidum/static/app/gbm-stacked-shap-tool.js
-node --check src/py_lucidum/static/app/gbm-stacked-shap-chart.js
-node --check src/py_lucidum/static/app/gbm-tree-viewer.js
-node --check src/py_lucidum/static/app/model-tool-shell.js
-.venv/bin/python scripts/run_browser_smoke.py
-git diff --check
-```
-
-Optional full browser smoke check:
-
-```bash
-.venv/bin/python scripts/run_browser_smoke.py
-```
-
-To pass custom pytest options or a different target, add them after `--`:
-
-```bash
-.venv/bin/python scripts/run_browser_smoke.py -- --durations=20 -q
-.venv/bin/python scripts/run_browser_smoke.py -- tests/test_browser_smoke.py::BrowserSmokeTests::test_gbm_tool_loads_feature_grid -q
-```
-
-Optional `pipx` install check:
-
-```bash
-PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 .venv/bin/python -m pytest tests/test_pipx_install.py
-```
-
-Use `PY_LUCIDUM_PIPX_PYTHON=python3.13` when the default `pipx` interpreter is not Python 3.13.
 
 The current test suite should cover:
 

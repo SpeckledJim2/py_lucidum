@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+python=${PY_LUCIDUM_TEST_PYTHON:-"$repo_root/.venv/bin/python"}
+
+if ! command -v "$python" >/dev/null 2>&1; then
+    echo "Lucidum pre-commit: Python is not executable: $python" >&2
+    echo "Set PY_LUCIDUM_TEST_PYTHON to the test-environment Python path." >&2
+    exit 1
+fi
+
+exec "$python" "$repo_root/scripts/run_tests.py" precommit

@@ -52,43 +52,27 @@ Use this map before opening large files:
 
 ## Before Committing
 
-Run the standard checks from `DEVELOPMENT.md`. For frontend, app-launch, or GBM UI changes, include the browser smoke tests. `scripts/run_browser_smoke.py` defaults to `tests/test_browser_smoke.py`; pass explicit pytest arguments after `--` only when you intentionally want another target.
-
-- Before every commit, unless the user explicitly says not to, run `.venv/bin/python scripts/bump_version.py patch`. Include `pyproject.toml` in the same commit and report the final version number.
+Use the tiered runner documented in `DEVELOPMENT.md`. The broad development
+lane runs syntax checks and every test module except the slow GLM and browser
+suites:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests
-.venv/bin/python -m compileall src tests
-node --check src/py_lucidum/static/app.js
-node --check src/py_lucidum/static/app/main.js
-node --check src/py_lucidum/static/app/dataset-viewer-tool.js
-node --check src/py_lucidum/static/app/column-profile-tool.js
-node --check src/py_lucidum/static/app/line-bar-tool.js
-node --check src/py_lucidum/static/app/histogram-tool.js
-node --check src/py_lucidum/static/app/uk-map-tool.js
-node --check src/py_lucidum/static/app/shared/api.js
-node --check src/py_lucidum/static/app/shared/format.js
-node --check src/py_lucidum/static/app/shared/model-ui.js
-node --check src/py_lucidum/static/app/shared/schema.js
-node --check src/py_lucidum/static/app/shared/tabulator.js
-node --check src/py_lucidum/static/app/shared/timing.js
-node --check src/py_lucidum/static/app/glm-tool.js
-node --check src/py_lucidum/static/app/glm-formula-builder.js
-node --check src/py_lucidum/static/app/glm-model-navigator.js
-node --check src/py_lucidum/static/app/glm-tabulations.js
-node --check src/py_lucidum/static/app/gbm-tool.js
-node --check src/py_lucidum/static/app/gbm-evaluation-chart.js
-node --check src/py_lucidum/static/app/gbm-feature-parameter-controls.js
-node --check src/py_lucidum/static/app/gbm-model-navigator.js
-node --check src/py_lucidum/static/app/gbm-tab-orchestration.js
-node --check src/py_lucidum/static/app/gbm-shap-tool.js
-node --check src/py_lucidum/static/app/gbm-shap-chart.js
-node --check src/py_lucidum/static/app/gbm-stacked-shap-tool.js
-node --check src/py_lucidum/static/app/gbm-stacked-shap-chart.js
-node --check src/py_lucidum/static/app/gbm-tree-viewer.js
-node --check src/py_lucidum/static/app/model-tool-shell.js
-.venv/bin/python scripts/run_browser_smoke.py
-git diff --check
+.venv/bin/python scripts/run_tests.py dev
 ```
+
+Use `focus` or `browser` with a specific target for the quickest feedback while
+editing one area. Before every commit, run the complete gate; it includes full
+unittest discovery, all browser smoke tests, dynamic syntax checks, and staged
+and unstaged whitespace checks:
+
+```bash
+.venv/bin/python scripts/run_tests.py precommit
+```
+
+The versioned `.githooks/pre-commit` hook runs that command automatically after
+one-time setup with `git config core.hooksPath .githooks`. Do not weaken or
+bypass the full gate merely to save time.
+
+- Before every commit, unless the user explicitly says not to, run `.venv/bin/python scripts/bump_version.py patch`. Include `pyproject.toml` in the same commit and report the final version number.
 
 Keep local datasets, `.lucidum/`, virtualenvs, caches, build artifacts, and generated README previews out of git.
