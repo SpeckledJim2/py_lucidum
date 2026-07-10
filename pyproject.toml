@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "py-lucidum"
-version = "0.3.12"
+version = "0.3.13"
 description = "Interactive data exploration workbench for local CSV files, Parquet files, and same-schema Parquet folders."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -24,10 +24,11 @@ Issues = "https://github.com/SpeckledJim2/py_lucidum/issues"
 
 [project.optional-dependencies]
 gbm = [
-  "lightgbm>=4.0",
+  "lightgbm[arrow]>=4.0",
   "numpy>=2.0",
   "openpyxl>=3.1",
   "pandas>=2.2",
+  "polars[pyarrow]>=1.0",
 ]
 glm = [
   "glum>=3.4",

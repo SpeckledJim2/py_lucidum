@@ -88,6 +88,32 @@ def gbm_dependencies() -> tuple[Any, Any, Any]:
     return lgb, np, pd
 
 
+def gbm_training_dependencies() -> tuple[Any, Any, Any, Any]:
+    lgb, np, pd = gbm_dependencies()
+    missing: list[str] = []
+    try:
+        import polars as pl  # type: ignore[import-not-found]
+    except ImportError:
+        pl = None
+        missing.append("polars")
+    try:
+        import pyarrow as pa  # type: ignore[import-not-found]
+    except ImportError:
+        pa = None
+        missing.append("pyarrow")
+    try:
+        import cffi  # type: ignore[import-not-found]  # noqa: F401
+    except ImportError:
+        missing.append("LightGBM Arrow runtime (cffi)")
+    if missing:
+        raise MissingGbmDependency(", ".join(missing))
+    return lgb, np, pd, pl
+
+
+def elapsed_seconds(started: float) -> float:
+    return round(max(0.0, time.perf_counter() - started), 6)
+
+
 class EbmStageController:
     def __init__(
         self,
@@ -244,7 +270,7 @@ def init_score_kind(selected_init_score: str) -> str:
     return "dataset_column"
 
 
-def attach_glm_init_score(work_frame: Any, dataset: Dataset, selected_init_score: str) -> Any:
+def attach_glm_init_score(work_frame: Any, dataset: Dataset, selected_init_score: str, pl: Any) -> Any:
     glm_store = GlmModelStore(dataset.path)
     ref = glm_store.source_ref(selected_init_score)
     if ref is None or ref.source_kind != "predictions":
@@ -252,17 +278,17 @@ def attach_glm_init_score(work_frame: Any, dataset: Dataset, selected_init_score
     prediction_path = glm_store.source_path(ref.model_id, "predictions")
     con = duckdb.connect(database=":memory:")
     try:
-        con.register("score_rows", work_frame[["__lucidum_row_id"]])
+        con.register("score_rows", work_frame.select("__lucidum_row_id"))
         init_frame = con.execute(
             f"""
 SELECT score_rows.__lucidum_row_id, prediction.glm_prediction AS __lucidum_init_score_prediction
 FROM score_rows
 LEFT JOIN read_parquet({sql_literal(str(prediction_path))}) prediction USING (__lucidum_row_id)
 """
-        ).fetch_df()
+        ).pl()
     finally:
         con.close()
-    return work_frame.merge(init_frame, on="__lucidum_row_id", how="left", sort=False)
+    return work_frame.join(init_frame, on="__lucidum_row_id", how="left", maintain_order="left")
 
 
 def init_score_arrays(
@@ -272,7 +298,7 @@ def init_score_arrays(
     selected_objective: str,
     dataset: Dataset,
     np: Any,
-    pd: Any,
+    pl: Any,
 ) -> tuple[Any | None, Any | None, dict[str, Any]]:
     value = normalise_init_score_value(selected_init_score)
     kind = init_score_kind(value)
@@ -281,18 +307,18 @@ def init_score_arrays(
     if kind == "none":
         return None, None, metadata
     if kind == "glm_prediction":
-        work_frame = attach_glm_init_score(work_frame, dataset, value)
-        prediction_values = pd.to_numeric(work_frame["__lucidum_init_score_prediction"], errors="coerce")
+        work_frame = attach_glm_init_score(work_frame, dataset, value, pl)
+        prediction_values = polars_numeric_array(work_frame, "__lucidum_init_score_prediction", pl)
         glm_store = GlmModelStore(dataset.path)
         ref = glm_store.source_ref(value)
         if ref is not None:
             metadata.update({"source_id": value, "model_id": ref.model_id})
     else:
-        if value not in work_frame:
+        if value not in work_frame.columns:
             raise ValueError(f"Choose a valid numeric dataset column for init_score: {value}")
-        prediction_values = pd.to_numeric(work_frame[value], errors="coerce")
+        prediction_values = polars_numeric_array(work_frame, value, pl)
         metadata.update({"column": value})
-    prediction_array = prediction_values.to_numpy(dtype="float64")
+    prediction_array = np.asarray(prediction_values, dtype="float64")
     linear_array = init_score_to_linear(np, prediction_array, transform, value)
     metadata.update(
         {
@@ -333,14 +359,97 @@ def raw_score_to_prediction(np: Any, raw_values: Any, transform: str) -> Any:
     return raw_values
 
 
-def init_score_dataframe(pd: Any, work_frame: Any, linear_values: Any, prediction_values: Any) -> Any:
-    return pd.DataFrame(
+def predict_response_values(
+    *,
+    booster: Any,
+    feature_data: Any,
+    best_iteration: int,
+    np: Any,
+    use_supplied_init_score: bool,
+    init_score_linear: Any | None,
+    init_score_transform_name: str,
+    use_offset_init_score: bool,
+    log_offset: Any | None,
+) -> Any:
+    if use_supplied_init_score:
+        if init_score_linear is None:
+            raise ValueError("Supplied GBM init_score values are unavailable")
+        raw_score = booster.predict(feature_data, raw_score=True, num_iteration=best_iteration)
+        return raw_score_to_prediction(
+            np,
+            np.asarray(init_score_linear, dtype="float64") + np.asarray(raw_score, dtype="float64"),
+            init_score_transform_name,
+        )
+    if use_offset_init_score:
+        if log_offset is None:
+            raise ValueError("GBM offset init_score values are unavailable")
+        raw_score = booster.predict(feature_data, raw_score=True, num_iteration=best_iteration)
+        return np.exp(np.asarray(log_offset, dtype="float64") + np.asarray(raw_score, dtype="float64"))
+    return booster.predict(feature_data, num_iteration=best_iteration)
+
+
+def init_score_dataframe(pl: Any, work_frame: Any, linear_values: Any, prediction_values: Any) -> Any:
+    return pl.DataFrame(
         {
-            "__lucidum_row_id": work_frame["__lucidum_row_id"].astype("int64").to_numpy(),
+            "__lucidum_row_id": work_frame.get_column("__lucidum_row_id").cast(pl.Int64),
             "init_score": linear_values,
             "init_score_prediction": prediction_values,
         }
     )
+
+
+def polars_numeric_array(frame: Any, column: str, pl: Any) -> Any:
+    return (
+        frame.get_column(column)
+        .cast(pl.Float64, strict=False)
+        .fill_null(float("nan"))
+        .to_numpy()
+    )
+
+
+def polars_feature_frame(
+    frame: Any,
+    feature_names: list[str],
+    categorical_features: list[str],
+    pl: Any,
+) -> tuple[Any, dict[str, list[str]]]:
+    labels: dict[str, list[str]] = {}
+    categorical_set = set(categorical_features)
+    expressions: list[Any] = [
+        pl.col(name).cast(pl.Float64, strict=False).alias(name)
+        for name in feature_names
+        if name not in categorical_set
+    ]
+    for name in categorical_features:
+        values = (
+            frame.get_column(name)
+            .cast(pl.String, strict=False)
+            .drop_nulls()
+            .unique()
+            .sort()
+            .to_list()
+        )
+        categories = [str(value) for value in values]
+        labels[name] = categories
+        if categories:
+            expressions.append(
+                pl.col(name)
+                .cast(pl.String, strict=False)
+                .cast(pl.Enum(categories), strict=False)
+                .to_physical()
+                .cast(pl.Int32)
+                .alias(name)
+            )
+        else:
+            expressions.append(pl.lit(None, dtype=pl.Int32).alias(name))
+    feature_frame = frame.select(feature_names)
+    if expressions:
+        feature_frame = feature_frame.with_columns(expressions)
+    return feature_frame, labels
+
+
+def arrow_rows(frame: Any, mask: Any, pl: Any) -> Any:
+    return frame.filter(pl.Series("__lucidum_mask", mask)).to_arrow()
 
 
 def training_projection_columns(
@@ -402,12 +511,16 @@ def train_model(
     grid_search: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     emit_preparing_progress(progress_callback, "Preparing GBM: loading dependencies...", 0)
-    lgb, np, pd = gbm_dependencies()
+    dependency_started = time.perf_counter()
+    lgb, np, pd, pl = gbm_training_dependencies()
+    timings = {"dependency_seconds": elapsed_seconds(dependency_started)}
     started = time.perf_counter()
     emit_preparing_progress(progress_callback, "Preparing GBM: validating request...", 0)
+    validation_started = time.perf_counter()
     validation = validate_request(dataset, payload, generated_sample_path=store.generated_sample_path)
     if not validation.ok:
         raise ValueError("; ".join(validation.errors))
+    timings["validation_seconds"] = elapsed_seconds(validation_started)
 
     emit_preparing_progress(progress_callback, "Preparing GBM: resolving parameters...", 0)
     params = normalise_parameters(payload.get("parameters"))
@@ -428,6 +541,7 @@ def train_model(
         params["num_leaves"] = 2
         params["learning_rate"] = EBM_INITIAL_LEARNING_RATE
 
+    data_load_started = time.perf_counter()
     with dataset.lock:
         emit_preparing_progress(progress_callback, "Preparing GBM: resolving selected features...", 0)
         columns = dataset.column_map()
@@ -472,16 +586,18 @@ def train_model(
             where_sql,
             generated_sample_path=generated_sample_path,
         )
-        score_frame = dataset.con.execute(select_sql).fetch_df()
+        score_frame = dataset.con.execute(select_sql).pl()
+    timings["data_load_seconds"] = elapsed_seconds(data_load_started)
 
-    if score_frame.empty:
+    if score_frame.is_empty():
         raise ValueError("No rows are available for GBM training")
+    scored_rows = score_frame.height
 
     emit_preparing_progress(
         progress_callback,
-        f"Preparing GBM: loaded {len(score_frame):,} rows; creating model workspace...",
+        f"Preparing GBM: loaded {scored_rows:,} rows; creating model workspace...",
         0,
-        scored_rows=len(score_frame),
+        scored_rows=scored_rows,
         feature_count=len(feature_names),
     )
     model_label = str(payload.get("label") or "GBM").strip() or "GBM"
@@ -558,24 +674,34 @@ def train_model(
         params["interaction_constraints"] = interaction_constraints
         stored_params["interaction_constraints"] = interaction_constraints
 
-    emit_preparing_progress(progress_callback, "Preparing GBM: coercing response and denominator columns...", 0, scored_rows=len(score_frame))
-    work_frame = score_frame.copy()
-    work_frame[response_col] = pd.to_numeric(work_frame[response_col], errors="coerce")
+    matrix_prep_started = time.perf_counter()
+    emit_preparing_progress(progress_callback, "Preparing GBM: coercing response and denominator columns...", 0, scored_rows=scored_rows)
+    numeric_expressions = [pl.col(response_col).cast(pl.Float64, strict=False).alias(response_col)]
     if offset_col:
-        work_frame[offset_col] = pd.to_numeric(work_frame[offset_col], errors="coerce")
-    response_present = work_frame[response_col].notna()
+        numeric_expressions.append(pl.col(offset_col).cast(pl.Float64, strict=False).alias(offset_col))
+    work_frame = score_frame.with_columns(numeric_expressions)
+    del score_frame
+    response_values = polars_numeric_array(work_frame, response_col, pl)
+    response_present = ~np.isnan(response_values)
     sample_mode = "none"
     sample_source = "none"
     if sample_column or generated_sample_path:
-        sample_values = work_frame[SAMPLE_COLUMN].astype(str).str.strip().str.lower()
+        sample_values = (
+            work_frame.get_column(SAMPLE_COLUMN)
+            .cast(pl.String, strict=False)
+            .str.strip_chars()
+            .str.to_lowercase()
+            .to_numpy()
+        )
         sample_mode = SAMPLE_COLUMN
         sample_source = "dataset" if sample_column else "generated"
+        train_mask = response_present & (sample_values == "training")
+        test_mask = response_present & (sample_values == "test")
+        validation_mask = response_present & (sample_values == "validation")
     else:
-        sample_values = pd.Series(["training"] * len(work_frame), index=work_frame.index)
-
-    train_mask = response_present & (sample_values == "training")
-    test_mask = response_present & (sample_values == "test")
-    validation_mask = response_present & (sample_values == "validation")
+        train_mask = response_present.copy()
+        test_mask = np.zeros(work_frame.height, dtype=bool)
+        validation_mask = np.zeros(work_frame.height, dtype=bool)
     if not bool(train_mask.any()):
         raise ValueError("No training rows are available after validation")
 
@@ -586,12 +712,11 @@ def train_model(
             f"({int(train_mask.sum()):,} train, {int(test_mask.sum()):,} test, {int(validation_mask.sum()):,} validation)..."
         ),
         0,
-        scored_rows=len(score_frame),
+        scored_rows=scored_rows,
         training_rows=int(train_mask.sum()),
         test_rows=int(test_mask.sum()),
         validation_rows=int(validation_mask.sum()),
     )
-    feature_frame = work_frame[feature_names].copy()
     emit_preparing_progress(
         progress_callback,
         f"Preparing GBM: encoding {len(categorical_features):,} categorical features...",
@@ -599,13 +724,11 @@ def train_model(
         feature_count=len(feature_names),
         categorical_feature_count=len(categorical_features),
     )
-    for name in categorical_features:
-        feature_frame[name] = feature_frame[name].astype("category")
-    categorical_labels = categorical_feature_labels(feature_frame, categorical_features)
+    feature_frame, categorical_labels = polars_feature_frame(work_frame, feature_names, categorical_features, pl)
 
-    emit_preparing_progress(progress_callback, "Preparing GBM: preparing init scores...", 0, scored_rows=len(score_frame))
-    offset_values = work_frame[offset_col].astype("float64") if offset_col else pd.Series([1.0] * len(work_frame), index=work_frame.index)
-    log_offset = np.log(offset_values.to_numpy(dtype="float64"))
+    emit_preparing_progress(progress_callback, "Preparing GBM: preparing init scores...", 0, scored_rows=scored_rows)
+    offset_values = polars_numeric_array(work_frame, offset_col, pl) if offset_col else None
+    log_offset = np.log(offset_values) if offset_values is not None else None
     use_supplied_init_score = init_score_requested({"init_score": selected_init_score})
     init_score_linear, init_score_prediction, init_score_metadata = init_score_arrays(
         work_frame=work_frame,
@@ -613,36 +736,45 @@ def train_model(
         selected_objective=selected_objective,
         dataset=dataset,
         np=np,
-        pd=pd,
+        pl=pl,
     )
     use_offset_init_score = bool(not use_supplied_init_score and should_use_offset_init_score(params, offset_col))
     active_init_score = init_score_linear if use_supplied_init_score else log_offset if use_offset_init_score else None
-    train_init = active_init_score[train_mask.to_numpy()] if active_init_score is not None else None
-    valid_init = active_init_score[test_mask.to_numpy()] if active_init_score is not None and bool(test_mask.any()) else None
+    train_init = active_init_score[train_mask] if active_init_score is not None else None
+    valid_init = active_init_score[test_mask] if active_init_score is not None and bool(test_mask.any()) else None
+    validation_init = active_init_score[validation_mask] if active_init_score is not None and bool(validation_mask.any()) else None
+    timings["matrix_prep_seconds"] = elapsed_seconds(matrix_prep_started)
 
     emit_preparing_progress(progress_callback, "Preparing GBM: building LightGBM datasets...", 0, training_rows=int(train_mask.sum()))
+    dataset_construct_started = time.perf_counter()
     train_set = lgb.Dataset(
-        feature_frame.loc[train_mask],
-        label=work_frame.loc[train_mask, response_col].astype("float64"),
-        categorical_feature=categorical_features or "auto",
+        arrow_rows(feature_frame, train_mask, pl),
+        label=np.asarray(response_values[train_mask], dtype="float64"),
+        feature_name=feature_names,
+        categorical_feature=categorical_features,
         init_score=train_init,
-        free_raw_data=False,
+        params=params,
+        free_raw_data=True,
     )
     valid_sets = [train_set]
     valid_names = ["training"]
     if bool(test_mask.any()):
         valid_sets.append(
             lgb.Dataset(
-                feature_frame.loc[test_mask],
-                label=work_frame.loc[test_mask, response_col].astype("float64"),
-                categorical_feature=categorical_features or "auto",
+                arrow_rows(feature_frame, test_mask, pl),
+                label=np.asarray(response_values[test_mask], dtype="float64"),
+                feature_name=feature_names,
+                categorical_feature=categorical_features,
                 init_score=valid_init,
                 reference=train_set,
-                free_raw_data=False,
+                params=params,
+                free_raw_data=True,
             )
         )
         valid_names.append("test")
-    validation_init = active_init_score[validation_mask.to_numpy()] if active_init_score is not None and bool(validation_mask.any()) else None
+    for lightgbm_dataset in valid_sets:
+        lightgbm_dataset.construct()
+    timings["dataset_construct_seconds"] = elapsed_seconds(dataset_construct_started)
 
     evaluation_result: dict[str, dict[str, list[float]]] = {}
     ebm_controller: EbmStageController | None = None
@@ -672,6 +804,7 @@ def train_model(
     callbacks.append(lgb.log_evaluation(period=0))
 
     emit_preparing_progress(progress_callback, f"Preparing GBM: starting LightGBM training ({num_boost_round:,} trees)...", 0)
+    fit_started = time.perf_counter()
     booster = lgb.train(
         params,
         train_set,
@@ -680,6 +813,7 @@ def train_model(
         valid_names=valid_names,
         callbacks=callbacks,
     )
+    timings["fit_seconds"] = elapsed_seconds(fit_started)
     final_iteration = int(booster.current_iteration() if hasattr(booster, "current_iteration") else num_boost_round)
     if ebm_controller:
         ebm_controller.finish(final_iteration)
@@ -690,18 +824,17 @@ def train_model(
     )
     append_holdout_evaluation(
         lgb=lgb,
+        pl=pl,
         booster=booster,
         feature_frame=feature_frame,
-        response=work_frame[response_col].astype("float64"),
+        response=response_values,
         validation_mask=validation_mask,
+        feature_names=feature_names,
         categorical_features=categorical_features,
         validation_init=validation_init,
         train_set=train_set,
         evaluation_result=evaluation_result,
     )
-    model_path = store.artifact_path(model_id, "model")
-    booster.save_model(str(model_path), num_iteration=best_iteration)
-
     emit_progress(
         progress_callback,
         phase_progress_payload(
@@ -714,31 +847,38 @@ def train_model(
             evaluation=evaluation_result,
         ),
     )
-    raw_score = booster.predict(feature_frame, raw_score=True, num_iteration=best_iteration)
-    if use_supplied_init_score and init_score_linear is not None:
-        prediction = raw_score_to_prediction(np, init_score_linear + raw_score, str(init_score_metadata.get("transform") or "identity"))
-    elif use_offset_init_score:
-        prediction = np.exp(log_offset + raw_score)
-    else:
-        prediction = booster.predict(feature_frame, num_iteration=best_iteration)
+    score_started = time.perf_counter()
+    full_feature_table = feature_frame.to_arrow()
+    prediction = predict_response_values(
+        booster=booster,
+        feature_data=full_feature_table,
+        best_iteration=best_iteration,
+        np=np,
+        use_supplied_init_score=use_supplied_init_score,
+        init_score_linear=init_score_linear,
+        init_score_transform_name=str(init_score_metadata.get("transform") or "identity"),
+        use_offset_init_score=use_offset_init_score,
+        log_offset=log_offset,
+    )
+    del full_feature_table
     prediction_data = {
-        "__lucidum_row_id": work_frame["__lucidum_row_id"].astype("int64").to_numpy(),
+        "__lucidum_row_id": work_frame.get_column("__lucidum_row_id").cast(pl.Int64),
         "gbm_prediction": prediction,
     }
     if offset_col:
         prediction_array = np.asarray(prediction, dtype="float64")
-        offset_array = offset_values.to_numpy(dtype="float64")
+        offset_array = np.asarray(offset_values, dtype="float64")
         rate = np.full(prediction_array.shape, np.nan, dtype="float64")
         valid_rate = np.isfinite(prediction_array) & np.isfinite(offset_array) & (offset_array > 0)
         rate[valid_rate] = prediction_array[valid_rate] / offset_array[valid_rate]
         prediction_data["gbm_prediction_rate"] = rate
-    predictions = pd.DataFrame(prediction_data)
-    write_dataframe_parquet(predictions, store.artifact_path(model_id, "predictions"))
-    if use_supplied_init_score and init_score_linear is not None and init_score_prediction is not None:
-        write_dataframe_parquet(
-            init_score_dataframe(pd, work_frame, init_score_linear, init_score_prediction),
-            store.artifact_path(model_id, "init_score"),
-        )
+    predictions = pl.DataFrame(prediction_data)
+    saved_init_score_frame = (
+        init_score_dataframe(pl, work_frame, init_score_linear, init_score_prediction)
+        if use_supplied_init_score and init_score_linear is not None and init_score_prediction is not None
+        else None
+    )
+    timings["score_seconds"] = elapsed_seconds(score_started)
 
     gain_values = booster.feature_importance(importance_type="gain")
     gains = {name: float(value or 0.0) for name, value in zip(feature_names, gain_values)}
@@ -757,7 +897,9 @@ def train_model(
     shap_mode = str(payload.get("shap_rows") or "0").strip().lower()
     shap_written_rows = 0
     shap_summary_rows: list[dict[str, Any]] = []
+    timings["shap_seconds"] = 0.0
     if shap_mode not in {"zero", "0", "none"}:
+        shap_started = time.perf_counter()
         emit_progress(
             progress_callback,
             phase_progress_payload(
@@ -772,7 +914,7 @@ def train_model(
         )
         shap_frame, shap_summary = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=booster,
             feature_frame=feature_frame,
             score_frame=work_frame,
@@ -783,11 +925,12 @@ def train_model(
             best_iteration=best_iteration,
             shap_interaction_groups=interaction_group_constraints,
         )
-        shap_written_rows = int(len(shap_frame))
+        shap_written_rows = shap_frame.height
         write_dataframe_parquet(shap_frame, store.artifact_path(model_id, "shap_long"))
         write_dataframe_parquet(shap_summary, store.artifact_path(model_id, "shap_summary"))
-        shap_summary_rows = shap_summary.to_dict("records")
+        shap_summary_rows = shap_summary.to_dicts()
         feature_config = feature_config_with_mean_abs_shap(feature_config, shap_summary_rows)
+        timings["shap_seconds"] = elapsed_seconds(shap_started)
 
     emit_progress(
         progress_callback,
@@ -801,12 +944,14 @@ def train_model(
             evaluation=evaluation_result,
         ),
     )
-    evaluation_frame = evaluation_dataframe(pd, evaluation_result)
-    write_dataframe_parquet(evaluation_frame, store.artifact_path(model_id, "evaluation"))
-    tree_table = tree_dataframe(pd, booster, categorical_labels=categorical_labels)
-    write_dataframe_parquet(tree_table, store.artifact_path(model_id, "tree_table"))
+    artifact_write_started = time.perf_counter()
+    booster.save_model(str(store.artifact_path(model_id, "model")), num_iteration=best_iteration)
+    write_dataframe_parquet(predictions, store.artifact_path(model_id, "predictions"))
+    if saved_init_score_frame is not None:
+        write_dataframe_parquet(saved_init_score_frame, store.artifact_path(model_id, "init_score"))
+    write_dataframe_parquet(evaluation_dataframe(pd, evaluation_result), store.artifact_path(model_id, "evaluation"))
+    write_dataframe_parquet(tree_dataframe(pd, booster, categorical_labels=categorical_labels), store.artifact_path(model_id, "tree_table"))
 
-    elapsed = time.perf_counter() - started
     ebm_metadata = ebm_controller.metadata() if ebm_controller else None
     feature_scenario = normalise_feature_scenario(payload.get("feature_scenario"))
     manifest = {
@@ -820,11 +965,11 @@ def train_model(
         "training_rows": int(train_mask.sum()),
         "test_rows": int(test_mask.sum()),
         "validation_rows": int(validation_mask.sum()),
-        "scored_rows": int(len(score_frame)),
+        "scored_rows": scored_rows,
         "sample_column": sample_mode if sample_mode != "none" else None,
         "sample_source": sample_source,
         "shap_rows": shap_written_rows,
-        "timings": {"training_seconds": elapsed},
+        "timings": {},
         "warnings": validation.warnings,
     }
     if feature_scenario:
@@ -844,6 +989,9 @@ def train_model(
     store.write_json(store.artifact_path(model_id, "features"), feature_names)
     write_dataframe_parquet(feature_config_frame[feature_config_columns], store.artifact_path(model_id, "feature_config"))
     store.write_json(store.artifact_path(model_id, "parameters"), stored_params)
+    timings["artifact_write_seconds"] = elapsed_seconds(artifact_write_started)
+    timings["training_seconds"] = elapsed_seconds(started)
+    manifest["timings"] = timings
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
     if activate:
         result = store.activate_model(model_id)
@@ -1021,10 +1169,12 @@ def lightgbm_progress_callback(
 def append_holdout_evaluation(
     *,
     lgb: Any,
+    pl: Any,
     booster: Any,
     feature_frame: Any,
     response: Any,
     validation_mask: Any,
+    feature_names: list[str],
     categorical_features: list[str],
     validation_init: Any,
     train_set: Any,
@@ -1033,12 +1183,14 @@ def append_holdout_evaluation(
     if not bool(validation_mask.any()):
         return
     validation_set = lgb.Dataset(
-        feature_frame.loc[validation_mask],
-        label=response.loc[validation_mask],
-        categorical_feature=categorical_features or "auto",
+        arrow_rows(feature_frame, validation_mask, pl),
+        label=response[validation_mask],
+        feature_name=feature_names,
+        categorical_feature=categorical_features,
         init_score=validation_init,
         reference=train_set,
-        free_raw_data=False,
+        params=train_set.get_params(),
+        free_raw_data=True,
     )
     try:
         results = booster.eval(validation_set, name="validation")
@@ -1296,7 +1448,7 @@ def shap_sample_positions(np: Any, *, mode: str, row_count: int, seed: int) -> A
 def shap_dataframes(
     *,
     np: Any,
-    pd: Any,
+    pl: Any,
     booster: Any,
     feature_frame: Any,
     score_frame: Any,
@@ -1308,29 +1460,31 @@ def shap_dataframes(
     shap_interaction_groups: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, Any]:
     group_columns = shap_interaction_group_columns(shap_interaction_groups or [], feature_names)
-    positions = shap_sample_positions(np, mode=shap_mode, row_count=len(feature_frame), seed=shap_seed)
+    positions = shap_sample_positions(np, mode=shap_mode, row_count=feature_frame.height, seed=shap_seed)
+    shap_schema = {
+        "__lucidum_row_id": pl.Int64,
+        **{feature_name: pl.Float64 for feature_name in feature_names},
+        **{group["name"]: pl.Float64 for group in group_columns},
+    }
+    summary_schema = {
+        "feature": pl.String,
+        "mean_abs_shap": pl.Float64,
+        "mean_shap": pl.Float64,
+        "row_count": pl.Int64,
+    }
     if len(positions) == 0:
-        return (
-            pd.DataFrame(
-                {
-                    "__lucidum_row_id": pd.Series(dtype="int64"),
-                    **{feature_name: pd.Series(dtype="float64") for feature_name in feature_names},
-                    **{group["name"]: pd.Series(dtype="float64") for group in group_columns},
-                }
-            ),
-            pd.DataFrame(columns=["feature", "mean_abs_shap", "mean_shap", "row_count"]),
-        )
+        return pl.DataFrame(schema=shap_schema), pl.DataFrame(schema=summary_schema)
 
-    sampled = feature_frame.iloc[positions]
-    sampled_scores = score_frame.iloc[positions]
-    contributions = booster.predict(sampled, pred_contrib=True, num_iteration=best_iteration)
+    sampled = feature_frame.gather(positions)
+    sampled_scores = score_frame.gather(positions)
+    contributions = booster.predict(sampled.to_arrow(), pred_contrib=True, num_iteration=best_iteration)
     if contributions.ndim == 3:
         contributions = contributions[:, :, 0]
     feature_contribs = contributions[:, : len(feature_names)]
 
-    shap_frame = pd.DataFrame(
+    shap_frame = pl.DataFrame(
         {
-            "__lucidum_row_id": sampled_scores["__lucidum_row_id"].astype("int64").to_numpy(),
+            "__lucidum_row_id": sampled_scores.get_column("__lucidum_row_id").cast(pl.Int64),
             **{
                 feature_name: feature_contribs[:, feature_index].astype(float)
                 for feature_index, feature_name in enumerate(feature_names)
@@ -1338,22 +1492,25 @@ def shap_dataframes(
         }
     )
     for group in group_columns:
-        shap_frame[group["name"]] = shap_frame[group["features"]].sum(axis=1)
-    if shap_frame.empty:
-        summary = pd.DataFrame(columns=["feature", "mean_abs_shap", "mean_shap", "row_count"])
+        shap_frame = shap_frame.with_columns(
+            pl.sum_horizontal([pl.col(name) for name in group["features"]]).alias(group["name"])
+        )
+    if shap_frame.is_empty():
+        summary = pl.DataFrame(schema=summary_schema)
     else:
-        summary = pd.DataFrame(
+        summary = pl.DataFrame(
             [
                 {
                     "feature": feature_name,
-                    "mean_abs_shap": float(np.abs(shap_frame[feature_name]).mean()),
-                    "mean_shap": float(shap_frame[feature_name].mean()),
-                    "row_count": int(shap_frame[feature_name].count()),
+                    "mean_abs_shap": float(shap_frame.get_column(feature_name).abs().mean()),
+                    "mean_shap": float(shap_frame.get_column(feature_name).mean()),
+                    "row_count": int(shap_frame.get_column(feature_name).count()),
                 }
                 for feature_name in feature_names
-            ]
+            ],
+            schema=summary_schema,
         )
-        summary = summary.sort_values("mean_abs_shap", ascending=False)
+        summary = summary.sort("mean_abs_shap", descending=True)
     return shap_frame, summary
 
 
@@ -1413,11 +1570,14 @@ def feature_config_with_mean_abs_shap(
 __all__ = [
     "MissingGbmDependency",
     "gbm_dependencies",
+    "gbm_training_dependencies",
     "lightgbm_progress_payload",
     "lightgbm_interaction_constraints",
     "lightgbm_pair_interaction_constraints",
     "feature_config_with_mean_abs_shap",
     "normalise_feature_scenario",
+    "polars_feature_frame",
+    "predict_response_values",
     "should_use_offset_init_score",
     "shap_interaction_group_columns",
     "train_model",

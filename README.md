@@ -372,11 +372,13 @@ When an active GLM is available, Line and Bar can show a dashed GLM overlay line
 
 ### Training and artifacts
 
+GBM training asks DuckDB for only the selected response, denominator, SAMPLE, init-score, and feature columns, materializes that projection in Polars, and sends numeric Arrow tables directly to LightGBM. Categorical values are encoded once with a stable shared mapping for training, test, validation, prediction, and SHAP rows. Pandas remains part of the GBM extra for compact tree tables, tabulations, and exports rather than the large training matrix.
+
 Parameter values can use grid-search braces, such as `{200, 300, 400}`, `{0.05, 0.3; 0.05}`, or `{bagging, goss}` for `data_sample_strategy`; the app samples the hypergrid deterministically, trains one model per valid sampled combination, skips invalid combinations with a notice, and activates the best completed model.
 
 The first parameter row, `init_score`, can stay as `none` for the current behavior or point at a numeric dataset column or fitted GLM prediction artifact. Supplied values are treated as prediction-space baselines, transformed to LightGBM's linear predictor space for objectives with log or logit links, and replace the automatic denominator-derived initial score. When used, the resolved baseline is saved as `init_score.parquet` beside the model.
 
-Saved GBM `parameters.json` is a LightGBM Python params dictionary intended for `json.load()` then `lgb.train(params=...)`, including objective and metric. Lucidum-only selections such as the UI `init_score` choice, init-score provenance, and EBM training mode live in `manifest.json`.
+Saved GBM `parameters.json` is a LightGBM Python params dictionary intended for `json.load()` then `lgb.train(params=...)`, including objective and metric. Lucidum-only selections such as the UI `init_score` choice, init-score provenance, EBM training mode, and phase timings live in `manifest.json`.
 
 GBM model input feature order lives in `features.json`, as a JSON array of feature names. Trained GBM display metadata lives in optional `feature_config.parquet`, enriched with kind, monotonicity, Gain, and optional SHAP importance. Prediction and SHAP data sources derive their raw dataset-column projections from the current dataset schema rather than from duplicated manifest fields.
 

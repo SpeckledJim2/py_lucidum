@@ -24,7 +24,7 @@ from py_lucidum.tools.gbm import tabulation as gbm_tabulation
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_table
@@ -444,7 +444,7 @@ COPY (
             features_path=features_path,
         )
 
-        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+        with patch("py_lucidum.tools.gbm.routes.gbm_training_dependencies", side_effect=AssertionError("should not import")):
             status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
         features = {row["name"]: row for row in payload["features"]}
@@ -761,7 +761,7 @@ COPY (
         self.write_shap_plot_model()
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
-        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+        with patch("py_lucidum.tools.gbm.routes.gbm_training_dependencies", side_effect=AssertionError("should not import")):
             status, body = asgi_get(app, "/api/gbm/models/shap-model/shap/config")
             plot_status, plot_body = asgi_post_json(app, "/api/gbm/models/shap-model/shap/plot", {"feature_1": "Age", "banding_1": 10})
             stacked_status, stacked_body = asgi_post_json(
@@ -1293,7 +1293,7 @@ COPY (
             "sample_column": "SAMPLE",
         }
 
-        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=MissingGbmDependency("lightgbm")):
+        with patch("py_lucidum.tools.gbm.routes.gbm_training_dependencies", side_effect=MissingGbmDependency("lightgbm")):
             status, body = asgi_post_json(app, "/api/gbm/train", request)
 
         self.assertEqual(status, 400)
@@ -1330,7 +1330,7 @@ COPY (
             "feature_interaction_features": ["Age"],
         }
 
-        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", return_value=(object(), object(), object())):
+        with patch("py_lucidum.tools.gbm.routes.gbm_training_dependencies", return_value=(object(), object(), object(), object())):
             status, body = asgi_post_json(app, "/api/gbm/train", request)
 
         self.assertEqual(status, 200)
@@ -1548,6 +1548,101 @@ COPY (
         message = str(raised.exception)
         self.assertIn("lightgbm runtime", message)
         self.assertIn("brew install libomp", message)
+
+    def test_gbm_training_dependencies_report_missing_arrow_runtime(self) -> None:
+        real_import = builtins.__import__
+
+        def import_without_cffi(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "cffi":
+                raise ImportError("missing cffi")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=import_without_cffi):
+            with self.assertRaises(MissingGbmDependency) as raised:
+                gbm_training_dependencies()
+
+        self.assertIn("LightGBM Arrow runtime (cffi)", str(raised.exception))
+        self.assertIn("py-lucidum[gbm]", str(raised.exception))
+
+    def test_polars_feature_frame_is_numeric_ordered_and_stably_categorical(self) -> None:
+        try:
+            import polars as pl
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        frame = pl.DataFrame(
+            {
+                "unused": ["x", "y", "z"],
+                "Age": [30, 40, 50],
+                "Segment": ["B", "A", None],
+            }
+        )
+
+        features, labels = polars_feature_frame(frame, ["Age", "Segment"], ["Segment"], pl)
+        arrow = features.to_arrow()
+
+        self.assertEqual(features.columns, ["Age", "Segment"])
+        self.assertEqual(labels, {"Segment": ["A", "B"]})
+        self.assertEqual(features.get_column("Segment").to_list(), [1, 0, None])
+        self.assertTrue(all(str(field.type).startswith(("double", "int")) for field in arrow.schema))
+
+    def test_response_prediction_uses_exactly_one_lightgbm_pass_per_mode(self) -> None:
+        try:
+            import numpy as np
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        class Booster:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def predict(self, feature_data: Any, **kwargs: Any) -> Any:
+                self.calls.append(kwargs)
+                return np.array([0.1, 0.2])
+
+        plain = Booster()
+        plain_values = predict_response_values(
+            booster=plain,
+            feature_data=object(),
+            best_iteration=3,
+            np=np,
+            use_supplied_init_score=False,
+            init_score_linear=None,
+            init_score_transform_name="identity",
+            use_offset_init_score=False,
+            log_offset=None,
+        )
+        supplied = Booster()
+        supplied_values = predict_response_values(
+            booster=supplied,
+            feature_data=object(),
+            best_iteration=3,
+            np=np,
+            use_supplied_init_score=True,
+            init_score_linear=np.log([2.0, 3.0]),
+            init_score_transform_name="log",
+            use_offset_init_score=False,
+            log_offset=None,
+        )
+        offset = Booster()
+        offset_values = predict_response_values(
+            booster=offset,
+            feature_data=object(),
+            best_iteration=3,
+            np=np,
+            use_supplied_init_score=False,
+            init_score_linear=None,
+            init_score_transform_name="identity",
+            use_offset_init_score=True,
+            log_offset=np.log([5.0, 7.0]),
+        )
+
+        self.assertEqual(plain.calls, [{"num_iteration": 3}])
+        self.assertEqual(supplied.calls, [{"raw_score": True, "num_iteration": 3}])
+        self.assertEqual(offset.calls, [{"raw_score": True, "num_iteration": 3}])
+        self.assertTrue(np.allclose(plain_values, [0.1, 0.2]))
+        self.assertTrue(np.allclose(supplied_values, np.exp(np.log([2.0, 3.0]) + [0.1, 0.2])))
+        self.assertTrue(np.allclose(offset_values, np.exp(np.log([5.0, 7.0]) + [0.1, 0.2])))
 
     def test_gbm_job_payload_includes_progress(self) -> None:
         job = GbmJob(id="j1", status="running", progress={"phase": "training", "iteration": 3})
@@ -1921,7 +2016,7 @@ COPY (
         self.write_shap_plot_model()
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
-        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+        with patch("py_lucidum.tools.gbm.routes.gbm_training_dependencies", side_effect=AssertionError("should not import")):
             status, body = asgi_get(app, "/api/gbm/config")
 
         payload = json.loads(body)
@@ -2473,6 +2568,21 @@ COPY (
         self.assertIsNone(result["offset_column"])
         self.assertEqual(result["training_rows"], 50000)
         manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
+        self.assertTrue(
+            {
+                "dependency_seconds",
+                "validation_seconds",
+                "data_load_seconds",
+                "matrix_prep_seconds",
+                "dataset_construct_seconds",
+                "fit_seconds",
+                "score_seconds",
+                "shap_seconds",
+                "artifact_write_seconds",
+                "training_seconds",
+            }.issubset(manifest["timings"])
+        )
+        self.assertGreaterEqual(manifest["timings"]["training_seconds"], manifest["timings"]["fit_seconds"])
         self.assertNotIn("objective", manifest)
         self.assertNotIn("metric", manifest)
         self.assertNotIn("best_metrics", manifest)
@@ -2690,7 +2800,7 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
     def test_shap_values_use_seeded_random_sample_for_bounded_modes(self) -> None:
         try:
             import numpy as np
-            import pandas as pd
+            import polars as pl
         except ImportError as exc:  # pragma: no cover - optional dependency guard.
             self.skipTest(str(exc))
 
@@ -2701,16 +2811,17 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
                 test_case.assertTrue(pred_contrib)
                 test_case.assertEqual(num_iteration, 3)
-                observed_feature_rows.append(frame["Age"].astype(int).tolist())
-                values = frame["Age"].to_numpy(dtype="float64")
+                polars_frame = pl.from_arrow(frame)
+                observed_feature_rows.append(polars_frame.get_column("Age").cast(pl.Int64).to_list())
+                values = polars_frame.get_column("Age").to_numpy().astype("float64")
                 return np.column_stack([values, values / 10.0, np.zeros(len(frame))])
 
-        feature_frame = pd.DataFrame({"Age": list(range(10)), "Segment": list(range(100, 110))})
-        score_frame = pd.DataFrame({"__lucidum_row_id": list(range(1, 11)), "Age": list(range(10)), "Segment": list(range(100, 110))})
+        feature_frame = pl.DataFrame({"Age": list(range(10)), "Segment": list(range(100, 110))})
+        score_frame = pl.DataFrame({"__lucidum_row_id": list(range(1, 11)), "Age": list(range(10)), "Segment": list(range(100, 110))})
 
         first_frame, _ = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=Booster(),
             feature_frame=feature_frame,
             score_frame=score_frame,
@@ -2722,7 +2833,7 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         )
         second_frame, _ = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=Booster(),
             feature_frame=feature_frame,
             score_frame=score_frame,
@@ -2734,7 +2845,7 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         )
         different_seed_frame, _ = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=Booster(),
             feature_frame=feature_frame,
             score_frame=score_frame,
@@ -2745,35 +2856,35 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             best_iteration=3,
         )
 
-        selected_row_ids = first_frame["__lucidum_row_id"].tolist()
+        selected_row_ids = first_frame.get_column("__lucidum_row_id").to_list()
         expected_row_ids = sorted((np.random.default_rng(7).choice(10, size=3, replace=False) + 1).tolist())
         self.assertEqual(selected_row_ids, expected_row_ids)
         self.assertNotEqual(selected_row_ids, [1, 2, 3])
-        self.assertEqual(second_frame["__lucidum_row_id"].tolist(), selected_row_ids)
-        self.assertNotEqual(different_seed_frame["__lucidum_row_id"].tolist(), selected_row_ids)
+        self.assertEqual(second_frame.get_column("__lucidum_row_id").to_list(), selected_row_ids)
+        self.assertNotEqual(different_seed_frame.get_column("__lucidum_row_id").to_list(), selected_row_ids)
         self.assertEqual(observed_feature_rows[0], [row_id - 1 for row_id in selected_row_ids])
 
     def test_shap_values_all_and_zero_modes_keep_expected_counts(self) -> None:
         try:
             import numpy as np
-            import pandas as pd
+            import polars as pl
         except ImportError as exc:  # pragma: no cover - optional dependency guard.
             self.skipTest(str(exc))
 
         class Booster:
             def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
-                values = frame["Age"].to_numpy(dtype="float64")
+                values = pl.from_arrow(frame).get_column("Age").to_numpy().astype("float64")
                 return np.column_stack([values, np.zeros(len(frame))])
 
         class UnexpectedBooster:
             def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
                 raise AssertionError("zero SHAP rows should not call LightGBM predict")
 
-        feature_frame = pd.DataFrame({"Age": [30, 40, 50, 60]})
-        score_frame = pd.DataFrame({"__lucidum_row_id": [1, 2, 3, 4], "Age": [30, 40, 50, 60]})
+        feature_frame = pl.DataFrame({"Age": [30, 40, 50, 60]})
+        score_frame = pl.DataFrame({"__lucidum_row_id": [1, 2, 3, 4], "Age": [30, 40, 50, 60]})
         all_frame, all_summary = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=Booster(),
             feature_frame=feature_frame,
             score_frame=score_frame,
@@ -2785,7 +2896,7 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         )
         zero_frame, zero_summary = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=UnexpectedBooster(),
             feature_frame=feature_frame,
             score_frame=score_frame,
@@ -2796,18 +2907,18 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             best_iteration=3,
         )
 
-        self.assertEqual(all_frame["__lucidum_row_id"].tolist(), [1, 2, 3, 4])
-        self.assertEqual(list(all_summary.columns), ["feature", "mean_abs_shap", "mean_shap", "row_count"])
-        self.assertEqual(int(all_summary["row_count"].iloc[0]), 4)
-        self.assertEqual(list(zero_frame.columns), ["__lucidum_row_id", "Age"])
-        self.assertEqual(list(zero_summary.columns), ["feature", "mean_abs_shap", "mean_shap", "row_count"])
-        self.assertTrue(zero_frame.empty)
-        self.assertTrue(zero_summary.empty)
+        self.assertEqual(all_frame.get_column("__lucidum_row_id").to_list(), [1, 2, 3, 4])
+        self.assertEqual(all_summary.columns, ["feature", "mean_abs_shap", "mean_shap", "row_count"])
+        self.assertEqual(int(all_summary.get_column("row_count")[0]), 4)
+        self.assertEqual(zero_frame.columns, ["__lucidum_row_id", "Age"])
+        self.assertEqual(zero_summary.columns, ["feature", "mean_abs_shap", "mean_shap", "row_count"])
+        self.assertTrue(zero_frame.is_empty())
+        self.assertTrue(zero_summary.is_empty())
 
     def test_shap_values_are_written_as_wide_numeric_feature_columns(self) -> None:
         try:
             import numpy as np
-            import pandas as pd
+            import polars as pl
         except ImportError as exc:  # pragma: no cover - optional dependency guard.
             self.skipTest(str(exc))
 
@@ -2817,15 +2928,15 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
                 test_case.assertTrue(pred_contrib)
                 test_case.assertEqual(num_iteration, 3)
-                test_case.assertEqual(list(frame.columns), ["Age", "Segment"])
+                test_case.assertEqual(frame.column_names, ["Age", "Segment"])
                 return np.array([[0.2, -0.1, 0.0], [0.5, 0.3, 0.0]])
 
         shap_frame, summary = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=Booster(),
-            feature_frame=pd.DataFrame({"Age": [30, 40], "Segment": ["A", "GU"]}),
-            score_frame=pd.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40], "Segment": ["A", "GU"]}),
+            feature_frame=pl.DataFrame({"Age": [30, 40], "Segment": ["A", "GU"]}),
+            score_frame=pl.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40], "Segment": ["A", "GU"]}),
             feature_names=["Age", "Segment"],
             model_id="m1",
             shap_mode="10k",
@@ -2833,13 +2944,13 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             best_iteration=3,
         )
 
-        self.assertEqual(list(shap_frame.columns), ["__lucidum_row_id", "Age", "Segment"])
-        self.assertEqual(shap_frame["__lucidum_row_id"].tolist(), [1, 2])
-        self.assertEqual(shap_frame["Age"].tolist(), [0.2, 0.5])
+        self.assertEqual(shap_frame.columns, ["__lucidum_row_id", "Age", "Segment"])
+        self.assertEqual(shap_frame.get_column("__lucidum_row_id").to_list(), [1, 2])
+        self.assertEqual(shap_frame.get_column("Age").to_list(), [0.2, 0.5])
         self.assertNotIn("feature_value", shap_frame.columns)
-        self.assertEqual(list(summary.columns), ["feature", "mean_abs_shap", "mean_shap", "row_count"])
-        self.assertEqual(set(summary["feature"]), {"Age", "Segment"})
-        summary_by_feature = {row["feature"]: row for row in summary.to_dict("records")}
+        self.assertEqual(summary.columns, ["feature", "mean_abs_shap", "mean_shap", "row_count"])
+        self.assertEqual(set(summary.get_column("feature")), {"Age", "Segment"})
+        summary_by_feature = {row["feature"]: row for row in summary.to_dicts()}
         self.assertAlmostEqual(summary_by_feature["Age"]["mean_abs_shap"], 0.35)
         self.assertAlmostEqual(summary_by_feature["Segment"]["mean_abs_shap"], 0.2)
 
@@ -2857,7 +2968,7 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
     def test_shap_values_include_interaction_group_columns_without_summary_rows(self) -> None:
         try:
             import numpy as np
-            import pandas as pd
+            import polars as pl
         except ImportError as exc:  # pragma: no cover - optional dependency guard.
             self.skipTest(str(exc))
 
@@ -2881,10 +2992,10 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
 
         shap_frame, summary = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=Booster(),
-            feature_frame=pd.DataFrame({"Age": [30, 40], "Segment": ["A", "B"], "POSTCODE_INTERACTION_GROUP": [1, 2]}),
-            score_frame=pd.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40], "Segment": ["A", "B"], "POSTCODE_INTERACTION_GROUP": [1, 2]}),
+            feature_frame=pl.DataFrame({"Age": [30, 40], "Segment": ["A", "B"], "POSTCODE_INTERACTION_GROUP": [1, 2]}),
+            score_frame=pl.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40], "Segment": ["A", "B"], "POSTCODE_INTERACTION_GROUP": [1, 2]}),
             feature_names=["Age", "Segment", "POSTCODE_INTERACTION_GROUP"],
             model_id="m1",
             shap_mode="all",
@@ -2894,19 +3005,19 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         )
 
         self.assertEqual(
-            list(shap_frame.columns),
+            shap_frame.columns,
             ["__lucidum_row_id", "Age", "Segment", "POSTCODE_INTERACTION_GROUP", "POSTCODE_INTERACTION_GROUP_2", "DRIVER_INTERACTION_GROUP"],
         )
-        self.assertAlmostEqual(shap_frame["POSTCODE_INTERACTION_GROUP_2"].iloc[0], 0.1)
-        self.assertAlmostEqual(shap_frame["POSTCODE_INTERACTION_GROUP_2"].iloc[1], 0.8)
-        self.assertEqual(shap_frame["DRIVER_INTERACTION_GROUP"].tolist(), [0.2, 0.5])
-        self.assertEqual(set(summary["feature"]), {"Age", "Segment", "POSTCODE_INTERACTION_GROUP"})
-        self.assertNotIn("POSTCODE_INTERACTION_GROUP_2", set(summary["feature"]))
+        self.assertAlmostEqual(shap_frame.get_column("POSTCODE_INTERACTION_GROUP_2")[0], 0.1)
+        self.assertAlmostEqual(shap_frame.get_column("POSTCODE_INTERACTION_GROUP_2")[1], 0.8)
+        self.assertEqual(shap_frame.get_column("DRIVER_INTERACTION_GROUP").to_list(), [0.2, 0.5])
+        self.assertEqual(set(summary.get_column("feature")), {"Age", "Segment", "POSTCODE_INTERACTION_GROUP"})
+        self.assertNotIn("POSTCODE_INTERACTION_GROUP_2", set(summary.get_column("feature")))
 
     def test_empty_shap_values_include_interaction_group_columns(self) -> None:
         try:
             import numpy as np
-            import pandas as pd
+            import polars as pl
         except ImportError as exc:  # pragma: no cover - optional dependency guard.
             self.skipTest(str(exc))
 
@@ -2916,10 +3027,10 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
 
         shap_frame, summary = shap_dataframes(
             np=np,
-            pd=pd,
+            pl=pl,
             booster=UnexpectedBooster(),
-            feature_frame=pd.DataFrame({"Age": [30, 40]}),
-            score_frame=pd.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40]}),
+            feature_frame=pl.DataFrame({"Age": [30, 40]}),
+            score_frame=pl.DataFrame({"__lucidum_row_id": [1, 2], "Age": [30, 40]}),
             feature_names=["Age"],
             model_id="m1",
             shap_mode="0",
@@ -2928,9 +3039,9 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
             shap_interaction_groups=[{"grouping": "DRIVER", "features": ["Age"]}],
         )
 
-        self.assertEqual(list(shap_frame.columns), ["__lucidum_row_id", "Age", "DRIVER_INTERACTION_GROUP"])
-        self.assertTrue(shap_frame.empty)
-        self.assertTrue(summary.empty)
+        self.assertEqual(shap_frame.columns, ["__lucidum_row_id", "Age", "DRIVER_INTERACTION_GROUP"])
+        self.assertTrue(shap_frame.is_empty())
+        self.assertTrue(summary.is_empty())
 
     def test_feature_config_with_mean_abs_shap_persists_training_summary_metric(self) -> None:
         features = [
@@ -3427,7 +3538,7 @@ COPY (
         self.write_model_artifacts()
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
-        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+        with patch("py_lucidum.tools.gbm.routes.gbm_training_dependencies", side_effect=AssertionError("should not import")):
             summary_status, summary_body = asgi_get(app, "/api/gbm/models/m1/trees")
             detail_status, detail_body = asgi_get(app, "/api/gbm/models/m1/trees/0")
 
@@ -3788,7 +3899,7 @@ COPY (
             con.close()
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
-        with patch("py_lucidum.tools.gbm.routes.gbm_dependencies", side_effect=AssertionError("should not import")):
+        with patch("py_lucidum.tools.gbm.routes.gbm_training_dependencies", side_effect=AssertionError("should not import")):
             status, body = asgi_get(app, "/api/gbm/models/ebm-summary/ebm-gain-summary")
 
         payload = json.loads(body)

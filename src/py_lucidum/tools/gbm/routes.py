@@ -13,7 +13,7 @@ from .sample import create_generated_sample
 from .shap import shap_config, shap_plot, stacked_shap_plot
 from .sources import GbmSourceProvider
 from .store import GbmModelNameError, GbmModelStore
-from .training import MissingGbmDependency, gbm_dependencies
+from .training import MissingGbmDependency, gbm_training_dependencies
 from .trees import ebm_gain_summary, tree_detail, tree_summary
 
 
@@ -62,7 +62,7 @@ def register(app: FastAPI, context: AppContext) -> None:
         payload = dict(await request.json())
         payload["feature_groupings"] = config.feature_groupings()
         try:
-            gbm_dependencies()
+            gbm_training_dependencies()
             if payload.get("create_sample"):
                 create_generated_sample(context.dataset, store.generated_sample_path)
             validation = validate_grid_or_request(context.dataset, payload, generated_sample_path=store.generated_sample_path)
