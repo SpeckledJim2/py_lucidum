@@ -310,7 +310,7 @@ export function createGlmTool({
                     <button type="button" data-glm-scope="all" class="${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}">All</button>
                     <button type="button" data-glm-scope="training" class="${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
                   </div>
-                  <button id="glmBuildBtn" class="tab glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
+                  <button id="glmBuildBtn" class="tab model-busy-button glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
               </div>
               ${formulaBuilder.formulaAssistDrawerHtml()}
@@ -398,7 +398,7 @@ export function createGlmTool({
         <section class="glm-tabulation-sidebar">
           <div class="glm-panel-header">
             <h3 class="glm-panel-title">Tabulations</h3>
-            <button id="glmBuildTabulationsBtn" class="tab glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !availableModels.length ? "disabled" : ""}>${isTabulating ? "Tabulating..." : "Tabulate"}</button>
+            <button id="glmBuildTabulationsBtn" class="tab model-busy-button glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !availableModels.length ? "disabled" : ""} ${isTabulating ? "aria-busy=\"true\"" : ""}>${isTabulating ? "Tabulating..." : "Tabulate"}</button>
           </div>
           <label id="glmTabulationModelLabel" class="glm-tabulation-label">Select models</label>
           <div class="glm-tabulation-model-region">
@@ -436,7 +436,7 @@ export function createGlmTool({
                     ${tabulationCrosstabOptionsHtml(crosstabOptions)}
                   </select>
                 </div>
-                <button id="glmExportTabulationsBtn" class="tab glm-inline-action-button glm-tabulation-export-button ${isExportingTabulations ? "building" : ""}" type="button" ${canExportSelectedTabulations() ? "" : "disabled"}>${isExportingTabulations ? "Exporting..." : "Export xlsx"}</button>
+                <button id="glmExportTabulationsBtn" class="tab model-busy-button glm-inline-action-button glm-tabulation-export-button ${isExportingTabulations ? "building" : ""}" type="button" ${canExportSelectedTabulations() ? "" : "disabled"} ${isExportingTabulations ? "aria-busy=\"true\"" : ""}>${isExportingTabulations ? "Exporting..." : "Export xlsx"}</button>
               </div>
             </div>
           </div>
@@ -1044,12 +1044,14 @@ export function createGlmTool({
       buildButton.disabled = isTabulating || !availableModels.length;
       buildButton.classList.toggle("building", isTabulating);
       buildButton.textContent = isTabulating ? "Tabulating..." : "Tabulate";
+      syncButtonBusyState(buildButton, isTabulating);
     }
     const exportButton = el("glmExportTabulationsBtn");
     if (exportButton) {
       exportButton.disabled = !canExportSelectedTabulations();
       exportButton.classList.toggle("building", isExportingTabulations);
       exportButton.textContent = isExportingTabulations ? "Exporting..." : "Export xlsx";
+      syncButtonBusyState(exportButton, isExportingTabulations);
     }
     refreshTabulationDiagnostics();
   }
@@ -2173,6 +2175,15 @@ export function createGlmTool({
     return `<span class="glm-build-status-main">${escapeHtml(main)}</span>${detail ? `<span class="glm-build-status-detail">${escapeHtml(detail)}</span>` : ""}`;
   }
 
+  function syncButtonBusyState(button, active) {
+    if (!button) return;
+    if (active) {
+      button.setAttribute("aria-busy", "true");
+    } else {
+      button.removeAttribute("aria-busy");
+    }
+  }
+
   function renderLiveProgress(progress) {
     const status = el("glmBuildStatus");
     if (!status) return;
@@ -2184,18 +2195,21 @@ export function createGlmTool({
       button.disabled = isBuilding;
       button.classList.toggle("building", isBuilding);
       button.textContent = isBuilding ? "Building..." : "Build GLM";
+      syncButtonBusyState(button, isBuilding);
     }
     const tabulationButton = el("glmBuildTabulationsBtn");
     if (tabulationButton) {
       tabulationButton.disabled = isTabulating || !tabulationAvailableModels().length;
       tabulationButton.classList.toggle("building", isTabulating);
       tabulationButton.textContent = isTabulating ? "Tabulating..." : "Tabulate";
+      syncButtonBusyState(tabulationButton, isTabulating);
     }
     const exportButton = el("glmExportTabulationsBtn");
     if (exportButton) {
       exportButton.disabled = !canExportSelectedTabulations();
       exportButton.classList.toggle("building", isExportingTabulations);
       exportButton.textContent = isExportingTabulations ? "Exporting..." : "Export xlsx";
+      syncButtonBusyState(exportButton, isExportingTabulations);
     }
   }
 

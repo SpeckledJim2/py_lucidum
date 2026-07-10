@@ -2376,9 +2376,30 @@ if (localStorage.getItem("py_lucidum_glm_regularization_alpha") !== "0.09") thro
 """
         self.run_node_script(script)
 
+    def test_model_busy_buttons_use_inline_spinners_without_progress_cursors(self) -> None:
+        controls_css = self.assert_no_store("/static/styles/controls.css")[1].decode("utf-8")
+        glm_css = self.assert_no_store("/static/styles/glm.css")[1].decode("utf-8")
+        gbm_css = self.assert_no_store("/static/styles/gbm.css")[1].decode("utf-8")
+        glm_js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
+        gbm_js = self.assert_no_store("/static/app/gbm-tool.js")[1].decode("utf-8")
+
+        self.assertIn('.model-busy-button[aria-busy="true"]::before', controls_css)
+        self.assertIn("animation: model-busy-button-spin 750ms linear infinite;", controls_css)
+        self.assertIn("@keyframes model-busy-button-spin", controls_css)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", controls_css)
+        self.assertIn("animation: none;", controls_css)
+        self.assertNotIn("cursor: progress", glm_css)
+        self.assertNotIn("cursor: progress", gbm_css)
+        for button_id in ("glmBuildBtn", "glmBuildTabulationsBtn", "glmExportTabulationsBtn"):
+            self.assertRegex(glm_js, rf'id="{button_id}" class="[^"]*\bmodel-busy-button\b')
+        self.assertRegex(gbm_js, r'id="gbmTrainBtn" class="[^"]*\bmodel-busy-button\b')
+        self.assertIn("function syncButtonBusyState(button, active)", glm_js)
+        self.assertIn('button.setAttribute("aria-busy", "true");', glm_js)
+        self.assertIn('button.removeAttribute("aria-busy");', glm_js)
+
     def test_glm_build_failure_unlocks_button_and_uses_inline_status(self) -> None:
         js = self.assert_no_store("/static/app/glm-tool.js")[1].decode("utf-8")
-        helpers = ["buildStatusHtml", "renderLiveProgress", "setBuildFailure"]
+        helpers = ["buildStatusHtml", "syncButtonBusyState", "renderLiveProgress", "setBuildFailure"]
         script = "\n".join(self.js_function_source(js, name) for name in helpers) + r"""
 let isBuilding = true;
 let liveProgress = null;
@@ -2402,7 +2423,14 @@ function makeClassList() {
   };
 }
 const status = { innerHTML: "", dataset: {}, classList: makeClassList() };
-const button = { disabled: true, textContent: "Building...", classList: makeClassList() };
+const buttonAttributes = new Map([["aria-busy", "true"]]);
+const button = {
+  disabled: true,
+  textContent: "Building...",
+  classList: makeClassList(),
+  setAttribute: (name, value) => buttonAttributes.set(name, value),
+  removeAttribute: (name) => buttonAttributes.delete(name),
+};
 function el(id) {
   if (id === "glmBuildStatus") return status;
   if (id === "glmBuildBtn") return button;
@@ -2418,6 +2446,7 @@ if (isBuilding) throw new Error("building flag still set");
 if (button.disabled) throw new Error("button still disabled");
 if (button.textContent !== "Build GLM") throw new Error(`button text ${button.textContent}`);
 if (button.classList.values.has("building")) throw new Error("button still has building class");
+if (buttonAttributes.has("aria-busy")) throw new Error("button still has aria-busy");
 if (status.dataset.phase !== "failed") throw new Error(`phase ${status.dataset.phase}`);
 if (status.classList.values.has("hidden")) throw new Error("inline status hidden");
 if (!status.innerHTML.includes("Unable to evaluate factor")) throw new Error(status.innerHTML);

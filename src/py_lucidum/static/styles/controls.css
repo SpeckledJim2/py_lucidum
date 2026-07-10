@@ -990,6 +990,38 @@
         white-space: nowrap;
       }
 
+      .model-busy-button {
+        align-items: center;
+        display: inline-flex;
+        gap: 6px;
+        justify-content: center;
+      }
+
+      .model-busy-button[aria-busy="true"]::before {
+        animation: model-busy-button-spin 750ms linear infinite;
+        border: 2px solid currentColor;
+        border-radius: 50%;
+        border-top-color: transparent;
+        content: "";
+        flex: 0 0 12px;
+        height: 12px;
+        width: 12px;
+      }
+
+      @keyframes model-busy-button-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .model-busy-button[aria-busy="true"]::before {
+          animation: none;
+          border-top-color: currentColor;
+          opacity: 0.75;
+        }
+      }
+
       .monitor-link {
         display: inline-flex;
         align-items: center;

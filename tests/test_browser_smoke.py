@@ -8399,9 +8399,47 @@ COPY (
                 page.route("**/api/glm/build", glm_build_route)
                 page.route("**/api/glm/jobs/glm-live-job", glm_job_route)
                 page.get_by_role("button", name="Formula builder").click()
+                page.evaluate(
+                    """
+                    () => {
+                      window.__glmBusyPointerMoves = 0;
+                      document.addEventListener("pointermove", () => { window.__glmBusyPointerMoves += 1; }, true);
+                    }
+                    """
+                )
+                page.locator("#glmBuildBtn").hover()
                 page.locator("#glmBuildBtn").click()
                 page.locator("#glmBuildStatus").get_by_text("Fitting GLM").wait_for(timeout=10_000)
                 self.assertEqual(glm_build_payload["value"]["family"], "tweedie")
+                glm_busy_button = page.locator("#glmBuildBtn").evaluate(
+                    """
+                    (button) => {
+                      const style = getComputedStyle(button);
+                      const spinner = getComputedStyle(button, "::before");
+                      return {
+                        text: button.textContent.trim(),
+                        disabled: button.disabled,
+                        ariaBusy: button.getAttribute("aria-busy"),
+                        building: button.classList.contains("building"),
+                        cursor: style.cursor,
+                        background: style.backgroundColor,
+                        spinnerContent: spinner.content,
+                        spinnerWidth: spinner.width,
+                        spinnerAnimation: spinner.animationName,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(glm_busy_button["text"], "Building...")
+                self.assertTrue(glm_busy_button["disabled"])
+                self.assertEqual(glm_busy_button["ariaBusy"], "true")
+                self.assertTrue(glm_busy_button["building"])
+                self.assertEqual(glm_busy_button["cursor"], "pointer")
+                self.assertEqual(glm_busy_button["background"], "rgb(217, 119, 6)")
+                self.assertEqual(glm_busy_button["spinnerContent"], '""')
+                self.assertEqual(glm_busy_button["spinnerWidth"], "12px")
+                self.assertEqual(glm_busy_button["spinnerAnimation"], "model-busy-button-spin")
+                glm_pointer_moves_while_busy = page.evaluate("window.__glmBusyPointerMoves")
                 glm_job_succeed["value"] = True
                 page.locator("#glmBuildBtn", has_text="Build GLM").wait_for(timeout=10_000)
                 page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
@@ -8416,6 +8454,31 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                glm_ready_button = page.locator("#glmBuildBtn").evaluate(
+                    """
+                    (button) => {
+                      const style = getComputedStyle(button);
+                      const spinner = getComputedStyle(button, "::before");
+                      return {
+                        text: button.textContent.trim(),
+                        disabled: button.disabled,
+                        ariaBusy: button.getAttribute("aria-busy"),
+                        building: button.classList.contains("building"),
+                        cursor: style.cursor,
+                        background: style.backgroundColor,
+                        spinnerContent: spinner.content,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(glm_ready_button["text"], "Build GLM")
+                self.assertFalse(glm_ready_button["disabled"])
+                self.assertIsNone(glm_ready_button["ariaBusy"])
+                self.assertFalse(glm_ready_button["building"])
+                self.assertEqual(glm_ready_button["cursor"], "pointer")
+                self.assertEqual(glm_ready_button["background"], "rgb(21, 128, 61)")
+                self.assertEqual(glm_ready_button["spinnerContent"], "none")
+                self.assertEqual(page.evaluate("window.__glmBusyPointerMoves"), glm_pointer_moves_while_busy)
                 page.unroute("**/api/glm/build", glm_build_route)
                 page.unroute("**/api/glm/jobs/glm-live-job", glm_job_route)
 
@@ -13776,7 +13839,7 @@ COPY (
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='normal']").is_checked())
                 self.assertTrue(page.locator("input[name='gbmEvaluationViewMode'][value='tail']").is_checked())
                 page.locator("input[name='gbmEvaluationViewMode'][value='all']").check()
-                live_job_succeed = {"value": False}
+                live_job_status = {"value": "running"}
                 train_payload = {"value": None}
 
                 def train_route(route: Any) -> None:
@@ -13798,7 +13861,7 @@ COPY (
                     )
 
                 def job_route(route: Any) -> None:
-                    if live_job_succeed["value"]:
+                    if live_job_status["value"] == "succeeded":
                         payload = {
                             "job_id": "live-job",
                             "status": "succeeded",
@@ -13815,6 +13878,19 @@ COPY (
                                 "metric": "gamma",
                                 "latest": [{"dataset": "test", "metric": "gamma", "value": 7.2}],
                                 "evaluation": {"training": {"gamma": [7.4, 7.3]}, "test": {"gamma": [7.35, 7.2]}},
+                            },
+                        }
+                    elif live_job_status["value"] == "failed":
+                        payload = {
+                            "job_id": "live-job",
+                            "status": "failed",
+                            "created_at": "2026-05-25T00:00:00Z",
+                            "updated_at": "2026-05-25T00:00:01Z",
+                            "result": None,
+                            "error": "Synthetic GBM training failure",
+                            "progress": {
+                                "phase": "failed",
+                                "message": "Synthetic GBM training failure",
                             },
                         }
                     else:
@@ -13912,9 +13988,47 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.evaluate(
+                    """
+                    () => {
+                      window.__gbmBusyPointerMoves = 0;
+                      document.addEventListener("pointermove", () => { window.__gbmBusyPointerMoves += 1; }, true);
+                    }
+                    """
+                )
+                page.locator("#gbmTrainBtn").hover()
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmTrainingStatus").get_by_text("training, tree 2/10, test gamma 7.2").wait_for(timeout=10_000)
                 page.locator("#startupProgress.ready", has_text="Training GBM (1/25)...").wait_for(timeout=10_000)
+                gbm_busy_button = page.locator("#gbmTrainBtn").evaluate(
+                    """
+                    (button) => {
+                      const style = getComputedStyle(button);
+                      const spinner = getComputedStyle(button, "::before");
+                      return {
+                        text: button.textContent.trim(),
+                        disabled: button.disabled,
+                        ariaBusy: button.getAttribute("aria-busy"),
+                        training: button.classList.contains("training"),
+                        cursor: style.cursor,
+                        background: style.backgroundColor,
+                        spinnerContent: spinner.content,
+                        spinnerWidth: spinner.width,
+                        spinnerAnimation: spinner.animationName,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(gbm_busy_button["text"], "Training...")
+                self.assertTrue(gbm_busy_button["disabled"])
+                self.assertEqual(gbm_busy_button["ariaBusy"], "true")
+                self.assertTrue(gbm_busy_button["training"])
+                self.assertEqual(gbm_busy_button["cursor"], "pointer")
+                self.assertEqual(gbm_busy_button["background"], "rgb(217, 119, 6)")
+                self.assertEqual(gbm_busy_button["spinnerContent"], '""')
+                self.assertEqual(gbm_busy_button["spinnerWidth"], "12px")
+                self.assertEqual(gbm_busy_button["spinnerAnimation"], "model-busy-button-spin")
+                gbm_pointer_moves_while_busy = page.evaluate("window.__gbmBusyPointerMoves")
                 self.assertNotIn("feature_scenario", train_payload["value"])
                 self.assertEqual(train_payload["value"]["feature_interaction_pairs"], [{"left": "Age", "right": "Segment"}])
                 self.assertNotIn("feature_interaction_groupings", train_payload["value"])
@@ -13936,9 +14050,64 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                live_job_succeed["value"] = True
+                live_job_status["value"] = "succeeded"
                 page.locator("#gbmTrainBtn", has_text="Train GBM").wait_for(timeout=10_000)
                 page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
+                gbm_ready_button = page.locator("#gbmTrainBtn").evaluate(
+                    """
+                    (button) => {
+                      const style = getComputedStyle(button);
+                      const spinner = getComputedStyle(button, "::before");
+                      return {
+                        text: button.textContent.trim(),
+                        disabled: button.disabled,
+                        ariaBusy: button.getAttribute("aria-busy"),
+                        training: button.classList.contains("training"),
+                        cursor: style.cursor,
+                        background: style.backgroundColor,
+                        spinnerContent: spinner.content,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(gbm_ready_button["text"], "Train GBM")
+                self.assertFalse(gbm_ready_button["disabled"])
+                self.assertIsNone(gbm_ready_button["ariaBusy"])
+                self.assertFalse(gbm_ready_button["training"])
+                self.assertEqual(gbm_ready_button["cursor"], "pointer")
+                self.assertEqual(gbm_ready_button["background"], "rgb(21, 128, 61)")
+                self.assertEqual(gbm_ready_button["spinnerContent"], "none")
+                self.assertEqual(page.evaluate("window.__gbmBusyPointerMoves"), gbm_pointer_moves_while_busy)
+
+                live_job_status["value"] = "failed"
+                page.locator("#gbmTrainBtn").click()
+                page.locator("#gbmNotice", has_text="Synthetic GBM training failure").wait_for(timeout=10_000)
+                gbm_failed_button = page.locator("#gbmTrainBtn").evaluate(
+                    """
+                    (button) => ({
+                      text: button.textContent.trim(),
+                      disabled: button.disabled,
+                      ariaBusy: button.getAttribute("aria-busy"),
+                      training: button.classList.contains("training"),
+                      spinnerContent: getComputedStyle(button, "::before").content,
+                    })
+                    """
+                )
+                self.assertEqual(gbm_failed_button["text"], "Train GBM")
+                self.assertFalse(gbm_failed_button["disabled"])
+                self.assertIsNone(gbm_failed_button["ariaBusy"])
+                self.assertFalse(gbm_failed_button["training"])
+                self.assertEqual(gbm_failed_button["spinnerContent"], "none")
+                page.evaluate(
+                    """
+                    () => {
+                      const notice = document.querySelector("#gbmNotice");
+                      if (!notice) return;
+                      notice.textContent = "";
+                      notice.classList.add("hidden");
+                    }
+                    """
+                )
                 page.unroute("**/api/gbm/train", train_route)
                 page.unroute("**/api/gbm/jobs/live-job", job_route)
                 gbm_top_before = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")

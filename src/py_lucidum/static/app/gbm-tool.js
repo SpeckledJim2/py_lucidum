@@ -313,7 +313,7 @@ export function createGbmTool({
                   <div class="gbm-parameter-controls-column">
                     <h3 class="gbm-section-title">Control</h3>
                     <div class="gbm-actions">
-                      <button id="gbmTrainBtn" class="tab gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining ? "disabled aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
+                      <button id="gbmTrainBtn" class="tab model-busy-button gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining ? "disabled aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
                       ${sampleStatusHtml(data.sample)}
                       <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
                         <span class="gbm-shap-label">SHAP rows</span>
