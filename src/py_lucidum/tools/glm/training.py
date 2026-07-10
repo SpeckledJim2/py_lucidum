@@ -236,6 +236,15 @@ def glm_dependencies() -> tuple[Any, Any, Any, Any, Any]:
     return glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd
 
 
+def glm_training_dependencies() -> tuple[Any, Any, Any, Any, Any, Any]:
+    glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd = glm_dependencies()
+    try:
+        import polars as pl  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise MissingGlmDependency("polars") from exc
+    return glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd, pl
+
+
 def should_isolate_glm_fit() -> bool:
     return "lightgbm" in sys.modules and _GLUM_FIRST_IMPORT_SAW_LIGHTGBM is not False
 
@@ -630,12 +639,46 @@ def _raise_actionable_singular_matrix_error(exc: Exception) -> None:
     ) from exc
 
 
-def data_frame_from_dataset(dataset: Dataset) -> tuple[Any, list[str]]:
+def formula_source_columns(formula: str, source_columns: list[str]) -> list[str]:
+    from formulaic import Formula  # type: ignore[import-not-found]
+    from formulaic.parser import DefaultFormulaParser  # type: ignore[import-not-found]
+
+    parsed = Formula(
+        str(formula or "1"),
+        _parser=DefaultFormulaParser(include_intercept=False),
+        _context={
+            "__formulaic_variables_available__": source_columns,
+            "__formulaic_variables_used_lhs__": [],
+        },
+    )
+    required = {str(variable) for variable in parsed.required_variables}
+    return [column for column in source_columns if column in required]
+
+
+def required_training_columns(dataset: Dataset, validation: dict[str, Any]) -> list[str]:
+    source_columns = [column.name for column in dataset.valid_schema_columns()]
+    requested = {
+        str(validation.get("response_column") or "").strip(),
+        str(validation.get("denominator_column") or "").strip(),
+    }
+    formula = validation.get("formula")
+    if isinstance(formula, dict):
+        requested.update(formula_source_columns(str(formula.get("fitted") or "1"), source_columns))
+        for expression in formula.get("offset_terms") or []:
+            requested.update(column_tokens(str(expression), source_columns))
+    if str(validation.get("training_scope") or "all") == "training":
+        sample_column = physical_sample_column(dataset)
+        if sample_column:
+            requested.add(sample_column)
+    requested.discard("")
+    return [column for column in source_columns if column in requested]
+
+
+def data_frame_from_dataset(dataset: Dataset, columns: list[str]) -> Any:
     with dataset.lock:
-        columns = [column.name for column in dataset.valid_schema_columns()]
         projection = ",\n  ".join(["ROW_NUMBER() OVER () AS __lucidum_row_id", *[quote_ident(name) for name in columns]])
-        frame = dataset.con.execute(f"SELECT {projection} FROM {dataset.relation_sql()}").fetchdf()
-    return frame, columns
+        frame = dataset.con.execute(f"SELECT {projection} FROM {dataset.relation_sql()}").pl()
+    return frame
 
 
 def finite_mask(np: Any, values: Any) -> Any:
@@ -660,6 +703,43 @@ def offset_values_for_frame(frame: Any, offset_terms: list[str], context: dict[s
         series = pd.Series(evaluated, index=frame.index)
         values = values + pd.to_numeric(series, errors="coerce")
     return values
+
+
+def offset_values_for_polars_frame(
+    frame: Any,
+    offset_terms: list[str],
+    context: dict[str, Any],
+    np: Any,
+    pl: Any,
+) -> Any | None:
+    terms = [str(term or "").strip() for term in offset_terms if str(term or "").strip()]
+    if not terms:
+        return None
+    local_context = dict(context)
+    for column in frame.columns:
+        local_context[str(column)] = frame.get_column(column).to_numpy()
+    values = np.zeros(frame.height, dtype=float)
+    for term in terms:
+        try:
+            evaluated = eval(term, {"__builtins__": {}}, local_context)
+        except Exception as exc:
+            raise ValueError(f"Could not evaluate GLM offset expression `{term}`: {exc}") from exc
+        if not hasattr(evaluated, "__len__") or isinstance(evaluated, (str, bytes)):
+            evaluated = np.full(frame.height, evaluated)
+        if len(evaluated) != frame.height:
+            raise ValueError(f"GLM offset expression `{term}` returned {len(evaluated)} values for {frame.height} rows")
+        numeric = pl.Series("offset", evaluated).cast(pl.Float64, strict=False).fill_null(float("nan")).to_numpy()
+        values = values + numeric
+    return values
+
+
+def polars_numeric_array(frame: Any, column: str, pl: Any) -> Any:
+    return (
+        frame.get_column(column)
+        .cast(pl.Float64, strict=False)
+        .fill_null(float("nan"))
+        .to_numpy()
+    )
 
 
 def check_target_range(np: Any, family: str, y: Any) -> None:
@@ -1006,40 +1086,45 @@ def build_predictions_frame(
     denominator_column: str,
     context: dict[str, Any],
     np: Any,
-    pd: Any,
+    pl: Any,
     *,
     offset_values: Any | None = None,
 ) -> tuple[Any, int, int]:
-    score_frame = frame.copy()
-    score_frame[TARGET_COLUMN] = np.nan
     if denominator_column:
-        denominator = pd.to_numeric(score_frame[denominator_column], errors="coerce")
-        score_mask = denominator.notna() & np.isfinite(denominator.astype(float)) & (denominator.astype(float) > 0)
+        denominator = polars_numeric_array(frame, denominator_column, pl)
+        score_mask = np.isfinite(denominator) & (denominator > 0)
     else:
         denominator = None
-        score_mask = pd.Series(True, index=score_frame.index)
+        score_mask = np.ones(frame.height, dtype=bool)
     if offset_values is not None:
-        score_mask = score_mask & finite_mask(np, offset_values)
+        score_mask = score_mask & np.isfinite(offset_values)
 
-    output = score_frame.loc[score_mask, ["__lucidum_row_id"]].copy()
+    score_frame = frame.filter(pl.Series("__lucidum_score_mask", score_mask))
     predict_kwargs = {"context": context}
     if offset_values is not None:
-        predict_kwargs["offset"] = offset_values.loc[score_mask].astype(float).to_numpy()
-    predictions = model.predict(score_frame.loc[score_mask].copy(), **predict_kwargs)
-    prediction_values = pd.to_numeric(predictions, errors="coerce")
+        predict_kwargs["offset"] = np.asarray(offset_values[score_mask], dtype=float)
+    predictions = model.predict(score_frame, **predict_kwargs)
+    prediction_values = np.asarray(predictions, dtype=float)
     rate_values = prediction_values.copy() if denominator is not None else None
     if denominator is not None:
-        prediction_values = prediction_values * denominator.loc[score_mask].to_numpy(dtype=float)
-    finite = np.isfinite(np.asarray(prediction_values, dtype=float))
-    output["glm_prediction"] = prediction_values
-    output.loc[~finite, "glm_prediction"] = np.nan
+        prediction_values = prediction_values * denominator[score_mask]
+    finite = np.isfinite(prediction_values)
+    output_columns: dict[str, Any] = {
+        "__lucidum_row_id": score_frame.get_column("__lucidum_row_id"),
+        "glm_prediction": pl.Series(
+            "glm_prediction",
+            np.where(finite, prediction_values, np.nan),
+        ).fill_nan(None),
+    }
     if rate_values is not None:
-        rate_finite = np.isfinite(np.asarray(rate_values, dtype=float))
-        output["glm_prediction_rate"] = rate_values
-        output.loc[~rate_finite, "glm_prediction_rate"] = np.nan
+        rate_finite = np.isfinite(rate_values)
+        output_columns["glm_prediction_rate"] = pl.Series(
+            "glm_prediction_rate",
+            np.where(rate_finite, rate_values, np.nan),
+        ).fill_nan(None)
     fitted_na_rows = int((~finite).sum())
     scored_rows = int(finite.sum())
-    return output, scored_rows, fitted_na_rows
+    return pl.DataFrame(output_columns), scored_rows, fitted_na_rows
 
 
 def regularization_summary(model: Any, regularization: dict[str, Any], np: Any) -> dict[str, Any]:
@@ -1063,7 +1148,7 @@ def train_model(
     activate: bool = True,
 ) -> dict[str, Any]:
     dependency_started = time.perf_counter()
-    glm_dependencies()
+    glm_training_dependencies()
     parent_dependency_ms = _elapsed_ms(dependency_started)
     if should_isolate_glm_fit():
         return train_model_in_subprocess(
@@ -1103,7 +1188,7 @@ def _train_model_impl(
     started = overall_started if overall_started is not None else time.perf_counter()
     timings = dict(base_timings or {})
     dependency_started = time.perf_counter()
-    glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd = glm_dependencies()
+    glum, GeneralizedLinearRegressor, GeneralizedLinearRegressorCV, np, pd, pl = glm_training_dependencies()
     local_dependency_ms = _elapsed_ms(dependency_started)
     parent_dependency_ms = _safe_float(timings.get("parent_dependency_ms"))
     timings["dependency_ms"] = round(parent_dependency_ms + local_dependency_ms, 1)
@@ -1119,7 +1204,8 @@ def _train_model_impl(
     progress = progress_callback or (lambda _progress: None)
     progress({"phase": "loading", "message": "Loading GLM training data", "percent": 5})
     data_load_started = time.perf_counter()
-    frame, source_columns = data_frame_from_dataset(dataset)
+    source_columns = required_training_columns(dataset, validation)
+    frame = data_frame_from_dataset(dataset, source_columns)
     timings["data_load_ms"] = _elapsed_ms(data_load_started)
     prep_started = time.perf_counter()
 
@@ -1144,44 +1230,53 @@ def _train_model_impl(
     estimator_fit_intercept = fit_intercept
     if intercept_only:
         internal_intercept_column = internal_intercept_column_name(list(frame.columns))
-        add_internal_intercept_column(frame, internal_intercept_column)
+        frame = frame.with_columns(pl.lit(1.0).alias(internal_intercept_column))
         estimator_fitted_formula = f"{TARGET_COLUMN} ~ 0 + `{internal_intercept_column}`"
         estimator_fit_intercept = False
 
-    offset_values = offset_values_for_frame(frame, offset_terms, context, np, pd)
+    offset_values = offset_values_for_polars_frame(frame, offset_terms, context, np, pl)
 
-    response = pd.to_numeric(frame[response_column], errors="coerce")
+    response = polars_numeric_array(frame, response_column, pl)
     if denominator_column:
-        denominator = pd.to_numeric(frame[denominator_column], errors="coerce")
-        eligible_mask = denominator.notna() & np.isfinite(denominator.astype(float)) & (denominator.astype(float) > 0)
-        target = response / denominator
+        denominator = polars_numeric_array(frame, denominator_column, pl)
+        eligible_mask = np.isfinite(denominator) & (denominator > 0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            target = response / denominator
         fit_weight = denominator
     else:
-        eligible_mask = pd.Series(True, index=frame.index)
+        eligible_mask = np.ones(frame.height, dtype=bool)
         target = response
         fit_weight = None
 
-    fit_mask = eligible_mask & finite_mask(np, target)
+    fit_mask = eligible_mask & np.isfinite(target)
     sample_column = physical_sample_column(dataset)
     if training_scope == "training":
         if not sample_column:
             raise ValueError("Training rows require a physical SAMPLE column")
-        fit_mask = fit_mask & (frame[sample_column].astype(str).str.strip().str.lower() == "training")
+        training_rows = (
+            frame.get_column(sample_column)
+            .cast(pl.String)
+            .str.strip_chars()
+            .str.to_lowercase()
+            .eq("training")
+            .fill_null(False)
+            .to_numpy()
+        )
+        fit_mask = fit_mask & training_rows
 
     if fit_weight is not None:
-        fit_mask = fit_mask & finite_mask(np, fit_weight) & (fit_weight.astype(float) > 0)
+        fit_mask = fit_mask & np.isfinite(fit_weight) & (fit_weight > 0)
     if offset_values is not None:
-        fit_mask = fit_mask & finite_mask(np, offset_values)
+        fit_mask = fit_mask & np.isfinite(offset_values)
 
     if int(fit_mask.sum()) < 2:
         raise ValueError("GLM fitting needs at least two valid rows")
 
-    y_fit = target.loc[fit_mask].astype(float)
+    y_fit = np.asarray(target[fit_mask], dtype=float)
     check_target_range(np, family, y_fit)
-    fit_frame = frame.loc[fit_mask].copy()
-    fit_frame[TARGET_COLUMN] = y_fit.to_numpy(dtype=float)
-    fit_weight_values = fit_weight.loc[fit_mask].astype(float).to_numpy() if fit_weight is not None else None
-    fit_offset_values = offset_values.loc[fit_mask].astype(float).to_numpy() if offset_values is not None else None
+    fit_frame = frame.filter(pl.Series("__lucidum_fit_mask", fit_mask)).with_columns(pl.Series(TARGET_COLUMN, y_fit))
+    fit_weight_values = np.asarray(fit_weight[fit_mask], dtype=float) if fit_weight is not None else None
+    fit_offset_values = np.asarray(offset_values[fit_mask], dtype=float) if offset_values is not None else None
     design_diagnostics = design_matrix_diagnostics(
         estimator_fitted_formula,
         fit_frame,
@@ -1245,11 +1340,11 @@ def _train_model_impl(
     progress({"phase": "scoring", "message": "Scoring GLM predictions", "percent": 70})
     score_started = time.perf_counter()
     with _capture_glm_warnings() as captured_warnings:
-        predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pd, offset_values=offset_values)
+        predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pl, offset_values=offset_values)
         coefficients = coefficient_rows(
             estimator,
             fit_frame,
-            y_fit.to_numpy(dtype=float),
+            y_fit,
             fit_weight_values,
             context,
             np,
@@ -1270,7 +1365,7 @@ def _train_model_impl(
         diagnostics = diagnostics_payload(
             estimator,
             fit_frame,
-            y_fit.to_numpy(dtype=float),
+            y_fit,
             fit_weight_values,
             context,
             np,
@@ -1328,10 +1423,29 @@ def _train_model_impl(
 
     progress({"phase": "writing", "message": "Saving GLM artifacts", "percent": 90})
     artifact_write_started = time.perf_counter()
-    coefficient_frame = pd.DataFrame(coefficients)
-    feature_importance_frame = pd.DataFrame(
+    coefficient_frame = pl.DataFrame(
+        coefficients,
+        schema={
+            "term": pl.String,
+            "features": pl.List(pl.String),
+            "estimate": pl.Float64,
+            "std_error": pl.Float64,
+            "statistic": pl.Float64,
+            "p_value": pl.Float64,
+            "ci_lower": pl.Float64,
+            "ci_upper": pl.Float64,
+        },
+        strict=False,
+    )
+    feature_importance_frame = pl.DataFrame(
         feature_importance,
-        columns=["feature", "importance", "term_count", "metric"],
+        schema={
+            "feature": pl.String,
+            "importance": pl.Float64,
+            "term_count": pl.Int64,
+            "metric": pl.String,
+        },
+        strict=False,
     )
     write_dataframe_parquet(coefficient_frame, store.artifact_path(model_id, "coefficients"))
     write_dataframe_parquet(feature_importance_frame, store.artifact_path(model_id, "feature_importance"))
@@ -1361,6 +1475,7 @@ __all__ = [
     "add_internal_intercept_column",
     "estimator_intercept_value",
     "glm_dependencies",
+    "glm_training_dependencies",
     "glm_feature_importance_rows",
     "internal_intercept_column_from_manifest",
     "train_model",

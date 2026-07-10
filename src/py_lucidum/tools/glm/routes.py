@@ -10,7 +10,7 @@ from .formula_assist import formula_levels
 from .jobs import GlmJobManager
 from .store import GlmModelNameError, GlmModelStore, GlmSourceProvider
 from .tabulation import export_tabulations, rebase_tabulation, reset_tabulation_rebase, tabulation_config, tabulation_plot, tabulation_table
-from .training import MissingGlmDependency, glm_dependencies
+from .training import MissingGlmDependency, glm_training_dependencies
 from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payload, regularization_options_payload, sample_metadata, validate_request
 
 
@@ -73,7 +73,7 @@ def register(app: FastAPI, context: AppContext) -> None:
         context.check_token(request)
         payload = dict(await request.json())
         try:
-            glm_dependencies()
+            glm_training_dependencies()
             validation = validate_request(context.dataset, payload)
             if not validation["ok"]:
                 raise ValueError("; ".join(validation["errors"]))

@@ -34,7 +34,10 @@ from py_lucidum.tools.glm.training import (
     formula_context,
     glm_formula_drop_first,
     glm_dependencies,
+    glm_training_dependencies,
     glm_feature_importance_rows,
+    data_frame_from_dataset,
+    required_training_columns,
     stop_persistent_glm_fit_worker,
     train_model,
     train_model_in_subprocess,
@@ -147,14 +150,14 @@ class GlmToolTests(unittest.TestCase):
 
     def require_glm_dependencies(self) -> None:
         try:
-            glm_dependencies()
+            glm_training_dependencies()
         except MissingGlmDependency as exc:
             self.skipTest(str(exc))
 
     def require_glm_and_gbm_dependencies(self) -> None:
         missing = [
             name
-            for name in ("glum", "lightgbm", "numpy", "pandas")
+            for name in ("glum", "lightgbm", "numpy", "pandas", "polars")
             if importlib.util.find_spec(name) is None
         ]
         if missing:
@@ -635,7 +638,7 @@ if result.get("iteration") != 10:
                 model_route_methods.update(getattr(route, "methods", set()))
         self.assertIn("DELETE", model_route_methods)
 
-        with patch("py_lucidum.tools.glm.routes.glm_dependencies", side_effect=AssertionError("should not import glum")):
+        with patch("py_lucidum.tools.glm.routes.glm_training_dependencies", side_effect=AssertionError("should not import glum")):
             status, body = asgi_get(app, "/api/glm/config")
         payload = json.loads(body)
 
@@ -649,7 +652,7 @@ if result.get("iteration") != 10:
     def test_glm_build_reports_actionable_missing_dependency(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
-        with patch("py_lucidum.tools.glm.routes.glm_dependencies", side_effect=MissingGlmDependency("glum")):
+        with patch("py_lucidum.tools.glm.routes.glm_training_dependencies", side_effect=MissingGlmDependency("polars")):
             status, body = asgi_post_json(
                 app,
                 "/api/glm/build",
@@ -659,7 +662,7 @@ if result.get("iteration") != 10:
 
         self.assertEqual(status, 400)
         self.assertIn("pip install 'py-lucidum[glm]'", payload["detail"])
-        self.assertIn("glum", payload["detail"])
+        self.assertIn("polars", payload["detail"])
 
     def test_formula_levels_endpoint_returns_sorted_capped_categorical_values(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
@@ -677,7 +680,7 @@ if result.get("iteration") != 10:
     def test_formula_levels_endpoint_searches_levels_without_glm_dependencies(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
-        with patch("py_lucidum.tools.glm.routes.glm_dependencies", side_effect=AssertionError("unexpected GLM dependency check")):
+        with patch("py_lucidum.tools.glm.routes.glm_training_dependencies", side_effect=AssertionError("unexpected GLM dependency check")):
             status, body = asgi_post_json(app, "/api/glm/formula/levels", {"column": "Segment", "search": "b", "limit": 500})
         payload = json.loads(body)
 
@@ -918,6 +921,114 @@ if result.get("iteration") != 10:
 
         self.assertFalse(result["ok"])
         self.assertIn("physical SAMPLE column", "; ".join(result["errors"]))
+
+    def test_glm_training_projection_uses_only_required_formula_columns(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "projection.csv"
+        path.write_text(
+            "response,denominator,Age Years,Segment,offset_base,SAMPLE,unused\n"
+            "10,100,30,A,1.0,training,ignore\n"
+            "20,200,40,B,2.0,test,ignore\n"
+            "30,300,50,A,3.0,training,ignore\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(path)
+
+        intercept = validate_request(
+            dataset,
+            {
+                "formula": "1",
+                "response_column": "response",
+                "denominator_column": "denominator",
+                "family": "poisson",
+                "training_scope": "all",
+            },
+        )
+        transformed = validate_request(
+            dataset,
+            {
+                "formula": (
+                    "ns(`Age Years`, df=3, constraints='center')"
+                    " + C(Segment):ifelse(`Age Years` > 35, 1, 0)"
+                    " + offset(log(pmax(offset_base, 1)))"
+                ),
+                "response_column": "response",
+                "denominator_column": "denominator",
+                "family": "poisson",
+                "training_scope": "training",
+            },
+        )
+        dot_formula = validate_request(
+            dataset,
+            {
+                "formula": ".",
+                "response_column": "response",
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+
+        self.assertTrue(intercept["ok"], intercept)
+        self.assertTrue(transformed["ok"], transformed)
+        self.assertTrue(dot_formula["ok"], dot_formula)
+        self.assertEqual(required_training_columns(dataset, intercept), ["response", "denominator"])
+        projected = required_training_columns(dataset, transformed)
+        self.assertEqual(
+            projected,
+            ["response", "denominator", "Age Years", "Segment", "offset_base", "SAMPLE"],
+        )
+        frame = data_frame_from_dataset(dataset, projected)
+        self.assertEqual(frame.columns, ["__lucidum_row_id", *projected])
+        self.assertEqual(frame.height, 3)
+        self.assertNotIn("unused", frame.columns)
+        self.assertEqual(
+            required_training_columns(dataset, dot_formula),
+            ["response", "denominator", "Age Years", "Segment", "offset_base", "SAMPLE", "unused"],
+        )
+
+    def test_polars_training_preserves_fit_and_score_row_eligibility(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "polars_eligibility.parquet"
+        with duckdb.connect(database=":memory:") as con:
+            con.execute(
+                f"""
+COPY (
+  SELECT * FROM (VALUES
+    (1, 1.0::DOUBLE, 1.0::DOUBLE, 'training'),
+    (2, 2.0::DOUBLE, 1.0::DOUBLE, 'training'),
+    (3, NULL::DOUBLE, 1.0::DOUBLE, 'training'),
+    (4, 'NaN'::DOUBLE, 1.0::DOUBLE, 'training'),
+    (5, 3.0::DOUBLE, 0.0::DOUBLE, 'training'),
+    (6, 4.0::DOUBLE, -1.0::DOUBLE, 'training'),
+    (7, 5.0::DOUBLE, 2.0::DOUBLE, 'test'),
+    (8, 6.0::DOUBLE, NULL::DOUBLE, 'training')
+  ) rows(row_id, response, denominator, SAMPLE)
+) TO {sql_literal(str(path))} (FORMAT PARQUET)
+"""
+            )
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "1",
+                "response_column": "response",
+                "denominator_column": "denominator",
+                "family": "normal",
+                "training_scope": "training",
+            },
+        )
+        predictions = store.read_parquet_records(store.artifact_path(result["model_id"], "predictions"))
+
+        self.assertEqual(result["diagnostics"]["training_rows"], 2)
+        self.assertEqual(result["diagnostics"]["eligible_rows"], 5)
+        self.assertEqual(result["diagnostics"]["scored_rows"], 5)
+        self.assertEqual(result["diagnostics"]["fitted_na_rows"], 0)
+        self.assertEqual([row["__lucidum_row_id"] for row in predictions], [1, 2, 3, 4, 7])
+        self.assertTrue(all(row["glm_prediction"] is not None for row in predictions))
+        self.assertTrue(all(row["glm_prediction_rate"] is not None for row in predictions))
 
     def test_glm_training_writes_weighted_predictions_and_publishes_source(self) -> None:
         self.require_glm_dependencies()
