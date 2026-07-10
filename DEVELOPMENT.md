@@ -308,14 +308,24 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 ## Testing
 
 Use these tiers to keep iteration focused while preserving the full suite.
-Narrow tiers are for local speed only; do not delete, skip, or weaken tests just
-to reduce count.
 
-- Broad development checks are the normal between-commit loop. Test modules are
-  discovered dynamically, so new modules join this tier automatically. Only
-  `test_glm.py` and `test_browser_smoke.py` are excluded; the fast packaging
-  contract in `test_pipx_install.py` runs while its environment-gated install
-  test remains skipped. This tier currently takes about 23 seconds:
+- Change-aware checks are the normal between-commit loop. They always run
+  syntax checks, inspect staged, unstaged, and untracked paths, then select the
+  matching tool tests. Shared, unknown, browser-test, or clean-tree changes
+  fall back to the broad lane; documentation-only changes stop after syntax.
+  Frontend changes also report when a focused browser scenario is advisable:
+
+```bash
+.venv/bin/python scripts/run_tests.py changed
+```
+
+- Broad development checks are the explicit local safety net. Test modules are
+  discovered dynamically, so new modules join this tier automatically. Browser
+  tests and slow GLM fitting/tabulation coverage are excluded, while fast GLM
+  validation/configuration contracts are included explicitly. Four Line/Bar
+  process-isolation cases remain full-gate tests. The fast packaging contract in
+  `test_pipx_install.py` runs while its environment-gated install test remains
+  skipped. This tier currently takes about 15 seconds:
 
 ```bash
 .venv/bin/python scripts/run_tests.py dev
@@ -386,12 +396,12 @@ not Python 3.13.
 
 Current timings recorded on macOS arm64 with Python 3.13.13 and Node 26.3.0:
 
-- Full unittest discovery: 585 tests, 40 expected skips, about 85 seconds.
-- GLM tests: 61 tests, about 67 seconds.
-- Browser smoke: 39 tests, about 89 seconds.
-- Broad development lane: 485 tests, one expected skip, and all syntax checks
-  in about 24 seconds.
-- Complete pre-commit gate: about 2 minutes 56 seconds.
+- Static-frontend changed lane equivalent: 23 tests plus syntax in about 2.1 seconds.
+- GBM changed lane equivalent: 118 tests plus syntax in about 6.3 seconds.
+- Broad development lane: 437 tests, one expected skip, and syntax in about 14.3 seconds.
+- Full unittest discovery: 525 tests, 39 expected skips, in about 75.4 seconds.
+- Browser smoke: 38 tests in about 80.2 seconds.
+- Complete pre-commit gate: about 2 minutes 37 seconds.
 
 Browser smoke coverage should include cross-tool focus and listener regressions
 after visiting tools that install global listeners, especially document/window

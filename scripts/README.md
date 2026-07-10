@@ -3,8 +3,20 @@
 ## Test Workflow
 
 `run_tests.py` is the canonical test entry point. The normal between-commit
-lane dynamically checks Python and non-vendored JavaScript syntax, then runs
-every test module except the slower GLM and browser suites:
+lane dynamically checks Python and non-vendored JavaScript syntax, then maps
+staged, unstaged, and untracked paths to focused tests:
+
+```bash
+.venv/bin/python scripts/run_tests.py changed
+```
+
+Shared, unknown, browser-test, or clean-tree changes fall back to the broad
+development lane. Documentation-only changes stop after syntax checks. Static
+frontend changes run the static contracts and print a reminder to run a focused
+browser scenario when interaction behavior changed.
+
+The explicit broad lane includes fast GLM contracts but excludes browser tests,
+slow GLM fitting/tabulation coverage, and Line/Bar process-isolation cases:
 
 ```bash
 .venv/bin/python scripts/run_tests.py dev

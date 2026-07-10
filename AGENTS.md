@@ -52,16 +52,23 @@ Use this map before opening large files:
 
 ## Before Committing
 
-Use the tiered runner documented in `DEVELOPMENT.md`. The broad development
-lane runs syntax checks and every test module except the slow GLM and browser
-suites:
+Use the tiered runner documented in `DEVELOPMENT.md`. The normal development
+loop selects focused tests from staged, unstaged, and untracked changes, with a
+safe fallback to the broad lane for shared or unknown files:
+
+```bash
+.venv/bin/python scripts/run_tests.py changed
+```
+
+The broad development lane runs syntax checks, non-browser modules, fast GLM
+contracts, and excludes slow modelling process integration cases:
 
 ```bash
 .venv/bin/python scripts/run_tests.py dev
 ```
 
-Use `focus` or `browser` with a specific target for the quickest feedback while
-editing one area. Before every commit, run the complete gate; it includes full
+Use `focus` or `browser` with a specific target when you need to override the
+automatic selection. Before every commit, run the complete gate; it includes full
 unittest discovery, all browser smoke tests, dynamic syntax checks, and staged
 and unstaged whitespace checks:
 

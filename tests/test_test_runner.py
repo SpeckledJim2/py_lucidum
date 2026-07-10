@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from scripts import run_tests
+from scripts import run_browser_smoke, run_tests
 
 
 class TestRunnerTests(unittest.TestCase):
@@ -25,6 +25,7 @@ class TestRunnerTests(unittest.TestCase):
         self.assertIn("test_pipx_install.py", names)
         self.assertIn("test_static_assets.py", names)
         self.assertIn("test_test_runner.py", names)
+        self.assertTrue(set(run_tests.FAST_GLM_TEST_TARGETS).issubset(set(run_tests.dev_test_targets(self.root))))
 
     def test_dev_targets_include_new_test_modules_automatically(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -34,7 +35,10 @@ class TestRunnerTests(unittest.TestCase):
             for name in ("test_browser_smoke.py", "test_glm.py", "test_new_tool.py"):
                 (tests_dir / name).touch()
 
-            self.assertEqual(run_tests.dev_test_targets(root), ["tests/test_new_tool.py"])
+            targets = run_tests.dev_test_targets(root)
+
+            self.assertEqual(targets[0], "tests/test_new_tool.py")
+            self.assertEqual(targets[1:], list(run_tests.FAST_GLM_TEST_TARGETS))
 
     def test_javascript_files_exclude_vendor_files(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -98,6 +102,51 @@ class TestRunnerTests(unittest.TestCase):
         self.assertLess(max(node_indexes), unittest_index)
         self.assertLess(unittest_index, browser_index)
 
+    def test_changed_targets_map_tool_frontend_and_multiple_areas(self) -> None:
+        self.assertEqual(
+            run_tests.changed_test_targets(["src/py_lucidum/tools/histogram/routes.py"]),
+            ["tests/test_histogram.py"],
+        )
+        self.assertEqual(
+            run_tests.changed_test_targets(["src/py_lucidum/static/app/histogram-tool.js"]),
+            ["tests/test_static_assets.py"],
+        )
+        self.assertEqual(
+            run_tests.changed_test_targets(
+                ["src/py_lucidum/tools/gbm/training.py", "src/py_lucidum/tools/uk_map/query.py"]
+            ),
+            ["tests/test_gbm.py", "tests/test_uk_map.py"],
+        )
+
+    def test_changed_targets_use_fast_glm_and_preserve_slow_classification(self) -> None:
+        targets = run_tests.changed_test_targets(["src/py_lucidum/tools/glm/validation.py"])
+
+        self.assertEqual(targets, sorted(run_tests.FAST_GLM_TEST_TARGETS))
+        self.assertTrue(run_tests.DEV_EXCLUDED_TEST_IDS)
+        self.assertTrue(
+            all("test_chart_glm_overlay_" in target for target in run_tests.DEV_EXCLUDED_TEST_IDS)
+        )
+
+    def test_changed_targets_fall_back_for_shared_unknown_clean_and_browser_changes(self) -> None:
+        self.assertIsNone(run_tests.changed_test_targets(["src/py_lucidum/core/dataset.py"]))
+        self.assertIsNone(run_tests.changed_test_targets(["an-unmapped-file.txt"]))
+        self.assertIsNone(run_tests.changed_test_targets(["tests/test_browser_smoke.py"]))
+        self.assertEqual(run_tests.changed_test_targets([]), [])
+        self.assertEqual(run_tests.changed_test_targets(["DEVELOPMENT.md"]), [])
+
+    def test_changed_paths_combines_staged_unstaged_and_untracked_names(self) -> None:
+        outputs = [
+            subprocess.CompletedProcess([], 0, stdout="src/py_lucidum/cli.py\ntests/test_cli.py\n", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="new-file.txt\n", stderr=""),
+        ]
+        with patch.object(run_tests.subprocess, "run", side_effect=outputs) as run:
+            paths = run_tests.changed_paths(self.root)
+
+        self.assertEqual(paths, ["new-file.txt", "src/py_lucidum/cli.py", "tests/test_cli.py"])
+        self.assertIn("HEAD", run.call_args_list[0].args[0])
+        self.assertIn("--diff-filter=ACMRD", run.call_args_list[0].args[0])
+        self.assertIn("--others", run.call_args_list[1].args[0])
+
     def test_precommit_stops_after_first_failure(self) -> None:
         with patch.object(run_tests, "run_process", return_value=7) as run_process:
             with redirect_stdout(io.StringIO()):
@@ -114,7 +163,19 @@ class TestRunnerTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         command = run_process.call_args.args[0]
-        self.assertEqual(command[1:], ["scripts/run_browser_smoke.py", target, "-q"])
+        self.assertEqual(command[1:], ["scripts/run_browser_smoke.py", "--", target, "-q"])
+
+    def test_browser_helper_forwards_pytest_options_and_default_target(self) -> None:
+        with patch.object(run_browser_smoke, "local_python", return_value="/test/python"):
+            with patch.object(run_browser_smoke, "run", return_value=0) as run:
+                code = run_browser_smoke.main(["--direct", "--", "--durations=5", "-q"])
+
+        self.assertEqual(code, 0)
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command,
+            ["/test/python", "-m", "pytest", "tests/test_browser_smoke.py", "--durations=5", "-q"],
+        )
 
     def test_pipx_command_enables_install_test_and_preserves_environment(self) -> None:
         with patch.dict(os.environ, {"PY_LUCIDUM_PIPX_PYTHON": "python3.13"}, clear=False):
