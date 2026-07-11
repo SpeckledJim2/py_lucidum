@@ -71,6 +71,7 @@ export function createDatasetViewerTool({
   let pendingFavouriteNormalSorters = null;
   let pendingFavouriteTransposedSort = null;
   let suppressNextWidthSnapshot = false;
+  let columnResizeGesture = null;
   let resizeFrame = null;
   let resizeHard = false;
 
@@ -168,6 +169,7 @@ export function createDatasetViewerTool({
         markDatasetViewChanged();
       });
       el("datasetViewerGrid").addEventListener("click", handleDatasetViewerGridClick);
+      el("datasetViewerGrid").addEventListener("pointerdown", handleDatasetViewerResizePointerDown);
       el("datasetViewerGrid").addEventListener("contextmenu", handleDatasetViewerGridContextMenu);
     }
     attachDatasetViewerMeta();
@@ -504,12 +506,10 @@ export function createDatasetViewerTool({
 
   function rememberNormalColumnWidth(column) {
     rememberDatasetViewerColumnWidth("normal", column, { user: true });
-    markDatasetViewChanged();
   }
 
   function rememberTransposedColumnWidth(column) {
     rememberDatasetViewerColumnWidth("transposed", column, { user: true });
-    markDatasetViewChanged();
   }
 
   function rememberDatasetViewerColumnWidth(mode, column, options = {}) {
@@ -901,6 +901,11 @@ export function createDatasetViewerTool({
   function handleDatasetViewerGridClick(event) {
     const grid = el("datasetViewerGrid");
     if (!grid || !grid.contains(event.target)) return;
+    const normalSorter = event.target?.closest?.(".tabulator-col-sorter");
+    if (normalSorter && grid.contains(normalSorter) && !state.datasetViewerTranspose) {
+      markDatasetViewChanged();
+      return;
+    }
     const normalHeaderLabel = event.target?.closest?.(".dataset-viewer-header-label[data-dataset-viewer-column-field]");
     if (normalHeaderLabel && grid.contains(normalHeaderLabel)) {
       event.preventDefault();
@@ -1020,6 +1025,38 @@ export function createDatasetViewerTool({
       selectedRowIds = new Set();
       selectedColumnFields = new Set();
     }
+  }
+
+  function handleDatasetViewerResizePointerDown(event) {
+    const grid = el("datasetViewerGrid");
+    const handle = event.target?.closest?.(".tabulator-col-resize-handle");
+    if (!grid || !handle || !grid.contains(handle)) return;
+    const handleRect = handle.getBoundingClientRect();
+    const columns = [...grid.querySelectorAll(".tabulator-col[tabulator-field]")];
+    const column = columns
+      .map((candidate) => ({
+        candidate,
+        distance: Math.abs(candidate.getBoundingClientRect().right - handleRect.left),
+      }))
+      .filter(({ distance }) => distance <= 8)
+      .sort((left, right) => left.distance - right.distance)[0]?.candidate || null;
+    if (!column) return;
+    columnResizeGesture = {
+      column,
+      width: column.getBoundingClientRect().width,
+    };
+    window.addEventListener("pointerup", finishDatasetViewerResizeGesture);
+    window.addEventListener("pointercancel", finishDatasetViewerResizeGesture);
+  }
+
+  function finishDatasetViewerResizeGesture() {
+    window.removeEventListener("pointerup", finishDatasetViewerResizeGesture);
+    window.removeEventListener("pointercancel", finishDatasetViewerResizeGesture);
+    const gesture = columnResizeGesture;
+    columnResizeGesture = null;
+    if (!gesture?.column?.isConnected) return;
+    const width = gesture.column.getBoundingClientRect().width;
+    if (Math.abs(width - gesture.width) >= 1) markDatasetViewChanged();
   }
 
   function toggleColumnSelection(field) {
@@ -1439,7 +1476,6 @@ export function createDatasetViewerTool({
     markRendered(toolCache(TOOL_ID).requestKey);
     if (suppressNormalSortChangeCount <= 0) {
       restoredFavouriteNormalSorters = [];
-      markDatasetViewChanged();
     }
   }
 

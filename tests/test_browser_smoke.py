@@ -1474,6 +1474,99 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertTrue(expected_arrow_up_state["focusedInExpected"])
                     self.assertTrue(expected_arrow_up_state["focusedNone"])
 
+                    page.locator('#expectedList .feature[data-value="actual"]').click()
+                    next_expected_value = page.evaluate(
+                        """
+                        () => {
+                          const buttons = [...document.querySelectorAll("#expectedList .feature")]
+                            .filter((button) => button.offsetParent !== null);
+                          const index = buttons.findIndex((button) => button.dataset.value === "actual");
+                          return buttons[index + 1]?.dataset.value || "";
+                        }
+                        """
+                    )
+                    self.assertTrue(next_expected_value)
+                    with page.expect_request(
+                        lambda request: request.url.endswith("/api/chart") and request.method == "POST",
+                        timeout=10_000,
+                    ) as expected_keyboard_request_info:
+                        page.keyboard.press("ArrowDown")
+                    expected_keyboard_request = json.loads(expected_keyboard_request_info.value.post_data or "{}")
+                    page.wait_for_function(
+                        """
+                        ([value]) => {
+                          const active = [...document.querySelectorAll("#expectedList .feature.active")];
+                          const target = active[0];
+                          return active.length === 1
+                            && target?.dataset.value === value
+                            && target.getAttribute("aria-pressed") === "true"
+                            && document.activeElement === target
+                            && document.querySelector('#expectedList .feature[data-value="actual"]')?.getAttribute("aria-pressed") === "false";
+                        }
+                        """,
+                        arg=[next_expected_value],
+                        timeout=10_000,
+                    )
+                    self.assertEqual(
+                        [response.get("numerator") for response in expected_keyboard_request.get("responses", [])],
+                        ["actual", next_expected_value],
+                    )
+
+                    page.locator('#expectedList .feature[data-value="actual"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#expectedList .feature.active").length === 2
+                          && document.querySelectorAll('#expectedList .feature[disabled]').length > 0
+                          && document.activeElement?.closest?.("#expectedList")
+                          && document.activeElement?.dataset?.value === "actual"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.keyboard.press("ArrowDown")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const active = [...document.querySelectorAll("#expectedList .feature.active")];
+                          return active.length === 1
+                            && document.activeElement === active[0];
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    collapsed_expected_state = page.evaluate(
+                        """() => ({
+                          activeValue: document.querySelector("#expectedList .feature.active")?.dataset.value || "",
+                          disabledCount: document.querySelectorAll("#expectedList .feature[disabled]").length,
+                        })"""
+                    )
+                    self.assertEqual(collapsed_expected_state["activeValue"], next_expected_value)
+                    self.assertEqual(collapsed_expected_state["disabledCount"], 0)
+
+                    page.locator("#expectedSearch").focus()
+                    page.keyboard.press("ArrowDown")
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#expectedList .feature.active").length === 1
+                          && document.activeElement?.id === "expectedSearch"
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator('#expectedList .feature[data-value="actual"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.activeElement?.closest?.("#expectedList")
+                          && document.activeElement?.dataset?.value === "actual"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.keyboard.press("ArrowUp")
+                    page.wait_for_function(
+                        """() => document.querySelector("#expectedList .feature.active")?.classList.contains("expected-none-option")
+                          && document.querySelectorAll('#expectedList .feature.active:not(.expected-none-option)').length === 0""",
+                        timeout=10_000,
+                    )
+
                     page.locator('#featureList .feature[data-value="feature_003"]').click()
                     page.wait_for_function(
                         """
@@ -3928,6 +4021,11 @@ COPY (
                             && button.classList.contains("active")) """,
                         timeout=10_000,
                     )
+                    dataset_favourite_id = page.eval_on_selector(
+                        ".saved-favourite-option.active",
+                        'button => button?.dataset.favouriteId || ""',
+                    )
+                    self.assertTrue(dataset_favourite_id)
                     saved_payload = json.loads(favourites_path.read_text(encoding="utf-8"))
                     saved_view = saved_payload["favourites"][0]["view"]
                     self.assertEqual(saved_view["scope"], "dataset_view")
@@ -3996,7 +4094,45 @@ COPY (
                         """() => document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"]')?.getBoundingClientRect().width || 0"""
                     )
                     self.assertGreaterEqual(float(restored_transposed_width), transposed_width["after"] - 2)
+                    page.wait_for_timeout(150)
+                    page.mouse.move(900, 700)
+                    page.wait_for_function(
+                        """
+                        ([id]) => {
+                          const favourite = document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`);
+                          return favourite?.classList.contains("active")
+                            && favourite.getAttribute("aria-selected") === "true"
+                            && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Dataset favourite";
+                        }
+                        """,
+                        arg=[dataset_favourite_id],
+                        timeout=10_000,
+                    )
+                    resize_tabulator_column(page, '#datasetViewerGrid .tabulator-col[tabulator-field="__field"]', 20)
+                    page.wait_for_function(
+                        """
+                        () => !document.querySelector(".saved-favourite-option.active")
+                          && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === ""
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator(f'.saved-favourite-option[data-favourite-id="{dataset_favourite_id}"]').click()
+                    page.wait_for_function(
+                        """
+                        ([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
+                          && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Dataset favourite"
+                        """,
+                        arg=[dataset_favourite_id],
+                        timeout=10_000,
+                    )
                     page.locator("#datasetViewerTranspose").uncheck()
+                    page.wait_for_function(
+                        """
+                        () => !document.querySelector(".saved-favourite-option.active")
+                          && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === ""
+                        """,
+                        timeout=10_000,
+                    )
                     page.wait_for_function(
                         """
                         () => {
@@ -4017,6 +4153,25 @@ COPY (
                     )
                     self.assertGreaterEqual(float(restored_normal_width), normal_width["after"] - 2)
 
+                    self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                    page.locator("#sidebarFavouriteNameInput").fill("Normal dataset favourite")
+                    page.locator('[data-favourite-action="save-add"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector(".saved-favourite-option.active .saved-filter-name")?.textContent.trim() === "Normal dataset favourite"
+                          && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Normal dataset favourite"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .tabulator-col-sorter').click()
+                    page.wait_for_function(
+                        """
+                        () => !document.querySelector(".saved-favourite-option.active")
+                          && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === ""
+                        """,
+                        timeout=10_000,
+                    )
+
                     startup_page = browser.new_page(viewport={"width": 1280, "height": 800})
                     startup_errors: list[str] = []
                     startup_page.on("pageerror", lambda error: startup_errors.append(str(error)))
@@ -4027,6 +4182,8 @@ COPY (
                           && document.querySelector("#datasetViewerTranspose")?.checked
                           && document.querySelector("#datasetViewerSearch")?.value === "price, post"
                           && document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
+                          && document.querySelector(".saved-favourite-option.active .saved-filter-name")?.textContent.trim() === "Dataset favourite"
+                          && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Dataset favourite"
                           && document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === "asc"
                         """,
                         timeout=10_000,
@@ -14049,6 +14206,197 @@ COPY (
                     """() => [...document.querySelectorAll(".saved-favourite-option .saved-filter-name")]
                       .some((node) => node.textContent.trim() === "Second view")""",
                     timeout=10_000,
+                )
+                favourite_ids = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll(".saved-favourite-option")].slice(0, 2)
+                      .map((button) => button.dataset.favouriteId || "")
+                    """
+                )
+                self.assertEqual(len(favourite_ids), 2)
+                self.assertTrue(all(favourite_ids))
+                first_favourite_id, second_favourite_id = favourite_ids
+                page.locator("#filterRowClearBtn").click()
+                click_focus_state = page.evaluate(
+                    """
+                    ([id]) => {
+                      document.activeElement?.blur?.();
+                      const focusStartedOnBody = document.activeElement === document.body;
+                      const button = document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`);
+                      button?.dispatchEvent(new MouseEvent("click", {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                      }));
+                      return {
+                        focusStartedOnBody,
+                        focusedFavouriteId: document.activeElement?.dataset?.favouriteId || "",
+                      };
+                    }
+                    """,
+                    arg=[first_favourite_id],
+                )
+                self.assertTrue(click_focus_state["focusStartedOnBody"])
+                self.assertEqual(click_focus_state["focusedFavouriteId"], first_favourite_id)
+                page.wait_for_function(
+                    """
+                    ([id]) => {
+                      const button = document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`);
+                      return button?.classList.contains("active")
+                        && document.activeElement === button
+                        && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Renamed view"
+                        && document.querySelector("#filterInput")?.value === "vehicle_age >= 3";
+                    }
+                    """,
+                    arg=[first_favourite_id],
+                    timeout=10_000,
+                )
+                clicked_favourite_focus_style = page.evaluate(
+                    """
+                    () => {
+                      const focused = document.activeElement;
+                      const style = focused ? getComputedStyle(focused) : null;
+                      return {
+                        focusedFavouriteId: focused?.dataset?.favouriteId || "",
+                        outlineStyle: style?.outlineStyle || "",
+                        outlineWidth: style?.outlineWidth || "",
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(clicked_favourite_focus_style["focusedFavouriteId"], first_favourite_id)
+                self.assertEqual(clicked_favourite_focus_style["outlineStyle"], "none")
+                self.assertEqual(clicked_favourite_focus_style["outlineWidth"], "0px")
+                page.locator(f'.saved-favourite-option[data-favourite-id="{first_favourite_id}"]').hover()
+                favourite_scroll_before = page.evaluate(
+                    """
+                    () => ({
+                      windowY: window.scrollY,
+                      sidebarTop: document.querySelector("#appSidebar")?.scrollTop || 0,
+                    })
+                    """
+                )
+                page.keyboard.press("ArrowDown")
+                page.wait_for_function(
+                    """
+                    ([id]) => {
+                      const button = document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`);
+                      return button?.classList.contains("active")
+                        && button.getAttribute("aria-selected") === "true"
+                        && document.activeElement === button
+                        && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Second view"
+                        && document.querySelector("#filterInput")?.value === "vehicle_age >= 3";
+                    }
+                    """,
+                    arg=[second_favourite_id],
+                    timeout=10_000,
+                )
+                favourite_keyboard_state = page.evaluate(
+                    """
+                    ([previousId]) => {
+                      const previous = document.querySelector(`.saved-favourite-option[data-favourite-id="${previousId}"]`);
+                      const active = document.querySelector(".saved-favourite-option.active");
+                      return {
+                        activeCount: document.querySelectorAll(".saved-favourite-option.active").length,
+                        keyboardNavigation: document.querySelector("#favouritesSelect")?.classList.contains("list-keyboard-navigation") || false,
+                        previousActive: previous?.classList.contains("active") || false,
+                        previousSelected: previous?.getAttribute("aria-selected") || "",
+                        previousHovered: previous?.matches(":hover") || false,
+                        previousBackground: previous ? getComputedStyle(previous).backgroundColor : "",
+                        activeBackground: active ? getComputedStyle(active).backgroundColor : "",
+                        activeOutlineStyle: active ? getComputedStyle(active).outlineStyle : "",
+                        activeOutlineWidth: active ? getComputedStyle(active).outlineWidth : "",
+                      };
+                    }
+                    """,
+                    arg=[first_favourite_id],
+                )
+                self.assertEqual(favourite_keyboard_state["activeCount"], 1)
+                self.assertTrue(favourite_keyboard_state["keyboardNavigation"])
+                self.assertFalse(favourite_keyboard_state["previousActive"])
+                self.assertEqual(favourite_keyboard_state["previousSelected"], "false")
+                self.assertTrue(favourite_keyboard_state["previousHovered"])
+                self.assertEqual(favourite_keyboard_state["previousBackground"], "rgba(0, 0, 0, 0)")
+                self.assertNotEqual(
+                    favourite_keyboard_state["previousBackground"],
+                    favourite_keyboard_state["activeBackground"],
+                )
+                self.assertEqual(favourite_keyboard_state["activeOutlineStyle"], "none")
+                self.assertEqual(favourite_keyboard_state["activeOutlineWidth"], "0px")
+                page.keyboard.press("ArrowUp")
+                page.wait_for_function(
+                    """
+                    ([id]) => {
+                      const button = document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`);
+                      return button?.classList.contains("active")
+                        && button.getAttribute("aria-selected") === "true"
+                        && document.activeElement === button
+                        && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Renamed view";
+                    }
+                    """,
+                    arg=[first_favourite_id],
+                    timeout=10_000,
+                )
+                page.keyboard.press("ArrowUp")
+                self.assertEqual(
+                    page.evaluate("() => document.activeElement?.dataset?.favouriteId || ''"),
+                    first_favourite_id,
+                )
+                page.keyboard.press("ArrowDown")
+                page.wait_for_function(
+                    """([id]) => document.activeElement?.dataset?.favouriteId === id
+                      && document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")""",
+                    arg=[second_favourite_id],
+                    timeout=10_000,
+                )
+                repeated_favourite_keyboard_state = page.evaluate(
+                    """
+                    ([previousId]) => {
+                      const previous = document.querySelector(`.saved-favourite-option[data-favourite-id="${previousId}"]`);
+                      return {
+                        keyboardNavigation: document.querySelector("#favouritesSelect")?.classList.contains("list-keyboard-navigation") || false,
+                        previousHovered: previous?.matches(":hover") || false,
+                        previousBackground: previous ? getComputedStyle(previous).backgroundColor : "",
+                      };
+                    }
+                    """,
+                    arg=[first_favourite_id],
+                )
+                self.assertTrue(repeated_favourite_keyboard_state["keyboardNavigation"])
+                self.assertTrue(repeated_favourite_keyboard_state["previousHovered"])
+                self.assertEqual(repeated_favourite_keyboard_state["previousBackground"], "rgba(0, 0, 0, 0)")
+                page.keyboard.press("ArrowDown")
+                self.assertEqual(
+                    page.evaluate("() => document.activeElement?.dataset?.favouriteId || ''"),
+                    second_favourite_id,
+                )
+                page.locator(f'.saved-favourite-option[data-favourite-id="{first_favourite_id}"]').hover()
+                restored_hover_state = page.evaluate(
+                    """
+                    ([id]) => {
+                      const hovered = document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`);
+                      return {
+                        keyboardNavigation: document.querySelector("#favouritesSelect")?.classList.contains("list-keyboard-navigation") || false,
+                        hovered: hovered?.matches(":hover") || false,
+                        background: hovered ? getComputedStyle(hovered).backgroundColor : "",
+                      };
+                    }
+                    """,
+                    arg=[first_favourite_id],
+                )
+                self.assertFalse(restored_hover_state["keyboardNavigation"])
+                self.assertTrue(restored_hover_state["hovered"])
+                self.assertNotEqual(restored_hover_state["background"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(
+                    page.evaluate(
+                        """
+                        () => ({
+                          windowY: window.scrollY,
+                          sidebarTop: document.querySelector("#appSidebar")?.scrollTop || 0,
+                        })
+                        """
+                    ),
+                    favourite_scroll_before,
                 )
                 self.click_sidebar_favourite_action(page, "#sidebarFavouriteMenuBtn")
                 page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)

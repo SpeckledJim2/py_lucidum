@@ -7,6 +7,7 @@
       import { createSpecificationsTool } from "./specifications-tool.js";
       import { createApiClient, monitorPath } from "./shared/api.js";
       import { createFormatters, escapeHtml } from "./shared/format.js";
+      import { bindVerticalListNavigation } from "./shared/list-navigation.js";
       import {
         currentDataSource as schemaCurrentDataSource,
         dataSourceColumns as schemaDataSourceColumns,
@@ -274,6 +275,7 @@
       let mobileLayoutActive = null;
       let lineBarFavourites = [];
       let lineBarFavouritesLoaded = false;
+      let favouritesKeyboardNavigation = null;
       let favouritePopoverMode = "manage";
       let favouriteStartupApplied = false;
       let selectedFavouriteManageId = "";
@@ -2687,6 +2689,7 @@
       function renderFavourites() {
         const list = el("favouritesSelect");
         if (!list) return;
+        const focusedFavouriteId = favouritesKeyboardNavigation?.focusedItemKey() || "";
         const favouritesLoading = !lineBarFavouritesLoaded && !favouriteLoadError;
         list.toggleAttribute("aria-busy", favouritesLoading);
         list.innerHTML = "";
@@ -2721,11 +2724,11 @@
           if (favouriteMessage(favourite)) button.title = favouriteMessage(favourite);
           const suffix = invalid ? " (invalid)" : "";
           button.innerHTML = `<span class="saved-filter-name">${escapeHtml(String(favourite.name || "") + suffix)}</span><span class="favourite-detail">${escapeHtml(favouriteTypeLabel(favourite))}</span>`;
-          button.addEventListener("click", () => applySavedFavourite(favourite, { refresh: true }));
           list.append(button);
         }
         syncFavouriteHeaderMeta();
         syncFavouriteActionButtons();
+        if (focusedFavouriteId) favouritesKeyboardNavigation?.focusItem(focusedFavouriteId);
       }
 
       function renderKpis() {
@@ -3447,6 +3450,15 @@
       }
 
       function bindFavouriteControls() {
+        favouritesKeyboardNavigation = bindVerticalListNavigation({
+          list: el("favouritesSelect"),
+          itemSelector: ".saved-favourite-option",
+          getItemKey: (button) => button.dataset.favouriteId || "",
+          onActivate: async (favouriteId) => {
+            const favourite = favouriteById(favouriteId);
+            if (favourite) await applySavedFavourite(favourite, { refresh: true });
+          },
+        });
         el("sidebarFavouriteAddBtn")?.addEventListener("click", () => {
           if (!toolSupportsFavouriteAdd()) return;
           setOpenSidebarSection("favourites");

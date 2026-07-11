@@ -146,6 +146,108 @@ if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percen
 """
         self.run_node_script(script)
 
+    def test_vertical_list_navigation_handles_rerenders_and_focus_ownership(self) -> None:
+        module = Path("src/py_lucidum/static/app/shared/list-navigation.js").resolve().as_uri()
+        script = f"""
+import {{ bindVerticalListNavigation }} from "{module}";
+
+const documentNode = {{ body: {{}}, documentElement: {{}}, activeElement: null }};
+const listeners = new Map();
+const classNames = new Set();
+const list = {{
+  ownerDocument: documentNode,
+  rows: [],
+  classList: {{
+    add(name) {{ classNames.add(name); }},
+    remove(name) {{ classNames.delete(name); }},
+    contains(name) {{ return classNames.has(name); }},
+  }},
+  addEventListener(type, handler) {{ listeners.set(type, handler); }},
+  removeEventListener(type, handler) {{ if (listeners.get(type) === handler) listeners.delete(type); }},
+  querySelectorAll(selector) {{
+    if (selector !== ".row") throw new Error(`unexpected selector ${{selector}}`);
+    return this.rows;
+  }},
+  contains(item) {{ return this.rows.includes(item); }},
+}};
+
+function row(key) {{
+  return {{
+    dataset: {{ key }},
+    disabled: false,
+    offsetParent: {{}},
+    scrollCount: 0,
+    closest(selector) {{ return selector === ".row" ? this : null; }},
+    focus() {{ documentNode.activeElement = this; }},
+    scrollIntoView() {{ this.scrollCount += 1; }},
+  }};
+}}
+
+const activations = [];
+let releaseActivation = null;
+list.rows = [row("a"), row("b"), row("c")];
+const navigation = bindVerticalListNavigation({{
+  list,
+  itemSelector: ".row",
+  getItemKey: (item) => item.dataset.key,
+  onActivate: async (key) => {{
+    activations.push(key);
+    if (key === "b") {{
+      list.rows = [row("a"), row("b"), row("c")];
+      documentNode.activeElement = documentNode.body;
+    }}
+    if (key === "c") await new Promise((resolve) => {{ releaseActivation = resolve; }});
+  }},
+}});
+
+function keyEvent(target, key) {{
+  return {{
+    key,
+    target,
+    defaultPrevented: false,
+    preventDefault() {{ this.defaultPrevented = true; }},
+  }};
+}}
+
+documentNode.activeElement = documentNode.body;
+const clickedRow = list.rows[0];
+list.classList.add("list-keyboard-navigation");
+await listeners.get("click")({{ target: clickedRow }});
+if (documentNode.activeElement !== clickedRow) throw new Error("click should explicitly focus its row");
+if (activations.join(",") !== "a") throw new Error("click should activate a");
+if (clickedRow.scrollCount !== 1) throw new Error("clicked row was not revealed");
+if (list.classList.contains("list-keyboard-navigation")) throw new Error("click should restore pointer hover mode");
+activations.length = 0;
+
+const topBoundary = keyEvent(list.rows[0], "ArrowUp");
+await listeners.get("keydown")(topBoundary);
+if (!topBoundary.defaultPrevented) throw new Error("top boundary should prevent scrolling");
+if (activations.length) throw new Error("top boundary should not activate an item");
+
+const down = keyEvent(list.rows[0], "ArrowDown");
+await listeners.get("keydown")(down);
+if (!down.defaultPrevented) throw new Error("ArrowDown should prevent scrolling");
+if (activations.join(",") !== "b") throw new Error("ArrowDown should activate b");
+if (documentNode.activeElement !== list.rows[1]) throw new Error("focus was not restored after rerender");
+if (list.rows[1].scrollCount !== 1) throw new Error("restored item was not revealed");
+if (!list.classList.contains("list-keyboard-navigation")) throw new Error("ArrowDown should enable keyboard mode");
+listeners.get("pointermove")();
+if (list.classList.contains("list-keyboard-navigation")) throw new Error("pointer movement should restore hover mode");
+
+const pendingDown = listeners.get("keydown")(keyEvent(list.rows[1], "ArrowDown"));
+const outside = {{}};
+documentNode.activeElement = outside;
+listeners.get("focusout")({{ relatedTarget: outside }});
+releaseActivation();
+await pendingDown;
+if (documentNode.activeElement !== outside) throw new Error("navigation stole deliberately moved focus");
+
+navigation.destroy();
+if (list.classList.contains("list-keyboard-navigation")) throw new Error("destroy should clear keyboard mode");
+if (listeners.has("click") || listeners.has("keydown") || listeners.has("focusout") || listeners.has("pointermove")) throw new Error("destroy did not remove listeners");
+"""
+        self.run_node_script(script)
+
 
 
     def test_package_version_matches_pyproject(self) -> None:

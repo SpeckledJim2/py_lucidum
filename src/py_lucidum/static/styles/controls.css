@@ -440,6 +440,11 @@
         background: color-mix(in srgb, var(--accent) 20%, var(--panel));
       }
 
+      .favourites-list .saved-favourite-option:focus {
+        outline: none;
+        outline-width: 0;
+      }
+
       .gbm-model-list .gbm-model-option.active,
       .glm-model-list .glm-model-option.active {
         background: color-mix(in srgb, var(--accent) 20%, var(--panel));
@@ -474,6 +479,10 @@
       .gbm-model-list .gbm-model-option:not(.active):hover,
       .glm-model-list .glm-model-option:not(.active):hover {
         background: color-mix(in srgb, var(--accent) 15%, transparent);
+      }
+
+      .favourites-list.list-keyboard-navigation .saved-favourite-option:hover:not(.active) {
+        background: transparent;
       }
 
       .kpi-list .kpi-option[hidden],

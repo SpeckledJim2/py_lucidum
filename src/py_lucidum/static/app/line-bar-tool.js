@@ -592,6 +592,45 @@ export function createLineBarTool({
     return true;
   }
 
+  function replaceExpectedSelection(value, sourceId = "") {
+    const current = expectedSelections();
+    if (!value) {
+      if (!current.length) return false;
+      state.expectedSelections = [];
+      syncExpectedSelectToFirstSelection();
+      return true;
+    }
+    const option = expectedSelectionOption(value, sourceId);
+    const nextSelection = {
+      value,
+      sourceId: option?.dataset.sourceId || sourceId || state.source || "dataset",
+      metricKind: option?.dataset.metricKind || "metric",
+    };
+    const unchanged = current.length === 1
+      && expectedSelectionKey(current[0].value, current[0].sourceId) === expectedSelectionKey(nextSelection.value, nextSelection.sourceId);
+    if (unchanged) return false;
+    state.expectedSelections = [nextSelection];
+    syncExpectedSelectToFirstSelection();
+    return true;
+  }
+
+  function activateExpectedKeyboardSelection(button) {
+    const value = button?.dataset.value || "";
+    const sourceId = button?.dataset.sourceId || "";
+    if (!replaceExpectedSelection(value, sourceId)) return;
+    const sourceChanged = syncExpectedSourceFromSelection({
+      expectedValue: value,
+      expectedSource: sourceId,
+      expectedSelections: state.expectedSelections,
+    });
+    if (!sourceChanged) {
+      renderExpectedNumerators({ preserveScroll: true });
+      updateAxisControls();
+    }
+    clearActiveFavouriteSelection();
+    refreshChart({ force: sourceChanged });
+  }
+
   function renderExpectedNumerators(options = {}) {
     const query = el("expectedSearch").value.trim().toLowerCase();
     const list = el("expectedList");
@@ -843,9 +882,9 @@ export function createLineBarTool({
     scrollNode.scrollTop = Math.min(position.top, maxTop);
   }
 
-  function lineBarPickerButtons(list) {
+  function lineBarPickerButtons(list, { includeDisabled = false } = {}) {
     return Array.from(list.querySelectorAll("button.feature"))
-      .filter((button) => !button.disabled && button.offsetParent !== null);
+      .filter((button) => (includeDisabled || !button.disabled) && button.offsetParent !== null);
   }
 
   function currentLineBarPickerButton(list, buttons) {
@@ -872,7 +911,8 @@ export function createLineBarTool({
   function handleLineBarPickerKeydown(event, searchInputId, listId) {
     if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
     const list = el(listId);
-    const buttons = lineBarPickerButtons(list);
+    const isExpectedPicker = listId === "expectedList";
+    const buttons = lineBarPickerButtons(list, { includeDisabled: isExpectedPicker });
     if (!buttons.length) return;
     const currentButton = currentLineBarPickerButton(list, buttons);
     const currentIndex = currentButton ? buttons.indexOf(currentButton) : -1;
@@ -890,7 +930,8 @@ export function createLineBarTool({
     };
     const startedFromButton = event.target instanceof HTMLButtonElement && list.contains(event.target);
     list.classList.add("line-bar-keyboard-navigation");
-    target.click();
+    if (isExpectedPicker) activateExpectedKeyboardSelection(target);
+    else target.click();
     if (startedFromButton) {
       focusLineBarPickerButton(list, targetState);
     } else {
