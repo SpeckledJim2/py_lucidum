@@ -381,10 +381,10 @@ export function createGlmTool({
         </div>
         <div id="glm-screen-panel-models" class="glm-tab-panel ${activeTab === "models" ? "" : "hidden"}" data-glm-panel="models" role="tabpanel" aria-labelledby="glm-screen-tab-models">
           <div class="glm-model-navigator">
-            <div class="glm-model-actions" role="group" aria-label="GLM model actions">
-              <button id="glmRenameModelBtn" class="tab glm-inline-action-button" type="button">Rename</button>
-              <button id="glmActivateModelBtn" class="tab glm-inline-action-button" type="button">Activate</button>
-              <button id="glmDeleteModelBtn" class="danger-action glm-model-delete-button" type="button">Delete</button>
+            <div class="glm-model-actions model-navigator-actions" role="group" aria-label="GLM model actions">
+              <button id="glmRenameModelBtn" class="tab model-navigator-action-button" type="button">Rename</button>
+              <button id="glmActivateModelBtn" class="tab model-navigator-action-button" type="button">Activate</button>
+              <button id="glmDeleteModelBtn" class="danger-action model-navigator-action-button" type="button">Delete</button>
             </div>
             <div id="glmModelGrid" class="glm-grid glm-model-grid"></div>
             <div id="glmModelFallback" class="glm-model-fallback"></div>
@@ -2579,7 +2579,9 @@ export function createGlmTool({
     const preservedIds = Array.from(selectedModelIds);
     const renderSeq = modelTableRenderSeq + 1;
     modelTableRenderSeq = renderSeq;
+    const previousTable = modelTable;
     modelTable = null;
+    previousTable?.destroy();
     if (!grid || !fallback) {
       updateModelActionButtons();
       return;

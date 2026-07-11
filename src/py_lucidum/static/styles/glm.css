@@ -108,6 +108,11 @@
         overflow: hidden;
       }
 
+      #glm-screen-panel-models {
+        margin-bottom: -8px;
+        margin-top: -8px;
+      }
+
       #glm-screen-panel-builder {
         overflow: visible;
       }
@@ -748,8 +753,7 @@
         white-space: normal;
       }
 
-      .glm-coefficient-actions,
-      .glm-model-actions {
+      .glm-coefficient-actions {
         display: flex;
         flex: 0 0 auto;
         gap: 8px;
@@ -1195,8 +1199,31 @@
       }
 
       .glm-model-grid {
-        flex: 1 1 auto;
+        border-color: var(--line);
+        border-left: 0;
+        border-radius: 0;
+        border-right: 0;
+        flex: 1 1 0;
         min-height: 0;
+        width: 100%;
+      }
+
+      .glm-model-grid.tabulator {
+        border-color: var(--line);
+        border-left: 0;
+        border-right: 0;
+      }
+
+      #glmModelGrid:has(+ #glmModelFallback:not(:empty)) {
+        display: none;
+      }
+
+      #glmModelFallback:empty {
+        display: none;
+      }
+
+      #glmModelFallback:not(:empty) {
+        flex: 1 1 0;
       }
 
       .glm-grid .tabulator,
@@ -1458,14 +1485,9 @@
       }
 
       .glm-model-navigator {
-        gap: 8px;
+        gap: 0;
         height: 100%;
-        padding: 8px;
-      }
-
-      .glm-model-actions {
-        align-self: stretch;
-        justify-content: flex-end;
+        padding: 0;
       }
 
       .glm-model-detail {

@@ -340,10 +340,10 @@ export function createGbmTool({
         </div>
         <div id="gbm-screen-panel-models" class="${gbmPanelClass(activeTab, "models")}" data-gbm-panel="models" role="tabpanel" aria-labelledby="gbm-screen-tab-models">
           <div class="gbm-model-navigator">
-            <div class="gbm-model-actions" role="group" aria-label="GBM model actions">
-              <button id="gbmRenameModelBtn" class="tab gbm-inline-action-button" type="button">Rename</button>
-              <button id="gbmActivateModelBtn" class="tab gbm-inline-action-button" type="button">Activate</button>
-              <button id="gbmDeleteModelBtn" class="danger-action gbm-model-delete-button" type="button">Delete</button>
+            <div class="gbm-model-actions model-navigator-actions" role="group" aria-label="GBM model actions">
+              <button id="gbmRenameModelBtn" class="tab model-navigator-action-button" type="button">Rename</button>
+              <button id="gbmActivateModelBtn" class="tab model-navigator-action-button" type="button">Activate</button>
+              <button id="gbmDeleteModelBtn" class="danger-action model-navigator-action-button" type="button">Delete</button>
             </div>
             <div id="gbmModelGrid" class="gbm-grid gbm-model-grid"></div>
             <div id="gbmModelFallback" class="gbm-fallback-table"></div>

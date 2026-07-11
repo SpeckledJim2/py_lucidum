@@ -8280,6 +8280,25 @@ COPY (
                     () => {
                       const dot = document.querySelector("#glmModelGrid .glm-model-active-dot");
                       const cell = dot?.closest(".tabulator-cell");
+                      const tool = document.querySelector(".glm-tool");
+                      const main = document.querySelector("main");
+                      const workspace = document.querySelector(".workspace");
+                      const mount = document.querySelector("#modelToolWrap");
+                      const sidebarResizer = document.querySelector("#sidebarResizer");
+                      const toolbar = document.querySelector(".glm-toolbar");
+                      const navigator = document.querySelector(".glm-model-navigator");
+                      const actions = document.querySelector(".glm-model-actions");
+                      const grid = document.querySelector("#glmModelGrid");
+                      const toolRect = tool.getBoundingClientRect();
+                      const toolbarRect = toolbar.getBoundingClientRect();
+                      const navigatorRect = navigator.getBoundingClientRect();
+                      const actionsRect = actions.getBoundingClientRect();
+                      const gridRect = grid.getBoundingClientRect();
+                      const buttons = [
+                        document.querySelector("#glmRenameModelBtn"),
+                        document.querySelector("#glmActivateModelBtn"),
+                        document.querySelector("#glmDeleteModelBtn"),
+                      ];
                       let activeDotCenterDelta = null;
                       if (dot && cell) {
                         const dotRect = dot.getBoundingClientRect();
@@ -8291,6 +8310,32 @@ COPY (
                           .map((node) => node.textContent.trim()).filter(Boolean),
                         borderWidth: getComputedStyle(document.querySelector(".glm-model-navigator")).borderTopWidth,
                         borderRadius: getComputedStyle(document.querySelector(".glm-model-navigator")).borderTopLeftRadius,
+                        gridBorderColor: getComputedStyle(grid).borderTopColor,
+                        gridBorderLeftWidth: getComputedStyle(grid).borderLeftWidth,
+                        gridBorderRadius: getComputedStyle(grid).borderTopLeftRadius,
+                        gridBorderRightWidth: getComputedStyle(grid).borderRightWidth,
+                        gridBorderWidth: getComputedStyle(grid).borderTopWidth,
+                        toolbarBorderColor: getComputedStyle(toolbar).borderBottomColor,
+                        navigatorLeftInset: navigatorRect.left - toolRect.left,
+                        navigatorRightInset: toolRect.right - navigatorRect.right,
+                        gridLeftInset: gridRect.left - toolRect.left,
+                        gridRightInset: toolRect.right - gridRect.right,
+                        gridBottomInset: toolRect.bottom - gridRect.bottom,
+                        mainLeft: main.getBoundingClientRect().left,
+                        mountLeft: mount.getBoundingClientRect().left,
+                        resizerRight: sidebarResizer.getBoundingClientRect().right,
+                        toolLeft: toolRect.left,
+                        workspaceLeft: workspace.getBoundingClientRect().left,
+                        actionHeight: actionsRect.height,
+                        actionTopGap: actionsRect.top - toolbarRect.bottom,
+                        actionGridGap: gridRect.top - actionsRect.bottom,
+                        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+                        buttonCenterDeltas: buttons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs((rect.top + rect.height / 2) - (actionsRect.top + actionsRect.height / 2));
+                        }),
+                        sharedButtonClasses: buttons.every((button) => button.classList.contains("model-navigator-action-button")),
+                        fallbackDisplay: getComputedStyle(document.querySelector("#glmModelFallback")).display,
                         rows: document.querySelectorAll("#glmModelGrid .tabulator-row").length,
                         activeDots: document.querySelectorAll("#glmModelGrid .glm-model-active-dot").length,
                         activeDotRowText: dot?.closest(".tabulator-row")?.textContent || "",
@@ -8309,6 +8354,27 @@ COPY (
                 )
                 self.assertEqual(glm_navigator_state["borderWidth"], "0px")
                 self.assertEqual(glm_navigator_state["borderRadius"], "0px")
+                self.assertEqual(glm_navigator_state["gridBorderColor"], glm_navigator_state["toolbarBorderColor"])
+                self.assertEqual(glm_navigator_state["gridBorderLeftWidth"], "0px")
+                self.assertEqual(glm_navigator_state["gridBorderRadius"], "0px")
+                self.assertEqual(glm_navigator_state["gridBorderRightWidth"], "0px")
+                self.assertEqual(glm_navigator_state["gridBorderWidth"], "1px")
+                self.assertAlmostEqual(glm_navigator_state["navigatorLeftInset"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["navigatorRightInset"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["gridLeftInset"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["gridRightInset"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["gridBottomInset"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["mainLeft"], glm_navigator_state["resizerRight"], delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["mountLeft"], glm_navigator_state["resizerRight"], delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["toolLeft"], glm_navigator_state["resizerRight"], delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["workspaceLeft"], glm_navigator_state["resizerRight"], delta=0.5)
+                self.assertEqual(glm_navigator_state["actionHeight"], 36)
+                self.assertAlmostEqual(glm_navigator_state["actionTopGap"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_navigator_state["actionGridGap"], 0, delta=0.5)
+                self.assertEqual(glm_navigator_state["buttonHeights"], [28, 28, 28])
+                self.assertTrue(all(delta <= 0.5 for delta in glm_navigator_state["buttonCenterDeltas"]))
+                self.assertTrue(glm_navigator_state["sharedButtonClasses"])
+                self.assertEqual(glm_navigator_state["fallbackDisplay"], "none")
                 self.assertEqual(glm_navigator_state["rows"], 4)
                 self.assertEqual(glm_navigator_state["activeDots"], 1)
                 self.assertIn("Browser smoke GLM", glm_navigator_state["activeDotRowText"])
@@ -8410,15 +8476,21 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#glmModelGrid .tabulator-row", has_text="Second smoke GLM").click()
                 selected_glm_navigator_state = page.evaluate(
                     """
-                    () => ({
-                      selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
-                      renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
-                      activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
-                      deleteDisabled: document.querySelector("#glmDeleteModelBtn")?.disabled,
-                    })
+                    () => {
+                      const table = window.Tabulator?.findTable?.("#glmModelGrid")?.[0];
+                      const row = table?.getRows?.().find((candidate) => candidate.getData()?.model_label === "Second smoke GLM");
+                      row?.select();
+                      const state = {
+                        selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
+                        renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
+                        activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                        deleteDisabled: document.querySelector("#glmDeleteModelBtn")?.disabled,
+                      };
+                      document.querySelector("#glmActivateModelBtn")?.click();
+                      return state;
+                    }
                     """
                 )
                 self.assertEqual(selected_glm_navigator_state["selectedRows"], 1)
@@ -8426,7 +8498,6 @@ COPY (
                 self.assertFalse(selected_glm_navigator_state["activateDisabled"])
                 self.assertFalse(selected_glm_navigator_state["deleteDisabled"])
 
-                page.locator("#glmActivateModelBtn").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Second smoke GLM")
@@ -8454,8 +8525,16 @@ COPY (
                 page.locator("#glmTool").click()
                 page.locator(".glm-tool").wait_for(timeout=10_000)
                 page.get_by_role("tab", name="Model navigator").click()
-                page.locator("#glmModelGrid .tabulator-row", has_text="Browser smoke GLM").click()
-                page.locator("#glmActivateModelBtn").click()
+                page.evaluate(
+                    """
+                    () => {
+                      const table = window.Tabulator?.findTable?.("#glmModelGrid")?.[0];
+                      const row = table?.getRows?.().find((candidate) => candidate.getData()?.model_label === "Browser smoke GLM");
+                      row?.select();
+                      document.querySelector("#glmActivateModelBtn")?.click();
+                    }
+                    """
+                )
                 page.wait_for_function(
                     """
                     () => document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Browser smoke GLM")
@@ -11229,8 +11308,30 @@ COPY (
                 sidebar_resizer_box = page.locator("#sidebarResizer").bounding_box()
                 self.assertIsNotNone(sidebar_resizer_box)
                 sidebar_resizer_x = sidebar_resizer_box["x"] + sidebar_resizer_box["width"] / 2
+                page.locator("#sidebarResizer").dispatch_event("pointerenter")
+                sidebar_resizer_hover_state = page.locator("#sidebarResizer").evaluate(
+                    """
+                    (resizer) => ({
+                      boxShadow: getComputedStyle(resizer).boxShadow,
+                      color: getComputedStyle(resizer).backgroundColor,
+                      accent: getComputedStyle(document.querySelector(".tool-option.active")).color,
+                    })
+                    """
+                )
+                self.assertEqual(sidebar_resizer_hover_state["color"], sidebar_resizer_hover_state["accent"])
+                self.assertNotEqual(sidebar_resizer_hover_state["boxShadow"], "none")
                 page.mouse.move(sidebar_resizer_x, sidebar_resizer_box["y"] + 100)
                 page.mouse.down()
+                sidebar_resizer_drag_state = page.locator("#sidebarResizer").evaluate(
+                    """
+                    (resizer) => ({
+                      boxShadow: getComputedStyle(resizer).boxShadow,
+                      color: getComputedStyle(resizer).backgroundColor,
+                    })
+                    """
+                )
+                self.assertEqual(sidebar_resizer_drag_state["color"], sidebar_resizer_hover_state["accent"])
+                self.assertEqual(sidebar_resizer_drag_state["boxShadow"], sidebar_resizer_hover_state["boxShadow"])
                 page.mouse.move(sidebar_resizer_x + 80, sidebar_resizer_box["y"] + 100, steps=8)
                 page.mouse.up()
                 wait_for_map_toggle_top_right()
@@ -13797,10 +13898,55 @@ COPY (
                       const firstRow = rows.find((row) => row.textContent.includes("Browser smoke model"));
                       const firstCells = [...(firstRow?.querySelectorAll(".tabulator-cell") || [])].map((node) => node.textContent.trim());
                       const cell = document.querySelector("#gbmModelGrid .tabulator-cell");
+                      const tool = document.querySelector(".gbm-tool");
+                      const main = document.querySelector("main");
+                      const workspace = document.querySelector(".workspace");
+                      const mount = document.querySelector("#modelToolWrap");
+                      const sidebarResizer = document.querySelector("#sidebarResizer");
+                      const toolbar = document.querySelector(".gbm-toolbar");
+                      const navigator = document.querySelector(".gbm-model-navigator");
+                      const actions = document.querySelector(".gbm-model-actions");
+                      const grid = document.querySelector("#gbmModelGrid");
+                      const toolRect = tool.getBoundingClientRect();
+                      const toolbarRect = toolbar.getBoundingClientRect();
+                      const navigatorRect = navigator.getBoundingClientRect();
+                      const actionsRect = actions.getBoundingClientRect();
+                      const gridRect = grid.getBoundingClientRect();
+                      const buttons = [
+                        document.querySelector("#gbmRenameModelBtn"),
+                        document.querySelector("#gbmActivateModelBtn"),
+                        document.querySelector("#gbmDeleteModelBtn"),
+                      ];
                       return {
                         headers,
                         borderWidth: getComputedStyle(document.querySelector(".gbm-model-navigator")).borderTopWidth,
                         borderRadius: getComputedStyle(document.querySelector(".gbm-model-navigator")).borderTopLeftRadius,
+                        gridBorderColor: getComputedStyle(grid).borderTopColor,
+                        gridBorderLeftWidth: getComputedStyle(grid).borderLeftWidth,
+                        gridBorderRadius: getComputedStyle(grid).borderTopLeftRadius,
+                        gridBorderRightWidth: getComputedStyle(grid).borderRightWidth,
+                        gridBorderWidth: getComputedStyle(grid).borderTopWidth,
+                        toolbarBorderColor: getComputedStyle(toolbar).borderBottomColor,
+                        navigatorLeftInset: navigatorRect.left - toolRect.left,
+                        navigatorRightInset: toolRect.right - navigatorRect.right,
+                        gridLeftInset: gridRect.left - toolRect.left,
+                        gridRightInset: toolRect.right - gridRect.right,
+                        gridBottomInset: toolRect.bottom - gridRect.bottom,
+                        mainLeft: main.getBoundingClientRect().left,
+                        mountLeft: mount.getBoundingClientRect().left,
+                        resizerRight: sidebarResizer.getBoundingClientRect().right,
+                        toolLeft: toolRect.left,
+                        workspaceLeft: workspace.getBoundingClientRect().left,
+                        actionHeight: actionsRect.height,
+                        actionTopGap: actionsRect.top - toolbarRect.bottom,
+                        actionGridGap: gridRect.top - actionsRect.bottom,
+                        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+                        buttonCenterDeltas: buttons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs((rect.top + rect.height / 2) - (actionsRect.top + actionsRect.height / 2));
+                        }),
+                        sharedButtonClasses: buttons.every((button) => button.classList.contains("model-navigator-action-button")),
+                        fallbackDisplay: getComputedStyle(document.querySelector("#gbmModelFallback")).display,
                         rowCount: rows.length,
                         activeDots: document.querySelectorAll("#gbmModelGrid .gbm-model-active-dot").length,
                         activeText: activeRow?.textContent || "",
@@ -13824,6 +13970,27 @@ COPY (
                 )
                 self.assertEqual(navigator_state["borderWidth"], "0px")
                 self.assertEqual(navigator_state["borderRadius"], "0px")
+                self.assertEqual(navigator_state["gridBorderColor"], navigator_state["toolbarBorderColor"])
+                self.assertEqual(navigator_state["gridBorderLeftWidth"], "0px")
+                self.assertEqual(navigator_state["gridBorderRadius"], "0px")
+                self.assertEqual(navigator_state["gridBorderRightWidth"], "0px")
+                self.assertEqual(navigator_state["gridBorderWidth"], "1px")
+                self.assertAlmostEqual(navigator_state["navigatorLeftInset"], 0, delta=0.5)
+                self.assertAlmostEqual(navigator_state["navigatorRightInset"], 0, delta=0.5)
+                self.assertAlmostEqual(navigator_state["gridLeftInset"], 0, delta=0.5)
+                self.assertAlmostEqual(navigator_state["gridRightInset"], 0, delta=0.5)
+                self.assertAlmostEqual(navigator_state["gridBottomInset"], 0, delta=0.5)
+                self.assertAlmostEqual(navigator_state["mainLeft"], navigator_state["resizerRight"], delta=0.5)
+                self.assertAlmostEqual(navigator_state["mountLeft"], navigator_state["resizerRight"], delta=0.5)
+                self.assertAlmostEqual(navigator_state["toolLeft"], navigator_state["resizerRight"], delta=0.5)
+                self.assertAlmostEqual(navigator_state["workspaceLeft"], navigator_state["resizerRight"], delta=0.5)
+                self.assertEqual(navigator_state["actionHeight"], 36)
+                self.assertAlmostEqual(navigator_state["actionTopGap"], 0, delta=0.5)
+                self.assertAlmostEqual(navigator_state["actionGridGap"], 0, delta=0.5)
+                self.assertEqual(navigator_state["buttonHeights"], [28, 28, 28])
+                self.assertTrue(all(delta <= 0.5 for delta in navigator_state["buttonCenterDeltas"]))
+                self.assertTrue(navigator_state["sharedButtonClasses"])
+                self.assertEqual(navigator_state["fallbackDisplay"], "none")
                 self.assertEqual(navigator_state["rowCount"], 1)
                 self.assertEqual(navigator_state["activeDots"], 1)
                 self.assertIn("Browser smoke model", navigator_state["activeText"])
@@ -14768,6 +14935,8 @@ COPY (
                     arg=[second_favourite_id],
                     timeout=10_000,
                 )
+                page.locator(f'.saved-favourite-option[data-favourite-id="{first_favourite_id}"]').hover()
+                page.evaluate('() => document.querySelector("#favouritesSelect")?.classList.add("list-keyboard-navigation")')
                 favourite_keyboard_state = page.evaluate(
                     """
                     ([previousId]) => {

@@ -329,6 +329,7 @@
 
       .sidebar-resizer {
         background: var(--line);
+        box-shadow: none;
         cursor: col-resize;
         inline-size: 1px;
         min-width: 1px;
@@ -337,6 +338,13 @@
         user-select: none;
         -webkit-user-select: none;
         z-index: 2;
+      }
+
+      #sidebarResizer:hover,
+      #sidebarResizer.hovering,
+      #sidebarResizer.dragging {
+        background: var(--accent);
+        box-shadow: -1px 0 0 var(--accent), 1px 0 0 var(--accent);
       }
 
       .sidebar-resizer::before {

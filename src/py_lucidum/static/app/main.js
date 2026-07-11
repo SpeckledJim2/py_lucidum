@@ -4124,6 +4124,12 @@
         const resizer = el("sidebarResizer");
 
         let dragging = false;
+        resizer.addEventListener("pointerenter", () => {
+          resizer.classList.add("hovering");
+        });
+        resizer.addEventListener("pointerleave", () => {
+          if (!dragging) resizer.classList.remove("hovering");
+        });
         resizer.addEventListener("pointerdown", (event) => {
           event.preventDefault();
           dragging = true;
@@ -4142,6 +4148,7 @@
           if (!dragging) return;
           dragging = false;
           resizer.classList.remove("dragging");
+          if (!resizer.matches(":hover")) resizer.classList.remove("hovering");
           document.body.classList.remove("resizing-sidebar");
           window.getSelection()?.removeAllRanges();
           if (event.pointerId !== undefined) {
