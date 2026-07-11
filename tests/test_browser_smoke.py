@@ -369,6 +369,29 @@ class BrowserSmokeTests(unittest.TestCase):
 
                     page = new_mobile_page(390, 844)
                     try:
+                        mobile_logo_geometry = page.evaluate(
+                            """
+                            () => {
+                              const header = document.querySelector("header").getBoundingClientRect();
+                              const mark = document.querySelector(".mark").getBoundingClientRect();
+                              const rail = document.querySelector("#toolSelectorSection").getBoundingClientRect();
+                              return {
+                                height: mark.height,
+                                horizontalCenterDelta: Math.abs(
+                                  (mark.left + mark.width / 2) - (rail.left + rail.width / 2),
+                                ),
+                                verticalCenterDelta: Math.abs(
+                                  (mark.top + mark.height / 2) - (header.top + header.height / 2),
+                                ),
+                                width: mark.width,
+                              };
+                            }
+                            """
+                        )
+                        self.assertAlmostEqual(mobile_logo_geometry["width"], 40, delta=0.5)
+                        self.assertAlmostEqual(mobile_logo_geometry["height"], 40, delta=0.5)
+                        self.assertLessEqual(mobile_logo_geometry["horizontalCenterDelta"], 0.5)
+                        self.assertLessEqual(mobile_logo_geometry["verticalCenterDelta"], 0.5)
                         line_bar_rects = wait_for_mobile_line_bar(page)
                         self.assertLessEqual(line_bar_rects["bodyScrollWidth"], line_bar_rects["bodyClientWidth"])
                         self.assertGreaterEqual(line_bar_rects["chart"]["width"], 260)
@@ -448,6 +471,42 @@ class BrowserSmokeTests(unittest.TestCase):
                                 self.assertGreaterEqual(
                                     dataset_viewer_mobile_toolbar["alphabetical"]["top"],
                                     dataset_viewer_mobile_toolbar["search"]["bottom"] - 1,
+                                )
+                                page.locator("#sidebarToggleBtn").click()
+                                page.wait_for_function(
+                                    "() => !document.body.classList.contains('sidebar-collapsed')",
+                                    timeout=10_000,
+                                )
+                                dataset_viewer_mobile_sidebar = page.evaluate(
+                                    """
+                                    () => {
+                                      const sidebar = document.querySelector("#appSidebar");
+                                      const main = document.querySelector("main");
+                                      const resizer = document.querySelector("#sidebarResizer");
+                                      const sidebarRect = sidebar.getBoundingClientRect();
+                                      const mainRect = main.getBoundingClientRect();
+                                      return {
+                                        activeTool: document.querySelector(".tool-option.active")?.id || "",
+                                        boxShadow: getComputedStyle(sidebar).boxShadow,
+                                        overlapsMain: sidebarRect.right > mainRect.left,
+                                        resizerDisplay: getComputedStyle(resizer).display,
+                                      };
+                                    }
+                                    """
+                                )
+                                self.assertEqual(
+                                    dataset_viewer_mobile_sidebar,
+                                    {
+                                        "activeTool": "datasetViewerTool",
+                                        "boxShadow": "none",
+                                        "overlapsMain": True,
+                                        "resizerDisplay": "none",
+                                    },
+                                )
+                                page.locator("#sidebarToggleBtn").click()
+                                page.wait_for_function(
+                                    "() => document.body.classList.contains('sidebar-collapsed')",
+                                    timeout=10_000,
                                 )
                             if tool_button == "#profileTool":
                                 page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
@@ -9395,6 +9454,29 @@ COPY (
                     """
                 )
                 self.assertEqual(page.locator("header").evaluate("node => getComputedStyle(node).height"), "52px")
+                logo_geometry = page.evaluate(
+                    """
+                    () => {
+                      const header = document.querySelector("header").getBoundingClientRect();
+                      const mark = document.querySelector(".mark").getBoundingClientRect();
+                      const rail = document.querySelector("#toolSelectorSection").getBoundingClientRect();
+                      return {
+                        height: mark.height,
+                        horizontalCenterDelta: Math.abs(
+                          (mark.left + mark.width / 2) - (rail.left + rail.width / 2),
+                        ),
+                        verticalCenterDelta: Math.abs(
+                          (mark.top + mark.height / 2) - (header.top + header.height / 2),
+                        ),
+                        width: mark.width,
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(logo_geometry["width"], 40, delta=0.5)
+                self.assertAlmostEqual(logo_geometry["height"], 40, delta=0.5)
+                self.assertLessEqual(logo_geometry["horizontalCenterDelta"], 0.5)
+                self.assertLessEqual(logo_geometry["verticalCenterDelta"], 0.5)
                 self.assertEqual(page.locator(".dataset-meta-title").text_content().strip(), "Lucidum Smoke Dataset")
                 self.assertFalse(page.locator("#datasetMeta").evaluate("node => node.classList.contains('dataset-meta-title-only')"))
                 self.assertTrue(page.locator(".dataset-meta-details").is_visible())
@@ -10866,6 +10948,8 @@ COPY (
                       const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
                       const sidebarBackground = getComputedStyle(sidebar).backgroundColor;
+                      const sidebarResizerCenterX = sidebarResizerRect.left + sidebarResizerRect.width / 2;
+                      const sidebarResizerHitY = sidebarResizerRect.top + Math.min(100, sidebarResizerRect.height / 2);
                       return {
                         count: buttons.length,
                         selectorDisplay: getComputedStyle(selector).display,
@@ -10878,11 +10962,17 @@ COPY (
                         railWidth: Math.round(railRect.width),
                         railAtSidebarLeft: Math.round(railRect.left) === Math.round(sidebarRect.left),
                         paneRightOfRail: Math.round(paneRect.left) >= Math.round(railRect.right),
-                        sidebarResizerFillTransparent: sidebarResizerStyle.backgroundColor === "rgba(0, 0, 0, 0)",
+                        sidebarResizerHitAreaTransparent: sidebarResizerLineStyle.backgroundColor === "rgba(0, 0, 0, 0)",
+                        sidebarResizerHitTargetWide: [-4, -3, -2, -1, 0, 1, 2, 3, 4].every(
+                          (offset) => document.elementFromPoint(
+                            sidebarResizerCenterX + offset,
+                            sidebarResizerHitY,
+                          ) === sidebarResizer,
+                        ),
                         siderailLineWidth: Math.round(parseFloat(railStyle.borderRightWidth)),
-                        sidebarResizerLineWidth: Math.round(parseFloat(sidebarResizerLineStyle.width)),
-                        sidebarResizerMatchesSiderailLine: sidebarResizerLineStyle.backgroundColor === railStyle.borderRightColor
-                          && Math.round(parseFloat(sidebarResizerLineStyle.width)) === Math.round(parseFloat(railStyle.borderRightWidth)),
+                        sidebarResizerLineWidth: Math.round(sidebarResizerRect.width),
+                        sidebarResizerMatchesSiderailLine: sidebarResizerStyle.backgroundColor === railStyle.borderRightColor
+                          && Math.round(sidebarResizerRect.width) === Math.round(parseFloat(railStyle.borderRightWidth)),
                         sidebarResizerWidth: Math.round(sidebarResizerRect.width),
                         labelsHidden: buttons.every((button) => {
                           const label = button.querySelector(".tool-label");
@@ -10907,11 +10997,12 @@ COPY (
                         "railWidth": 50,
                         "railAtSidebarLeft": True,
                         "paneRightOfRail": True,
-                        "sidebarResizerFillTransparent": True,
+                        "sidebarResizerHitAreaTransparent": True,
+                        "sidebarResizerHitTargetWide": True,
                         "siderailLineWidth": 1,
                         "sidebarResizerLineWidth": 1,
                         "sidebarResizerMatchesSiderailLine": True,
-                        "sidebarResizerWidth": 9,
+                        "sidebarResizerWidth": 1,
                         "labelsHidden": True,
                     },
                 )

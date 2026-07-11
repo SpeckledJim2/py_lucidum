@@ -12,7 +12,7 @@
         display: flex;
         align-items: center;
         gap: 14px;
-        padding: 0 14px;
+        padding: 0 14px 0 0;
         border-bottom: 1px solid var(--line);
         background: var(--panel);
         min-width: 0;
@@ -21,8 +21,9 @@
       .brand {
         display: flex;
         align-items: center;
-        gap: 10px;
+        flex: 0 0 var(--sidebar-collapsed-width);
         font-weight: 700;
+        justify-content: center;
       }
 
       .mark-link {
@@ -30,8 +31,8 @@
       }
 
       .mark {
-        width: 48px;
-        height: 48px;
+        width: 40px;
+        height: 40px;
         object-fit: contain;
         display: block;
       }
@@ -327,11 +328,10 @@
       }
 
       .sidebar-resizer {
-        background: transparent;
+        background: var(--line);
         cursor: col-resize;
-        inline-size: 9px;
-        margin-inline: -4px;
-        min-width: 9px;
+        inline-size: 1px;
+        min-width: 1px;
         position: relative;
         touch-action: none;
         user-select: none;
@@ -340,22 +340,12 @@
       }
 
       .sidebar-resizer::before {
-        background: var(--line);
+        background: transparent;
         content: "";
         inset-block: 0;
-        inset-inline-start: 4px;
+        inset-inline-start: -4px;
         position: absolute;
-        width: 1px;
-      }
-
-      .sidebar-resizer:hover,
-      .sidebar-resizer.dragging {
-        background: transparent;
-      }
-
-      .sidebar-resizer:hover::before,
-      .sidebar-resizer.dragging::before {
-        background: var(--line);
+        width: 9px;
       }
 
       main {
@@ -588,12 +578,7 @@
       @media (max-width: 640px) {
         header {
           gap: 8px;
-          padding: 0 8px;
-        }
-
-        .mark {
-          width: 42px;
-          height: 42px;
+          padding: 0 8px 0 0;
         }
 
         .shell,
@@ -612,7 +597,7 @@
         }
 
         #appSidebar {
-          box-shadow: 12px 0 28px rgb(15 23 42 / 18%);
+          box-shadow: none;
           max-width: calc(100vw - 16px);
           overflow: auto;
           position: relative;
