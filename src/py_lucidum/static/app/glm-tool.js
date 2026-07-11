@@ -318,10 +318,7 @@ export function createGlmTool({
               <div class="glm-panel-header">
                 <h3 class="glm-panel-title">GLM formula</h3>
                 <div class="glm-builder-actions">
-                  <button id="glmClearFormulaBtn" class="tab glm-inline-action-button" type="button" title="Clear formula">× clear</button>
                   <button id="glmFormulaAssistBtn" class="tab glm-icon-action-button ${formulaBuilder.formulaAssistOpen ? "active" : ""}" type="button" aria-label="Formula tools" title="Formula tools">f(x)</button>
-                  <button id="glmFontSmallerBtn" class="tab glm-icon-action-button" type="button" aria-label="Decrease formula font size" title="Decrease font size">A-</button>
-                  <button id="glmFontLargerBtn" class="tab glm-icon-action-button" type="button" aria-label="Increase formula font size" title="Increase font size">A+</button>
                   <div class="segmented glm-scope-control glm-header-scope-control" role="group" aria-label="Rows to fit">
                     <button type="button" data-glm-scope="all" class="${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}">All</button>
                     <button type="button" data-glm-scope="training" class="${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
@@ -354,6 +351,11 @@ export function createGlmTool({
               <div class="glm-editor-shell">
                 <div id="glmFormulaEditor" class="glm-formula-editor"></div>
                 <textarea id="glmFormulaText" class="glm-formula-text" spellcheck="false">${escapeHtml(formulaBuilder.formulaDraft)}</textarea>
+                <div class="glm-editor-font-controls" role="group" aria-label="Formula editor font size">
+                  <button id="glmFontSmallerBtn" class="glm-editor-font-button" type="button" aria-label="Decrease formula font size" title="Decrease font size">A-</button>
+                  <button id="glmFontLargerBtn" class="glm-editor-font-button" type="button" aria-label="Increase formula font size" title="Increase font size">A+</button>
+                  <button id="glmClearFormulaBtn" class="glm-editor-font-button" type="button" aria-label="Clear formula" title="Clear formula">×</button>
+                </div>
               </div>
             </section>
             <div id="glmBuilderResizer" class="glm-builder-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize GLM formula and coefficients panels" tabindex="0"></div>

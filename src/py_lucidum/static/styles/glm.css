@@ -4,7 +4,7 @@
         flex-direction: column;
         min-height: 0;
         height: 100%;
-        padding: 0 8px 8px;
+        padding: 0 0 8px;
         width: 100%;
         position: relative;
       }
@@ -40,7 +40,7 @@
         gap: 12px;
         height: var(--sidebar-collapsed-width);
         justify-content: flex-start;
-        margin: 0 -8px 8px;
+        margin: 0 0 8px;
         padding-right: 8px;
       }
 
@@ -115,7 +115,7 @@
       .glm-builder-layout {
         display: grid;
         gap: 0;
-        grid-template-columns: minmax(320px, var(--glm-formula-panel-width, 0.95fr)) 12px minmax(360px, 1.05fr);
+        grid-template-columns: minmax(320px, var(--glm-formula-panel-width, 0.95fr)) 1px minmax(360px, 1.05fr);
         height: 100%;
         min-height: 0;
         min-width: 0;
@@ -347,9 +347,54 @@
       }
 
       .glm-editor-shell {
+        border-top: 1px solid var(--line);
         flex: 1 1 auto;
         min-height: 0;
         position: relative;
+      }
+
+      .glm-editor-font-controls {
+        align-items: center;
+        display: flex;
+        gap: 3px;
+        position: absolute;
+        right: 18px;
+        top: 6px;
+        z-index: 5;
+      }
+
+      .glm-editor-font-button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1;
+        min-height: 24px;
+        padding: 3px 2px;
+      }
+
+      .glm-editor-font-button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      #glmFontLargerBtn {
+        transform: translateX(4px);
+      }
+
+      #glmClearFormulaBtn {
+        margin-left: 8px;
+        transform: translateX(4px);
+      }
+
+      .glm-editor-font-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
       }
 
       .glm-formula-assist-drawer {
@@ -606,6 +651,12 @@
         bottom: -8px;
         top: -8px;
         width: 1px;
+      }
+
+      .glm-builder-layout > .glm-builder-resizer {
+        justify-self: center;
+        width: 12px;
+        z-index: 6;
       }
 
       body.glm-builder-resizing {

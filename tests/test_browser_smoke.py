@@ -6921,9 +6921,24 @@ COPY (
                       const builderPanel = document.querySelector("#glm-screen-panel-builder");
                       const formulaPanel = document.querySelector(".glm-formula-panel");
                       const coefficientPanel = document.querySelector(".glm-coefficient-panel");
+                      const headerActions = document.querySelector(".glm-builder-actions");
+                      const editorShell = document.querySelector(".glm-editor-shell");
+                      const fontControls = document.querySelector(".glm-editor-font-controls");
+                      const fontSmaller = document.querySelector("#glmFontSmallerBtn");
+                      const fontLarger = document.querySelector("#glmFontLargerBtn");
+                      const clearFormula = document.querySelector("#glmClearFormulaBtn");
                       const resizer = document.querySelector("#glmBuilderResizer");
                       const resizerRect = resizer.getBoundingClientRect();
                       const resizerRule = getComputedStyle(resizer, "::before");
+                      const toolRect = tool.getBoundingClientRect();
+                      const formulaPanelRect = formulaPanel.getBoundingClientRect();
+                      const coefficientPanelRect = coefficientPanel.getBoundingClientRect();
+                      const editorShellRect = editorShell.getBoundingClientRect();
+                      const editorShellStyle = getComputedStyle(editorShell);
+                      const fontControlsRect = fontControls.getBoundingClientRect();
+                      const fontSmallerStyle = getComputedStyle(fontSmaller);
+                      const fontLargerStyle = getComputedStyle(fontLarger);
+                      const clearFormulaStyle = getComputedStyle(clearFormula);
                       return {
                         formulaBorderWidth: getComputedStyle(formulaPanel).borderTopWidth,
                         formulaBorderRadius: getComputedStyle(formulaPanel).borderTopLeftRadius,
@@ -6936,7 +6951,37 @@ COPY (
                         dividerTop: resizerRect.top + Number.parseFloat(resizerRule.top),
                         dividerBottom: resizerRect.bottom - Number.parseFloat(resizerRule.bottom),
                         toolbarBottom: toolbar.getBoundingClientRect().bottom,
-                        toolBottom: tool.getBoundingClientRect().bottom,
+                        toolBottom: toolRect.bottom,
+                        formulaPanelLeftInset: formulaPanelRect.left - toolRect.left,
+                        coefficientPanelRightInset: toolRect.right - coefficientPanelRect.right,
+                        editorLeftInset: editorShellRect.left - formulaPanelRect.left,
+                        editorRightInset: formulaPanelRect.right - editorShellRect.right,
+                        dividerHitWidth: resizerRect.width,
+                        formulaToDividerGap: resizerRect.left + (resizerRect.width - Number.parseFloat(resizerRule.width)) / 2
+                          - formulaPanelRect.right,
+                        dividerToCoefficientGap: coefficientPanelRect.left
+                          - (resizerRect.left + (resizerRect.width + Number.parseFloat(resizerRule.width)) / 2),
+                        headerEditorButtonCount: headerActions.querySelectorAll("#glmFontSmallerBtn, #glmFontLargerBtn, #glmClearFormulaBtn").length,
+                        fontControlsInEditor: editorShell.contains(fontControls),
+                        clearFormulaInEditor: editorShell.contains(clearFormula),
+                        editorTopBorderWidth: editorShellStyle.borderTopWidth,
+                        editorTopBorderColor: editorShellStyle.borderTopColor,
+                        fontControlsTopInset: fontControlsRect.top - editorShellRect.top,
+                        fontControlsRightInset: editorShellRect.right - fontControlsRect.right,
+                        fontButtonOrder: fontSmaller.getBoundingClientRect().left < fontLarger.getBoundingClientRect().left,
+                        fontButtonGap: fontLarger.getBoundingClientRect().left - fontSmaller.getBoundingClientRect().right,
+                        clearButtonOrder: fontLarger.getBoundingClientRect().left < clearFormula.getBoundingClientRect().left,
+                        clearButtonGap: clearFormula.getBoundingClientRect().left - fontLarger.getBoundingClientRect().right,
+                        clearButtonRightInset: editorShellRect.right - clearFormula.getBoundingClientRect().right,
+                        clearButtonText: clearFormula.textContent.trim(),
+                        fontButtonBorderWidth: fontSmallerStyle.borderTopWidth,
+                        fontButtonBackground: fontSmallerStyle.backgroundColor,
+                        fontButtonSize: fontSmallerStyle.fontSize,
+                        fontButtonWeight: fontSmallerStyle.fontWeight,
+                        clearMatchesLargerStyle: clearFormulaStyle.borderTopWidth === fontLargerStyle.borderTopWidth
+                          && clearFormulaStyle.backgroundColor === fontLargerStyle.backgroundColor
+                          && clearFormulaStyle.fontSize === fontLargerStyle.fontSize
+                          && clearFormulaStyle.fontWeight === fontLargerStyle.fontWeight,
                       };
                     }
                     """
@@ -6958,6 +7003,76 @@ COPY (
                     glm_builder_geometry["toolBottom"],
                     delta=0.5,
                 )
+                self.assertAlmostEqual(glm_builder_geometry["formulaPanelLeftInset"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["coefficientPanelRightInset"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["editorLeftInset"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["editorRightInset"], 0, delta=0.5)
+                self.assertEqual(glm_builder_geometry["dividerHitWidth"], 12)
+                self.assertAlmostEqual(glm_builder_geometry["formulaToDividerGap"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["dividerToCoefficientGap"], 0, delta=0.5)
+                self.assertEqual(glm_builder_geometry["headerEditorButtonCount"], 0)
+                self.assertTrue(glm_builder_geometry["fontControlsInEditor"])
+                self.assertTrue(glm_builder_geometry["clearFormulaInEditor"])
+                self.assertEqual(glm_builder_geometry["editorTopBorderWidth"], "1px")
+                self.assertEqual(glm_builder_geometry["editorTopBorderColor"], glm_builder_geometry["toolbarLineColor"])
+                self.assertAlmostEqual(glm_builder_geometry["fontControlsTopInset"], 7, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["fontControlsRightInset"], 18, delta=0.5)
+                self.assertTrue(glm_builder_geometry["fontButtonOrder"])
+                self.assertAlmostEqual(glm_builder_geometry["fontButtonGap"], 7, delta=0.5)
+                self.assertTrue(glm_builder_geometry["clearButtonOrder"])
+                self.assertAlmostEqual(glm_builder_geometry["clearButtonGap"], 11, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["clearButtonRightInset"], 14, delta=0.5)
+                self.assertEqual(glm_builder_geometry["clearButtonText"], "×")
+                self.assertTrue(glm_builder_geometry["clearMatchesLargerStyle"])
+                self.assertEqual(glm_builder_geometry["fontButtonBorderWidth"], "0px")
+                self.assertEqual(glm_builder_geometry["fontButtonBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(glm_builder_geometry["fontButtonSize"], "14px")
+                self.assertEqual(glm_builder_geometry["fontButtonWeight"], "800")
+
+                siderail_accent_color = page.locator(".tool-option.active").first.evaluate(
+                    "(button) => getComputedStyle(button).color"
+                )
+                for glm_editor_button in ("#glmFontSmallerBtn", "#glmFontLargerBtn", "#glmClearFormulaBtn"):
+                    page.locator(glm_editor_button).hover()
+                    self.assertEqual(
+                        page.locator(glm_editor_button).evaluate("(button) => getComputedStyle(button).color"),
+                        siderail_accent_color,
+                    )
+
+                page.locator("#glmFontSmallerBtn").focus()
+                page.keyboard.press("Tab")
+                glm_font_focus_state = page.locator("#glmFontLargerBtn").evaluate(
+                    """
+                    (button) => ({
+                      active: document.activeElement === button,
+                      outlineStyle: getComputedStyle(button).outlineStyle,
+                      outlineWidth: getComputedStyle(button).outlineWidth,
+                    })
+                    """
+                )
+                self.assertTrue(glm_font_focus_state["active"])
+                self.assertNotEqual(glm_font_focus_state["outlineStyle"], "none")
+                self.assertEqual(glm_font_focus_state["outlineWidth"], "2px")
+
+                glm_editor_font_size_before = page.locator("#glmFormulaEditor").evaluate(
+                    "(editor) => Number.parseFloat(getComputedStyle(editor).fontSize)"
+                )
+                page.locator("#glmFontLargerBtn").click()
+                page.wait_for_function(
+                    """
+                    (fontSize) => Number.parseFloat(getComputedStyle(document.querySelector("#glmFormulaEditor")).fontSize) === fontSize + 1
+                    """,
+                    arg=glm_editor_font_size_before,
+                    timeout=10_000,
+                )
+                page.locator("#glmFontSmallerBtn").click()
+                page.wait_for_function(
+                    """
+                    (fontSize) => Number.parseFloat(getComputedStyle(document.querySelector("#glmFormulaEditor")).fontSize) === fontSize
+                    """,
+                    arg=glm_editor_font_size_before,
+                    timeout=10_000,
+                )
 
                 formula_width_before = page.locator(".glm-formula-panel").evaluate(
                     "(panel) => panel.getBoundingClientRect().width"
@@ -6976,11 +7091,25 @@ COPY (
                     () => ({
                       formula: document.querySelector(".glm-formula-panel").getBoundingClientRect().width,
                       coefficients: document.querySelector(".glm-coefficient-panel").getBoundingClientRect().width,
+                      fontControlsTopInset: document.querySelector(".glm-editor-font-controls").getBoundingClientRect().top
+                        - document.querySelector(".glm-editor-shell").getBoundingClientRect().top,
+                      fontControlsRightInset: document.querySelector(".glm-editor-shell").getBoundingClientRect().right
+                        - document.querySelector(".glm-editor-font-controls").getBoundingClientRect().right,
                     })
                     """
                 )
                 self.assertGreater(glm_builder_resized_widths["formula"], formula_width_before + 30)
                 self.assertGreaterEqual(glm_builder_resized_widths["coefficients"], 360)
+                self.assertAlmostEqual(
+                    glm_builder_resized_widths["fontControlsTopInset"],
+                    glm_builder_geometry["fontControlsTopInset"],
+                    delta=0.5,
+                )
+                self.assertAlmostEqual(
+                    glm_builder_resized_widths["fontControlsRightInset"],
+                    glm_builder_geometry["fontControlsRightInset"],
+                    delta=0.5,
+                )
 
                 page.evaluate(
                     """
@@ -7009,6 +7138,9 @@ COPY (
                     () => document.querySelector("#glmFormulaEditor")?.getBoundingClientRect().top || 0
                     """
                 )
+                closed_font_controls_top = page.locator(".glm-editor-font-controls").evaluate(
+                    "(controls) => controls.getBoundingClientRect().top"
+                )
                 page.evaluate(
                     """
                     () => {
@@ -7030,12 +7162,14 @@ COPY (
                       const controls = document.querySelector(".glm-formula-panel .glm-builder-control-row");
                       const family = document.querySelector("#glmFamilySelect");
                       const editor = document.querySelector("#glmFormulaEditor");
+                      const fontControls = document.querySelector(".glm-editor-font-controls");
                       const preview = document.querySelector("#glmFormulaAssistPreview");
-                      if (!drawer || !header || !actions || !controls || !family || !editor || !preview || drawer.classList.contains("hidden")) return false;
+                      if (!drawer || !header || !actions || !controls || !family || !editor || !fontControls || !preview || drawer.classList.contains("hidden")) return false;
                       const drawerRect = drawer.getBoundingClientRect();
                       const headerRect = header.getBoundingClientRect();
                       const actionsRect = actions.getBoundingClientRect();
                       const editorRect = editor.getBoundingClientRect();
+                      const fontControlsRect = fontControls.getBoundingClientRect();
                       const previewRect = preview.getBoundingClientRect();
                       const style = getComputedStyle(drawer);
                       return Math.abs(drawerRect.top - headerRect.bottom) <= 2
@@ -7045,6 +7179,7 @@ COPY (
                         && controls.getClientRects().length === 0
                         && family.getClientRects().length === 0
                         && editorRect.top >= drawerRect.bottom - 2
+                        && Math.abs(fontControlsRect.top - editorRect.top - 6) <= 0.5
                         && style.borderLeftWidth === "0px"
                         && style.borderRightWidth === "0px"
                         && style.borderTopWidth === "1px"
@@ -7056,6 +7191,10 @@ COPY (
                 self.assertGreater(
                     page.evaluate("() => document.querySelector('#glmFormulaEditor')?.getBoundingClientRect().top || 0"),
                     closed_editor_top + 100,
+                )
+                self.assertGreater(
+                    page.locator(".glm-editor-font-controls").evaluate("(controls) => controls.getBoundingClientRect().top"),
+                    closed_font_controls_top + 100,
                 )
                 page.locator("#glmFormulaAssistBtn").click()
                 page.wait_for_function(
@@ -7070,13 +7209,15 @@ COPY (
                       const controls = document.querySelector(".glm-formula-panel .glm-builder-control-row");
                       const family = document.querySelector("#glmFamilySelect");
                       const editor = document.querySelector("#glmFormulaEditor");
-                      if (!controls || !family || !editor) return false;
+                      const fontControls = document.querySelector(".glm-editor-font-controls");
+                      if (!controls || !family || !editor || !fontControls) return false;
                       return controls.getClientRects().length > 0
                         && family.getClientRects().length > 0
-                        && Math.abs(editor.getBoundingClientRect().top - closedTop) <= 2;
+                        && Math.abs(editor.getBoundingClientRect().top - closedTop.editor) <= 2
+                        && Math.abs(fontControls.getBoundingClientRect().top - closedTop.fontControls) <= 2;
                     }
                     """,
-                    arg=closed_editor_top,
+                    arg={"editor": closed_editor_top, "fontControls": closed_font_controls_top},
                     timeout=10_000,
                 )
                 page.locator("#glmFormulaAssistBtn").click()
