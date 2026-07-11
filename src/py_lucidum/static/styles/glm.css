@@ -123,13 +123,19 @@
       .glm-tabulation-sidebar,
       .glm-tabulation-main {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 6px;
         display: flex;
         flex-direction: column;
         min-height: 0;
         min-width: 0;
         overflow: hidden;
+      }
+
+      .glm-formula-panel,
+      .glm-coefficient-panel,
+      .glm-tabulation-sidebar,
+      .glm-tabulation-main {
+        border: 1px solid var(--line);
+        border-radius: 6px;
       }
 
       .glm-formula-panel {

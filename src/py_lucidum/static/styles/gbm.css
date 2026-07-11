@@ -1479,8 +1479,6 @@
 
       .gbm-model-navigator {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 6px;
         color: var(--text);
         display: flex;
         flex-direction: column;

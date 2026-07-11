@@ -8020,6 +8020,8 @@ COPY (
                       return {
                         headers: [...document.querySelectorAll("#glmModelGrid .tabulator-col-title")]
                           .map((node) => node.textContent.trim()).filter(Boolean),
+                        borderWidth: getComputedStyle(document.querySelector(".glm-model-navigator")).borderTopWidth,
+                        borderRadius: getComputedStyle(document.querySelector(".glm-model-navigator")).borderTopLeftRadius,
                         rows: document.querySelectorAll("#glmModelGrid .tabulator-row").length,
                         activeDots: document.querySelectorAll("#glmModelGrid .glm-model-active-dot").length,
                         activeDotRowText: dot?.closest(".tabulator-row")?.textContent || "",
@@ -8036,6 +8038,8 @@ COPY (
                     glm_navigator_state["headers"],
                     ["Model", "Created", "Response", "Weight", "Family", "Deviance", "AIC", "BIC", "Rows"],
                 )
+                self.assertEqual(glm_navigator_state["borderWidth"], "0px")
+                self.assertEqual(glm_navigator_state["borderRadius"], "0px")
                 self.assertEqual(glm_navigator_state["rows"], 4)
                 self.assertEqual(glm_navigator_state["activeDots"], 1)
                 self.assertIn("Browser smoke GLM", glm_navigator_state["activeDotRowText"])
@@ -13494,6 +13498,8 @@ COPY (
                       const cell = document.querySelector("#gbmModelGrid .tabulator-cell");
                       return {
                         headers,
+                        borderWidth: getComputedStyle(document.querySelector(".gbm-model-navigator")).borderTopWidth,
+                        borderRadius: getComputedStyle(document.querySelector(".gbm-model-navigator")).borderTopLeftRadius,
                         rowCount: rows.length,
                         activeDots: document.querySelectorAll("#gbmModelGrid .gbm-model-active-dot").length,
                         activeText: activeRow?.textContent || "",
@@ -13515,6 +13521,8 @@ COPY (
                         "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
                     ],
                 )
+                self.assertEqual(navigator_state["borderWidth"], "0px")
+                self.assertEqual(navigator_state["borderRadius"], "0px")
                 self.assertEqual(navigator_state["rowCount"], 1)
                 self.assertEqual(navigator_state["activeDots"], 1)
                 self.assertIn("Browser smoke model", navigator_state["activeText"])
