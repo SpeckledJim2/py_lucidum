@@ -4,6 +4,7 @@
         flex-direction: column;
         min-height: 0;
         height: 100%;
+        padding: 0 8px 8px;
         width: 100%;
         position: relative;
       }
@@ -23,6 +24,7 @@
         line-height: 1.25;
         max-width: min(560px, 54%);
         padding: 7px 9px;
+        pointer-events: none;
         position: absolute;
         right: 8px;
         top: 8px;
@@ -30,21 +32,23 @@
       }
 
       .glm-toolbar {
-        align-items: flex-start;
+        align-items: stretch;
+        background: var(--sidebar-bg);
+        border-bottom: 1px solid var(--line);
         display: flex;
         flex: 0 0 auto;
         gap: 12px;
+        height: var(--sidebar-collapsed-width);
         justify-content: flex-start;
-        margin-bottom: 10px;
+        margin: 0 -8px 8px;
+        padding-right: 8px;
       }
 
       .glm-tabs {
+        flex: 0 1 auto;
+        height: 100%;
+        min-width: 0;
         position: static;
-      }
-
-      .glm-tabs .tab {
-        font-size: 12px;
-        font-weight: 700;
       }
 
       .glm-build-status {

@@ -278,12 +278,12 @@ export function createGbmTool({
       <div class="gbm-tool">
         <div id="gbmNotice" class="gbm-notice hidden" role="alert" aria-live="polite"></div>
         <div class="gbm-toolbar">
-          <div class="gbm-tabs tabs workspace-tabs">
+          <div class="gbm-tabs tool-screen-nav" role="tablist" aria-label="GBM screens">
             ${gbmTabsHtml(activeTab)}
           </div>
           <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${trainingStatusHtml(liveProgress)}</div>
         </div>
-        <div class="${gbmPanelClass(activeTab, "features")}" data-gbm-panel="features">
+        <div id="gbm-screen-panel-features" class="${gbmPanelClass(activeTab, "features")}" data-gbm-panel="features" role="tabpanel" aria-labelledby="gbm-screen-tab-features">
           <div class="gbm-feature-layout">
             <section class="gbm-panel-section gbm-grid-panel">
               <div class="gbm-section-header gbm-feature-section-header">
@@ -338,7 +338,7 @@ export function createGbmTool({
             </section>
           </div>
         </div>
-        <div class="${gbmPanelClass(activeTab, "models")}" data-gbm-panel="models">
+        <div id="gbm-screen-panel-models" class="${gbmPanelClass(activeTab, "models")}" data-gbm-panel="models" role="tabpanel" aria-labelledby="gbm-screen-tab-models">
           <div class="gbm-model-navigator">
             <div class="gbm-model-actions" role="group" aria-label="GBM model actions">
               <button id="gbmRenameModelBtn" class="tab gbm-inline-action-button" type="button">Rename</button>
@@ -349,7 +349,7 @@ export function createGbmTool({
             <div id="gbmModelFallback" class="gbm-fallback-table"></div>
           </div>
         </div>
-        <div class="${gbmPanelClass(activeTab, "trees")}" data-gbm-panel="trees">
+        <div id="gbm-screen-panel-trees" class="${gbmPanelClass(activeTab, "trees")}" data-gbm-panel="trees" role="tabpanel" aria-labelledby="gbm-screen-tab-trees">
           <div id="gbmTreeViewer" class="gbm-tree-viewer">
             <section class="gbm-panel-section gbm-tree-summary-panel">
               <div class="gbm-tree-section-header">
@@ -386,10 +386,10 @@ export function createGbmTool({
             </section>
           </div>
         </div>
-        <div class="${gbmPanelClass(activeTab, "shap")}" data-gbm-panel="shap">
+        <div id="gbm-screen-panel-shap" class="${gbmPanelClass(activeTab, "shap")}" data-gbm-panel="shap" role="tabpanel" aria-labelledby="gbm-screen-tab-shap">
           ${shapTool.shellHtml()}
         </div>
-        <div class="${gbmPanelClass(activeTab, "stacked-shap")}" data-gbm-panel="stacked-shap">
+        <div id="gbm-screen-panel-stacked-shap" class="${gbmPanelClass(activeTab, "stacked-shap")}" data-gbm-panel="stacked-shap" role="tabpanel" aria-labelledby="gbm-screen-tab-stacked-shap">
           ${stackedShapTool.shellHtml()}
         </div>
       </div>

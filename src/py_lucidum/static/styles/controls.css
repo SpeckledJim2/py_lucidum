@@ -1172,6 +1172,109 @@
         gap: 6px;
       }
 
+      .tool-screen-nav {
+        align-items: stretch;
+        background: var(--sidebar-bg);
+        border: 0;
+        border-radius: 0;
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 0;
+        height: var(--sidebar-collapsed-width);
+        min-height: var(--sidebar-collapsed-width);
+        min-width: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+      }
+
+      .tool-screen-nav::-webkit-scrollbar {
+        display: none;
+      }
+
+      .tool-screen-nav-item {
+        align-items: center;
+        appearance: none;
+        background: var(--sidebar-bg);
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        border-left: 1px solid var(--line);
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        display: inline-flex;
+        flex: 0 0 auto;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 650;
+        gap: 7px;
+        justify-content: center;
+        height: var(--sidebar-collapsed-width);
+        min-height: var(--sidebar-collapsed-width);
+        min-width: var(--sidebar-collapsed-width);
+        padding: 0 12px;
+        position: relative;
+        white-space: nowrap;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .tool-screen-nav-item:first-child {
+        border-left: 0;
+      }
+
+      .tool-screen-nav-item:last-child {
+        border-right: 1px solid var(--line);
+      }
+
+      .tool-screen-nav-item:hover {
+        background: var(--sidebar-bg);
+        color: var(--text);
+      }
+
+      .tool-screen-nav-item.active {
+        background: var(--sidebar-bg);
+        color: var(--accent);
+      }
+
+      .tool-screen-nav-item.active::after {
+        background: var(--accent);
+        border-radius: 0;
+        bottom: 0;
+        content: "";
+        height: 3px;
+        left: -1px;
+        position: absolute;
+        right: -1px;
+      }
+
+      .tool-screen-nav-item:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: -3px;
+      }
+
+      .tool-screen-nav-icon {
+        display: block;
+        fill: none;
+        flex: 0 0 18px;
+        height: 18px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.7;
+        width: 18px;
+      }
+
+      @media (max-width: 900px) {
+        .tool-screen-nav-item {
+          padding-inline: 0;
+          width: var(--sidebar-collapsed-width);
+        }
+
+        .tool-screen-nav-label {
+          display: none;
+        }
+      }
+
       .workspace-tabs {
         position: absolute;
         top: 8px;

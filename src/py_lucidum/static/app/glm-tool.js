@@ -3,6 +3,11 @@ import { createGlmModelNavigator } from "./glm-model-navigator.js";
 import { createGlmTabulations, GLM_TABULATION_MODEL_CROSSTAB } from "./glm-tabulations.js";
 import { loadTabulator } from "./shared/tabulator.js";
 import {
+  bindToolScreenNavigation,
+  syncToolScreenNavigation,
+  toolScreenNavButtonHtml,
+} from "./shared/tool-screen-nav.js";
+import {
   bindFallbackModelSelection,
   createSidebarModelHeading,
   createSidebarModelOption,
@@ -25,6 +30,11 @@ import {
 const GLM_RUNNING_POLL_MS = 500;
 const GLM_QUEUED_POLL_MS = 1000;
 const GLM_MODEL_LIST_POLL_MS = 2000;
+const GLM_TABS = [
+  { id: "builder", label: "Formula builder", icon: "formula" },
+  { id: "models", label: "Model navigator", icon: "models" },
+  { id: "tabulations", label: "Tabulations", icon: "table" },
+];
 
 function glmAutoModelTimeLabel(date = new Date()) {
   const hour = String(date.getHours()).padStart(2, "0");
@@ -289,14 +299,20 @@ export function createGlmTool({
       <div class="glm-tool">
         <div id="glmNotice" class="glm-notice hidden" role="alert" aria-live="polite"></div>
         <div class="glm-toolbar">
-          <div class="glm-tabs tabs workspace-tabs">
-            <button class="tab ${activeTab === "builder" ? "active" : ""}" type="button" data-glm-tab="builder">Formula builder</button>
-            <button class="tab ${activeTab === "models" ? "active" : ""}" type="button" data-glm-tab="models">Model navigator</button>
-            <button class="tab ${activeTab === "tabulations" ? "active" : ""}" type="button" data-glm-tab="tabulations">Tabulations</button>
+          <div class="glm-tabs tool-screen-nav" role="tablist" aria-label="GLM screens">
+            ${GLM_TABS.map((tab) => toolScreenNavButtonHtml({
+              active: activeTab === tab.id,
+              buttonId: `glm-screen-tab-${tab.id}`,
+              controlsId: `glm-screen-panel-${tab.id}`,
+              icon: tab.icon,
+              label: tab.label,
+              targetId: tab.id,
+              toolDataAttribute: "glm-tab",
+            })).join("")}
           </div>
           <div id="glmBuildStatus" class="glm-build-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${buildStatusHtml(liveProgress)}</div>
         </div>
-        <div class="glm-tab-panel ${activeTab === "builder" ? "" : "hidden"}" data-glm-panel="builder">
+        <div id="glm-screen-panel-builder" class="glm-tab-panel ${activeTab === "builder" ? "" : "hidden"}" data-glm-panel="builder" role="tabpanel" aria-labelledby="glm-screen-tab-builder">
           <div class="glm-builder-layout"${splitStyle ? ` style="${splitStyle}"` : ""}>
             <section class="glm-formula-panel">
               <div class="glm-panel-header">
@@ -361,7 +377,7 @@ export function createGlmTool({
             </section>
           </div>
         </div>
-        <div class="glm-tab-panel ${activeTab === "models" ? "" : "hidden"}" data-glm-panel="models">
+        <div id="glm-screen-panel-models" class="glm-tab-panel ${activeTab === "models" ? "" : "hidden"}" data-glm-panel="models" role="tabpanel" aria-labelledby="glm-screen-tab-models">
           <div class="glm-model-navigator">
             <div class="glm-model-actions" role="group" aria-label="GLM model actions">
               <button id="glmRenameModelBtn" class="tab glm-inline-action-button" type="button">Rename</button>
@@ -372,7 +388,7 @@ export function createGlmTool({
             <div id="glmModelFallback" class="glm-model-fallback"></div>
           </div>
         </div>
-        <div class="glm-tab-panel ${activeTab === "tabulations" ? "" : "hidden"}" data-glm-panel="tabulations">
+        <div id="glm-screen-panel-tabulations" class="glm-tab-panel ${activeTab === "tabulations" ? "" : "hidden"}" data-glm-panel="tabulations" role="tabpanel" aria-labelledby="glm-screen-tab-tabulations">
           <div id="glmTabulationsPanel" class="glm-tabulations-panel">
             ${tabulationsPanelHtml()}
           </div>
@@ -2030,14 +2046,12 @@ export function createGlmTool({
   }
 
   function bindTabs(mount) {
-    mount.querySelectorAll("[data-glm-tab]").forEach((button) => {
-      button.addEventListener("click", () => {
-        activeTab = button.dataset.glmTab;
-        mount.querySelectorAll("[data-glm-tab]").forEach((item) => item.classList.toggle("active", item === button));
-        mount.querySelectorAll("[data-glm-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.glmPanel !== activeTab));
-        if (activeTab === "models") refreshModelListIfNeeded();
-        if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
-      });
+    bindToolScreenNavigation(mount.querySelector(".glm-tabs"), (nextTab) => {
+      activeTab = nextTab;
+      syncToolScreenNavigation(mount.querySelector(".glm-tabs"), activeTab);
+      mount.querySelectorAll("[data-glm-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.glmPanel !== activeTab));
+      if (activeTab === "models") refreshModelListIfNeeded();
+      if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
     });
   }
 

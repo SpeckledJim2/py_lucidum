@@ -1,13 +1,27 @@
+import {
+  bindToolScreenNavigation,
+  syncToolScreenNavigation,
+  toolScreenNavButtonHtml,
+} from "./shared/tool-screen-nav.js";
+
 const GBM_TABS = [
-  { id: "features", label: "Features and parameters" },
-  { id: "models", label: "Model navigator" },
-  { id: "shap", label: "SHAP" },
-  { id: "stacked-shap", label: "Stacked SHAP" },
-  { id: "trees", label: "Tree viewer" },
+  { id: "features", label: "Features and parameters", icon: "features" },
+  { id: "models", label: "Model navigator", icon: "models" },
+  { id: "shap", label: "SHAP", icon: "shap" },
+  { id: "stacked-shap", label: "Stacked SHAP", icon: "layers" },
+  { id: "trees", label: "Tree viewer", icon: "tree" },
 ];
 
 export function gbmTabsHtml(activeTab) {
-  return GBM_TABS.map((tab) => `<button class="tab ${tab.id === activeTab ? "active" : ""}" type="button" data-gbm-tab="${tab.id}">${tab.label}</button>`).join("");
+  return GBM_TABS.map((tab) => toolScreenNavButtonHtml({
+    active: tab.id === activeTab,
+    buttonId: `gbm-screen-tab-${tab.id}`,
+    controlsId: `gbm-screen-panel-${tab.id}`,
+    icon: tab.icon,
+    label: tab.label,
+    targetId: tab.id,
+    toolDataAttribute: "gbm-tab",
+  })).join("");
 }
 
 export function gbmPanelClass(activeTab, panel) {
@@ -15,15 +29,11 @@ export function gbmPanelClass(activeTab, panel) {
 }
 
 export function bindGbmTabs(mount, onSelect) {
-  for (const button of mount.querySelectorAll("[data-gbm-tab]")) {
-    button.addEventListener("click", () => onSelect(button.dataset.gbmTab));
-  }
+  bindToolScreenNavigation(mount.querySelector(".gbm-tabs"), onSelect);
 }
 
 export function syncGbmRenderedTab(mount, nextTab) {
-  for (const button of mount.querySelectorAll("[data-gbm-tab]")) {
-    button.classList.toggle("active", button.dataset.gbmTab === nextTab);
-  }
+  syncToolScreenNavigation(mount.querySelector(".gbm-tabs"), nextTab);
   for (const panel of mount.querySelectorAll("[data-gbm-panel]")) {
     panel.classList.toggle("hidden", panel.dataset.gbmPanel !== nextTab);
   }

@@ -858,6 +858,35 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
             with self.subTest(url=url):
                 self.assert_no_store(url)
 
+    def test_tool_screen_navigation_uses_a_distinct_shared_component(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        controls = (static_root / "styles/controls.css").read_text(encoding="utf-8")
+        helper = (static_root / "app/shared/tool-screen-nav.js").read_text(encoding="utf-8")
+        gbm = (static_root / "app/gbm-tab-orchestration.js").read_text(encoding="utf-8")
+        glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
+        specs = (static_root / "app/specifications-tool.js").read_text(encoding="utf-8")
+        index = (static_root / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn(".tool-screen-nav-item {", controls)
+        self.assertIn("height: var(--sidebar-collapsed-width);", controls)
+        self.assertIn("background: var(--sidebar-bg);", controls)
+        self.assertIn(".tool-screen-nav-item:first-child", controls)
+        self.assertIn(".tool-screen-nav-item:last-child", controls)
+        self.assertIn(".tool-screen-nav-item.active::after", controls)
+        self.assertIn("@media (max-width: 900px)", controls)
+        self.assertIn(".tool-screen-nav-label", controls)
+        self.assertIn('role="tab"', helper)
+        self.assertIn('aria-selected="${active}"', helper)
+        self.assertIn('["ArrowLeft", "ArrowRight", "Home", "End"]', helper)
+        self.assertIn('class="gbm-tabs tool-screen-nav"', (static_root / "app/gbm-tool.js").read_text(encoding="utf-8"))
+        self.assertIn('class="glm-tabs tool-screen-nav"', glm)
+        self.assertIn('class="tool-screen-nav spec-kind-tabs"', specs)
+        self.assertIn('<div class="spec-file-row">', specs)
+        self.assertLess(specs.index('<div class="spec-file-row">'), specs.index('id="specSaveBtn"'))
+        self.assertIn("toolScreenNavButtonHtml", gbm)
+        self.assertIn('id="lineBarTabs" class="tabs workspace-tabs hidden"', index)
+        self.assertNotIn('id="lineBarTabs" class="tool-screen-nav', index)
+
     def test_monitor_entrypoints_disable_cache(self) -> None:
         _, body = self.assert_no_store("/monitor")
         html = body.decode("utf-8")

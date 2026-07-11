@@ -1,9 +1,14 @@
 import { loadTabulator } from "./shared/tabulator.js";
+import {
+  bindToolScreenNavigation,
+  syncToolScreenNavigation,
+  toolScreenNavButtonHtml,
+} from "./shared/tool-screen-nav.js";
 
 const SPEC_KINDS = [
-  { id: "feature", label: "Feature spec" },
-  { id: "kpi", label: "KPI spec" },
-  { id: "filter", label: "Filter spec" },
+  { id: "feature", label: "Feature spec", icon: "features" },
+  { id: "kpi", label: "KPI spec", icon: "kpi" },
+  { id: "filter", label: "Filter spec", icon: "filter" },
 ];
 
 const FEATURE_METADATA_COLUMNS = new Set(["Base", "min", "max", "banding"]);
@@ -63,14 +68,24 @@ export function createSpecificationsTool({
       <div class="spec-tool">
         <div class="spec-topbar">
           <div class="spec-control-row">
-            <div class="tabs spec-kind-tabs" role="tablist" aria-label="Specification type">
-              ${SPEC_KINDS.map((kind) => `<button class="tab ${kind.id === activeKind ? "active" : ""}" type="button" role="tab" data-spec-kind="${kind.id}" aria-selected="${kind.id === activeKind ? "true" : "false"}">${escapeHtml(kind.label)}</button>`).join("")}
+            <div class="tool-screen-nav spec-kind-tabs" role="tablist" aria-label="Specification type">
+              ${SPEC_KINDS.map((kind) => toolScreenNavButtonHtml({
+                active: kind.id === activeKind,
+                buttonId: `spec-screen-tab-${kind.id}`,
+                controlsId: "specGrid",
+                icon: kind.icon,
+                label: kind.label,
+                targetId: kind.id,
+                toolDataAttribute: "spec-kind",
+              })).join("")}
             </div>
+          </div>
+          <div class="spec-file-row">
+            <span id="specFilePath" class="spec-file-path"></span>
             <div class="spec-file-actions">
               <button id="specSaveBtn" class="spec-save-button" type="button">Save</button>
             </div>
           </div>
-          <span id="specFilePath" class="spec-file-path"></span>
           <div id="specNotice" class="spec-notice spec-notice-empty" role="status" aria-live="polite"></div>
         </div>
         <div id="specGrid" class="spec-grid" tabindex="0"></div>
@@ -87,9 +102,7 @@ export function createSpecificationsTool({
   }
 
   function bindShell() {
-    el("specificationsWrap").querySelectorAll("[data-spec-kind]").forEach((button) => {
-      button.addEventListener("click", () => selectKind(button.dataset.specKind));
-    });
+    bindToolScreenNavigation(el("specificationsWrap").querySelector(".spec-kind-tabs"), selectKind);
     el("specSaveBtn").addEventListener("click", saveCurrentSpec);
     el("specContextMenu").addEventListener("click", (event) => {
       const button = event.target.closest("[data-spec-row-action]");
@@ -444,11 +457,7 @@ export function createSpecificationsTool({
 
   function syncKindTabs() {
     if (!rendered) return;
-    el("specificationsWrap").querySelectorAll("[data-spec-kind]").forEach((button) => {
-      const active = button.dataset.specKind === activeKind;
-      button.classList.toggle("active", active);
-      button.setAttribute("aria-selected", String(active));
-    });
+    syncToolScreenNavigation(el("specificationsWrap").querySelector(".spec-kind-tabs"), activeKind);
   }
 
   function syncFilePath(spec = specs.get(activeKind)) {

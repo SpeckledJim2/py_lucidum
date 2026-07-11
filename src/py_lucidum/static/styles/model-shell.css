@@ -16,14 +16,14 @@
 
       .visual-area.model-mode .workspace {
         background: var(--panel);
-        border-color: transparent;
+        border: 0;
         border-radius: 0;
         box-shadow: none;
         padding: 0;
       }
 
       .visual-area.model-mode .model-tool-wrap {
-        padding: 8px;
+        padding: 0;
       }
 
       .model-shell {

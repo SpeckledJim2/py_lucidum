@@ -926,6 +926,29 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.locator("#glmTool").click()
                     page.locator("#modelToolWrap:not(.hidden) #glmFormulaEditor").wait_for(timeout=10_000)
                     wait_for_ace_theme("ace/theme/monokai", True)
+                    glm_rail_geometry = page.locator(".glm-toolbar").evaluate(
+                        """
+                        (rail) => {
+                          const workspace = rail.closest(".workspace");
+                          const railRect = rail.getBoundingClientRect();
+                          const workspaceRect = workspace.getBoundingClientRect();
+                          return {
+                            height: railRect.height,
+                            topInset: railRect.top - workspaceRect.top,
+                            leftInset: railRect.left - workspaceRect.left,
+                            rightInset: workspaceRect.right - railRect.right,
+                            workspaceBorderWidth: getComputedStyle(workspace).borderTopWidth,
+                            borderBottomWidth: getComputedStyle(rail).borderBottomWidth,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(glm_rail_geometry["height"], 50)
+                    self.assertLessEqual(abs(glm_rail_geometry["topInset"]), 0.5)
+                    self.assertLessEqual(abs(glm_rail_geometry["leftInset"]), 0.5)
+                    self.assertLessEqual(abs(glm_rail_geometry["rightInset"]), 0.5)
+                    self.assertEqual(glm_rail_geometry["workspaceBorderWidth"], "0px")
+                    self.assertEqual(glm_rail_geometry["borderBottomWidth"], "1px")
                     self.assertGreaterEqual(glm_config_requests, 1)
                     glm_requests_after_first_open = glm_config_requests
 
@@ -3027,6 +3050,39 @@ COPY (
                     page.locator("#specFilePath", has_text="Save target:").wait_for(timeout=10_000)
                     page.locator("#specFilePath", has_text=re.compile(r"\((new file|existing file ignored by --no-features)\)")).wait_for(timeout=10_000)
                     page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
+                    self.assertEqual(page.locator(".spec-kind-tabs #specSaveBtn").count(), 0)
+                    self.assertEqual(page.locator(".spec-file-row #specSaveBtn").count(), 1)
+                    spec_rail_geometry = page.locator(".spec-control-row").evaluate(
+                        """
+                        (rail) => {
+                          const tool = rail.closest(".spec-tool");
+                          const workspace = tool.closest(".workspace");
+                          const railRect = rail.getBoundingClientRect();
+                          const toolRect = tool.getBoundingClientRect();
+                          const workspaceRect = workspace.getBoundingClientRect();
+                          return {
+                            height: railRect.height,
+                            topInset: railRect.top - toolRect.top,
+                            leftInset: railRect.left - toolRect.left,
+                            rightInset: toolRect.right - railRect.right,
+                            workspaceTopInset: railRect.top - workspaceRect.top,
+                            workspaceLeftInset: railRect.left - workspaceRect.left,
+                            workspaceRightInset: workspaceRect.right - railRect.right,
+                            workspaceBorderWidth: getComputedStyle(workspace).borderTopWidth,
+                            borderBottomWidth: getComputedStyle(rail).borderBottomWidth,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(spec_rail_geometry["height"], 50)
+                    self.assertLessEqual(abs(spec_rail_geometry["topInset"]), 0.5)
+                    self.assertLessEqual(abs(spec_rail_geometry["leftInset"]), 0.5)
+                    self.assertLessEqual(abs(spec_rail_geometry["rightInset"]), 0.5)
+                    self.assertLessEqual(abs(spec_rail_geometry["workspaceTopInset"]), 0.5)
+                    self.assertLessEqual(abs(spec_rail_geometry["workspaceLeftInset"]), 0.5)
+                    self.assertLessEqual(abs(spec_rail_geometry["workspaceRightInset"]), 0.5)
+                    self.assertEqual(spec_rail_geometry["workspaceBorderWidth"], "0px")
+                    self.assertEqual(spec_rail_geometry["borderBottomWidth"], "1px")
                     self.assertEqual(
                         page.locator('#specGrid .tabulator-row .tabulator-cell[tabulator-field="Feature"]').first.inner_text().strip(),
                         "vehicle_age",
@@ -3611,7 +3667,7 @@ COPY (
                         )
                         page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
                         page.locator("#gbmTool").click()
-                        page.get_by_role("button", name="Model navigator").click()
+                        page.get_by_role("tab", name="Model navigator").click()
                         page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
                         page.locator("#gbmActivateModelBtn").click()
                         page.wait_for_function(
@@ -6118,7 +6174,7 @@ COPY (
                 )
                 page.locator("#glmTool").click()
                 page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
-                page.get_by_role("button", name="Tabulations").click()
+                page.get_by_role("tab", name="Tabulations").click()
                 page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age × Segment").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
@@ -6827,7 +6883,7 @@ COPY (
 
                 page.locator("#glmTool").click()
                 page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
-                page.get_by_role("button", name="Formula builder").click()
+                page.get_by_role("tab", name="Formula builder").click()
                 self.assertEqual(
                     wait_for_glm_builder_state(
                         {
@@ -7235,7 +7291,7 @@ COPY (
                 self.assertEqual(glm_coefficient_chart_body["responses"][1]["source"], "glm:browser-smoke-glm:predictions")
                 page.locator("#glmTool").click()
                 page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
-                page.get_by_role("button", name="Formula builder").click()
+                page.get_by_role("tab", name="Formula builder").click()
                 wait_for_glm_builder_state(
                     {
                         "formula": "actualNumerator ~ 1 + Age + Segment",
@@ -7263,7 +7319,7 @@ COPY (
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                 page.locator("#glmTool").click()
                 page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
-                page.get_by_role("button", name="Formula builder").click()
+                page.get_by_role("tab", name="Formula builder").click()
                 self.assertEqual(wait_for_glm_builder_state(edited_glm_draft), edited_glm_draft)
 
                 open_sidebar_section("#glmModelCollapseBtn")
@@ -7948,7 +8004,7 @@ COPY (
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
                 page.locator("#glmTool").click()
                 page.locator(".glm-tool").wait_for(timeout=10_000)
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#glmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 glm_navigator_state = page.evaluate(
                     """
@@ -8124,7 +8180,7 @@ COPY (
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
                 page.locator("#glmTool").click()
                 page.locator(".glm-tool").wait_for(timeout=10_000)
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#glmModelGrid .tabulator-row", has_text="Browser smoke GLM").click()
                 page.locator("#glmActivateModelBtn").click()
                 page.wait_for_function(
@@ -8139,7 +8195,7 @@ COPY (
                     page.locator("#themeBtn").click()
                     page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
 
-                page.get_by_role("button", name="Tabulations").click()
+                page.get_by_role("tab", name="Tabulations").click()
                 page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
@@ -8498,7 +8554,7 @@ COPY (
 
                 page.route("**/api/glm/build", glm_build_route)
                 page.route("**/api/glm/jobs/glm-live-job", glm_job_route)
-                page.get_by_role("button", name="Formula builder").click()
+                page.get_by_role("tab", name="Formula builder").click()
                 page.evaluate(
                     """
                     () => {
@@ -11521,6 +11577,118 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                nav_state = page.locator(".gbm-tabs").evaluate(
+                    """
+                    (nav) => {
+                      const active = nav.querySelector('[data-gbm-tab="features"]');
+                      const inactive = nav.querySelector('[data-gbm-tab="models"]');
+                      const last = nav.querySelector('[data-gbm-tab="trees"]');
+                      const panel = document.querySelector("#gbm-screen-panel-features");
+                      const toolbar = nav.closest(".gbm-toolbar");
+                      const tool = nav.closest(".gbm-tool");
+                      const workspace = tool.closest(".workspace");
+                      const style = getComputedStyle(active);
+                      const inactiveStyle = getComputedStyle(inactive);
+                      const lastStyle = getComputedStyle(last);
+                      const toolbarStyle = getComputedStyle(toolbar);
+                      const indicator = getComputedStyle(active, "::after");
+                      const toolbarRect = toolbar.getBoundingClientRect();
+                      const toolRect = tool.getBoundingClientRect();
+                      const workspaceRect = workspace.getBoundingClientRect();
+                      return {
+                        role: nav.getAttribute("role"),
+                        activeRole: active?.getAttribute("role"),
+                        selected: active?.getAttribute("aria-selected"),
+                        controls: active?.getAttribute("aria-controls"),
+                        panelLabelledBy: panel?.getAttribute("aria-labelledby"),
+                        height: active.getBoundingClientRect().height,
+                        railHeight: toolbarRect.height,
+                        railTopInset: toolbarRect.top - toolRect.top,
+                        railLeftInset: toolbarRect.left - toolRect.left,
+                        railRightInset: toolRect.right - toolbarRect.right,
+                        workspaceTopInset: toolbarRect.top - workspaceRect.top,
+                        workspaceLeftInset: toolbarRect.left - workspaceRect.left,
+                        workspaceRightInset: workspaceRect.right - toolbarRect.right,
+                        workspaceBorderWidth: getComputedStyle(workspace).borderTopWidth,
+                        borderTopWidth: style.borderTopWidth,
+                        borderBottomWidth: style.borderBottomWidth,
+                        borderLeftWidth: style.borderLeftWidth,
+                        inactiveBorderBottomWidth: inactiveStyle.borderBottomWidth,
+                        separatorLeftWidth: inactiveStyle.borderLeftWidth,
+                        lastBorderRightWidth: lastStyle.borderRightWidth,
+                        railBorderBottomWidth: toolbarStyle.borderBottomWidth,
+                        background: style.backgroundColor,
+                        railBackground: toolbarStyle.backgroundColor,
+                        fontSize: style.fontSize,
+                        fontWeight: style.fontWeight,
+                        activeColor: style.color,
+                        inactiveColor: inactiveStyle.color,
+                        accentColor: getComputedStyle(document.querySelector(".tool-option.active")).color,
+                        mutedColor: getComputedStyle(document.querySelector(".tool-option:not(.active)")).color,
+                        indicatorLeft: indicator.left,
+                        indicatorRight: indicator.right,
+                        iconCount: nav.querySelectorAll(".tool-screen-nav-icon").length,
+                        labelDisplay: getComputedStyle(active.querySelector(".tool-screen-nav-label")).display,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(nav_state["role"], "tablist")
+                self.assertEqual(nav_state["activeRole"], "tab")
+                self.assertEqual(nav_state["selected"], "true")
+                self.assertEqual(nav_state["controls"], "gbm-screen-panel-features")
+                self.assertEqual(nav_state["panelLabelledBy"], "gbm-screen-tab-features")
+                self.assertEqual(nav_state["height"], 50)
+                self.assertEqual(nav_state["railHeight"], 50)
+                self.assertLessEqual(abs(nav_state["railTopInset"]), 0.5)
+                self.assertLessEqual(abs(nav_state["railLeftInset"]), 0.5)
+                self.assertLessEqual(abs(nav_state["railRightInset"]), 0.5)
+                self.assertLessEqual(abs(nav_state["workspaceTopInset"]), 0.5)
+                self.assertLessEqual(abs(nav_state["workspaceLeftInset"]), 0.5)
+                self.assertLessEqual(abs(nav_state["workspaceRightInset"]), 0.5)
+                self.assertEqual(nav_state["workspaceBorderWidth"], "0px")
+                self.assertEqual(nav_state["borderTopWidth"], "0px")
+                self.assertEqual(nav_state["borderBottomWidth"], "1px")
+                self.assertEqual(nav_state["borderLeftWidth"], "0px")
+                self.assertEqual(nav_state["inactiveBorderBottomWidth"], "1px")
+                self.assertEqual(nav_state["separatorLeftWidth"], "1px")
+                self.assertEqual(nav_state["lastBorderRightWidth"], "1px")
+                self.assertEqual(nav_state["railBorderBottomWidth"], "1px")
+                self.assertEqual(nav_state["background"], nav_state["railBackground"])
+                self.assertEqual(nav_state["fontSize"], "13px")
+                self.assertEqual(nav_state["fontWeight"], "650")
+                self.assertEqual(nav_state["activeColor"], nav_state["accentColor"])
+                self.assertEqual(nav_state["inactiveColor"], nav_state["mutedColor"])
+                self.assertEqual(nav_state["indicatorLeft"], "-1px")
+                self.assertEqual(nav_state["indicatorRight"], "-1px")
+                self.assertEqual(nav_state["iconCount"], 5)
+                self.assertNotEqual(nav_state["labelDisplay"], "none")
+
+                page.locator('[data-gbm-tab="features"]').focus()
+                page.keyboard.press("ArrowRight")
+                page.locator('[data-gbm-tab="models"][aria-selected="true"]:focus').wait_for(timeout=10_000)
+                page.keyboard.press("ArrowLeft")
+                page.locator('[data-gbm-tab="features"][aria-selected="true"]:focus').wait_for(timeout=10_000)
+                page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
+
+                page.set_viewport_size({"width": 800, "height": 800})
+                compact_nav_state = page.locator('[data-gbm-tab="features"]').evaluate(
+                    """
+                    (button) => ({
+                      width: button.getBoundingClientRect().width,
+                      height: button.getBoundingClientRect().height,
+                      labelDisplay: getComputedStyle(button.querySelector(".tool-screen-nav-label")).display,
+                      ariaLabel: button.getAttribute("aria-label"),
+                      title: button.getAttribute("title"),
+                    })
+                    """
+                )
+                self.assertEqual(compact_nav_state["width"], 50)
+                self.assertEqual(compact_nav_state["height"], 50)
+                self.assertEqual(compact_nav_state["labelDisplay"], "none")
+                self.assertEqual(compact_nav_state["ariaLabel"], "Features and parameters")
+                self.assertEqual(compact_nav_state["title"], "Features and parameters")
+                page.set_viewport_size({"width": 1280, "height": 800})
                 default_metric_state = page.evaluate(
                     """
                     () => {
@@ -11602,7 +11770,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
                 page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST", timeout=10_000):
@@ -11613,7 +11781,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
                 page.locator("#gbmFeatureGrid .tabulator-row", has_text="PostcodeArea").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
@@ -11623,7 +11791,7 @@ COPY (
                 self.assertEqual(no_shap_context_labels, ["Toggle interaction constraint", "Go to Line and Bar"])
                 page.keyboard.press("Escape")
                 page.wait_for_function('() => document.querySelector("#gbmFeatureContextMenu")?.hidden === true')
-                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.get_by_role("tab", name="SHAP", exact=True).click()
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST", timeout=10_000):
                     page.locator("#gbmShapFeatureList1 .feature", has_text="lat").click()
                 page.wait_for_function(
@@ -11633,7 +11801,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Stacked SHAP", exact=True).click()
+                page.get_by_role("tab", name="Stacked SHAP", exact=True).click()
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST", timeout=10_000):
                     page.locator("#gbmStackedShapFeatureList .feature", has_text="lat").click()
                 page.wait_for_function(
@@ -11642,7 +11810,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
                 page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option", has_text="Gain").click()
                 page.wait_for_function(
@@ -11755,9 +11923,9 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator(".gbm-model-navigator").get_by_text("Browser smoke model", exact=False).wait_for(timeout=10_000)
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#gbmFeatureInteractionConstraintButton")?.textContent.trim() === "Constraint groups (1)"
@@ -11787,7 +11955,7 @@ COPY (
                 self.assertEqual(feature_scenario_state()["value"], "")
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
-                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.get_by_role("tab", name="SHAP", exact=True).click()
                 page.locator("#gbmShapChart").wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
@@ -12092,7 +12260,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Stacked SHAP").click()
+                page.get_by_role("tab", name="Stacked SHAP").click()
                 page.locator("#gbmStackedShapChart").wait_for(timeout=10_000)
                 page.wait_for_function(
                     """
@@ -12139,7 +12307,7 @@ COPY (
                 self.assertIn("SHAP Values by lat", stacked_state["title"])
                 self.assertTrue(stacked_state["hasOther"])
                 self.assertTrue(stacked_state["reconciles"])
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 page.locator("#gbmModelSelect").wait_for(state="attached", timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)
                 page.wait_for_function(
@@ -12184,7 +12352,7 @@ COPY (
                 page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").click()
                 page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").wait_for(timeout=10_000)
                 page.keyboard.press("Escape")
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 navigator_state = page.evaluate(
                     """
@@ -12226,7 +12394,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -12307,7 +12475,7 @@ COPY (
                 page.unroute("**/api/gbm/validate", pair_validate_route)
                 page.unroute("**/api/gbm/train", pair_train_route)
                 page.unroute("**/api/gbm/jobs/pair-live-job", pair_job_route)
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
                 page.locator("#gbmActivateModelBtn").click()
                 page.wait_for_function(
@@ -12461,7 +12629,7 @@ COPY (
                 self.assertTrue(activated_navigator_state["activateDisabled"])
                 self.assertTrue(activated_navigator_state["deleteDisabled"])
                 self.assertIn("Second smoke model", activated_navigator_state["sidebarMeta"])
-                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.get_by_role("tab", name="SHAP", exact=True).click()
                 page.wait_for_function(
                     """
                     () => {
@@ -12487,7 +12655,7 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertFalse(page.locator("#gbmShapMessage", has_text="undefined is not an object").is_visible())
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
                 page.locator("#gbmActivateModelBtn").click()
                 page.wait_for_function(
@@ -12497,7 +12665,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.get_by_role("tab", name="SHAP", exact=True).click()
                 page.wait_for_function(
                     """
                     () => {
@@ -12518,7 +12686,7 @@ COPY (
                     }
                     """
                 )
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
                 page.locator("#gbmActivateModelBtn").click()
                 page.wait_for_function(
@@ -12528,7 +12696,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.get_by_role("tab", name="SHAP", exact=True).click()
                 page.wait_for_function(
                     """
                     () => {
@@ -12542,7 +12710,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
                 page.locator("#gbmActivateModelBtn").click()
                 page.wait_for_function(
@@ -12552,7 +12720,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.get_by_role("tab", name="SHAP", exact=True).click()
                 page.wait_for_function(
                     """
                     () => {
@@ -12578,7 +12746,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
                 page.locator("#gbmActivateModelBtn").click()
                 page.wait_for_function(
@@ -12588,7 +12756,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="SHAP", exact=True).click()
+                page.get_by_role("tab", name="SHAP", exact=True).click()
                 page.wait_for_function(
                     """
                     () => {
@@ -12603,7 +12771,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.22",
@@ -12672,7 +12840,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -12815,7 +12983,7 @@ COPY (
                     timeout=10_000,
                 )
                 page.locator("input[name='gbmEvaluationViewMode'][value='tail']").check()
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
                 page.evaluate("() => { window.prompt = () => 'renamed-smoke-model'; }")
                 page.locator("#gbmRenameModelBtn").click()
@@ -12832,7 +13000,7 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertEqual(page.locator("#gbmModelGrid .tabulator-row").count(), 1)
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.11",
@@ -13214,7 +13382,7 @@ COPY (
                 self.assertTrue(chart_options["yScale"])
                 self.assertEqual(chart_options["seriesNames"], ["train", "test"])
                 self.assertTrue(chart_options["showSymbol"])
-                page.get_by_role("button", name="Tree viewer").click()
+                page.get_by_role("tab", name="Tree viewer").click()
                 page.locator("#gbmTreeSummaryGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#gbmTreeChart svg.gbm-tree-svg").wait_for(state="attached", timeout=10_000)
                 tree_state = page.evaluate(
@@ -13312,7 +13480,7 @@ COPY (
                     self.assertLess(summary_width_after, summary_width_before - 40)
                 else:
                     self.assertGreaterEqual(summary_width_before, 420)
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 navigator_state = page.evaluate(
                     """
@@ -13394,7 +13562,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.get_by_role("button", name="Features and parameters").click()
+                page.get_by_role("tab", name="Features and parameters").click()
                 page.wait_for_function(
                     """
                     () => [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
@@ -13792,7 +13960,7 @@ COPY (
                 self.assertIn("Monotonicity", layout["featureHeaders"])
                 self.assertEqual(sum(header in layout["featureHeaders"] for header in ("Gain", "SHAP")), 1)
                 self.assertNotIn("Type", layout["featureHeaders"])
-                page.get_by_role("button", name="Model navigator").click()
+                page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 final_model_count = page.locator("#gbmModelGrid .tabulator-row").count()
                 self.assertGreater(final_model_count, 0)
