@@ -1,3 +1,9 @@
+import { bindVerticalListNavigation } from "./shared/list-navigation.js";
+
+const PROFILE_SUMMARY_MIN_WIDTH = 320;
+const PROFILE_DETAIL_MIN_WIDTH = 260;
+const PROFILE_RESIZE_STEP = 24;
+
 export function createColumnProfileTool({
   api,
   el,
@@ -21,6 +27,9 @@ export function createColumnProfileTool({
   showClipboardToast,
   activeFilterLabel,
 }) {
+  let profileSummaryPaneWidth = null;
+  let profileTableNavigation = null;
+
   function isNumericKind(kind) {
     return kind === "numeric" || kind === "integer";
   }
@@ -124,11 +133,13 @@ export function createColumnProfileTool({
 
   function renderProfileTable(data, columns = sortedProfileColumns(data.columns || [])) {
     const tableScroll = captureProfileTableScroll();
+    profileTableNavigation?.destroy();
+    profileTableNavigation = null;
     closeProfileColumnContextMenu();
     ensureSelectedProfileColumn(columns);
     const visibleColumns = searchedProfileColumns(columns);
     const rows = columns.map((column) => `
-      <tr class="profile-summary-row${column.name === state.selectedProfileColumn ? " selected" : ""}" data-profile-column="${escapeHtml(column.name)}" tabindex="0" aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}"${profileColumnMatchesSearch(column.name) ? "" : " hidden"}>
+      <tr class="profile-summary-row${column.name === state.selectedProfileColumn ? " selected" : ""}" data-profile-column="${escapeHtml(column.name)}" tabindex="${column.name === state.selectedProfileColumn ? "0" : "-1"}" aria-selected="${column.name === state.selectedProfileColumn ? "true" : "false"}"${profileColumnMatchesSearch(column.name) ? "" : " hidden"}>
         <td class="profile-column-name">${escapeHtml(column.name)}</td>
         <td>${profileTypeBadgeHtml(column)}</td>
         <td>${profileMissingHtml(column)}</td>
@@ -142,15 +153,18 @@ export function createColumnProfileTool({
     const profileFilter = document.getElementById("profileFilter");
     profileGroupMeta?.remove();
     profileFilter?.remove();
+    const splitStyle = Number.isFinite(profileSummaryPaneWidth) && profileSummaryPaneWidth > 0
+      ? ` style="--profile-summary-pane-width: ${Math.round(profileSummaryPaneWidth)}px"`
+      : "";
     el("profileWrap").innerHTML = `
-      <div class="profile-toolbar">
+      <div class="profile-toolbar app-control-strip app-control-strip-row">
         ${profileSummaryActionsHtml(data)}
         <div class="profile-column-search-row">
-          <input id="profileColumnSearch" class="search profile-column-search" type="search" placeholder="Search columns" aria-label="Search profile columns" autocomplete="off" value="${escapeHtml(state.profileColumnSearch || "")}" />
+          <input id="profileColumnSearch" class="search profile-column-search app-control-input" type="search" placeholder="Search columns" aria-label="Search profile columns" autocomplete="off" value="${escapeHtml(state.profileColumnSearch || "")}" />
         </div>
         <div id="profileMeta" class="profile-meta"></div>
       </div>
-      <div class="profile-content">
+      <div class="profile-content"${splitStyle}>
         <div class="profile-summary-pane">
           <div class="profile-table-scroll">
             <table class="profile-table">
@@ -168,6 +182,7 @@ export function createColumnProfileTool({
           </div>
           ${empty}
         </div>
+        <div id="profilePaneResizer" class="profile-pane-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize column summary and profile detail panels" tabindex="0"></div>
         <aside id="profileDetailPane" class="profile-detail-pane" aria-live="polite">${currentDetail}</aside>
       </div>
     `;
@@ -202,18 +217,98 @@ export function createColumnProfileTool({
 
   function bindProfileTable() {
     bindProfileSummaryModeControl();
+    bindProfilePaneResizer();
     el("profileColumnSearch")?.addEventListener("input", handleProfileColumnSearch);
     el("profileWrap").querySelectorAll("[data-profile-sort]").forEach((button) => {
       button.addEventListener("click", () => setProfileSort(button.dataset.profileSort));
     });
+    const tableBody = el("profileWrap")?.querySelector(".profile-table tbody");
+    if (tableBody) {
+      profileTableNavigation = bindVerticalListNavigation({
+        list: tableBody,
+        itemSelector: "[data-profile-column]",
+        getItemKey: (row) => row.dataset.profileColumn || "",
+        onActivate: (columnName) => selectProfileColumn(columnName),
+      });
+    }
     el("profileWrap").querySelectorAll("[data-profile-column]").forEach((row) => {
-      row.addEventListener("click", () => selectProfileColumn(row.dataset.profileColumn || ""));
       row.addEventListener("contextmenu", openProfileColumnContextMenu);
       row.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         selectProfileColumn(row.dataset.profileColumn || "");
       });
+    });
+  }
+
+  function bindProfilePaneResizer() {
+    const content = el("profileWrap")?.querySelector(".profile-content");
+    const summary = content?.querySelector(".profile-summary-pane");
+    const resizer = el("profilePaneResizer");
+    if (!content || !summary || !resizer) return;
+
+    const splitLimits = () => {
+      const contentWidth = content.getBoundingClientRect().width || 0;
+      const resizerWidth = resizer.getBoundingClientRect().width || 0;
+      return {
+        min: PROFILE_SUMMARY_MIN_WIDTH,
+        max: Math.max(PROFILE_SUMMARY_MIN_WIDTH, contentWidth - resizerWidth - PROFILE_DETAIL_MIN_WIDTH),
+      };
+    };
+
+    const syncAccessibility = (width) => {
+      const limits = splitLimits();
+      resizer.setAttribute("aria-valuemin", String(limits.min));
+      resizer.setAttribute("aria-valuemax", String(Math.round(limits.max)));
+      resizer.setAttribute("aria-valuenow", String(Math.round(width)));
+    };
+
+    const resizeTo = (width) => {
+      if (window.matchMedia("(max-width: 640px)").matches) return;
+      const limits = splitLimits();
+      const clamped = Math.max(limits.min, Math.min(limits.max, width));
+      profileSummaryPaneWidth = clamped;
+      content.style.setProperty("--profile-summary-pane-width", `${Math.round(clamped)}px`);
+      syncAccessibility(clamped);
+    };
+
+    const resizeFromClientX = (clientX) => {
+      const contentRect = content.getBoundingClientRect();
+      const resizerWidth = resizer.getBoundingClientRect().width || 0;
+      resizeTo(clientX - contentRect.left - resizerWidth / 2);
+    };
+
+    const currentWidth = summary.getBoundingClientRect().width || PROFILE_SUMMARY_MIN_WIDTH;
+    if (Number.isFinite(profileSummaryPaneWidth) && profileSummaryPaneWidth > 0) {
+      resizeTo(profileSummaryPaneWidth);
+    } else {
+      syncAccessibility(currentWidth);
+    }
+
+    resizer.addEventListener("pointerdown", (event) => {
+      if (window.matchMedia("(max-width: 640px)").matches) return;
+      event.preventDefault();
+      resizer.classList.add("dragging");
+      document.body.classList.add("profile-pane-resizing");
+      resizer.setPointerCapture?.(event.pointerId);
+      const onMove = (moveEvent) => resizeFromClientX(moveEvent.clientX);
+      const onUp = () => {
+        resizer.classList.remove("dragging");
+        document.body.classList.remove("profile-pane-resizing");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+      window.addEventListener("pointercancel", onUp, { once: true });
+    });
+
+    resizer.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const width = summary.getBoundingClientRect().width || PROFILE_SUMMARY_MIN_WIDTH;
+      resizeTo(width + (event.key === "ArrowRight" ? PROFILE_RESIZE_STEP : -PROFILE_RESIZE_STEP));
     });
   }
 
@@ -392,11 +487,11 @@ export function createColumnProfileTool({
     return `
       <div class="profile-summary-actions">
         <div id="profileSummaryMode" class="profile-summary-mode" role="radiogroup" aria-label="Profile calculation rows">
-          <label class="profile-summary-mode-option ${selected === "auto" ? "active" : ""}">
+          <label class="profile-summary-mode-option app-control-button ${selected === "auto" ? "active" : ""}">
             <input type="radio" name="profileSummaryMode" value="auto" ${selected === "auto" ? "checked" : ""} />
             <span>Use 100k</span>
           </label>
-          <label class="profile-summary-mode-option ${selected === "full" ? "active" : ""}">
+          <label class="profile-summary-mode-option app-control-button ${selected === "full" ? "active" : ""}">
             <input type="radio" name="profileSummaryMode" value="full" ${selected === "full" ? "checked" : ""} />
             <span>Use all rows</span>
           </label>
@@ -560,6 +655,7 @@ export function createColumnProfileTool({
       const selected = row.dataset.profileColumn === state.selectedProfileColumn;
       row.classList.toggle("selected", selected);
       row.setAttribute("aria-selected", String(selected));
+      row.tabIndex = selected ? 0 : -1;
     });
   }
 

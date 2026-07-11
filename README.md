@@ -94,7 +94,7 @@ Launch the bundled synthetic demo dataset:
 
 Open the printed URL in your browser. Stop the server with `Ctrl+C` in the terminal. Pass `--buttons` when you want the browser header to show `Stop app` and `Open monitor` buttons.
 
-Demo launches label the header as `Lucidum Demo Motor Dataset · motor_premiums.parquet · ...` before the size, row count, and column count.
+Demo launches label the header as `Lucidum Demo Dataset · motor_premiums.parquet · ...` before the size, row count, and column count.
 
 The sidebar footer shows the installed Lucidum package version as `lucidum v<version>` when expanded and `v<version>` when collapsed. Both labels are populated from the running app's schema metadata.
 
@@ -178,7 +178,7 @@ On startup, when saved favourites exist and no `--line-bar-favourite` or `line_b
 .venv/bin/lucidum --demo --no-features
 .venv/bin/lucidum --demo --tools line-bar
 .venv/bin/lucidum --demo --buttons
-.venv/bin/lucidum --demo --title-prefix "Lucidum Demo Motor Dataset"
+.venv/bin/lucidum --demo --title-prefix "Lucidum Demo Dataset"
 .venv/bin/lucidum path/to/my_data.parquet --title-prefix "Motor pricing data"
 .venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm,gbm
 .venv/bin/lucidum path/to/my_data.parquet --tools all
@@ -188,7 +188,7 @@ On startup, when saved favourites exist and no `--line-bar-favourite` or `line_b
 - `--host 0.0.0.0` binds to all network interfaces for LAN testing. Keep token protection enabled unless another access layer is in place.
 - `--no-token` disables URL/API token protection for local-only use.
 - `--buttons` shows the `Stop app` and `Open monitor` buttons in the browser header. Without it, those header buttons are hidden; stop terminal launches with `Ctrl+C`, and open the monitor directly at `/monitor?token=...` when needed.
-- `--title-prefix` shows custom text before the file or folder name in the browser header. `--demo` defaults this to `Lucidum Demo Motor Dataset`; pass an empty value to suppress it.
+- `--title-prefix` shows custom text before the file or folder name in the browser header. `--demo` defaults this to `Lucidum Demo Dataset`; pass an empty value to suppress it.
 - `--x`, `--actual`, `--expected`, `--expected2`, and `--denominator` set initial Line/Bar selections.
 - `--line-bar-favourite` opens a saved Favourite by name or id. URL query parameter `line_bar_favourite` provides the same startup selection and overrides the default supplied by Python or the CLI. If no startup favourite is supplied, the first saved favourite opens automatically when favourites exist.
 - `--line-bar-favourites` points Lucidum at the JSON file used to store saved Favourites. It is a server-side file path, not a URL query parameter.

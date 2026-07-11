@@ -1047,6 +1047,16 @@
         white-space: nowrap;
       }
 
+      .app-control-input {
+        border-radius: var(--app-control-button-radius);
+        box-sizing: border-box;
+        font-size: var(--app-control-button-font-size);
+        height: var(--app-control-button-height);
+        line-height: 1.2;
+        min-height: var(--app-control-button-height);
+        padding-block: 2px;
+      }
+
       .model-busy-button {
         align-items: center;
         display: inline-flex;

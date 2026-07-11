@@ -56,6 +56,7 @@
 
       main:has(> #visualArea.profile-mode) {
         background: var(--panel);
+        padding: 0;
       }
 
       .visual-area.profile-mode .workspace {
@@ -65,18 +66,13 @@
       .profile-wrap {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 0;
         height: 100%;
         min-height: 0;
         overflow: hidden;
       }
 
       .profile-toolbar {
-        align-items: center;
-        display: flex;
-        flex: 0 0 auto;
-        gap: 8px;
-        min-height: 28px;
         min-width: 0;
       }
 
@@ -104,8 +100,8 @@
       .profile-content {
         display: grid;
         flex: 1 1 auto;
-        grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
-        gap: 10px;
+        grid-template-columns: minmax(320px, var(--profile-summary-pane-width, 3fr)) 12px minmax(260px, 1fr);
+        gap: 0;
         min-height: 0;
         min-width: 0;
         overflow: hidden;
@@ -135,8 +131,7 @@
       }
 
       .profile-column-search {
-        height: 26px;
-        font-size: 11px;
+        width: 100%;
       }
 
       .profile-summary-mode {
@@ -153,13 +148,8 @@
         color: var(--text);
         cursor: pointer;
         display: inline-flex;
-        font-size: 11px;
         justify-content: center;
-        line-height: 1.2;
-        min-height: 24px;
-        padding: 2px 7px;
         position: relative;
-        white-space: nowrap;
       }
 
       .profile-summary-mode-option.active {
@@ -190,8 +180,28 @@
         display: flex;
         flex-direction: column;
         gap: 9px;
-        border-left: 1px solid var(--line);
-        padding-left: 10px;
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 8px;
+      }
+
+      .profile-pane-resizer {
+        cursor: col-resize;
+        min-height: 0;
+        width: 12px;
+        z-index: 4;
+      }
+
+      .profile-pane-resizer::before {
+        background: var(--line);
+        border-radius: 0;
+        bottom: 0;
+        top: 0;
+        width: 1px;
+      }
+
+      body.profile-pane-resizing {
+        cursor: col-resize;
       }
 
       .profile-table-scroll {
@@ -201,28 +211,54 @@
       }
 
       .profile-table {
-        width: 100%;
-        border-collapse: collapse;
+        border-collapse: separate;
         border-spacing: 0;
         font-size: 12px;
         line-height: 1.1;
         font-variant-numeric: tabular-nums;
+        min-width: 760px;
+        table-layout: fixed;
+        width: 100%;
+      }
+
+      .profile-table thead tr,
+      .profile-table tbody tr {
+        height: 22px;
       }
 
       .profile-table th,
       .profile-table td {
         border-bottom: 1px solid var(--line);
-        padding: 2px 6px;
         height: 22px;
+        padding: 2px 6px;
         text-align: left;
         vertical-align: middle;
         white-space: nowrap;
       }
 
+      .profile-table th:nth-child(1),
+      .profile-table td:nth-child(1) {
+        width: 30%;
+      }
+
+      .profile-table th:nth-child(2),
+      .profile-table td:nth-child(2),
+      .profile-table th:nth-child(3),
+      .profile-table td:nth-child(3) {
+        width: 13%;
+      }
+
+      .profile-table th:nth-child(4),
+      .profile-table td:nth-child(4) {
+        width: 15%;
+      }
+
+      .profile-table th:nth-child(5),
+      .profile-table td:nth-child(5) {
+        width: 29%;
+      }
+
       .profile-table th {
-        position: sticky;
-        top: 0;
-        z-index: 2;
         background: var(--panel);
         color: var(--muted);
         font-size: 11px;
@@ -256,21 +292,6 @@
         line-height: 1;
       }
 
-      .profile-table th:first-child,
-      .profile-table td:first-child {
-        position: sticky;
-        left: 0;
-        background: var(--panel);
-      }
-
-      .profile-table th:first-child {
-        z-index: 3;
-      }
-
-      .profile-table td:first-child {
-        z-index: 1;
-      }
-
       .profile-summary-row {
         cursor: pointer;
         user-select: none;
@@ -281,20 +302,19 @@
         background: color-mix(in srgb, var(--accent) 7%, var(--panel));
       }
 
+      .profile-table tbody.list-keyboard-navigation .profile-summary-row:hover:not(.selected) td {
+        background: var(--panel);
+      }
+
       .profile-summary-row.selected td {
         background: color-mix(in srgb, var(--accent) 13%, var(--panel));
       }
 
-      .profile-summary-row:focus-visible td {
-        outline: 2px solid var(--accent);
-        outline-offset: -2px;
+      .profile-summary-row:focus {
+        outline: none;
       }
 
       .profile-column-name {
-        min-width: 180px;
-        max-width: 320px;
-        overflow: hidden;
-        text-overflow: ellipsis;
         font-weight: 650;
       }
 
@@ -681,10 +701,27 @@
       }
 
       @media (max-width: 640px) {
+        .profile-toolbar {
+          flex-wrap: wrap;
+        }
+
+        .profile-column-search-row {
+          flex: 1 1 180px;
+        }
+
+        .profile-meta {
+          flex-basis: 100%;
+          max-width: 100%;
+        }
+
         .profile-content {
           grid-template-columns: minmax(0, 1fr);
           grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
           gap: 8px;
+        }
+
+        .profile-pane-resizer {
+          display: none;
         }
 
         .profile-detail-pane {
@@ -694,6 +731,7 @@
           grid-row: 1;
           padding-bottom: 8px;
           padding-left: 0;
+          padding-right: 0;
         }
 
         .profile-summary-pane {

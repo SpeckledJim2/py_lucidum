@@ -40,7 +40,7 @@ DEFAULT_SPEC_CANDIDATES = {
     "features": ("feature_spec.csv", "specs/feature_spec.csv"),
 }
 
-DEMO_TITLE_PREFIX = "Lucidum Demo Motor Dataset"
+DEMO_TITLE_PREFIX = "Lucidum Demo Dataset"
 
 
 class LucidumServer(uvicorn.Server):

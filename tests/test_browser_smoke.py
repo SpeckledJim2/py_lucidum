@@ -654,9 +654,17 @@ class BrowserSmokeTests(unittest.TestCase):
                                       const content = document.querySelector("#profileWrap .profile-content").getBoundingClientRect();
                                       const summary = document.querySelector("#profileWrap .profile-summary-pane").getBoundingClientRect();
                                       const detail = document.querySelector("#profileDetailPane").getBoundingClientRect();
+                                      const toolbar = document.querySelector("#profileWrap .profile-toolbar");
+                                      const resizer = document.querySelector("#profilePaneResizer");
+                                      const tableScroll = document.querySelector(".profile-table-scroll");
+                                      const table = document.querySelector(".profile-table");
                                       const contentStyle = getComputedStyle(document.querySelector("#profileWrap .profile-content"));
                                       const detailStyle = getComputedStyle(document.querySelector("#profileDetailPane"));
                                       return {
+                                        controlHeights: [
+                                          ...document.querySelectorAll(".profile-summary-mode-option"),
+                                          document.querySelector("#profileColumnSearch"),
+                                        ].map((control) => control.getBoundingClientRect().height),
                                         detailBottomBorder: detailStyle.borderBottomWidth,
                                         detailHeightRatio: detail.height / content.height,
                                         detailLeftBorder: detailStyle.borderLeftWidth,
@@ -665,9 +673,17 @@ class BrowserSmokeTests(unittest.TestCase):
                                         gridColumns: contentStyle.gridTemplateColumns,
                                         gridRows: contentStyle.gridTemplateRows,
                                         mobile: window.matchMedia("(max-width: 640px)").matches,
+                                        resizerDisplay: getComputedStyle(resizer).display,
                                         summaryBottomAligned: Math.abs(summary.bottom - content.bottom) <= 2,
                                         summaryHeightRatio: summary.height / content.height,
                                         summaryTop: summary.top,
+                                        tableIsScrollable: tableScroll.scrollWidth > tableScroll.clientWidth + 1,
+                                        tableRowHeights: [
+                                          table.querySelector("thead tr"),
+                                          table.querySelector("tbody tr"),
+                                        ].map((row) => row.getBoundingClientRect().height),
+                                        toolbarHasNoOverflow: toolbar.scrollWidth <= toolbar.clientWidth + 1,
+                                        toolbarHeight: toolbar.getBoundingClientRect().height,
                                       };
                                     }
                                     """
@@ -680,6 +696,12 @@ class BrowserSmokeTests(unittest.TestCase):
                                 self.assertGreaterEqual(profile_mobile_layout["summaryHeightRatio"], 0.38)
                                 self.assertEqual(profile_mobile_layout["detailLeftBorder"], "0px")
                                 self.assertEqual(profile_mobile_layout["detailBottomBorder"], "1px")
+                                self.assertEqual(profile_mobile_layout["resizerDisplay"], "none")
+                                self.assertEqual(profile_mobile_layout["controlHeights"], [28, 28, 28])
+                                self.assertTrue(profile_mobile_layout["tableIsScrollable"])
+                                self.assertEqual(profile_mobile_layout["tableRowHeights"], [22, 22])
+                                self.assertTrue(profile_mobile_layout["toolbarHasNoOverflow"])
+                                self.assertGreaterEqual(profile_mobile_layout["toolbarHeight"], 50)
                             if tool_button == "#ukMapTool":
                                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                                 page.wait_for_function(
@@ -975,25 +997,44 @@ class BrowserSmokeTests(unittest.TestCase):
     def test_column_profile_preserves_table_scroll_on_filter_change(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "many_profile_columns.csv"
-            columns = ["vehicle_age", "price", "value"] + [f"feature_{index:03d}" for index in range(1, 91)]
+            columns = ["vehicle_age", "price", "value", "QUOTE_DATE", "MAKE"] + [f"feature_{index:03d}" for index in range(1, 91)]
             rows = [",".join(columns)]
             for row_index in range(1, 10):
-                values = [str(row_index), str(100 + row_index), str(10 + row_index)]
+                values = [
+                    str(row_index),
+                    str(100 + row_index),
+                    str(10 + row_index),
+                    f"2017-01-{row_index:02d}",
+                    "FORD" if row_index % 2 else "BMW",
+                ]
                 values.extend(str((row_index * column_index) % 101) for column_index in range(1, 91))
                 rows.append(",".join(values))
             data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
-            base_url, server, thread = self.start_app(data_path, tools=["column_profile"])
+            base_url, server, thread = self.start_app(data_path, tools=["column_profile", "line_bar"])
             try:
                 assert sync_playwright is not None
                 with sync_playwright() as playwright:
                     browser = playwright.chromium.launch()
                     page = browser.new_page(viewport={"width": 1280, "height": 800})
                     page_errors: list[str] = []
+                    profile_summary_requests = 0
+                    profile_detail_requests = 0
+
+                    def count_profile_summary_request(request: object) -> None:
+                        nonlocal profile_summary_requests, profile_detail_requests
+                        if request.url.endswith("/api/column-profile/summary"):
+                            profile_summary_requests += 1
+                        elif request.url.endswith("/api/column-profile/detail"):
+                            profile_detail_requests += 1
+
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", count_profile_summary_request)
                     try:
-                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.goto(f"{base_url}?tool=column_profile", wait_until="domcontentloaded")
                         page.locator("#datasetMeta").get_by_text("many_profile_columns.csv").wait_for(timeout=10_000)
                         page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                        page.locator("#profileDetailTitle").wait_for(timeout=10_000)
+                        page.locator(".profile-stats-table, .profile-count-table").wait_for(timeout=10_000)
                         profile_surface = page.evaluate(
                             """
                             () => {
@@ -1020,6 +1061,510 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertTrue(profile_surface["profileMode"])
                         self.assertEqual(profile_surface["mainBackground"], profile_surface["panelBackground"])
                         self.assertEqual(profile_surface["workspaceBackground"], profile_surface["panelBackground"])
+                        profile_geometry = page.evaluate(
+                            """
+                            () => {
+                              const toolbar = document.querySelector(".profile-toolbar");
+                              const content = document.querySelector(".profile-content");
+                              const summary = document.querySelector(".profile-summary-pane");
+                              const detail = document.querySelector("#profileDetailPane");
+                              const resizer = document.querySelector("#profilePaneResizer");
+                              const sidebarResizer = document.querySelector("#sidebarResizer");
+                              const main = document.querySelector("main");
+                              const visual = document.querySelector("#visualArea");
+                              const workspace = document.querySelector(".workspace");
+                              const wrap = document.querySelector("#profileWrap");
+                              const tableScroll = document.querySelector(".profile-table-scroll");
+                              const table = document.querySelector(".profile-table");
+                              const headerRow = table.querySelector("thead tr");
+                              const bodyRow = table.querySelector("tbody tr");
+                              const firstCell = table.querySelector("tbody td");
+                              const firstHeader = table.querySelector("thead th");
+                              const detailTitle = document.querySelector("#profileDetailTitle");
+                              const detailTable = detail.querySelector(".profile-stats-table, .profile-count-table");
+                              const search = document.querySelector("#profileColumnSearch");
+                              const meta = document.querySelector("#profileMeta");
+                              const buttons = [...document.querySelectorAll(".profile-summary-mode-option")];
+                              const toolbarRect = toolbar.getBoundingClientRect();
+                              const contentRect = content.getBoundingClientRect();
+                              const summaryRect = summary.getBoundingClientRect();
+                              const detailRect = detail.getBoundingClientRect();
+                              const resizerRect = resizer.getBoundingClientRect();
+                              const sidebarResizerRect = sidebarResizer.getBoundingClientRect();
+                              const mainRect = main.getBoundingClientRect();
+                              const visualRect = visual.getBoundingClientRect();
+                              const workspaceRect = workspace.getBoundingClientRect();
+                              const wrapRect = wrap.getBoundingClientRect();
+                              const tableRect = table.getBoundingClientRect();
+                              const searchRect = search.getBoundingClientRect();
+                              const toolbarDivider = getComputedStyle(toolbar, "::after");
+                              const resizerRule = getComputedStyle(resizer, "::before");
+                              return {
+                                toolbarHeight: toolbarRect.height,
+                                toolbarPaddingTop: getComputedStyle(toolbar).paddingTop,
+                                toolbarPaddingRight: getComputedStyle(toolbar).paddingRight,
+                                toolbarDividerHeight: toolbarDivider.height,
+                                toolbarDividerColor: toolbarDivider.backgroundColor,
+                                toolbarLeftGap: toolbarRect.left - sidebarResizerRect.right,
+                                toolbarRightGap: window.innerWidth - toolbarRect.right,
+                                toolbarContentGap: contentRect.top - toolbarRect.bottom,
+                                contentBottomGap: content.parentElement.getBoundingClientRect().bottom - contentRect.bottom,
+                                mainPaddingLeft: getComputedStyle(main).paddingLeft,
+                                mainPaddingRight: getComputedStyle(main).paddingRight,
+                                visualLeftGap: visualRect.left - mainRect.left,
+                                visualRightGap: mainRect.right - visualRect.right,
+                                workspaceLeftGap: workspaceRect.left - mainRect.left,
+                                workspaceRightGap: mainRect.right - workspaceRect.right,
+                                wrapLeftGap: wrapRect.left - mainRect.left,
+                                wrapRightGap: mainRect.right - wrapRect.right,
+                                buttonsShared: buttons.every((button) => button.classList.contains("app-control-button")),
+                                buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+                                buttonCenterDeltas: buttons.map((button) => {
+                                  const rect = button.getBoundingClientRect();
+                                  return Math.abs((rect.top + rect.height / 2) - (toolbarRect.top + toolbarRect.height / 2));
+                                }),
+                                searchShared: search.classList.contains("app-control-input"),
+                                searchHeight: searchRect.height,
+                                searchCenterDelta: Math.abs((searchRect.top + searchRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)),
+                                metaInToolbar: toolbar.contains(meta),
+                                metaCenterDelta: Math.abs(
+                                  (meta.getBoundingClientRect().top + meta.getBoundingClientRect().height / 2)
+                                  - (toolbarRect.top + toolbarRect.height / 2)
+                                ),
+                                resizerWidth: resizerRect.width,
+                                resizerTopGap: resizerRect.top - contentRect.top,
+                                resizerBottomGap: contentRect.bottom - resizerRect.bottom,
+                                resizerRuleTop: resizerRule.top,
+                                resizerRuleBottom: resizerRule.bottom,
+                                resizerRuleWidth: resizerRule.width,
+                                resizerRuleColor: resizerRule.backgroundColor,
+                                summaryToResizerGap: resizerRect.left - summaryRect.right,
+                                resizerToDetailGap: detailRect.left - resizerRect.right,
+                                summaryWidth: summaryRect.width,
+                                detailWidth: detailRect.width,
+                                defaultDetailRatio: detailRect.width / (summaryRect.width + detailRect.width),
+                                detailPaddingLeft: getComputedStyle(detail).paddingLeft,
+                                detailPaddingRight: getComputedStyle(detail).paddingRight,
+                                detailPaddingTop: getComputedStyle(detail).paddingTop,
+                                detailTitleTopGap: detailTitle.getBoundingClientRect().top - detailRect.top,
+                                detailTableBorderTop: getComputedStyle(detailTable).borderTopWidth,
+                                detailTableBorderRight: getComputedStyle(detailTable).borderRightWidth,
+                                detailTableBorderBottom: getComputedStyle(detailTable).borderBottomWidth,
+                                detailTableBorderLeft: getComputedStyle(detailTable).borderLeftWidth,
+                                detailTableBorderColor: getComputedStyle(detailTable).borderTopColor,
+                                tableLeftGap: tableRect.left - summaryRect.left,
+                                tableRightGap: summaryRect.right - tableRect.right,
+                                tableOverflow: tableScroll.scrollWidth - tableScroll.clientWidth,
+                                tableLayout: getComputedStyle(table).tableLayout,
+                                tableBorderCollapse: getComputedStyle(table).borderCollapse,
+                                tableMinWidth: getComputedStyle(table).minWidth,
+                                tableWidth: tableRect.width,
+                                cellOverflow: getComputedStyle(firstCell).overflowX,
+                                cellTextOverflow: getComputedStyle(firstCell).textOverflow,
+                                cellPosition: getComputedStyle(firstCell).position,
+                                headerPosition: getComputedStyle(firstHeader).position,
+                                headerRowHeight: headerRow.getBoundingClientRect().height,
+                                bodyRowHeight: bodyRow.getBoundingClientRect().height,
+                                ariaOrientation: resizer.getAttribute("aria-orientation"),
+                                ariaValueMin: Number(resizer.getAttribute("aria-valuemin")),
+                                ariaValueMax: Number(resizer.getAttribute("aria-valuemax")),
+                                ariaValueNow: Number(resizer.getAttribute("aria-valuenow")),
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(profile_geometry["toolbarHeight"], 50)
+                        self.assertEqual(profile_geometry["toolbarPaddingTop"], "0px")
+                        self.assertEqual(profile_geometry["toolbarPaddingRight"], "8px")
+                        self.assertEqual(profile_geometry["toolbarDividerHeight"], "1px")
+                        self.assertAlmostEqual(profile_geometry["toolbarLeftGap"], 0, delta=0.5)
+                        self.assertAlmostEqual(profile_geometry["toolbarRightGap"], 0, delta=0.5)
+                        self.assertAlmostEqual(profile_geometry["toolbarContentGap"], 0, delta=0.5)
+                        self.assertAlmostEqual(profile_geometry["contentBottomGap"], 0, delta=0.5)
+                        self.assertEqual(profile_geometry["mainPaddingLeft"], "0px")
+                        self.assertEqual(profile_geometry["mainPaddingRight"], "0px")
+                        for edge_gap in (
+                            "visualLeftGap", "visualRightGap", "workspaceLeftGap", "workspaceRightGap",
+                            "wrapLeftGap", "wrapRightGap",
+                        ):
+                            self.assertAlmostEqual(profile_geometry[edge_gap], 0, delta=0.5)
+                        self.assertTrue(profile_geometry["buttonsShared"])
+                        self.assertEqual(profile_geometry["buttonHeights"], [28, 28])
+                        self.assertTrue(all(delta <= 0.1 for delta in profile_geometry["buttonCenterDeltas"]))
+                        self.assertTrue(profile_geometry["searchShared"])
+                        self.assertEqual(profile_geometry["searchHeight"], 28)
+                        self.assertLessEqual(profile_geometry["searchCenterDelta"], 0.1)
+                        self.assertTrue(profile_geometry["metaInToolbar"])
+                        self.assertLessEqual(profile_geometry["metaCenterDelta"], 0.5)
+                        self.assertEqual(profile_geometry["resizerWidth"], 12)
+                        self.assertAlmostEqual(profile_geometry["resizerTopGap"], 0, delta=0.5)
+                        self.assertAlmostEqual(profile_geometry["resizerBottomGap"], 0, delta=0.5)
+                        self.assertEqual(profile_geometry["resizerRuleTop"], "0px")
+                        self.assertEqual(profile_geometry["resizerRuleBottom"], "0px")
+                        self.assertEqual(profile_geometry["resizerRuleWidth"], "1px")
+                        self.assertEqual(profile_geometry["resizerRuleColor"], profile_geometry["toolbarDividerColor"])
+                        self.assertAlmostEqual(profile_geometry["summaryToResizerGap"], 0, delta=0.5)
+                        self.assertAlmostEqual(profile_geometry["resizerToDetailGap"], 0, delta=0.5)
+                        self.assertGreaterEqual(profile_geometry["summaryWidth"], 320)
+                        self.assertGreaterEqual(profile_geometry["detailWidth"], 260)
+                        self.assertLessEqual(profile_geometry["defaultDetailRatio"], 0.31)
+                        self.assertEqual(profile_geometry["detailPaddingLeft"], "8px")
+                        self.assertEqual(profile_geometry["detailPaddingRight"], "8px")
+                        self.assertEqual(profile_geometry["detailPaddingTop"], "8px")
+                        self.assertGreaterEqual(profile_geometry["detailTitleTopGap"], 8)
+                        for border_width in (
+                            "detailTableBorderTop", "detailTableBorderRight",
+                            "detailTableBorderBottom", "detailTableBorderLeft",
+                        ):
+                            self.assertEqual(profile_geometry[border_width], "0px")
+                        self.assertAlmostEqual(profile_geometry["tableLeftGap"], 0, delta=0.5)
+                        self.assertLessEqual(profile_geometry["tableRightGap"], 0)
+                        self.assertGreaterEqual(profile_geometry["tableWidth"], profile_geometry["summaryWidth"])
+                        self.assertGreater(profile_geometry["tableOverflow"], 0)
+                        self.assertEqual(profile_geometry["tableLayout"], "fixed")
+                        self.assertEqual(profile_geometry["tableBorderCollapse"], "separate")
+                        self.assertEqual(profile_geometry["tableMinWidth"], "760px")
+                        self.assertEqual(profile_geometry["cellOverflow"], "visible")
+                        self.assertNotEqual(profile_geometry["cellTextOverflow"], "ellipsis")
+                        self.assertEqual(profile_geometry["cellPosition"], "static")
+                        self.assertEqual(profile_geometry["headerPosition"], "static")
+                        self.assertEqual(profile_geometry["headerRowHeight"], 22)
+                        self.assertEqual(profile_geometry["bodyRowHeight"], 22)
+                        horizontal_scroll = page.locator(".profile-table-scroll").evaluate(
+                            "node => { node.scrollLeft = 120; return node.scrollLeft; }"
+                        )
+                        self.assertGreater(horizontal_scroll, 0)
+                        page.locator(".profile-table-scroll").evaluate("node => { node.scrollLeft = 0; }")
+                        self.assertEqual(profile_geometry["ariaOrientation"], "vertical")
+                        self.assertEqual(profile_geometry["ariaValueMin"], 320)
+                        self.assertGreater(profile_geometry["ariaValueMax"], profile_geometry["ariaValueMin"])
+                        self.assertAlmostEqual(profile_geometry["ariaValueNow"], profile_geometry["summaryWidth"], delta=1)
+
+                        hovered_row_key = page.evaluate(
+                            """
+                            () => [...document.querySelectorAll(".profile-summary-row")]
+                              .filter((row) => row.offsetParent !== null)[2]?.dataset.profileColumn || ""
+                            """
+                        )
+                        self.assertTrue(hovered_row_key)
+                        hovered_row = page.locator(f'.profile-summary-row[data-profile-column="{hovered_row_key}"]')
+                        hovered_box = hovered_row.bounding_box()
+                        self.assertIsNotNone(hovered_box)
+                        assert hovered_box is not None
+                        hovered_x = hovered_box["x"] + min(18, hovered_box["width"] / 2)
+                        hovered_y = hovered_box["y"] + hovered_box["height"] / 2
+                        page.mouse.move(hovered_x, hovered_y)
+                        hover_background = hovered_row.locator("td").first.evaluate(
+                            "cell => getComputedStyle(cell).backgroundColor"
+                        )
+                        panel_background = page.locator(".profile-toolbar").evaluate(
+                            "node => getComputedStyle(node).backgroundColor"
+                        )
+                        self.assertNotEqual(hover_background, panel_background)
+
+                        initial_navigation = page.evaluate(
+                            """
+                            () => {
+                              const rows = [...document.querySelectorAll(".profile-summary-row")]
+                                .filter((row) => row.offsetParent !== null);
+                              const selected = rows.find((row) => row.getAttribute("aria-selected") === "true");
+                              const index = rows.indexOf(selected);
+                              selected.focus({ preventScroll: true });
+                              return {
+                                selected: selected.dataset.profileColumn,
+                                next: rows[index + 1]?.dataset.profileColumn || "",
+                              };
+                            }
+                            """
+                        )
+                        self.assertTrue(initial_navigation["next"])
+                        page.keyboard.press("ArrowDown")
+                        page.wait_for_function(
+                            """
+                            target => document.querySelector('.profile-summary-row[aria-selected="true"]')?.dataset.profileColumn === target
+                              && document.activeElement?.dataset?.profileColumn === target
+                              && document.querySelector("#profileDetailTitle")?.textContent.trim() === target
+                            """,
+                            arg=initial_navigation["next"],
+                            timeout=10_000,
+                        )
+                        keyboard_hover_state = page.evaluate(
+                            """
+                            hoveredKey => {
+                              const body = document.querySelector(".profile-table tbody");
+                              const hovered = document.querySelector(`.profile-summary-row[data-profile-column="${hoveredKey}"]`);
+                              return {
+                                keyboardMode: body.classList.contains("list-keyboard-navigation"),
+                                hoveredSelected: hovered.classList.contains("selected"),
+                                hoveredBackground: getComputedStyle(hovered.querySelector("td")).backgroundColor,
+                              };
+                            }
+                            """,
+                            arg=hovered_row_key,
+                        )
+                        self.assertTrue(keyboard_hover_state["keyboardMode"])
+                        self.assertFalse(keyboard_hover_state["hoveredSelected"])
+                        self.assertEqual(keyboard_hover_state["hoveredBackground"], panel_background)
+                        page.mouse.move(hovered_x + 1, hovered_y)
+                        pointer_hover_state = page.evaluate(
+                            """
+                            hoveredKey => {
+                              const body = document.querySelector(".profile-table tbody");
+                              const hovered = document.querySelector(`.profile-summary-row[data-profile-column="${hoveredKey}"]`);
+                              return {
+                                keyboardMode: body.classList.contains("list-keyboard-navigation"),
+                                hoveredBackground: getComputedStyle(hovered.querySelector("td")).backgroundColor,
+                              };
+                            }
+                            """,
+                            arg=hovered_row_key,
+                        )
+                        self.assertFalse(pointer_hover_state["keyboardMode"])
+                        self.assertEqual(pointer_hover_state["hoveredBackground"], hover_background)
+                        keyboard_row_state = page.evaluate(
+                            """
+                            () => {
+                              const rows = [...document.querySelectorAll(".profile-summary-row")];
+                              const focused = document.activeElement;
+                              const cells = [...focused.querySelectorAll("td")];
+                              return {
+                                selectedCount: rows.filter((row) => row.getAttribute("aria-selected") === "true").length,
+                                tabbableCount: rows.filter((row) => row.tabIndex === 0).length,
+                                focusedTabIndex: focused.tabIndex,
+                                focusedOutline: getComputedStyle(focused).outlineStyle,
+                                cellOutlines: cells.map((cell) => getComputedStyle(cell).outlineStyle),
+                                cellShadows: cells.map((cell) => getComputedStyle(cell).boxShadow),
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(keyboard_row_state["selectedCount"], 1)
+                        self.assertEqual(keyboard_row_state["tabbableCount"], 1)
+                        self.assertEqual(keyboard_row_state["focusedTabIndex"], 0)
+                        self.assertEqual(keyboard_row_state["focusedOutline"], "none")
+                        self.assertEqual(set(keyboard_row_state["cellOutlines"]), {"none"})
+                        self.assertEqual(set(keyboard_row_state["cellShadows"]), {"none"})
+                        page.keyboard.press("ArrowUp")
+                        page.wait_for_function(
+                            """
+                            target => document.querySelector('.profile-summary-row[aria-selected="true"]')?.dataset.profileColumn === target
+                              && document.activeElement?.dataset?.profileColumn === target
+                            """,
+                            arg=initial_navigation["selected"],
+                            timeout=10_000,
+                        )
+
+                        first_row = page.locator(".profile-summary-row").first
+                        first_row.click()
+                        first_column = first_row.get_attribute("data-profile-column") or ""
+                        page.locator(".profile-table-scroll").evaluate("node => { node.scrollTop = 0; }")
+                        second_row = page.locator(".profile-summary-row").nth(1)
+                        second_row.hover()
+                        second_hover_background = second_row.locator("td").first.evaluate(
+                            "cell => getComputedStyle(cell).backgroundColor"
+                        )
+                        first_row.focus()
+                        detail_requests_before_top_boundary = profile_detail_requests
+                        page.keyboard.press("ArrowUp")
+                        boundary_state = page.evaluate(
+                            """
+                            () => {
+                              const selected = document.querySelector('.profile-summary-row[aria-selected="true"]');
+                              const hovered = document.querySelectorAll(".profile-summary-row")[1];
+                              const cells = [...selected.querySelectorAll("td")];
+                              return {
+                                selected: selected?.dataset.profileColumn || "",
+                                focused: document.activeElement?.dataset?.profileColumn || "",
+                                scrollTop: document.querySelector(".profile-table-scroll").scrollTop,
+                                keyboardMode: document.querySelector(".profile-table tbody").classList.contains("list-keyboard-navigation"),
+                                focusedOutline: getComputedStyle(selected).outlineStyle,
+                                cellShadows: cells.map((cell) => getComputedStyle(cell).boxShadow),
+                                hoveredSelected: hovered.classList.contains("selected"),
+                                hoveredBackground: getComputedStyle(hovered.querySelector("td")).backgroundColor,
+                                panelBackground: getComputedStyle(document.querySelector(".profile-toolbar")).backgroundColor,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(boundary_state["selected"], first_column)
+                        self.assertEqual(boundary_state["focused"], first_column)
+                        self.assertEqual(boundary_state["scrollTop"], 0)
+                        self.assertTrue(boundary_state["keyboardMode"])
+                        self.assertEqual(boundary_state["focusedOutline"], "none")
+                        self.assertEqual(set(boundary_state["cellShadows"]), {"none"})
+                        self.assertFalse(boundary_state["hoveredSelected"])
+                        self.assertEqual(boundary_state["hoveredBackground"], boundary_state["panelBackground"])
+                        self.assertEqual(profile_detail_requests, detail_requests_before_top_boundary)
+                        second_row.hover(position={"x": 4, "y": 4})
+                        self.assertFalse(
+                            page.locator(".profile-table tbody").evaluate(
+                                'node => node.classList.contains("list-keyboard-navigation")'
+                            )
+                        )
+                        self.assertEqual(
+                            second_row.locator("td").first.evaluate("cell => getComputedStyle(cell).backgroundColor"),
+                            second_hover_background,
+                        )
+
+                        last_row = page.locator(".profile-summary-row").last
+                        last_row.click()
+                        last_column = last_row.get_attribute("data-profile-column") or ""
+                        penultimate_row = page.locator(".profile-summary-row").nth(-2)
+                        penultimate_row.hover()
+                        last_row.focus()
+                        bottom_scroll_before = page.locator(".profile-table-scroll").evaluate("node => node.scrollTop")
+                        detail_requests_before_bottom_boundary = profile_detail_requests
+                        page.keyboard.press("ArrowDown")
+                        bottom_boundary_state = page.evaluate(
+                            """
+                            () => {
+                              const selected = document.querySelector('.profile-summary-row[aria-selected="true"]');
+                              const rows = [...document.querySelectorAll(".profile-summary-row")];
+                              const hovered = rows.at(-2);
+                              return {
+                                selected: selected?.dataset.profileColumn || "",
+                                focused: document.activeElement?.dataset?.profileColumn || "",
+                                scrollTop: document.querySelector(".profile-table-scroll").scrollTop,
+                                keyboardMode: document.querySelector(".profile-table tbody").classList.contains("list-keyboard-navigation"),
+                                focusedOutline: getComputedStyle(selected).outlineStyle,
+                                cellShadows: [...selected.querySelectorAll("td")].map((cell) => getComputedStyle(cell).boxShadow),
+                                hoveredSelected: hovered.classList.contains("selected"),
+                                hoveredBackground: getComputedStyle(hovered.querySelector("td")).backgroundColor,
+                                panelBackground: getComputedStyle(document.querySelector(".profile-toolbar")).backgroundColor,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(bottom_boundary_state["selected"], last_column)
+                        self.assertEqual(bottom_boundary_state["focused"], last_column)
+                        self.assertEqual(bottom_boundary_state["scrollTop"], bottom_scroll_before)
+                        self.assertTrue(bottom_boundary_state["keyboardMode"])
+                        self.assertEqual(bottom_boundary_state["focusedOutline"], "none")
+                        self.assertEqual(set(bottom_boundary_state["cellShadows"]), {"none"})
+                        self.assertFalse(bottom_boundary_state["hoveredSelected"])
+                        self.assertEqual(
+                            bottom_boundary_state["hoveredBackground"], bottom_boundary_state["panelBackground"]
+                        )
+                        self.assertEqual(profile_detail_requests, detail_requests_before_bottom_boundary)
+
+                        page.locator("#profileColumnSearch").fill("v")
+                        filtered_navigation = page.evaluate(
+                            """
+                            () => {
+                              const rows = [...document.querySelectorAll(".profile-summary-row")]
+                                .filter((row) => row.offsetParent !== null);
+                              rows[0].click();
+                              return rows.map((row) => row.dataset.profileColumn);
+                            }
+                            """
+                        )
+                        self.assertEqual(filtered_navigation, ["vehicle_age", "value"])
+                        page.keyboard.press("ArrowDown")
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector('.profile-summary-row[aria-selected="true"]')?.dataset.profileColumn === "value"
+                              && document.activeElement?.dataset?.profileColumn === "value"
+                            """,
+                            timeout=10_000,
+                        )
+                        page.locator("#profileColumnSearch").fill("")
+
+                        page.locator('.profile-summary-row[data-profile-column="MAKE"]').click()
+                        page.locator("#profileDetailTitle").get_by_text("MAKE", exact=True).wait_for(timeout=10_000)
+                        page.locator(".profile-table-scroll").evaluate("node => { node.scrollLeft = 0; node.scrollTop = 0; }")
+                        standard_cell_state = page.evaluate(
+                            """
+                            () => {
+                              const scroll = document.querySelector(".profile-table-scroll");
+                              const header = document.querySelector(".profile-table thead").getBoundingClientRect();
+                              const cell = document.querySelector('.profile-summary-row[data-profile-column="QUOTE_DATE"] .profile-column-name');
+                              const rect = cell.getBoundingClientRect();
+                              const hit = document.elementFromPoint(rect.left + Math.min(12, rect.width / 2), rect.top + rect.height / 2);
+                              return {
+                                text: cell.textContent.trim(),
+                                visible: getComputedStyle(cell).visibility,
+                                opacity: getComputedStyle(cell).opacity,
+                                belowHeader: rect.top >= header.bottom - 0.5,
+                                hitCell: hit?.closest?.("td") === cell,
+                                leftGap: rect.left - scroll.getBoundingClientRect().left,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(standard_cell_state["text"], "QUOTE_DATE")
+                        self.assertEqual(standard_cell_state["visible"], "visible")
+                        self.assertEqual(standard_cell_state["opacity"], "1")
+                        self.assertTrue(standard_cell_state["belowHeader"])
+                        self.assertTrue(standard_cell_state["hitCell"])
+                        self.assertAlmostEqual(standard_cell_state["leftGap"], 0, delta=0.5)
+                        page.locator(".profile-table-scroll").evaluate("node => { node.scrollLeft = 0; }")
+
+                        page.locator('.profile-sort-button[data-profile-sort="name"]').click()
+                        sorted_navigation = page.evaluate(
+                            """
+                            () => {
+                              const rows = [...document.querySelectorAll(".profile-summary-row")]
+                                .filter((row) => row.offsetParent !== null);
+                              rows[0].click();
+                              return rows.slice(0, 2).map((row) => row.dataset.profileColumn);
+                            }
+                            """
+                        )
+                        page.keyboard.press("ArrowDown")
+                        page.wait_for_function(
+                            """
+                            target => document.querySelector('.profile-summary-row[aria-selected="true"]')?.dataset.profileColumn === target
+                              && document.activeElement?.dataset?.profileColumn === target
+                            """,
+                            arg=sorted_navigation[1],
+                            timeout=10_000,
+                        )
+
+                        resizer = page.locator("#profilePaneResizer")
+                        resizer.hover()
+                        self.assertEqual(resizer.evaluate('node => getComputedStyle(node, "::before").width'), "3px")
+                        self.assertEqual(
+                            resizer.evaluate('node => getComputedStyle(node, "::before").backgroundColor'),
+                            page.locator("#profileTool.active").evaluate("node => getComputedStyle(node).color"),
+                        )
+                        resizer_box = resizer.bounding_box()
+                        self.assertIsNotNone(resizer_box)
+                        assert resizer_box is not None
+                        requests_before_resize = profile_summary_requests
+                        drag_start_width = profile_geometry["summaryWidth"]
+                        page.mouse.move(resizer_box["x"] + resizer_box["width"] / 2, resizer_box["y"] + resizer_box["height"] / 2)
+                        page.mouse.down()
+                        page.mouse.move(resizer_box["x"] + resizer_box["width"] / 2 - 72, resizer_box["y"] + resizer_box["height"] / 2, steps=4)
+                        page.mouse.up()
+                        dragged_width = page.locator(".profile-summary-pane").evaluate("node => node.getBoundingClientRect().width")
+                        self.assertAlmostEqual(dragged_width, drag_start_width - 72, delta=2)
+                        resized_table_geometry = page.evaluate(
+                            """
+                            () => {
+                              const summary = document.querySelector(".profile-summary-pane").getBoundingClientRect();
+                              const scroll = document.querySelector(".profile-table-scroll");
+                              const table = document.querySelector(".profile-table").getBoundingClientRect();
+                              return {
+                                leftGap: table.left - summary.left,
+                                rightGap: summary.right - table.right,
+                                overflow: scroll.scrollWidth - scroll.clientWidth,
+                              };
+                            }
+                            """
+                        )
+                        self.assertAlmostEqual(resized_table_geometry["leftGap"], 0, delta=0.5)
+                        self.assertLess(resized_table_geometry["rightGap"], 0)
+                        self.assertGreater(resized_table_geometry["overflow"], 0)
+                        resizer.focus()
+                        page.keyboard.press("ArrowRight")
+                        keyboard_width = page.locator(".profile-summary-pane").evaluate("node => node.getBoundingClientRect().width")
+                        self.assertAlmostEqual(keyboard_width, dragged_width + 24, delta=1)
+                        self.assertAlmostEqual(
+                            float(resizer.get_attribute("aria-valuenow") or 0),
+                            keyboard_width,
+                            delta=1,
+                        )
+                        self.assertEqual(profile_summary_requests, requests_before_resize)
                         page.locator('#profileWrap [data-profile-sort="missing"]').click()
                         page.locator('#profileWrap th[aria-sort="ascending"] [data-profile-sort="missing"]').wait_for(timeout=10_000)
                         before_scroll = page.evaluate(
@@ -1032,6 +1577,9 @@ class BrowserSmokeTests(unittest.TestCase):
                             """
                         )
                         self.assertGreater(before_scroll, 0)
+                        split_width_before_filter = page.locator(".profile-summary-pane").evaluate(
+                            "node => node.getBoundingClientRect().width"
+                        )
                         with page.expect_response(lambda response: response.url.endswith("/api/column-profile/summary") and response.status == 200, timeout=10_000):
                             page.evaluate(
                                 """
@@ -1051,6 +1599,23 @@ class BrowserSmokeTests(unittest.TestCase):
                             """,
                             arg=before_scroll,
                             timeout=10_000,
+                        )
+                        self.assertAlmostEqual(
+                            page.locator(".profile-summary-pane").evaluate("node => node.getBoundingClientRect().width"),
+                            split_width_before_filter,
+                            delta=1,
+                        )
+                        requests_before_tool_switch = profile_summary_requests
+                        page.locator("#lineBarTool").click()
+                        page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                        page.locator("#profileTool").click()
+                        page.locator("#profileTool.active").wait_for(timeout=10_000)
+                        page.locator("#profileWrap:not(.hidden) .profile-table").wait_for(timeout=10_000)
+                        self.assertEqual(profile_summary_requests, requests_before_tool_switch)
+                        self.assertAlmostEqual(
+                            page.locator(".profile-summary-pane").evaluate("node => node.getBoundingClientRect().width"),
+                            split_width_before_filter,
+                            delta=1,
                         )
                         self.assertEqual(page_errors, [])
                     finally:
@@ -11481,7 +12046,7 @@ COPY (
                 )
                 self.assertIsNotNone(profile_meta_position)
                 self.assertAlmostEqual(profile_meta_position["top"], dataset_viewer_meta_position["top"], delta=1)
-                self.assertAlmostEqual(profile_meta_position["rightOffset"], dataset_viewer_meta_position["rightOffset"], delta=1)
+                self.assertAlmostEqual(profile_meta_position["rightOffset"], 8, delta=1)
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")

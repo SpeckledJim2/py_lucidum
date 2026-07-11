@@ -223,6 +223,9 @@ const topBoundary = keyEvent(list.rows[0], "ArrowUp");
 await listeners.get("keydown")(topBoundary);
 if (!topBoundary.defaultPrevented) throw new Error("top boundary should prevent scrolling");
 if (activations.length) throw new Error("top boundary should not activate an item");
+if (!list.classList.contains("list-keyboard-navigation")) throw new Error("top boundary should enable keyboard mode");
+listeners.get("pointermove")();
+if (list.classList.contains("list-keyboard-navigation")) throw new Error("pointer movement should restore hover mode after a boundary press");
 
 const down = keyEvent(list.rows[0], "ArrowDown");
 await listeners.get("keydown")(down);
@@ -233,6 +236,14 @@ if (list.rows[1].scrollCount !== 1) throw new Error("restored item was not revea
 if (!list.classList.contains("list-keyboard-navigation")) throw new Error("ArrowDown should enable keyboard mode");
 listeners.get("pointermove")();
 if (list.classList.contains("list-keyboard-navigation")) throw new Error("pointer movement should restore hover mode");
+
+const bottomBoundary = keyEvent(list.rows[2], "ArrowDown");
+await listeners.get("keydown")(bottomBoundary);
+if (!bottomBoundary.defaultPrevented) throw new Error("bottom boundary should prevent scrolling");
+if (activations.join(",") !== "b") throw new Error("bottom boundary should not activate an item");
+if (!list.classList.contains("list-keyboard-navigation")) throw new Error("bottom boundary should enable keyboard mode");
+listeners.get("pointermove")();
+if (list.classList.contains("list-keyboard-navigation")) throw new Error("pointer movement should restore hover mode after the bottom boundary");
 
 const pendingDown = listeners.get("keydown")(keyEvent(list.rows[1], "ArrowDown"));
 const outside = {{}};
@@ -891,6 +902,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
         controls = (static_root / "styles/controls.css").read_text(encoding="utf-8")
+        profile = (static_root / "app/column-profile-tool.js").read_text(encoding="utf-8")
         model_shell = (static_root / "styles/model-shell.css").read_text(encoding="utf-8")
         glm_css = (static_root / "styles/glm.css").read_text(encoding="utf-8")
         glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
@@ -905,6 +917,15 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".app-control-strip--titled {", controls)
         self.assertIn(".app-control-button,", controls)
         self.assertIn("height: var(--app-control-button-height);", controls)
+        self.assertIn(".app-control-input {", controls)
+        self.assertIn('class="profile-toolbar app-control-strip app-control-strip-row"', profile)
+        self.assertIn('class="search profile-column-search app-control-input"', profile)
+        self.assertIn('id="profilePaneResizer"', profile)
+        self.assertIn('role="separator"', profile)
+        self.assertIn('aria-orientation="vertical"', profile)
+        self.assertIn('import { bindVerticalListNavigation } from "./shared/list-navigation.js";', profile)
+        self.assertIn('itemSelector: "[data-profile-column]"', profile)
+        self.assertIn('row.tabIndex = selected ? 0 : -1;', profile)
         self.assertNotIn(".model-control-strip", model_shell)
         self.assertNotIn("glm-builder-control-strip", glm_css)
         self.assertNotIn("model-control-strip", glm + gbm)

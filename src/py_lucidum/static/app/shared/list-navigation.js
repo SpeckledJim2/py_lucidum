@@ -71,11 +71,11 @@ export function bindVerticalListNavigation({
     const direction = event.key === "ArrowDown" ? 1 : -1;
     const nextIndex = Math.min(Math.max(currentIndex + direction, 0), availableItems.length - 1);
     event.preventDefault();
+    list.classList.add("list-keyboard-navigation");
     if (nextIndex === currentIndex) return;
 
     const targetKey = getItemKey(availableItems[nextIndex]);
     if (!targetKey) return;
-    list.classList.add("list-keyboard-navigation");
     return activateItem(targetKey);
   }
 

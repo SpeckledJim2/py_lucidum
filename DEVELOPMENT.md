@@ -280,7 +280,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - CLI launches use token-protected URLs by default.
 - `--no-token` disables token checks for local-only use.
 - Main app header `Stop app` and `Open monitor` buttons are hidden by default. `--buttons`, `serve(..., buttons=True)`, or `create_app(..., header_buttons=True)` shows both controls.
-- `--title-prefix`, `serve(..., title_prefix=...)`, and `create_app(..., title_prefix=...)` populate `/api/schema.title_prefix` and render before the file or folder name in the main app header. `lucidum --demo` defaults this prefix to `Lucidum Demo Motor Dataset` unless an explicit value, including an empty value, is supplied.
+- `--title-prefix`, `serve(..., title_prefix=...)`, and `create_app(..., title_prefix=...)` populate `/api/schema.title_prefix` and render before the file or folder name in the main app header. `lucidum --demo` defaults this prefix to `Lucidum Demo Dataset` unless an explicit value, including an empty value, is supplied.
 - Header dataset metadata is inert except for GLM/GBM model-count links: postcode Area/Sector/Unit shortcuts and the Column Profile shortcut are intentionally not rendered in the header.
 - When the main header metadata overflows at high browser zoom or narrow viewport widths, the frontend hides the file name, size, rows, columns, and model-count links and keeps only the bold title prefix visible. Launches without `title_prefix` keep the normal metadata ellipsis behavior.
 - In notebook-style runtimes with an existing event loop, `serve()` and `run_app()` start the Uvicorn server in a background thread and return the URL.
