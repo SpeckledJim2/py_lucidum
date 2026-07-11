@@ -68,6 +68,11 @@
         padding: 0;
       }
 
+      #mapZoomIn,
+      #mapZoomOut {
+        font-weight: 600;
+      }
+
       .map-viewport-button:last-child {
         border-bottom: 0;
       }

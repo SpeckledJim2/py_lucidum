@@ -99,12 +99,6 @@
         return !document.body.classList.contains("sidebar-collapsed");
       }
 
-      function initialMobileLayoutActive() {
-        return window.innerWidth <= MOBILE_LAYOUT_MAX_WIDTH;
-      }
-
-      const startedInMobileLayout = initialMobileLayoutActive();
-
       const state = {
         schema: null,
         x: null,
@@ -201,9 +195,9 @@
         pendingMapZoom: null,
         mapControlPosition: null,
         mapControlMoved: false,
-        mapControlCollapsed: startedInMobileLayout,
+        mapControlCollapsed: true,
         mapControlCollapsedPosition: null,
-        mapLegendCollapsed: startedInMobileLayout,
+        mapLegendCollapsed: true,
         tablePage: 1,
         bandFeature: null,
         bandSuggestionPendingKey: null,

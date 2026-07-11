@@ -235,6 +235,144 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_overlays_start_collapsed_without_expanded_frame(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,vehicle_age,price,value\n"
+                "AB,AB10 1,1,100,10\n"
+                "AB,AB10 1,2,200,20\n"
+                "AL,AL1 1,3,300,30\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["uk_map"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.add_init_script(
+                        """
+                        window.__ukMapLegendVisibleExpanded = false;
+                        window.__ukMapControlVisibleExpanded = false;
+                        window.__ukMapLegendMonitorActive = true;
+                        const sampleUkMapLegend = () => {
+                          const legend = document.querySelector("#mapLegend");
+                          const body = document.querySelector("#mapLegendBody");
+                          const control = document.querySelector("#mapFloatingControl");
+                          if (legend && body) {
+                            const visible = !legend.classList.contains("hidden") && legend.offsetParent !== null;
+                            const expanded = !legend.classList.contains("collapsed")
+                              || getComputedStyle(body).display !== "none";
+                            if (visible && expanded) window.__ukMapLegendVisibleExpanded = true;
+                          }
+                          if (control) {
+                            const visible = !control.classList.contains("hidden") && control.offsetParent !== null;
+                            if (visible && !control.classList.contains("collapsed")) {
+                              window.__ukMapControlVisibleExpanded = true;
+                            }
+                          }
+                          if (window.__ukMapLegendMonitorActive) requestAnimationFrame(sampleUkMapLegend);
+                        };
+                        requestAnimationFrame(sampleUkMapLegend);
+                        """
+                    )
+                    try:
+                        page.goto(f"{base_url}/?tool=uk_map", wait_until="domcontentloaded")
+                        page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+                        page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                        page.locator("#mapZoomIn").wait_for(timeout=10_000)
+                        self.assertEqual(
+                            page.locator("#mapZoomIn").evaluate("node => getComputedStyle(node).fontWeight"),
+                            "600",
+                        )
+                        self.assertEqual(
+                            page.locator("#mapZoomOut").evaluate("node => getComputedStyle(node).fontWeight"),
+                            "600",
+                        )
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const legend = document.querySelector("#mapLegend");
+                              const body = document.querySelector("#mapLegendBody");
+                              const control = document.querySelector("#mapFloatingControl");
+                              return legend
+                                && body
+                                && control
+                                && !legend.classList.contains("hidden")
+                                && legend.classList.contains("collapsed")
+                                && getComputedStyle(body).display === "none"
+                                && !control.classList.contains("hidden")
+                                && control.classList.contains("collapsed");
+                            }
+                            """,
+                            timeout=20_000,
+                        )
+                        legend_toggle = page.locator("#mapLegendToggle")
+                        self.assertEqual(legend_toggle.get_attribute("title"), "Expand legend")
+                        self.assertEqual(legend_toggle.get_attribute("aria-label"), "Expand legend")
+                        self.assertEqual(legend_toggle.get_attribute("aria-expanded"), "false")
+                        self.assertFalse(page.evaluate("() => window.__ukMapLegendVisibleExpanded"))
+                        control_toggle = page.locator("#mapControlReset")
+                        self.assertEqual(control_toggle.get_attribute("title"), "Expand map controls")
+                        self.assertEqual(control_toggle.get_attribute("aria-label"), "Expand map controls")
+                        self.assertEqual(control_toggle.get_attribute("aria-expanded"), "false")
+                        self.assertFalse(page.evaluate("() => window.__ukMapControlVisibleExpanded"))
+                        page.evaluate("() => { window.__ukMapLegendMonitorActive = false; }")
+
+                        control_toggle.click()
+                        page.wait_for_function(
+                            '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")'
+                        )
+                        self.assertEqual(control_toggle.get_attribute("title"), "Collapse map controls")
+                        self.assertEqual(control_toggle.get_attribute("aria-label"), "Collapse map controls")
+                        self.assertEqual(control_toggle.get_attribute("aria-expanded"), "true")
+                        control_toggle.click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")'
+                        )
+                        self.assertEqual(control_toggle.get_attribute("aria-expanded"), "false")
+
+                        legend_toggle.click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const legend = document.querySelector("#mapLegend");
+                              const body = document.querySelector("#mapLegendBody");
+                              return legend
+                                && body
+                                && !legend.classList.contains("collapsed")
+                                && getComputedStyle(body).display !== "none";
+                            }
+                            """
+                        )
+                        self.assertEqual(legend_toggle.get_attribute("title"), "Collapse legend")
+                        self.assertEqual(legend_toggle.get_attribute("aria-label"), "Collapse legend")
+                        self.assertEqual(legend_toggle.get_attribute("aria-expanded"), "true")
+
+                        legend_toggle.click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#mapLegend")?.classList.contains("collapsed")
+                              && getComputedStyle(document.querySelector("#mapLegendBody")).display === "none"
+                            """
+                        )
+                        self.assertEqual(legend_toggle.get_attribute("aria-expanded"), "false")
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        page.close()
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_mobile_phone_viewport_keeps_default_tools_usable(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
@@ -4999,6 +5137,11 @@ COPY (
                         page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
                         page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                         page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
+                        page.locator("#mapControlReset").click()
+                        page.wait_for_function(
+                            '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")',
+                            timeout=10_000,
+                        )
 
                         with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
                             page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
@@ -8310,7 +8453,6 @@ COPY (
                           .map((node) => node.textContent.trim()).filter(Boolean),
                         borderWidth: getComputedStyle(document.querySelector(".glm-model-navigator")).borderTopWidth,
                         borderRadius: getComputedStyle(document.querySelector(".glm-model-navigator")).borderTopLeftRadius,
-                        gridBorderColor: getComputedStyle(grid).borderTopColor,
                         gridBorderLeftWidth: getComputedStyle(grid).borderLeftWidth,
                         gridBorderRadius: getComputedStyle(grid).borderTopLeftRadius,
                         gridBorderRightWidth: getComputedStyle(grid).borderRightWidth,
@@ -8321,12 +8463,16 @@ COPY (
                         gridLeftInset: gridRect.left - toolRect.left,
                         gridRightInset: toolRect.right - gridRect.right,
                         gridBottomInset: toolRect.bottom - gridRect.bottom,
+                        actionBorderColor: getComputedStyle(actions).borderBottomColor,
+                        actionBorderWidth: getComputedStyle(actions).borderBottomWidth,
                         mainLeft: main.getBoundingClientRect().left,
                         mountLeft: mount.getBoundingClientRect().left,
                         resizerRight: sidebarResizer.getBoundingClientRect().right,
                         toolLeft: toolRect.left,
                         workspaceLeft: workspace.getBoundingClientRect().left,
                         actionHeight: actionsRect.height,
+                        actionPaddingRight: getComputedStyle(actions).paddingRight,
+                        actionPaddingTop: getComputedStyle(actions).paddingTop,
                         actionTopGap: actionsRect.top - toolbarRect.bottom,
                         actionGridGap: gridRect.top - actionsRect.bottom,
                         buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
@@ -8334,7 +8480,7 @@ COPY (
                           const rect = button.getBoundingClientRect();
                           return Math.abs((rect.top + rect.height / 2) - (actionsRect.top + actionsRect.height / 2));
                         }),
-                        sharedButtonClasses: buttons.every((button) => button.classList.contains("model-navigator-action-button")),
+                        sharedButtonClasses: buttons.every((button) => button.classList.contains("model-control-button")),
                         fallbackDisplay: getComputedStyle(document.querySelector("#glmModelFallback")).display,
                         rows: document.querySelectorAll("#glmModelGrid .tabulator-row").length,
                         activeDots: document.querySelectorAll("#glmModelGrid .glm-model-active-dot").length,
@@ -8354,11 +8500,10 @@ COPY (
                 )
                 self.assertEqual(glm_navigator_state["borderWidth"], "0px")
                 self.assertEqual(glm_navigator_state["borderRadius"], "0px")
-                self.assertEqual(glm_navigator_state["gridBorderColor"], glm_navigator_state["toolbarBorderColor"])
                 self.assertEqual(glm_navigator_state["gridBorderLeftWidth"], "0px")
                 self.assertEqual(glm_navigator_state["gridBorderRadius"], "0px")
                 self.assertEqual(glm_navigator_state["gridBorderRightWidth"], "0px")
-                self.assertEqual(glm_navigator_state["gridBorderWidth"], "1px")
+                self.assertEqual(glm_navigator_state["gridBorderWidth"], "0px")
                 self.assertAlmostEqual(glm_navigator_state["navigatorLeftInset"], 0, delta=0.5)
                 self.assertAlmostEqual(glm_navigator_state["navigatorRightInset"], 0, delta=0.5)
                 self.assertAlmostEqual(glm_navigator_state["gridLeftInset"], 0, delta=0.5)
@@ -8368,7 +8513,11 @@ COPY (
                 self.assertAlmostEqual(glm_navigator_state["mountLeft"], glm_navigator_state["resizerRight"], delta=0.5)
                 self.assertAlmostEqual(glm_navigator_state["toolLeft"], glm_navigator_state["resizerRight"], delta=0.5)
                 self.assertAlmostEqual(glm_navigator_state["workspaceLeft"], glm_navigator_state["resizerRight"], delta=0.5)
+                self.assertEqual(glm_navigator_state["actionBorderColor"], glm_navigator_state["toolbarBorderColor"])
+                self.assertEqual(glm_navigator_state["actionBorderWidth"], "1px")
                 self.assertEqual(glm_navigator_state["actionHeight"], 36)
+                self.assertEqual(glm_navigator_state["actionPaddingRight"], "8px")
+                self.assertEqual(glm_navigator_state["actionPaddingTop"], "4px")
                 self.assertAlmostEqual(glm_navigator_state["actionTopGap"], 0, delta=0.5)
                 self.assertAlmostEqual(glm_navigator_state["actionGridGap"], 0, delta=0.5)
                 self.assertEqual(glm_navigator_state["buttonHeights"], [28, 28, 28])
@@ -8547,6 +8696,7 @@ COPY (
                     page.locator("#themeBtn").click()
                     page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
 
+                page.set_viewport_size({"width": 1800, "height": 900})
                 page.get_by_role("tab", name="Tabulations").click()
                 page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").click()
@@ -8566,6 +8716,279 @@ COPY (
                     timeout=10_000,
                 )
                 page.locator("#glmTabulationTable .glm-tabulation-colour-cell").first.wait_for(timeout=10_000)
+                tabulation_geometry = page.evaluate(
+                    """
+                    () => {
+                      const tool = document.querySelector(".glm-tool");
+                      const toolbar = document.querySelector(".glm-toolbar");
+                      const layout = document.querySelector(".glm-tabulation-layout");
+                      const sidebar = document.querySelector(".glm-tabulation-sidebar");
+                      const main = document.querySelector(".glm-tabulation-main");
+                      const leftControls = sidebar.querySelector(".model-control-strip");
+                      const rightControls = main.querySelector(".model-control-strip");
+                      const resizer = document.querySelector("#glmTabulationResizer");
+                      const modelGrid = document.querySelector("#glmTabulationModelGrid");
+                      const tableGrid = document.querySelector("#glmTabulationTableGrid");
+                      const resultGrid = document.querySelector("#glmTabulationTable");
+                      const tabulateButton = document.querySelector("#glmBuildTabulationsBtn");
+                      const rightButtons = [...rightControls.querySelectorAll("button")];
+                      const crosstab = document.querySelector("#glmTabulationCrosstab");
+                      const navigatorButton = document.querySelector("#glmRenameModelBtn");
+                      const toolRect = tool.getBoundingClientRect();
+                      const toolbarRect = toolbar.getBoundingClientRect();
+                      const layoutRect = layout.getBoundingClientRect();
+                      const sidebarRect = sidebar.getBoundingClientRect();
+                      const mainRect = main.getBoundingClientRect();
+                      const leftControlsRect = leftControls.getBoundingClientRect();
+                      const rightControlsRect = rightControls.getBoundingClientRect();
+                      const resizerRect = resizer.getBoundingClientRect();
+                      const modelGridRect = modelGrid.getBoundingClientRect();
+                      const tableGridRect = tableGrid.getBoundingClientRect();
+                      const resultGridRect = resultGrid.getBoundingClientRect();
+                      const sidebarStyle = getComputedStyle(sidebar);
+                      const mainStyle = getComputedStyle(main);
+                      const leftControlsStyle = getComputedStyle(leftControls);
+                      const rightControlsStyle = getComputedStyle(rightControls);
+                      const resizerRule = getComputedStyle(resizer, "::before");
+                      const modelGridStyle = getComputedStyle(modelGrid);
+                      const tableGridStyle = getComputedStyle(tableGrid);
+                      const resultGridStyle = getComputedStyle(resultGrid);
+                      const navigatorButtonStyle = getComputedStyle(navigatorButton);
+                      const tabulateButtonRect = tabulateButton.getBoundingClientRect();
+                      const crosstabRect = crosstab.getBoundingClientRect();
+                      return {
+                        layoutTopGap: layoutRect.top - toolbarRect.bottom,
+                        layoutBottomGap: toolRect.bottom - layoutRect.bottom,
+                        sidebarBorderWidth: sidebarStyle.borderTopWidth,
+                        sidebarBorderRadius: sidebarStyle.borderTopLeftRadius,
+                        mainBorderWidth: mainStyle.borderTopWidth,
+                        mainBorderRadius: mainStyle.borderTopLeftRadius,
+                        leftControlHeight: leftControlsRect.height,
+                        rightControlHeight: rightControlsRect.height,
+                        controlBottomDelta: Math.abs(leftControlsRect.bottom - rightControlsRect.bottom),
+                        leftControlBorderWidth: leftControlsStyle.borderBottomWidth,
+                        rightControlBorderWidth: rightControlsStyle.borderBottomWidth,
+                        leftControlBorderColor: leftControlsStyle.borderBottomColor,
+                        rightControlBorderColor: rightControlsStyle.borderBottomColor,
+                        toolbarBorderColor: getComputedStyle(toolbar).borderBottomColor,
+                        leftControlPaddingTop: leftControlsStyle.paddingTop,
+                        leftControlPaddingRight: leftControlsStyle.paddingRight,
+                        rightControlPaddingTop: rightControlsStyle.paddingTop,
+                        rightControlPaddingRight: rightControlsStyle.paddingRight,
+                        tabulateButtonHeight: tabulateButtonRect.height,
+                        tabulateButtonCenterDelta: Math.abs(
+                          (tabulateButtonRect.top + tabulateButtonRect.height / 2)
+                          - (leftControlsRect.top + leftControlsRect.height / 2)
+                        ),
+                        rightButtonHeights: rightButtons.map((button) => button.getBoundingClientRect().height),
+                        rightButtonCenterDeltas: rightButtons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs(
+                            (rect.top + rect.height / 2)
+                            - (rightControlsRect.top + rightControlsRect.height / 2)
+                          );
+                        }),
+                        allButtonsUseSharedClass: [tabulateButton, ...rightButtons]
+                          .every((button) => button.classList.contains("model-control-button")),
+                        allButtonFontSizes: [tabulateButton, ...rightButtons]
+                          .map((button) => getComputedStyle(button).fontSize),
+                        allButtonPaddingTop: [tabulateButton, ...rightButtons]
+                          .map((button) => getComputedStyle(button).paddingTop),
+                        allButtonPaddingRight: [tabulateButton, ...rightButtons]
+                          .map((button) => getComputedStyle(button).paddingRight),
+                        allButtonRadii: [tabulateButton, ...rightButtons]
+                          .map((button) => getComputedStyle(button).borderTopLeftRadius),
+                        allButtonBoxSizing: [tabulateButton, ...rightButtons]
+                          .map((button) => getComputedStyle(button).boxSizing),
+                        navigatorButtonMetrics: {
+                          fontSize: navigatorButtonStyle.fontSize,
+                          paddingTop: navigatorButtonStyle.paddingTop,
+                          paddingRight: navigatorButtonStyle.paddingRight,
+                          radius: navigatorButtonStyle.borderTopLeftRadius,
+                          boxSizing: navigatorButtonStyle.boxSizing,
+                        },
+                        crosstabHeight: crosstabRect.height,
+                        crosstabCenterDelta: Math.abs(
+                          (crosstabRect.top + crosstabRect.height / 2)
+                          - (rightControlsRect.top + rightControlsRect.height / 2)
+                        ),
+                        resizerTopGap: resizerRect.top - layoutRect.top,
+                        resizerBottomGap: layoutRect.bottom - resizerRect.bottom,
+                        resizerRuleTop: resizerRule.top,
+                        resizerRuleBottom: resizerRule.bottom,
+                        resizerRuleWidth: resizerRule.width,
+                        modelGridLeftGap: modelGridRect.left - sidebarRect.left,
+                        modelGridRightGap: sidebarRect.right - modelGridRect.right,
+                        tableGridLeftGap: tableGridRect.left - sidebarRect.left,
+                        tableGridRightGap: sidebarRect.right - tableGridRect.right,
+                        tableGridBottomGap: sidebarRect.bottom - tableGridRect.bottom,
+                        resultGridLeftGap: resultGridRect.left - mainRect.left,
+                        resultGridRightGap: mainRect.right - resultGridRect.right,
+                        resultGridBottomGap: mainRect.bottom - resultGridRect.bottom,
+                        modelGridBorderLeft: modelGridStyle.borderLeftWidth,
+                        modelGridBorderRight: modelGridStyle.borderRightWidth,
+                        modelGridBorderRadius: modelGridStyle.borderTopLeftRadius,
+                        tableGridBorderLeft: tableGridStyle.borderLeftWidth,
+                        tableGridBorderRight: tableGridStyle.borderRightWidth,
+                        tableGridBorderRadius: tableGridStyle.borderTopLeftRadius,
+                        resultGridBorderLeft: resultGridStyle.borderLeftWidth,
+                        resultGridBorderRight: resultGridStyle.borderRightWidth,
+                        resultGridBorderRadius: resultGridStyle.borderTopLeftRadius,
+                        modelFallbackDisplay: getComputedStyle(document.querySelector("#glmTabulationModelFallback")).display,
+                        tableFallbackDisplay: getComputedStyle(document.querySelector("#glmTabulationTableFallback")).display,
+                        resultFallbackDisplay: getComputedStyle(document.querySelector("#glmTabulationFallback")).display,
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(tabulation_geometry["layoutTopGap"], 0, delta=0.5)
+                self.assertAlmostEqual(tabulation_geometry["layoutBottomGap"], 0, delta=0.5)
+                self.assertEqual(tabulation_geometry["sidebarBorderWidth"], "0px")
+                self.assertEqual(tabulation_geometry["sidebarBorderRadius"], "0px")
+                self.assertEqual(tabulation_geometry["mainBorderWidth"], "0px")
+                self.assertEqual(tabulation_geometry["mainBorderRadius"], "0px")
+                self.assertEqual(tabulation_geometry["leftControlHeight"], 36)
+                self.assertEqual(tabulation_geometry["rightControlHeight"], 36)
+                self.assertAlmostEqual(tabulation_geometry["controlBottomDelta"], 0, delta=0.5)
+                self.assertEqual(tabulation_geometry["leftControlBorderWidth"], "1px")
+                self.assertEqual(tabulation_geometry["rightControlBorderWidth"], "1px")
+                self.assertEqual(tabulation_geometry["leftControlBorderColor"], tabulation_geometry["toolbarBorderColor"])
+                self.assertEqual(tabulation_geometry["rightControlBorderColor"], tabulation_geometry["toolbarBorderColor"])
+                self.assertEqual(tabulation_geometry["leftControlPaddingTop"], "4px")
+                self.assertEqual(tabulation_geometry["leftControlPaddingRight"], "8px")
+                self.assertEqual(tabulation_geometry["rightControlPaddingTop"], "4px")
+                self.assertEqual(tabulation_geometry["rightControlPaddingRight"], "8px")
+                self.assertEqual(tabulation_geometry["tabulateButtonHeight"], 28)
+                self.assertLessEqual(tabulation_geometry["tabulateButtonCenterDelta"], 0.5)
+                self.assertEqual(tabulation_geometry["rightButtonHeights"], [28, 28, 28, 28, 28])
+                self.assertTrue(all(delta <= 0.5 for delta in tabulation_geometry["rightButtonCenterDeltas"]))
+                self.assertTrue(tabulation_geometry["allButtonsUseSharedClass"])
+                self.assertEqual(set(tabulation_geometry["allButtonFontSizes"]), {"12px"})
+                self.assertEqual(set(tabulation_geometry["allButtonPaddingTop"]), {"2px"})
+                self.assertEqual(set(tabulation_geometry["allButtonPaddingRight"]), {"8px"})
+                self.assertEqual(set(tabulation_geometry["allButtonRadii"]), {"5px"})
+                self.assertEqual(set(tabulation_geometry["allButtonBoxSizing"]), {"border-box"})
+                self.assertEqual(
+                    tabulation_geometry["navigatorButtonMetrics"],
+                    {
+                        "fontSize": "12px",
+                        "paddingTop": "2px",
+                        "paddingRight": "8px",
+                        "radius": "5px",
+                        "boxSizing": "border-box",
+                    },
+                )
+                self.assertEqual(tabulation_geometry["crosstabHeight"], 28)
+                self.assertLessEqual(tabulation_geometry["crosstabCenterDelta"], 0.5)
+                self.assertAlmostEqual(tabulation_geometry["resizerTopGap"], 0, delta=0.5)
+                self.assertAlmostEqual(tabulation_geometry["resizerBottomGap"], 0, delta=0.5)
+                self.assertEqual(tabulation_geometry["resizerRuleTop"], "0px")
+                self.assertEqual(tabulation_geometry["resizerRuleBottom"], "0px")
+                self.assertEqual(tabulation_geometry["resizerRuleWidth"], "1px")
+                for key in (
+                    "modelGridLeftGap", "modelGridRightGap", "tableGridLeftGap", "tableGridRightGap",
+                    "tableGridBottomGap", "resultGridLeftGap", "resultGridRightGap", "resultGridBottomGap",
+                ):
+                    self.assertAlmostEqual(tabulation_geometry[key], 0, delta=0.5)
+                for key in (
+                    "modelGridBorderLeft", "modelGridBorderRight", "tableGridBorderLeft", "tableGridBorderRight",
+                    "resultGridBorderLeft", "resultGridBorderRight",
+                ):
+                    self.assertEqual(tabulation_geometry[key], "0px")
+                self.assertEqual(tabulation_geometry["modelGridBorderRadius"], "0px")
+                self.assertEqual(tabulation_geometry["tableGridBorderRadius"], "0px")
+                self.assertEqual(tabulation_geometry["resultGridBorderRadius"], "0px")
+                self.assertEqual(tabulation_geometry["modelFallbackDisplay"], "none")
+                self.assertEqual(tabulation_geometry["tableFallbackDisplay"], "none")
+                self.assertEqual(tabulation_geometry["resultFallbackDisplay"], "none")
+                page.locator(".glm-tabulation-controls").evaluate(
+                    """
+                    controls => {
+                      controls.style.alignSelf = "flex-start";
+                      controls.style.flexBasis = "auto";
+                      controls.style.height = "auto";
+                      controls.style.width = "360px";
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector(".glm-tabulation-controls")?.getBoundingClientRect().height > 36
+                    """,
+                    timeout=10_000,
+                )
+                wrapped_tabulation_controls = page.evaluate(
+                    """
+                    () => {
+                      const controls = document.querySelector(".glm-tabulation-controls");
+                      const buttons = [
+                        document.querySelector("#glmBuildTabulationsBtn"),
+                        ...controls.querySelectorAll("button"),
+                      ];
+                      return {
+                        controlHeight: controls.getBoundingClientRect().height,
+                        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+                        sharedClasses: buttons.every((button) => button.classList.contains("model-control-button")),
+                      };
+                    }
+                    """
+                )
+                self.assertGreater(wrapped_tabulation_controls["controlHeight"], 36)
+                self.assertEqual(wrapped_tabulation_controls["buttonHeights"], [28, 28, 28, 28, 28, 28])
+                self.assertTrue(wrapped_tabulation_controls["sharedClasses"])
+                page.locator(".glm-tabulation-controls").evaluate(
+                    """
+                    controls => {
+                      controls.style.removeProperty("align-self");
+                      controls.style.removeProperty("flex-basis");
+                      controls.style.removeProperty("height");
+                      controls.style.removeProperty("width");
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector(".glm-tabulation-controls")?.getBoundingClientRect().height === 36
+                    """,
+                    timeout=10_000,
+                )
+                tabulation_sidebar_width_before = page.locator(".glm-tabulation-sidebar").evaluate(
+                    "sidebar => sidebar.getBoundingClientRect().width"
+                )
+                tabulation_resizer = page.locator("#glmTabulationResizer")
+                tabulation_resizer.hover()
+                self.assertEqual(
+                    tabulation_resizer.evaluate('resizer => getComputedStyle(resizer, "::before").width'),
+                    "3px",
+                )
+                tabulation_resizer_box = tabulation_resizer.bounding_box()
+                self.assertIsNotNone(tabulation_resizer_box)
+                assert tabulation_resizer_box is not None
+                tabulation_resizer_x = tabulation_resizer_box["x"] + tabulation_resizer_box["width"] / 2
+                tabulation_resizer_y = tabulation_resizer_box["y"] + tabulation_resizer_box["height"] / 2
+                page.mouse.move(tabulation_resizer_x, tabulation_resizer_y)
+                page.mouse.down()
+                page.mouse.move(tabulation_resizer_x + 30, tabulation_resizer_y, steps=4)
+                page.mouse.up()
+                page.wait_for_function(
+                    """
+                    (before) => document.querySelector(".glm-tabulation-sidebar")?.getBoundingClientRect().width > before + 20
+                    """,
+                    arg=tabulation_sidebar_width_before,
+                    timeout=10_000,
+                )
+                tabulation_sidebar_width_dragged = page.locator(".glm-tabulation-sidebar").evaluate(
+                    "sidebar => sidebar.getBoundingClientRect().width"
+                )
+                tabulation_resizer.focus()
+                page.keyboard.press("ArrowLeft")
+                page.wait_for_function(
+                    """
+                    (dragged) => document.querySelector(".glm-tabulation-sidebar")?.getBoundingClientRect().width < dragged - 20
+                    """,
+                    arg=tabulation_sidebar_width_dragged,
+                    timeout=10_000,
+                )
                 tabulation_single_state = page.evaluate(
                     """
                     () => {
@@ -9853,6 +10276,12 @@ COPY (
                     () => (document.querySelector("#mapGroupMeta")?.textContent || "").includes("matched")
                       || (document.querySelector("#mapGroupMeta")?.textContent || "").includes("plotted")
                     """,
+                    timeout=10_000,
+                )
+                self.assertEqual(page.locator("#mapControlReset").get_attribute("aria-expanded"), "false")
+                page.locator("#mapControlReset").click()
+                page.wait_for_function(
+                    '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")',
                     timeout=10_000,
                 )
                 assert_dataset_viewer_hidden()
@@ -13921,7 +14350,6 @@ COPY (
                         headers,
                         borderWidth: getComputedStyle(document.querySelector(".gbm-model-navigator")).borderTopWidth,
                         borderRadius: getComputedStyle(document.querySelector(".gbm-model-navigator")).borderTopLeftRadius,
-                        gridBorderColor: getComputedStyle(grid).borderTopColor,
                         gridBorderLeftWidth: getComputedStyle(grid).borderLeftWidth,
                         gridBorderRadius: getComputedStyle(grid).borderTopLeftRadius,
                         gridBorderRightWidth: getComputedStyle(grid).borderRightWidth,
@@ -13932,12 +14360,16 @@ COPY (
                         gridLeftInset: gridRect.left - toolRect.left,
                         gridRightInset: toolRect.right - gridRect.right,
                         gridBottomInset: toolRect.bottom - gridRect.bottom,
+                        actionBorderColor: getComputedStyle(actions).borderBottomColor,
+                        actionBorderWidth: getComputedStyle(actions).borderBottomWidth,
                         mainLeft: main.getBoundingClientRect().left,
                         mountLeft: mount.getBoundingClientRect().left,
                         resizerRight: sidebarResizer.getBoundingClientRect().right,
                         toolLeft: toolRect.left,
                         workspaceLeft: workspace.getBoundingClientRect().left,
                         actionHeight: actionsRect.height,
+                        actionPaddingRight: getComputedStyle(actions).paddingRight,
+                        actionPaddingTop: getComputedStyle(actions).paddingTop,
                         actionTopGap: actionsRect.top - toolbarRect.bottom,
                         actionGridGap: gridRect.top - actionsRect.bottom,
                         buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
@@ -13945,7 +14377,7 @@ COPY (
                           const rect = button.getBoundingClientRect();
                           return Math.abs((rect.top + rect.height / 2) - (actionsRect.top + actionsRect.height / 2));
                         }),
-                        sharedButtonClasses: buttons.every((button) => button.classList.contains("model-navigator-action-button")),
+                        sharedButtonClasses: buttons.every((button) => button.classList.contains("model-control-button")),
                         fallbackDisplay: getComputedStyle(document.querySelector("#gbmModelFallback")).display,
                         rowCount: rows.length,
                         activeDots: document.querySelectorAll("#gbmModelGrid .gbm-model-active-dot").length,
@@ -13970,11 +14402,10 @@ COPY (
                 )
                 self.assertEqual(navigator_state["borderWidth"], "0px")
                 self.assertEqual(navigator_state["borderRadius"], "0px")
-                self.assertEqual(navigator_state["gridBorderColor"], navigator_state["toolbarBorderColor"])
                 self.assertEqual(navigator_state["gridBorderLeftWidth"], "0px")
                 self.assertEqual(navigator_state["gridBorderRadius"], "0px")
                 self.assertEqual(navigator_state["gridBorderRightWidth"], "0px")
-                self.assertEqual(navigator_state["gridBorderWidth"], "1px")
+                self.assertEqual(navigator_state["gridBorderWidth"], "0px")
                 self.assertAlmostEqual(navigator_state["navigatorLeftInset"], 0, delta=0.5)
                 self.assertAlmostEqual(navigator_state["navigatorRightInset"], 0, delta=0.5)
                 self.assertAlmostEqual(navigator_state["gridLeftInset"], 0, delta=0.5)
@@ -13984,7 +14415,11 @@ COPY (
                 self.assertAlmostEqual(navigator_state["mountLeft"], navigator_state["resizerRight"], delta=0.5)
                 self.assertAlmostEqual(navigator_state["toolLeft"], navigator_state["resizerRight"], delta=0.5)
                 self.assertAlmostEqual(navigator_state["workspaceLeft"], navigator_state["resizerRight"], delta=0.5)
+                self.assertEqual(navigator_state["actionBorderColor"], navigator_state["toolbarBorderColor"])
+                self.assertEqual(navigator_state["actionBorderWidth"], "1px")
                 self.assertEqual(navigator_state["actionHeight"], 36)
+                self.assertEqual(navigator_state["actionPaddingRight"], "8px")
+                self.assertEqual(navigator_state["actionPaddingTop"], "4px")
                 self.assertAlmostEqual(navigator_state["actionTopGap"], 0, delta=0.5)
                 self.assertAlmostEqual(navigator_state["actionGridGap"], 0, delta=0.5)
                 self.assertEqual(navigator_state["buttonHeights"], [28, 28, 28])
@@ -15001,7 +15436,6 @@ COPY (
                       const previous = document.querySelector(`.saved-favourite-option[data-favourite-id="${previousId}"]`);
                       return {
                         keyboardNavigation: document.querySelector("#favouritesSelect")?.classList.contains("list-keyboard-navigation") || false,
-                        previousHovered: previous?.matches(":hover") || false,
                         previousBackground: previous ? getComputedStyle(previous).backgroundColor : "",
                       };
                     }
@@ -15009,7 +15443,6 @@ COPY (
                     arg=[first_favourite_id],
                 )
                 self.assertTrue(repeated_favourite_keyboard_state["keyboardNavigation"])
-                self.assertTrue(repeated_favourite_keyboard_state["previousHovered"])
                 self.assertEqual(repeated_favourite_keyboard_state["previousBackground"], "rgba(0, 0, 0, 0)")
                 page.keyboard.press("ArrowDown")
                 self.assertEqual(

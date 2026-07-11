@@ -887,6 +887,27 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('id="lineBarTabs" class="tabs workspace-tabs hidden"', index)
         self.assertNotIn('id="lineBarTabs" class="tool-screen-nav', index)
 
+    def test_uk_map_overlay_markup_starts_collapsed(self) -> None:
+        index = (
+            Path(__file__).resolve().parents[1] / "src/py_lucidum/static/index.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'id="mapFloatingControl" class="map-floating-control hidden collapsed"',
+            index,
+        )
+        self.assertIn(
+            'id="mapControlReset" class="map-control-reset" type="button" title="Expand map controls" '
+            'aria-label="Expand map controls" aria-controls="mapFloatingControl" aria-expanded="false"',
+            index,
+        )
+        self.assertIn('id="mapLegend" class="map-legend hidden collapsed"', index)
+        self.assertIn(
+            'id="mapLegendToggle" class="map-legend-toggle" type="button" title="Expand legend" '
+            'aria-label="Expand legend" aria-controls="mapLegendBody" aria-expanded="false"',
+            index,
+        )
+
     def test_monitor_entrypoints_disable_cache(self) -> None:
         _, body = self.assert_no_store("/monitor")
         html = body.decode("utf-8")

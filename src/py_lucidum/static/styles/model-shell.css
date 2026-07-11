@@ -26,19 +26,25 @@
         padding: 0;
       }
 
+      .model-control-strip {
+        box-sizing: border-box;
+        border-bottom: 1px solid var(--line);
+        flex: 0 0 auto;
+        min-height: 36px;
+        padding: 4px 8px;
+      }
+
       .model-navigator-actions {
         align-items: center;
-        box-sizing: border-box;
         display: flex;
         flex: 0 0 36px;
         gap: 8px;
         height: 36px;
         justify-content: flex-end;
-        min-height: 36px;
-        padding: 0 8px;
       }
 
-      .model-navigator-action-button {
+      .model-control-button,
+      .segmented button.model-control-button {
         box-sizing: border-box;
         border-radius: 5px;
         flex: 0 0 auto;
