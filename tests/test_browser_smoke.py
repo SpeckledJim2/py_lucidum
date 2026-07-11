@@ -7123,7 +7123,16 @@ COPY (
                       const builderPanel = document.querySelector("#glm-screen-panel-builder");
                       const formulaPanel = document.querySelector(".glm-formula-panel");
                       const coefficientPanel = document.querySelector(".glm-coefficient-panel");
+                      const formulaHeader = formulaPanel.querySelector(".glm-panel-header");
+                      const coefficientHeader = coefficientPanel.querySelector(".glm-panel-header");
                       const headerActions = document.querySelector(".glm-builder-actions");
+                      const coefficientActions = document.querySelector(".glm-coefficient-actions");
+                      const formulaTitle = formulaHeader.querySelector(".glm-panel-title");
+                      const coefficientTitle = coefficientHeader.querySelector(".glm-panel-title");
+                      const normalisationControls = document.querySelector(".glm-builder-control-row");
+                      const coefficientMeta = document.querySelector("#glmCoefficientMeta");
+                      const formulaButtons = [...headerActions.querySelectorAll("button")];
+                      const coefficientButtons = [...coefficientActions.querySelectorAll("button")];
                       const editorShell = document.querySelector(".glm-editor-shell");
                       const fontControls = document.querySelector(".glm-editor-font-controls");
                       const fontSmaller = document.querySelector("#glmFontSmallerBtn");
@@ -7135,6 +7144,13 @@ COPY (
                       const toolRect = tool.getBoundingClientRect();
                       const formulaPanelRect = formulaPanel.getBoundingClientRect();
                       const coefficientPanelRect = coefficientPanel.getBoundingClientRect();
+                      const toolbarRect = toolbar.getBoundingClientRect();
+                      const formulaHeaderRect = formulaHeader.getBoundingClientRect();
+                      const coefficientHeaderRect = coefficientHeader.getBoundingClientRect();
+                      const formulaTitleRect = formulaTitle.getBoundingClientRect();
+                      const coefficientTitleRect = coefficientTitle.getBoundingClientRect();
+                      const normalisationControlsRect = normalisationControls.getBoundingClientRect();
+                      const coefficientMetaRect = coefficientMeta.getBoundingClientRect();
                       const editorShellRect = editorShell.getBoundingClientRect();
                       const editorShellStyle = getComputedStyle(editorShell);
                       const fontControlsRect = fontControls.getBoundingClientRect();
@@ -7147,6 +7163,72 @@ COPY (
                         builderOverflow: getComputedStyle(builderPanel).overflow,
                         coefficientBorderWidth: getComputedStyle(coefficientPanel).borderTopWidth,
                         coefficientBorderRadius: getComputedStyle(coefficientPanel).borderTopLeftRadius,
+                        formulaHeaderHeight: formulaHeaderRect.height,
+                        coefficientHeaderHeight: coefficientHeaderRect.height,
+                        formulaHeaderTopGap: formulaHeaderRect.top - toolbarRect.bottom,
+                        coefficientHeaderTopGap: coefficientHeaderRect.top - toolbarRect.bottom,
+                        builderBottomGap: toolRect.bottom - builderPanel.getBoundingClientRect().bottom,
+                        controlStripTopDelta: Math.abs(formulaHeaderRect.top - coefficientHeaderRect.top),
+                        controlStripBottomDelta: Math.abs(formulaHeaderRect.bottom - coefficientHeaderRect.bottom),
+                        formulaHeaderBorderWidth: getComputedStyle(formulaHeader).borderBottomWidth,
+                        coefficientHeaderBorderWidth: getComputedStyle(coefficientHeader).borderBottomWidth,
+                        formulaHeaderDividerHeight: getComputedStyle(formulaHeader, "::after").height,
+                        coefficientHeaderDividerHeight: getComputedStyle(coefficientHeader, "::after").height,
+                        formulaHeaderDividerColor: getComputedStyle(formulaHeader, "::after").backgroundColor,
+                        coefficientHeaderDividerColor: getComputedStyle(coefficientHeader, "::after").backgroundColor,
+                        formulaHeaderPaddingTop: getComputedStyle(formulaHeader).paddingTop,
+                        formulaHeaderPaddingBottom: getComputedStyle(formulaHeader).paddingBottom,
+                        formulaHeaderPaddingRight: getComputedStyle(formulaHeader).paddingRight,
+                        coefficientHeaderPaddingTop: getComputedStyle(coefficientHeader).paddingTop,
+                        coefficientHeaderPaddingBottom: getComputedStyle(coefficientHeader).paddingBottom,
+                        coefficientHeaderPaddingRight: getComputedStyle(coefficientHeader).paddingRight,
+                        formulaTitleCenterDelta: Math.abs(
+                          (formulaTitleRect.top + formulaTitleRect.height / 2)
+                          - (formulaHeaderRect.top + formulaHeaderRect.height / 2)
+                        ),
+                        coefficientTitleCenterDelta: Math.abs(
+                          (coefficientTitleRect.top + coefficientTitleRect.height / 2)
+                          - (coefficientHeaderRect.top + coefficientHeaderRect.height / 2)
+                        ),
+                        formulaButtonHeights: formulaButtons.map((button) => button.getBoundingClientRect().height),
+                        coefficientButtonHeights: coefficientButtons.map((button) => button.getBoundingClientRect().height),
+                        formulaButtonCenterDeltas: formulaButtons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs(
+                            (rect.top + rect.height / 2)
+                            - (formulaHeaderRect.top + formulaHeaderRect.height / 2)
+                          );
+                        }),
+                        coefficientButtonCenterDeltas: coefficientButtons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs(
+                            (rect.top + rect.height / 2)
+                            - (coefficientHeaderRect.top + coefficientHeaderRect.height / 2)
+                          );
+                        }),
+                        formulaButtonEdgeDeltas: formulaButtons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs(
+                            (rect.top - formulaHeaderRect.top)
+                            - (formulaHeaderRect.bottom - rect.bottom)
+                          );
+                        }),
+                        coefficientButtonEdgeDeltas: coefficientButtons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs(
+                            (rect.top - coefficientHeaderRect.top)
+                            - (coefficientHeaderRect.bottom - rect.bottom)
+                          );
+                        }),
+                        allHeaderButtonsShared: [...formulaButtons, ...coefficientButtons]
+                          .every((button) => button.classList.contains("app-control-button")),
+                        formulaStripShared: formulaHeader.classList.contains("app-control-strip-row"),
+                        coefficientStripShared: coefficientHeader.classList.contains("app-control-strip-row"),
+                        coefficientActionsPosition: getComputedStyle(coefficientActions).position,
+                        normalisationInHeader: formulaHeader.contains(normalisationControls),
+                        normalisationTopGap: normalisationControlsRect.top - formulaHeaderRect.bottom,
+                        coefficientMetaInHeader: coefficientHeader.contains(coefficientMeta),
+                        coefficientMetaTopGap: coefficientMetaRect.top - coefficientHeaderRect.bottom,
                         dividerWidth: resizerRule.width,
                         dividerColor: resizerRule.backgroundColor,
                         toolbarLineColor: getComputedStyle(toolbar).borderBottomColor,
@@ -7193,6 +7275,41 @@ COPY (
                 self.assertEqual(glm_builder_geometry["builderOverflow"], "visible")
                 self.assertEqual(glm_builder_geometry["coefficientBorderWidth"], "0px")
                 self.assertEqual(glm_builder_geometry["coefficientBorderRadius"], "0px")
+                self.assertEqual(glm_builder_geometry["formulaHeaderHeight"], 50)
+                self.assertEqual(glm_builder_geometry["coefficientHeaderHeight"], 50)
+                self.assertAlmostEqual(glm_builder_geometry["formulaHeaderTopGap"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["coefficientHeaderTopGap"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["builderBottomGap"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["controlStripTopDelta"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["controlStripBottomDelta"], 0, delta=0.5)
+                self.assertEqual(glm_builder_geometry["formulaHeaderBorderWidth"], "0px")
+                self.assertEqual(glm_builder_geometry["coefficientHeaderBorderWidth"], "0px")
+                self.assertEqual(glm_builder_geometry["formulaHeaderDividerHeight"], "1px")
+                self.assertEqual(glm_builder_geometry["coefficientHeaderDividerHeight"], "1px")
+                self.assertEqual(glm_builder_geometry["formulaHeaderDividerColor"], glm_builder_geometry["toolbarLineColor"])
+                self.assertEqual(glm_builder_geometry["coefficientHeaderDividerColor"], glm_builder_geometry["toolbarLineColor"])
+                self.assertEqual(glm_builder_geometry["formulaHeaderPaddingTop"], "0px")
+                self.assertEqual(glm_builder_geometry["formulaHeaderPaddingBottom"], "0px")
+                self.assertEqual(glm_builder_geometry["formulaHeaderPaddingRight"], "8px")
+                self.assertEqual(glm_builder_geometry["coefficientHeaderPaddingTop"], "0px")
+                self.assertEqual(glm_builder_geometry["coefficientHeaderPaddingBottom"], "0px")
+                self.assertEqual(glm_builder_geometry["coefficientHeaderPaddingRight"], "8px")
+                self.assertLessEqual(glm_builder_geometry["formulaTitleCenterDelta"], 0.1)
+                self.assertLessEqual(glm_builder_geometry["coefficientTitleCenterDelta"], 0.1)
+                self.assertEqual(glm_builder_geometry["formulaButtonHeights"], [28, 28, 28, 28])
+                self.assertEqual(glm_builder_geometry["coefficientButtonHeights"], [28, 28])
+                self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["formulaButtonCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["coefficientButtonCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["formulaButtonEdgeDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["coefficientButtonEdgeDeltas"]))
+                self.assertTrue(glm_builder_geometry["allHeaderButtonsShared"])
+                self.assertTrue(glm_builder_geometry["formulaStripShared"])
+                self.assertTrue(glm_builder_geometry["coefficientStripShared"])
+                self.assertEqual(glm_builder_geometry["coefficientActionsPosition"], "static")
+                self.assertFalse(glm_builder_geometry["normalisationInHeader"])
+                self.assertGreaterEqual(glm_builder_geometry["normalisationTopGap"], 0)
+                self.assertFalse(glm_builder_geometry["coefficientMetaInHeader"])
+                self.assertGreaterEqual(glm_builder_geometry["coefficientMetaTopGap"], 0)
                 self.assertEqual(glm_builder_geometry["dividerWidth"], "1px")
                 self.assertEqual(glm_builder_geometry["dividerColor"], glm_builder_geometry["toolbarLineColor"])
                 self.assertAlmostEqual(
@@ -7230,6 +7347,81 @@ COPY (
                 self.assertEqual(glm_builder_geometry["fontButtonBackground"], "rgba(0, 0, 0, 0)")
                 self.assertEqual(glm_builder_geometry["fontButtonSize"], "14px")
                 self.assertEqual(glm_builder_geometry["fontButtonWeight"], "800")
+
+                page.evaluate(
+                    '() => document.documentElement.style.setProperty("--app-tool-row-height", "58px")'
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const formula = document.querySelector(".glm-formula-panel .app-control-strip");
+                      const coefficients = document.querySelector(".glm-coefficient-panel .app-control-strip");
+                      const buttons = [...document.querySelectorAll(
+                        ".glm-formula-panel .app-control-strip button, .glm-coefficient-panel .app-control-strip button"
+                      )];
+                      const tab = document.querySelector(".glm-tabs .tool-screen-nav-item");
+                      return tab?.getBoundingClientRect().height === 58
+                        && formula?.getBoundingClientRect().height === 58
+                        && coefficients?.getBoundingClientRect().height === 58
+                        && buttons.length === 6
+                        && buttons.every((button) => button.getBoundingClientRect().height === 28);
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                scaled_control_geometry = page.evaluate(
+                    """
+                    () => {
+                      const strips = [...document.querySelectorAll(
+                        ".glm-formula-panel .app-control-strip, .glm-coefficient-panel .app-control-strip"
+                      )];
+                      return strips.map((strip) => {
+                        const stripRect = strip.getBoundingClientRect();
+                        const titleRect = strip.querySelector(".glm-panel-title").getBoundingClientRect();
+                        const buttons = [...strip.querySelectorAll("button")];
+                        return {
+                          height: stripRect.height,
+                          titleCenterDelta: Math.abs(
+                            (titleRect.top + titleRect.height / 2)
+                            - (stripRect.top + stripRect.height / 2)
+                          ),
+                          buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+                          buttonCenterDeltas: buttons.map((button) => {
+                            const rect = button.getBoundingClientRect();
+                            return Math.abs(
+                              (rect.top + rect.height / 2)
+                              - (stripRect.top + stripRect.height / 2)
+                            );
+                          }),
+                        };
+                      });
+                    }
+                    """
+                )
+                self.assertEqual([strip["height"] for strip in scaled_control_geometry], [58, 58])
+                self.assertTrue(all(strip["titleCenterDelta"] <= 0.1 for strip in scaled_control_geometry))
+                self.assertEqual(
+                    [strip["buttonHeights"] for strip in scaled_control_geometry],
+                    [[28, 28, 28, 28], [28, 28]],
+                )
+                self.assertTrue(
+                    all(
+                        delta <= 0.1
+                        for strip in scaled_control_geometry
+                        for delta in strip["buttonCenterDeltas"]
+                    )
+                )
+                page.evaluate(
+                    '() => document.documentElement.style.removeProperty("--app-tool-row-height")'
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector(".glm-tabs .tool-screen-nav-item")?.getBoundingClientRect().height === 50
+                      && document.querySelector(".glm-formula-panel .app-control-strip")?.getBoundingClientRect().height === 50
+                      && document.querySelector("#glmBuildBtn")?.getBoundingClientRect().height === 28
+                    """,
+                    timeout=10_000,
+                )
 
                 siderail_accent_color = page.locator(".tool-option.active").first.evaluate(
                     "(button) => getComputedStyle(button).color"
@@ -7384,7 +7576,7 @@ COPY (
                         && Math.abs(fontControlsRect.top - editorRect.top - 6) <= 0.5
                         && style.borderLeftWidth === "0px"
                         && style.borderRightWidth === "0px"
-                        && style.borderTopWidth === "1px"
+                        && style.borderTopWidth === "0px"
                         && style.borderBottomWidth === "1px";
                     }
                     """,
@@ -8463,7 +8655,8 @@ COPY (
                         gridLeftInset: gridRect.left - toolRect.left,
                         gridRightInset: toolRect.right - gridRect.right,
                         gridBottomInset: toolRect.bottom - gridRect.bottom,
-                        actionBorderColor: getComputedStyle(actions).borderBottomColor,
+                        actionDividerColor: getComputedStyle(actions, "::after").backgroundColor,
+                        actionDividerHeight: getComputedStyle(actions, "::after").height,
                         actionBorderWidth: getComputedStyle(actions).borderBottomWidth,
                         mainLeft: main.getBoundingClientRect().left,
                         mountLeft: mount.getBoundingClientRect().left,
@@ -8480,7 +8673,11 @@ COPY (
                           const rect = button.getBoundingClientRect();
                           return Math.abs((rect.top + rect.height / 2) - (actionsRect.top + actionsRect.height / 2));
                         }),
-                        sharedButtonClasses: buttons.every((button) => button.classList.contains("model-control-button")),
+                        buttonEdgeDeltas: buttons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs((rect.top - actionsRect.top) - (actionsRect.bottom - rect.bottom));
+                        }),
+                        sharedButtonClasses: buttons.every((button) => button.classList.contains("app-control-button")),
                         fallbackDisplay: getComputedStyle(document.querySelector("#glmModelFallback")).display,
                         rows: document.querySelectorAll("#glmModelGrid .tabulator-row").length,
                         activeDots: document.querySelectorAll("#glmModelGrid .glm-model-active-dot").length,
@@ -8513,15 +8710,17 @@ COPY (
                 self.assertAlmostEqual(glm_navigator_state["mountLeft"], glm_navigator_state["resizerRight"], delta=0.5)
                 self.assertAlmostEqual(glm_navigator_state["toolLeft"], glm_navigator_state["resizerRight"], delta=0.5)
                 self.assertAlmostEqual(glm_navigator_state["workspaceLeft"], glm_navigator_state["resizerRight"], delta=0.5)
-                self.assertEqual(glm_navigator_state["actionBorderColor"], glm_navigator_state["toolbarBorderColor"])
-                self.assertEqual(glm_navigator_state["actionBorderWidth"], "1px")
-                self.assertEqual(glm_navigator_state["actionHeight"], 36)
+                self.assertEqual(glm_navigator_state["actionDividerColor"], glm_navigator_state["toolbarBorderColor"])
+                self.assertEqual(glm_navigator_state["actionDividerHeight"], "1px")
+                self.assertEqual(glm_navigator_state["actionBorderWidth"], "0px")
+                self.assertEqual(glm_navigator_state["actionHeight"], 50)
                 self.assertEqual(glm_navigator_state["actionPaddingRight"], "8px")
-                self.assertEqual(glm_navigator_state["actionPaddingTop"], "4px")
+                self.assertEqual(glm_navigator_state["actionPaddingTop"], "0px")
                 self.assertAlmostEqual(glm_navigator_state["actionTopGap"], 0, delta=0.5)
                 self.assertAlmostEqual(glm_navigator_state["actionGridGap"], 0, delta=0.5)
                 self.assertEqual(glm_navigator_state["buttonHeights"], [28, 28, 28])
-                self.assertTrue(all(delta <= 0.5 for delta in glm_navigator_state["buttonCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in glm_navigator_state["buttonCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in glm_navigator_state["buttonEdgeDeltas"]))
                 self.assertTrue(glm_navigator_state["sharedButtonClasses"])
                 self.assertEqual(glm_navigator_state["fallbackDisplay"], "none")
                 self.assertEqual(glm_navigator_state["rows"], 4)
@@ -8724,8 +8923,8 @@ COPY (
                       const layout = document.querySelector(".glm-tabulation-layout");
                       const sidebar = document.querySelector(".glm-tabulation-sidebar");
                       const main = document.querySelector(".glm-tabulation-main");
-                      const leftControls = sidebar.querySelector(".model-control-strip");
-                      const rightControls = main.querySelector(".model-control-strip");
+                      const leftControls = sidebar.querySelector(".app-control-strip");
+                      const rightControls = main.querySelector(".app-control-strip");
                       const resizer = document.querySelector("#glmTabulationResizer");
                       const modelGrid = document.querySelector("#glmTabulationModelGrid");
                       const tableGrid = document.querySelector("#glmTabulationTableGrid");
@@ -8768,8 +8967,10 @@ COPY (
                         controlBottomDelta: Math.abs(leftControlsRect.bottom - rightControlsRect.bottom),
                         leftControlBorderWidth: leftControlsStyle.borderBottomWidth,
                         rightControlBorderWidth: rightControlsStyle.borderBottomWidth,
-                        leftControlBorderColor: leftControlsStyle.borderBottomColor,
-                        rightControlBorderColor: rightControlsStyle.borderBottomColor,
+                        leftControlDividerHeight: getComputedStyle(leftControls, "::after").height,
+                        rightControlDividerHeight: getComputedStyle(rightControls, "::after").height,
+                        leftControlDividerColor: getComputedStyle(leftControls, "::after").backgroundColor,
+                        rightControlDividerColor: getComputedStyle(rightControls, "::after").backgroundColor,
                         toolbarBorderColor: getComputedStyle(toolbar).borderBottomColor,
                         leftControlPaddingTop: leftControlsStyle.paddingTop,
                         leftControlPaddingRight: leftControlsStyle.paddingRight,
@@ -8780,6 +8981,10 @@ COPY (
                           (tabulateButtonRect.top + tabulateButtonRect.height / 2)
                           - (leftControlsRect.top + leftControlsRect.height / 2)
                         ),
+                        tabulateButtonEdgeDelta: Math.abs(
+                          (tabulateButtonRect.top - leftControlsRect.top)
+                          - (leftControlsRect.bottom - tabulateButtonRect.bottom)
+                        ),
                         rightButtonHeights: rightButtons.map((button) => button.getBoundingClientRect().height),
                         rightButtonCenterDeltas: rightButtons.map((button) => {
                           const rect = button.getBoundingClientRect();
@@ -8788,8 +8993,15 @@ COPY (
                             - (rightControlsRect.top + rightControlsRect.height / 2)
                           );
                         }),
+                        rightButtonEdgeDeltas: rightButtons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs(
+                            (rect.top - rightControlsRect.top)
+                            - (rightControlsRect.bottom - rect.bottom)
+                          );
+                        }),
                         allButtonsUseSharedClass: [tabulateButton, ...rightButtons]
-                          .every((button) => button.classList.contains("model-control-button")),
+                          .every((button) => button.classList.contains("app-control-button")),
                         allButtonFontSizes: [tabulateButton, ...rightButtons]
                           .map((button) => getComputedStyle(button).fontSize),
                         allButtonPaddingTop: [tabulateButton, ...rightButtons]
@@ -8847,21 +9059,25 @@ COPY (
                 self.assertEqual(tabulation_geometry["sidebarBorderRadius"], "0px")
                 self.assertEqual(tabulation_geometry["mainBorderWidth"], "0px")
                 self.assertEqual(tabulation_geometry["mainBorderRadius"], "0px")
-                self.assertEqual(tabulation_geometry["leftControlHeight"], 36)
-                self.assertEqual(tabulation_geometry["rightControlHeight"], 36)
+                self.assertEqual(tabulation_geometry["leftControlHeight"], 50)
+                self.assertEqual(tabulation_geometry["rightControlHeight"], 50)
                 self.assertAlmostEqual(tabulation_geometry["controlBottomDelta"], 0, delta=0.5)
-                self.assertEqual(tabulation_geometry["leftControlBorderWidth"], "1px")
-                self.assertEqual(tabulation_geometry["rightControlBorderWidth"], "1px")
-                self.assertEqual(tabulation_geometry["leftControlBorderColor"], tabulation_geometry["toolbarBorderColor"])
-                self.assertEqual(tabulation_geometry["rightControlBorderColor"], tabulation_geometry["toolbarBorderColor"])
-                self.assertEqual(tabulation_geometry["leftControlPaddingTop"], "4px")
+                self.assertEqual(tabulation_geometry["leftControlBorderWidth"], "0px")
+                self.assertEqual(tabulation_geometry["rightControlBorderWidth"], "0px")
+                self.assertEqual(tabulation_geometry["leftControlDividerHeight"], "1px")
+                self.assertEqual(tabulation_geometry["rightControlDividerHeight"], "1px")
+                self.assertEqual(tabulation_geometry["leftControlDividerColor"], tabulation_geometry["toolbarBorderColor"])
+                self.assertEqual(tabulation_geometry["rightControlDividerColor"], tabulation_geometry["toolbarBorderColor"])
+                self.assertEqual(tabulation_geometry["leftControlPaddingTop"], "0px")
                 self.assertEqual(tabulation_geometry["leftControlPaddingRight"], "8px")
-                self.assertEqual(tabulation_geometry["rightControlPaddingTop"], "4px")
+                self.assertEqual(tabulation_geometry["rightControlPaddingTop"], "0px")
                 self.assertEqual(tabulation_geometry["rightControlPaddingRight"], "8px")
                 self.assertEqual(tabulation_geometry["tabulateButtonHeight"], 28)
-                self.assertLessEqual(tabulation_geometry["tabulateButtonCenterDelta"], 0.5)
+                self.assertLessEqual(tabulation_geometry["tabulateButtonCenterDelta"], 0.1)
+                self.assertLessEqual(tabulation_geometry["tabulateButtonEdgeDelta"], 0.1)
                 self.assertEqual(tabulation_geometry["rightButtonHeights"], [28, 28, 28, 28, 28])
-                self.assertTrue(all(delta <= 0.5 for delta in tabulation_geometry["rightButtonCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in tabulation_geometry["rightButtonCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in tabulation_geometry["rightButtonEdgeDeltas"]))
                 self.assertTrue(tabulation_geometry["allButtonsUseSharedClass"])
                 self.assertEqual(set(tabulation_geometry["allButtonFontSizes"]), {"12px"})
                 self.assertEqual(set(tabulation_geometry["allButtonPaddingTop"]), {"2px"})
@@ -8879,7 +9095,7 @@ COPY (
                     },
                 )
                 self.assertEqual(tabulation_geometry["crosstabHeight"], 28)
-                self.assertLessEqual(tabulation_geometry["crosstabCenterDelta"], 0.5)
+                self.assertLessEqual(tabulation_geometry["crosstabCenterDelta"], 0.1)
                 self.assertAlmostEqual(tabulation_geometry["resizerTopGap"], 0, delta=0.5)
                 self.assertAlmostEqual(tabulation_geometry["resizerBottomGap"], 0, delta=0.5)
                 self.assertEqual(tabulation_geometry["resizerRuleTop"], "0px")
@@ -8913,7 +9129,7 @@ COPY (
                 )
                 page.wait_for_function(
                     """
-                    () => document.querySelector(".glm-tabulation-controls")?.getBoundingClientRect().height > 36
+                    () => document.querySelector(".glm-tabulation-controls")?.getBoundingClientRect().height > 50
                     """,
                     timeout=10_000,
                 )
@@ -8928,12 +9144,12 @@ COPY (
                       return {
                         controlHeight: controls.getBoundingClientRect().height,
                         buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
-                        sharedClasses: buttons.every((button) => button.classList.contains("model-control-button")),
+                        sharedClasses: buttons.every((button) => button.classList.contains("app-control-button")),
                       };
                     }
                     """
                 )
-                self.assertGreater(wrapped_tabulation_controls["controlHeight"], 36)
+                self.assertGreater(wrapped_tabulation_controls["controlHeight"], 50)
                 self.assertEqual(wrapped_tabulation_controls["buttonHeights"], [28, 28, 28, 28, 28, 28])
                 self.assertTrue(wrapped_tabulation_controls["sharedClasses"])
                 page.locator(".glm-tabulation-controls").evaluate(
@@ -8948,7 +9164,7 @@ COPY (
                 )
                 page.wait_for_function(
                     """
-                    () => document.querySelector(".glm-tabulation-controls")?.getBoundingClientRect().height === 36
+                    () => document.querySelector(".glm-tabulation-controls")?.getBoundingClientRect().height === 50
                     """,
                     timeout=10_000,
                 )
@@ -14360,7 +14576,8 @@ COPY (
                         gridLeftInset: gridRect.left - toolRect.left,
                         gridRightInset: toolRect.right - gridRect.right,
                         gridBottomInset: toolRect.bottom - gridRect.bottom,
-                        actionBorderColor: getComputedStyle(actions).borderBottomColor,
+                        actionDividerColor: getComputedStyle(actions, "::after").backgroundColor,
+                        actionDividerHeight: getComputedStyle(actions, "::after").height,
                         actionBorderWidth: getComputedStyle(actions).borderBottomWidth,
                         mainLeft: main.getBoundingClientRect().left,
                         mountLeft: mount.getBoundingClientRect().left,
@@ -14377,7 +14594,11 @@ COPY (
                           const rect = button.getBoundingClientRect();
                           return Math.abs((rect.top + rect.height / 2) - (actionsRect.top + actionsRect.height / 2));
                         }),
-                        sharedButtonClasses: buttons.every((button) => button.classList.contains("model-control-button")),
+                        buttonEdgeDeltas: buttons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return Math.abs((rect.top - actionsRect.top) - (actionsRect.bottom - rect.bottom));
+                        }),
+                        sharedButtonClasses: buttons.every((button) => button.classList.contains("app-control-button")),
                         fallbackDisplay: getComputedStyle(document.querySelector("#gbmModelFallback")).display,
                         rowCount: rows.length,
                         activeDots: document.querySelectorAll("#gbmModelGrid .gbm-model-active-dot").length,
@@ -14415,15 +14636,17 @@ COPY (
                 self.assertAlmostEqual(navigator_state["mountLeft"], navigator_state["resizerRight"], delta=0.5)
                 self.assertAlmostEqual(navigator_state["toolLeft"], navigator_state["resizerRight"], delta=0.5)
                 self.assertAlmostEqual(navigator_state["workspaceLeft"], navigator_state["resizerRight"], delta=0.5)
-                self.assertEqual(navigator_state["actionBorderColor"], navigator_state["toolbarBorderColor"])
-                self.assertEqual(navigator_state["actionBorderWidth"], "1px")
-                self.assertEqual(navigator_state["actionHeight"], 36)
+                self.assertEqual(navigator_state["actionDividerColor"], navigator_state["toolbarBorderColor"])
+                self.assertEqual(navigator_state["actionDividerHeight"], "1px")
+                self.assertEqual(navigator_state["actionBorderWidth"], "0px")
+                self.assertEqual(navigator_state["actionHeight"], 50)
                 self.assertEqual(navigator_state["actionPaddingRight"], "8px")
-                self.assertEqual(navigator_state["actionPaddingTop"], "4px")
+                self.assertEqual(navigator_state["actionPaddingTop"], "0px")
                 self.assertAlmostEqual(navigator_state["actionTopGap"], 0, delta=0.5)
                 self.assertAlmostEqual(navigator_state["actionGridGap"], 0, delta=0.5)
                 self.assertEqual(navigator_state["buttonHeights"], [28, 28, 28])
-                self.assertTrue(all(delta <= 0.5 for delta in navigator_state["buttonCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in navigator_state["buttonCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.1 for delta in navigator_state["buttonEdgeDeltas"]))
                 self.assertTrue(navigator_state["sharedButtonClasses"])
                 self.assertEqual(navigator_state["fallbackDisplay"], "none")
                 self.assertEqual(navigator_state["rowCount"], 1)

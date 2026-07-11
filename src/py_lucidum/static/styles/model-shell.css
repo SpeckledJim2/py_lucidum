@@ -26,36 +26,6 @@
         padding: 0;
       }
 
-      .model-control-strip {
-        box-sizing: border-box;
-        border-bottom: 1px solid var(--line);
-        flex: 0 0 auto;
-        min-height: 36px;
-        padding: 4px 8px;
-      }
-
-      .model-navigator-actions {
-        align-items: center;
-        display: flex;
-        flex: 0 0 36px;
-        gap: 8px;
-        height: 36px;
-        justify-content: flex-end;
-      }
-
-      .model-control-button,
-      .segmented button.model-control-button {
-        box-sizing: border-box;
-        border-radius: 5px;
-        flex: 0 0 auto;
-        font-size: 12px;
-        height: 28px;
-        line-height: 1.2;
-        min-height: 28px;
-        padding: 2px 8px;
-        white-space: nowrap;
-      }
-
       .model-shell {
         max-width: 720px;
         border: 1px solid var(--line);

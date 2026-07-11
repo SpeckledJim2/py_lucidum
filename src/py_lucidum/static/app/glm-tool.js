@@ -315,15 +315,15 @@ export function createGlmTool({
         <div id="glm-screen-panel-builder" class="glm-tab-panel ${activeTab === "builder" ? "" : "hidden"}" data-glm-panel="builder" role="tabpanel" aria-labelledby="glm-screen-tab-builder">
           <div class="glm-builder-layout"${splitStyle ? ` style="${splitStyle}"` : ""}>
             <section class="glm-formula-panel">
-              <div class="glm-panel-header">
+              <div class="glm-panel-header app-control-strip app-control-strip-row app-control-strip--titled">
                 <h3 class="glm-panel-title">GLM formula</h3>
                 <div class="glm-builder-actions">
-                  <button id="glmFormulaAssistBtn" class="tab glm-icon-action-button ${formulaBuilder.formulaAssistOpen ? "active" : ""}" type="button" aria-label="Formula tools" title="Formula tools">f(x)</button>
+                  <button id="glmFormulaAssistBtn" class="tab app-control-button glm-icon-action-button ${formulaBuilder.formulaAssistOpen ? "active" : ""}" type="button" aria-label="Formula tools" title="Formula tools">f(x)</button>
                   <div class="segmented glm-scope-control glm-header-scope-control" role="group" aria-label="Rows to fit">
-                    <button type="button" data-glm-scope="all" class="${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}">All</button>
-                    <button type="button" data-glm-scope="training" class="${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
+                    <button type="button" data-glm-scope="all" class="app-control-button ${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}">All</button>
+                    <button type="button" data-glm-scope="training" class="app-control-button ${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
                   </div>
-                  <button id="glmBuildBtn" class="tab model-busy-button glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
+                  <button id="glmBuildBtn" class="tab app-control-button model-busy-button glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
               </div>
               ${formulaBuilder.formulaAssistDrawerHtml()}
@@ -360,16 +360,14 @@ export function createGlmTool({
             </section>
             <div id="glmBuilderResizer" class="glm-builder-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize GLM formula and coefficients panels" tabindex="0"></div>
             <section class="glm-coefficient-panel">
-              <div class="glm-panel-header glm-coefficient-header">
-                <div>
-                  <h3 class="glm-panel-title">Coefficients</h3>
-                  <div id="glmCoefficientMeta" class="glm-coefficient-meta">${diagnosticsHtml(diagnostics, activeModel, coefficientRowsForActiveModel(data.active_model_id))}</div>
-                </div>
+              <div class="glm-panel-header glm-coefficient-header app-control-strip app-control-strip-row app-control-strip--titled">
+                <h3 class="glm-panel-title">Coefficients</h3>
                 <div class="glm-coefficient-actions">
-                  <button id="glmCopyCoefficientsBtn" class="tab glm-inline-action-button" type="button">Copy</button>
-                  <button id="glmDownloadCoefficientsBtn" class="tab glm-inline-action-button" type="button">Download</button>
+                  <button id="glmCopyCoefficientsBtn" class="tab app-control-button glm-inline-action-button" type="button">Copy</button>
+                  <button id="glmDownloadCoefficientsBtn" class="tab app-control-button glm-inline-action-button" type="button">Download</button>
                 </div>
               </div>
+              <div id="glmCoefficientMeta" class="glm-coefficient-meta">${diagnosticsHtml(diagnostics, activeModel, coefficientRowsForActiveModel(data.active_model_id))}</div>
               <div class="glm-table-tools">
                 <label>Search: <input id="glmCoefficientSearch" class="search" type="search" /></label>
               </div>
@@ -381,10 +379,10 @@ export function createGlmTool({
         </div>
         <div id="glm-screen-panel-models" class="glm-tab-panel ${activeTab === "models" ? "" : "hidden"}" data-glm-panel="models" role="tabpanel" aria-labelledby="glm-screen-tab-models">
           <div class="glm-model-navigator">
-            <div class="glm-model-actions model-navigator-actions model-control-strip" role="group" aria-label="GLM model actions">
-              <button id="glmRenameModelBtn" class="tab model-control-button" type="button">Rename</button>
-              <button id="glmActivateModelBtn" class="tab model-control-button" type="button">Activate</button>
-              <button id="glmDeleteModelBtn" class="danger-action model-control-button" type="button">Delete</button>
+            <div class="glm-model-actions app-control-strip app-control-strip-row app-control-strip--actions" role="group" aria-label="GLM model actions">
+              <button id="glmRenameModelBtn" class="tab app-control-button" type="button">Rename</button>
+              <button id="glmActivateModelBtn" class="tab app-control-button" type="button">Activate</button>
+              <button id="glmDeleteModelBtn" class="danger-action app-control-button" type="button">Delete</button>
             </div>
             <div id="glmModelGrid" class="glm-grid glm-model-grid"></div>
             <div id="glmModelFallback" class="glm-model-fallback"></div>
@@ -414,9 +412,9 @@ export function createGlmTool({
     return `
       <div class="glm-tabulation-layout" style="${savedTabulationSplitWidthStyle()}">
         <section class="glm-tabulation-sidebar">
-          <div class="glm-panel-header model-control-strip">
+          <div class="glm-panel-header app-control-strip app-control-strip-row app-control-strip--titled">
             <h3 class="glm-panel-title">Tabulations</h3>
-            <button id="glmBuildTabulationsBtn" class="tab model-control-button model-busy-button glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !availableModels.length ? "disabled" : ""} ${isTabulating ? "aria-busy=\"true\"" : ""}>${isTabulating ? "Tabulating..." : "Tabulate"}</button>
+            <button id="glmBuildTabulationsBtn" class="tab app-control-button model-busy-button glm-build-button ${isTabulating ? "building" : ""}" type="button" ${isTabulating || !availableModels.length ? "disabled" : ""} ${isTabulating ? "aria-busy=\"true\"" : ""}>${isTabulating ? "Tabulating..." : "Tabulate"}</button>
           </div>
           <label id="glmTabulationModelLabel" class="glm-tabulation-label">Select models</label>
           <div class="glm-tabulation-model-region">
@@ -432,18 +430,18 @@ export function createGlmTool({
         </section>
         <div id="glmTabulationResizer" class="glm-builder-resizer glm-tabulation-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize GLM tabulations and table panels" tabindex="0"></div>
         <section class="glm-tabulation-main">
-          <div class="glm-tabulation-controls model-control-strip">
+          <div class="glm-tabulation-controls app-control-strip app-control-strip-row">
             <div class="glm-tabulation-controls-row glm-tabulation-controls-primary">
               <div class="glm-tabulation-control-group glm-tabulation-control-left">
                 <div class="segmented glm-tabulation-view-toggle" role="group" aria-label="Tabulation view">
-                  <button type="button" data-glm-tabulation-view="table" class="model-control-button ${tabulationView === "table" ? "active" : ""}">Table</button>
-                  <button type="button" data-glm-tabulation-view="plot" class="model-control-button ${tabulationView === "plot" ? "active" : ""}" ${features.length > 2 ? "disabled" : ""}>Plot</button>
+                  <button type="button" data-glm-tabulation-view="table" class="app-control-button ${tabulationView === "table" ? "active" : ""}">Table</button>
+                  <button type="button" data-glm-tabulation-view="plot" class="app-control-button ${tabulationView === "plot" ? "active" : ""}" ${features.length > 2 ? "disabled" : ""}>Plot</button>
                 </div>
               </div>
               <div class="glm-tabulation-control-group glm-tabulation-control-middle">
                 <div class="segmented glm-tabulation-scale-toggle" role="group" aria-label="Tabulation display scale">
-                  <button type="button" data-glm-tabulation-scale="linear" class="model-control-button ${tabulationScale === "linear" ? "active" : ""}">linear</button>
-                  <button type="button" data-glm-tabulation-scale="exp" class="model-control-button ${tabulationScale === "exp" ? "active" : ""}">exp</button>
+                  <button type="button" data-glm-tabulation-scale="linear" class="app-control-button ${tabulationScale === "linear" ? "active" : ""}">linear</button>
+                  <button type="button" data-glm-tabulation-scale="exp" class="app-control-button ${tabulationScale === "exp" ? "active" : ""}">exp</button>
                 </div>
                 <label class="glm-tabulation-check"><input id="glmTabulationColor" type="checkbox" ${tabulationColor ? "checked" : ""} /> colour</label>
               </div>
@@ -454,7 +452,7 @@ export function createGlmTool({
                     ${tabulationCrosstabOptionsHtml(crosstabOptions)}
                   </select>
                 </div>
-                <button id="glmExportTabulationsBtn" class="tab model-control-button model-busy-button glm-inline-action-button glm-tabulation-export-button ${isExportingTabulations ? "building" : ""}" type="button" ${canExportSelectedTabulations() ? "" : "disabled"} ${isExportingTabulations ? "aria-busy=\"true\"" : ""}>${isExportingTabulations ? "Exporting..." : "Export xlsx"}</button>
+                <button id="glmExportTabulationsBtn" class="tab app-control-button model-busy-button glm-inline-action-button glm-tabulation-export-button ${isExportingTabulations ? "building" : ""}" type="button" ${canExportSelectedTabulations() ? "" : "disabled"} ${isExportingTabulations ? "aria-busy=\"true\"" : ""}>${isExportingTabulations ? "Exporting..." : "Export xlsx"}</button>
               </div>
             </div>
           </div>

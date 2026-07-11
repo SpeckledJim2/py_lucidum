@@ -38,7 +38,7 @@
         display: flex;
         flex: 0 0 auto;
         gap: 12px;
-        height: var(--sidebar-collapsed-width);
+        height: var(--app-tool-row-height);
         justify-content: flex-start;
         margin: 0 0 8px;
         padding-right: 8px;
@@ -108,11 +108,8 @@
         overflow: hidden;
       }
 
-      #glm-screen-panel-models {
-        margin-bottom: -8px;
-        margin-top: -8px;
-      }
-
+      #glm-screen-panel-builder,
+      #glm-screen-panel-models,
       #glm-screen-panel-tabulations {
         margin-bottom: -8px;
         margin-top: -8px;
@@ -159,14 +156,7 @@
       }
 
       .glm-panel-header {
-        align-items: flex-start;
-        display: flex;
-        flex: 0 0 auto;
-        flex-wrap: wrap;
-        gap: 12px;
-        justify-content: space-between;
         min-width: 0;
-        padding: 8px 12px 5px;
       }
 
       .glm-panel-title {
@@ -186,7 +176,7 @@
         gap: 8px;
         justify-content: space-between;
         min-width: 0;
-        padding: 0 12px 8px;
+        padding: 6px 8px 8px;
       }
 
       .glm-builder-control-stack {
@@ -305,19 +295,15 @@
       }
 
       .glm-header-scope-control {
-        margin-left: 8px;
-      }
-
-      .glm-scope-control button {
-        min-height: 28px;
+        margin-left: 0;
       }
 
       .glm-builder-actions {
         align-items: center;
         display: flex;
         flex: 0 0 auto;
-        flex-wrap: wrap;
-        gap: 7px;
+        flex-wrap: nowrap;
+        gap: var(--app-control-strip-gap);
         justify-content: flex-end;
         min-width: 0;
       }
@@ -326,7 +312,6 @@
       .glm-icon-action-button,
       .glm-build-button {
         flex: 0 0 auto;
-        min-height: 28px;
       }
 
       .glm-build-button {
@@ -408,7 +393,7 @@
       .glm-formula-assist-drawer {
         background: color-mix(in srgb, var(--panel) 96%, var(--line));
         border-bottom: 1px solid var(--line);
-        border-top: 1px solid var(--line);
+        border-top: 0;
         display: flex;
         flex: 0 0 429px;
         flex-direction: column;
@@ -656,8 +641,8 @@
       .glm-builder-layout > .glm-builder-resizer::before {
         background: var(--line);
         border-radius: 0;
-        bottom: -8px;
-        top: -8px;
+        bottom: 0;
+        top: 0;
         width: 1px;
       }
 
@@ -719,11 +704,6 @@
         color: #e5e7eb;
       }
 
-      .glm-coefficient-header {
-        align-items: flex-start;
-        padding-right: 172px;
-      }
-
       .glm-coefficient-meta {
         color: var(--muted);
         display: flex;
@@ -732,7 +712,9 @@
         font-weight: 500;
         gap: 3px;
         line-height: 1.2;
-        margin-top: 5px;
+        flex: 0 0 auto;
+        margin-top: 0;
+        padding: 5px 8px 6px;
       }
 
       .glm-coefficient-meta-row {
@@ -759,14 +741,7 @@
       .glm-coefficient-actions {
         display: flex;
         flex: 0 0 auto;
-        gap: 8px;
-      }
-
-      .glm-coefficient-actions {
-        position: absolute;
-        right: 12px;
-        top: 8px;
-        z-index: 2;
+        gap: var(--app-control-strip-gap);
       }
 
       .glm-table-tools {
@@ -1062,11 +1037,9 @@
 
       .glm-tabulation-controls {
         align-items: stretch;
-        display: flex;
-        flex: 0 0 36px;
         flex-direction: column;
         gap: 0;
-        height: 36px;
+        justify-content: center;
         min-width: 0;
       }
 
@@ -1126,7 +1099,7 @@
         border-radius: 4px;
         color: var(--text);
         font-size: 12px;
-        height: 28px;
+        height: var(--app-control-button-height);
         max-width: 240px;
         min-width: 0;
         width: clamp(150px, 18vw, 240px);
@@ -1195,17 +1168,6 @@
         color: var(--text);
         min-height: 220px;
         overflow: hidden;
-      }
-
-      .glm-tabulation-sidebar .glm-panel-header {
-        align-items: center;
-        flex: 0 0 36px;
-        height: 36px;
-        padding: 4px 8px;
-      }
-
-      .glm-tabulation-controls.model-control-strip {
-        padding: 4px 8px;
       }
 
       .glm-grid.tabulator {
@@ -1542,14 +1504,19 @@
           grid-template-rows: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
         }
 
-        .glm-tabulation-controls {
-          flex-basis: auto;
-          height: auto;
-        }
-
         .glm-builder-resizer,
         .glm-tabulation-selector-resizer,
         .glm-tabulation-resizer {
           display: none;
+        }
+      }
+
+      @media (max-width: 480px) {
+        .glm-formula-panel .app-control-strip-row {
+          flex-wrap: wrap;
+        }
+
+        .glm-builder-actions {
+          flex-wrap: wrap;
         }
       }

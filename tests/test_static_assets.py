@@ -868,7 +868,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         index = (static_root / "index.html").read_text(encoding="utf-8")
 
         self.assertIn(".tool-screen-nav-item {", controls)
-        self.assertIn("height: var(--sidebar-collapsed-width);", controls)
+        self.assertIn("height: var(--app-tool-row-height);", controls)
         self.assertIn("background: var(--sidebar-bg);", controls)
         self.assertIn(".tool-screen-nav-item:first-child", controls)
         self.assertIn(".tool-screen-nav-item:last-child", controls)
@@ -886,6 +886,32 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("toolScreenNavButtonHtml", gbm)
         self.assertIn('id="lineBarTabs" class="tabs workspace-tabs hidden"', index)
         self.assertNotIn('id="lineBarTabs" class="tool-screen-nav', index)
+
+    def test_app_control_strips_use_shared_height_tokens(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
+        controls = (static_root / "styles/controls.css").read_text(encoding="utf-8")
+        model_shell = (static_root / "styles/model-shell.css").read_text(encoding="utf-8")
+        glm_css = (static_root / "styles/glm.css").read_text(encoding="utf-8")
+        glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
+        gbm = (static_root / "app/gbm-tool.js").read_text(encoding="utf-8")
+
+        self.assertIn("--app-tool-row-height: 50px;", foundations)
+        self.assertIn("--app-control-strip-height: var(--app-tool-row-height);", foundations)
+        self.assertIn("--app-control-button-height: 28px;", foundations)
+        self.assertIn(".app-control-strip {", controls)
+        self.assertIn("min-height: var(--app-control-strip-height);", controls)
+        self.assertIn(".app-control-strip-row {", controls)
+        self.assertIn(".app-control-strip--titled {", controls)
+        self.assertIn(".app-control-button,", controls)
+        self.assertIn("height: var(--app-control-button-height);", controls)
+        self.assertNotIn(".model-control-strip", model_shell)
+        self.assertNotIn("glm-builder-control-strip", glm_css)
+        self.assertNotIn("model-control-strip", glm + gbm)
+        self.assertNotIn("model-control-button", glm + gbm)
+        self.assertIn("app-control-strip app-control-strip-row app-control-strip--titled", glm)
+        self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", glm)
+        self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", gbm)
 
     def test_uk_map_overlay_markup_starts_collapsed(self) -> None:
         index = (

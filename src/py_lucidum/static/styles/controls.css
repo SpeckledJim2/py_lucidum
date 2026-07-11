@@ -999,6 +999,54 @@
         white-space: nowrap;
       }
 
+      .app-control-strip {
+        background: var(--panel);
+        box-sizing: border-box;
+        min-height: var(--app-control-strip-height);
+        padding-block: 0;
+        padding-inline: var(--app-control-strip-padding-inline);
+        position: relative;
+      }
+
+      .app-control-strip::after {
+        background: var(--line);
+        bottom: 0;
+        content: "";
+        height: var(--app-control-strip-divider-width);
+        left: 0;
+        pointer-events: none;
+        position: absolute;
+        right: 0;
+      }
+
+      .app-control-strip-row {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: var(--app-control-strip-gap);
+      }
+
+      .app-control-strip--titled {
+        justify-content: space-between;
+      }
+
+      .app-control-strip--actions {
+        justify-content: flex-end;
+      }
+
+      .app-control-button,
+      .segmented button.app-control-button {
+        border-radius: var(--app-control-button-radius);
+        box-sizing: border-box;
+        flex: 0 0 auto;
+        font-size: var(--app-control-button-font-size);
+        height: var(--app-control-button-height);
+        line-height: 1.2;
+        min-height: var(--app-control-button-height);
+        padding: 2px var(--app-control-button-padding-inline);
+        white-space: nowrap;
+      }
+
       .model-busy-button {
         align-items: center;
         display: inline-flex;
@@ -1180,8 +1228,8 @@
         display: flex;
         flex-wrap: nowrap;
         gap: 0;
-        height: var(--sidebar-collapsed-width);
-        min-height: var(--sidebar-collapsed-width);
+        height: var(--app-tool-row-height);
+        min-height: var(--app-tool-row-height);
         min-width: 0;
         overflow-x: auto;
         overflow-y: hidden;
@@ -1209,8 +1257,8 @@
         font-weight: 650;
         gap: 7px;
         justify-content: center;
-        height: var(--sidebar-collapsed-width);
-        min-height: var(--sidebar-collapsed-width);
+        height: var(--app-tool-row-height);
+        min-height: var(--app-tool-row-height);
         min-width: var(--sidebar-collapsed-width);
         padding: 0 12px;
         position: relative;

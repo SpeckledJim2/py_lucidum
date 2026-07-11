@@ -24,6 +24,15 @@
         --saved-filter-theme-hover-bg: #b9d0e7;
         --saved-filter-theme-text: #58677c;
         --sidebar-collapsed-width: 50px;
+        --app-tool-row-height: 50px;
+        --app-control-strip-height: var(--app-tool-row-height);
+        --app-control-button-height: 28px;
+        --app-control-strip-gap: 8px;
+        --app-control-strip-padding-inline: 8px;
+        --app-control-strip-divider-width: 1px;
+        --app-control-button-radius: 5px;
+        --app-control-button-font-size: 12px;
+        --app-control-button-padding-inline: 8px;
         --shadow: 0 1px 2px rgb(15 23 42 / 8%);
       }
 

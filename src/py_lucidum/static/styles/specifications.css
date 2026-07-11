@@ -58,7 +58,7 @@
         display: flex;
         flex: 0 0 auto;
         gap: 12px;
-        height: var(--sidebar-collapsed-width);
+        height: var(--app-tool-row-height);
         justify-content: space-between;
         margin: 0 -8px;
         min-width: 0;
