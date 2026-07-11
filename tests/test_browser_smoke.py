@@ -6913,6 +6913,75 @@ COPY (
                     },
                 )
 
+                glm_builder_geometry = page.evaluate(
+                    """
+                    () => {
+                      const tool = document.querySelector(".glm-tool");
+                      const toolbar = document.querySelector(".glm-toolbar");
+                      const builderPanel = document.querySelector("#glm-screen-panel-builder");
+                      const formulaPanel = document.querySelector(".glm-formula-panel");
+                      const coefficientPanel = document.querySelector(".glm-coefficient-panel");
+                      const resizer = document.querySelector("#glmBuilderResizer");
+                      const resizerRect = resizer.getBoundingClientRect();
+                      const resizerRule = getComputedStyle(resizer, "::before");
+                      return {
+                        formulaBorderWidth: getComputedStyle(formulaPanel).borderTopWidth,
+                        formulaBorderRadius: getComputedStyle(formulaPanel).borderTopLeftRadius,
+                        builderOverflow: getComputedStyle(builderPanel).overflow,
+                        coefficientBorderWidth: getComputedStyle(coefficientPanel).borderTopWidth,
+                        coefficientBorderRadius: getComputedStyle(coefficientPanel).borderTopLeftRadius,
+                        dividerWidth: resizerRule.width,
+                        dividerColor: resizerRule.backgroundColor,
+                        toolbarLineColor: getComputedStyle(toolbar).borderBottomColor,
+                        dividerTop: resizerRect.top + Number.parseFloat(resizerRule.top),
+                        dividerBottom: resizerRect.bottom - Number.parseFloat(resizerRule.bottom),
+                        toolbarBottom: toolbar.getBoundingClientRect().bottom,
+                        toolBottom: tool.getBoundingClientRect().bottom,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(glm_builder_geometry["formulaBorderWidth"], "0px")
+                self.assertEqual(glm_builder_geometry["formulaBorderRadius"], "0px")
+                self.assertEqual(glm_builder_geometry["builderOverflow"], "visible")
+                self.assertEqual(glm_builder_geometry["coefficientBorderWidth"], "0px")
+                self.assertEqual(glm_builder_geometry["coefficientBorderRadius"], "0px")
+                self.assertEqual(glm_builder_geometry["dividerWidth"], "1px")
+                self.assertEqual(glm_builder_geometry["dividerColor"], glm_builder_geometry["toolbarLineColor"])
+                self.assertAlmostEqual(
+                    glm_builder_geometry["dividerTop"],
+                    glm_builder_geometry["toolbarBottom"],
+                    delta=0.5,
+                )
+                self.assertAlmostEqual(
+                    glm_builder_geometry["dividerBottom"],
+                    glm_builder_geometry["toolBottom"],
+                    delta=0.5,
+                )
+
+                formula_width_before = page.locator(".glm-formula-panel").evaluate(
+                    "(panel) => panel.getBoundingClientRect().width"
+                )
+                glm_builder_resizer_box = page.locator("#glmBuilderResizer").bounding_box()
+                self.assertIsNotNone(glm_builder_resizer_box)
+                assert glm_builder_resizer_box is not None
+                glm_builder_resizer_x = glm_builder_resizer_box["x"] + glm_builder_resizer_box["width"] / 2
+                glm_builder_resizer_y = glm_builder_resizer_box["y"] + glm_builder_resizer_box["height"] / 2
+                page.mouse.move(glm_builder_resizer_x, glm_builder_resizer_y)
+                page.mouse.down()
+                page.mouse.move(glm_builder_resizer_x + 48, glm_builder_resizer_y, steps=4)
+                page.mouse.up()
+                glm_builder_resized_widths = page.evaluate(
+                    """
+                    () => ({
+                      formula: document.querySelector(".glm-formula-panel").getBoundingClientRect().width,
+                      coefficients: document.querySelector(".glm-coefficient-panel").getBoundingClientRect().width,
+                    })
+                    """
+                )
+                self.assertGreater(glm_builder_resized_widths["formula"], formula_width_before + 30)
+                self.assertGreaterEqual(glm_builder_resized_widths["coefficients"], 360)
+
                 page.evaluate(
                     """
                     () => {

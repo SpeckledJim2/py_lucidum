@@ -108,6 +108,10 @@
         overflow: hidden;
       }
 
+      #glm-screen-panel-builder {
+        overflow: visible;
+      }
+
       .glm-builder-layout {
         display: grid;
         gap: 0;
@@ -130,8 +134,6 @@
         overflow: hidden;
       }
 
-      .glm-formula-panel,
-      .glm-coefficient-panel,
       .glm-tabulation-sidebar,
       .glm-tabulation-main {
         border: 1px solid var(--line);
@@ -596,6 +598,14 @@
       .glm-builder-resizer {
         cursor: col-resize;
         min-height: 0;
+      }
+
+      .glm-builder-layout > .glm-builder-resizer::before {
+        background: var(--line);
+        border-radius: 0;
+        bottom: -8px;
+        top: -8px;
+        width: 1px;
       }
 
       body.glm-builder-resizing {
