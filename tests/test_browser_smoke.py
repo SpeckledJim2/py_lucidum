@@ -15330,6 +15330,35 @@ COPY (
                       const viridisFill = chart.querySelector("rect.gbm-tree-split-node")?.getAttribute("fill") || "";
                       const rootLabel = chart.querySelector(".gbm-tree-node-label");
                       const rootLabelSpans = [...(rootLabel?.querySelectorAll("tspan") || [])];
+                      const viewer = document.querySelector("#gbmTreeViewer");
+                      const strip = viewer.querySelector(".gbm-tree-control-strip");
+                      const leftControls = viewer.querySelector(".gbm-tree-section-header");
+                      const rightControls = viewer.querySelector(".gbm-tree-diagram-header");
+                      const summaryPanel = viewer.querySelector(".gbm-tree-summary-panel");
+                      const summaryGrid = viewer.querySelector("#gbmTreeSummaryGrid");
+                      const resizer = viewer.querySelector("#gbmTreeResizer");
+                      const diagramPanel = viewer.querySelector(".gbm-tree-diagram-panel");
+                      const tool = document.querySelector(".gbm-tool");
+                      const toolbar = document.querySelector(".gbm-toolbar");
+                      const search = viewer.querySelector("#gbmTreeSearch");
+                      const rect = (node) => {
+                        const bounds = node.getBoundingClientRect();
+                        return {
+                          top: bounds.top,
+                          right: bounds.right,
+                          bottom: bounds.bottom,
+                          left: bounds.left,
+                          width: bounds.width,
+                          height: bounds.height,
+                        };
+                      };
+                      const controlNodes = [
+                        viewer.querySelector("#gbmTreeSearch"),
+                        ...viewer.querySelectorAll("[data-gbm-tree-zoom], [data-gbm-tree-palette]"),
+                      ];
+                      const sortableColumns = ["tree", "dim"].map((field) =>
+                        viewer.querySelector(`#gbmTreeSummaryGrid .tabulator-col[tabulator-field='${field}']`)
+                      );
                       return {
                         rows: document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-row").length,
                         selectedRows: document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-row.tabulator-selected").length,
@@ -15356,6 +15385,55 @@ COPY (
                         rootLabelWeights: rootLabelSpans.map((node) => node.getAttribute("font-weight")),
                         plainFill,
                         viridisFill,
+                        geometry: {
+                          viewer: rect(viewer),
+                          tool: rect(tool),
+                          toolbar: rect(toolbar),
+                          strip: rect(strip),
+                          leftControls: rect(leftControls),
+                          rightControls: rect(rightControls),
+                          summaryPanel: rect(summaryPanel),
+                          summaryGrid: rect(summaryGrid),
+                          resizer: rect(resizer),
+                          diagramPanel: rect(diagramPanel),
+                          chart: rect(chart),
+                        },
+                        stripDividerHeight: getComputedStyle(strip, "::after").height,
+                        resizerLineWidth: getComputedStyle(resizer, "::before").width,
+                        resizerLineRadius: getComputedStyle(resizer, "::before").borderRadius,
+                        searchStyle: {
+                          fontSize: getComputedStyle(search).fontSize,
+                          lineHeight: getComputedStyle(search).lineHeight,
+                          paddingLeft: getComputedStyle(search).paddingLeft,
+                          paddingRight: getComputedStyle(search).paddingRight,
+                          borderRadius: getComputedStyle(search).borderRadius,
+                        },
+                        controlHeights: controlNodes.map((node) => rect(node).height),
+                        controlsCentred: controlNodes.every((node) => {
+                          const owner = node.closest(".gbm-tree-section-header, .gbm-tree-diagram-header");
+                          const nodeRect = node.getBoundingClientRect();
+                          const ownerRect = owner.getBoundingClientRect();
+                          return Math.abs(
+                            (nodeRect.top + nodeRect.height / 2) - (ownerRect.top + ownerRect.height / 2)
+                          ) <= 0.75;
+                        }),
+                        chartBorderWidths: ["Top", "Right", "Bottom", "Left"].map(
+                          (side) => getComputedStyle(chart)[`border${side}Width`]
+                        ),
+                        chartBorderRadius: getComputedStyle(chart).borderRadius,
+                        gridBorderWidths: ["Top", "Right", "Bottom", "Left"].map(
+                          (side) => getComputedStyle(summaryGrid)[`border${side}Width`]
+                        ),
+                        gridBorderRadius: getComputedStyle(summaryGrid).borderRadius,
+                        sortersContained: sortableColumns.every((column) => {
+                          const sorter = column?.querySelector(".tabulator-col-sorter");
+                          if (!column || !sorter) return false;
+                          const columnRect = column.getBoundingClientRect();
+                          const sorterRect = sorter.getBoundingClientRect();
+                          return sorterRect.width > 0
+                            && sorterRect.left >= columnRect.left - 0.5
+                            && sorterRect.right <= columnRect.right + 0.5;
+                        }),
                       };
                     }
                     """,
@@ -15369,8 +15447,8 @@ COPY (
                 self.assertIn("Tree gain: 7", tree_state["detailSummary"])
                 self.assertTrue(tree_state["summaryInsideChart"])
                 self.assertGreaterEqual(tree_state["summaryWidth"], 420)
-                self.assertLessEqual(tree_state["treeColumnWidth"], 50)
-                self.assertLessEqual(tree_state["dimColumnWidth"], 46)
+                self.assertAlmostEqual(tree_state["treeColumnWidth"], 56, delta=0.75)
+                self.assertAlmostEqual(tree_state["dimColumnWidth"], 52, delta=0.75)
                 self.assertEqual(tree_state["headers"], ["tree", "dim", "features", "gain"])
                 self.assertGreaterEqual(tree_state["splitNodes"], 1)
                 self.assertGreaterEqual(tree_state["leafNodes"], 2)
@@ -15388,7 +15466,73 @@ COPY (
                 self.assertEqual(tree_state["rootLabelWeights"][:2], ["700", "700"])
                 self.assertIn("400", tree_state["rootLabelWeights"][2:])
                 self.assertNotEqual(tree_state["plainFill"], tree_state["viridisFill"])
+                geometry = tree_state["geometry"]
+                self.assertAlmostEqual(geometry["strip"]["height"], 50, delta=0.75)
+                self.assertEqual(tree_state["stripDividerHeight"], "1px")
+                self.assertEqual(tree_state["resizerLineWidth"], "1px")
+                self.assertEqual(tree_state["resizerLineRadius"], "0px")
+                self.assertEqual(tree_state["controlHeights"], [28] * 8)
+                self.assertEqual(
+                    tree_state["searchStyle"],
+                    {
+                        "fontSize": "12px",
+                        "lineHeight": "14.4px",
+                        "paddingLeft": "8px",
+                        "paddingRight": "8px",
+                        "borderRadius": "5px",
+                    },
+                )
+                self.assertTrue(tree_state["controlsCentred"])
+                self.assertTrue(tree_state["sortersContained"])
+                self.assertEqual(tree_state["chartBorderWidths"], ["0px"] * 4)
+                self.assertEqual(tree_state["chartBorderRadius"], "0px")
+                self.assertEqual(tree_state["gridBorderWidths"], ["0px"] * 4)
+                self.assertEqual(tree_state["gridBorderRadius"], "0px")
+                self.assertAlmostEqual(geometry["viewer"]["left"], geometry["tool"]["left"], delta=0.75)
+                self.assertAlmostEqual(geometry["viewer"]["right"], geometry["tool"]["right"], delta=0.75)
+                self.assertAlmostEqual(geometry["viewer"]["bottom"], geometry["tool"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["viewer"]["top"], geometry["toolbar"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["leftControls"]["left"], geometry["summaryPanel"]["left"], delta=0.75)
+                self.assertAlmostEqual(geometry["leftControls"]["right"], geometry["summaryPanel"]["right"], delta=0.75)
+                self.assertAlmostEqual(geometry["rightControls"]["left"], geometry["diagramPanel"]["left"], delta=0.75)
+                self.assertAlmostEqual(geometry["rightControls"]["right"], geometry["diagramPanel"]["right"], delta=0.75)
+                self.assertAlmostEqual(geometry["leftControls"]["right"], geometry["rightControls"]["left"], delta=0.75)
+                self.assertAlmostEqual(geometry["summaryGrid"]["top"], geometry["strip"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["summaryGrid"]["left"], geometry["viewer"]["left"], delta=0.75)
+                self.assertAlmostEqual(geometry["summaryGrid"]["right"], geometry["summaryPanel"]["right"], delta=0.75)
+                self.assertAlmostEqual(geometry["summaryGrid"]["bottom"], geometry["viewer"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["summaryGrid"]["right"], geometry["diagramPanel"]["left"], delta=0.75)
+                self.assertAlmostEqual(
+                    geometry["summaryGrid"]["right"],
+                    geometry["resizer"]["left"] + geometry["resizer"]["width"] / 2,
+                    delta=0.75,
+                )
+                self.assertAlmostEqual(geometry["resizer"]["top"], geometry["viewer"]["top"], delta=0.75)
+                self.assertAlmostEqual(geometry["resizer"]["bottom"], geometry["viewer"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["resizer"]["width"], 12, delta=0.75)
+                self.assertAlmostEqual(geometry["chart"]["top"], geometry["strip"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["chart"]["right"], geometry["viewer"]["right"], delta=0.75)
+                self.assertAlmostEqual(geometry["chart"]["bottom"], geometry["viewer"]["bottom"], delta=0.75)
                 resizer = page.locator("#gbmTreeResizer")
+                resizer_box = resizer.bounding_box()
+                self.assertIsNotNone(resizer_box)
+                drag_y = resizer_box["y"] + 24
+                edge_grab_x = resizer_box["x"] + resizer_box["width"] - 2
+                page.mouse.move(edge_grab_x, drag_y)
+                self.assertEqual(
+                    resizer.evaluate("node => getComputedStyle(node, '::before').width"),
+                    "3px",
+                )
+                width_before_edge_grab = page.locator(".gbm-tree-summary-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                page.mouse.down()
+                page.mouse.move(edge_grab_x + 1, drag_y)
+                page.mouse.up()
+                width_after_edge_grab = page.locator(".gbm-tree-summary-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                self.assertAlmostEqual(width_after_edge_grab - width_before_edge_grab, 1, delta=1.25)
                 resizer_box = resizer.bounding_box()
                 self.assertIsNotNone(resizer_box)
                 summary_width_before = page.locator(".gbm-tree-summary-panel").evaluate("node => node.getBoundingClientRect().width")

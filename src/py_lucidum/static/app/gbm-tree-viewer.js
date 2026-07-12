@@ -35,6 +35,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
   let resizeFrame = null;
   let summaryWidth = DEFAULT_SUMMARY_WIDTH;
   let resizePointerId = null;
+  let resizePointerOffset = 0;
   let highlightedNodeId = "";
   let renderToken = 0;
 
@@ -129,8 +130,8 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
           selectableRows: 1,
           placeholder: "No trees",
           columns: [
-            { title: "tree", field: "tree", width: 46, minWidth: 46, hozAlign: "right", headerSortStartingDir: "asc" },
-            { title: "dim", field: "dim", width: 42, minWidth: 42, hozAlign: "right" },
+            { title: "tree", field: "tree", width: 56, minWidth: 56, hozAlign: "right", headerSortStartingDir: "asc" },
+            { title: "dim", field: "dim", width: 52, minWidth: 52, hozAlign: "right" },
             { title: "features", field: "features", widthGrow: 2, formatter: treeFeaturesFormatter },
             { title: "gain", field: "gain", width: 96, hozAlign: "right", formatter: treeGainFormatter },
           ],
@@ -415,6 +416,10 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     resizer.dataset.bound = "true";
     resizer.addEventListener("pointerdown", (event) => {
       event.preventDefault();
+      const bounds = root.getBoundingClientRect();
+      const summaryBounds = root.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect();
+      const dividerX = summaryBounds?.right ?? bounds.left + summaryWidth;
+      resizePointerOffset = event.clientX - dividerX;
       resizePointerId = event.pointerId;
       resizer.classList.add("dragging");
       root.classList.add("resizing");
@@ -423,11 +428,12 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     resizer.addEventListener("pointermove", (event) => {
       if (resizePointerId !== event.pointerId) return;
       const bounds = root.getBoundingClientRect();
-      setSummaryWidth(root, event.clientX - bounds.left);
+      setSummaryWidth(root, event.clientX - bounds.left - resizePointerOffset);
     });
     const finishDrag = (event) => {
       if (resizePointerId !== event.pointerId) return;
       resizePointerId = null;
+      resizePointerOffset = 0;
       resizer.classList.remove("dragging");
       root.classList.remove("resizing");
       if (resizer.hasPointerCapture(event.pointerId)) {

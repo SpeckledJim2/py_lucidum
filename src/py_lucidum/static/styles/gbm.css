@@ -185,6 +185,10 @@
         margin: -8px -8px -8px;
       }
 
+      #gbm-screen-panel-trees {
+        margin: -8px -8px -8px;
+      }
+
       .gbm-tab-panel[data-gbm-panel="trees"] {
         height: 100%;
       }
@@ -1223,10 +1227,12 @@
 
       .gbm-tree-viewer {
         display: grid;
-        grid-template-columns: minmax(420px, var(--gbm-tree-summary-width, 560px)) 7px minmax(360px, 1fr);
-        gap: 6px;
+        grid-template-columns: minmax(420px, var(--gbm-tree-summary-width, 560px)) minmax(360px, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 0;
         height: 100%;
         min-height: 0;
+        overflow: hidden;
       }
 
       .gbm-tree-viewer.resizing {
@@ -1235,23 +1241,49 @@
 
       .gbm-tree-summary-panel,
       .gbm-tree-diagram-panel {
+        grid-row: 2;
         min-height: 0;
+        overflow: hidden;
+      }
+
+      .gbm-tree-summary-panel {
+        grid-column: 1;
+      }
+
+      .gbm-tree-diagram-panel {
+        grid-column: 2;
+      }
+
+      .gbm-tree-control-strip {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        padding-inline: 0;
+      }
+
+      .gbm-tree-control-layout {
+        display: grid;
+        grid-template-columns: minmax(420px, var(--gbm-tree-summary-width, 560px)) minmax(360px, 1fr);
+        min-height: var(--app-control-strip-height);
       }
 
       .gbm-tree-section-header,
       .gbm-tree-diagram-header {
-        align-items: center;
-        display: flex;
-        flex: 0 0 auto;
-        gap: 10px;
-        justify-content: space-between;
-        margin-bottom: 6px;
         min-width: 0;
+        padding-inline: var(--app-control-strip-padding-inline);
+      }
+
+      .gbm-tree-section-header {
+        grid-column: 1;
+      }
+
+      .gbm-tree-diagram-header {
+        grid-column: 2;
       }
 
       .gbm-tree-section-header .gbm-section-title,
       .gbm-tree-diagram-header .gbm-section-title {
         margin: 0;
+        white-space: nowrap;
       }
 
       .gbm-tree-detail-summary {
@@ -1292,26 +1324,68 @@
       .gbm-tree-search {
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 5px;
         color: var(--text);
-        font: inherit;
-        font-size: 12px;
-        height: 25px;
         min-width: 0;
-        padding: 2px 8px;
         width: min(170px, 48%);
       }
 
       .gbm-tree-summary-grid {
+        border: 0;
+        border-radius: 0;
         flex: 1 1 auto;
         height: 100%;
         min-height: 0;
+        width: 100%;
+      }
+
+      .gbm-tree-summary-grid.tabulator {
+        border: 0;
+      }
+
+      #gbmTreeSummaryGrid:has(+ #gbmTreeSummaryFallback:not(:empty)) {
+        display: none;
+      }
+
+      #gbmTreeSummaryFallback:empty {
+        display: none;
+      }
+
+      #gbmTreeSummaryFallback:not(:empty) {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        width: 100%;
+      }
+
+      .gbm-tree-summary-fallback table {
+        border: 0;
+        border-radius: 0;
+        width: 100%;
       }
 
       .gbm-tree-resizer {
         align-self: stretch;
         cursor: col-resize;
+        grid-column: 1;
+        grid-row: 1 / -1;
+        justify-self: end;
         min-height: 0;
+        transform: translateX(50%);
+        width: 12px;
+        z-index: 4;
+      }
+
+      .gbm-tree-resizer::before {
+        background: var(--line);
+        border-radius: 0;
+        bottom: 0;
+        top: 0;
+        width: 1px;
+      }
+
+      .gbm-tree-resizer:hover::before,
+      .gbm-tree-resizer.dragging::before {
+        width: 3px;
       }
 
       .gbm-tree-summary-grid .tabulator-row.tabulator-selected,
@@ -1357,7 +1431,7 @@
 
       .gbm-tree-zoom button,
       .gbm-tree-palette button {
-        min-height: 25px;
+        margin: 0;
       }
 
       .gbm-tree-zoom button {
@@ -1369,10 +1443,11 @@
         --gbm-tree-leaf-fill: #fef3c7;
         --gbm-tree-node-stroke: #64748b;
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 6px;
+        border: 0;
+        border-radius: 0;
         flex: 1 1 auto;
-        min-height: 420px;
+        height: 100%;
+        min-height: 0;
         min-width: 0;
         overflow: hidden;
         position: relative;
