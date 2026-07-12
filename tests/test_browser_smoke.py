@@ -4511,6 +4511,36 @@ COPY (
   SELECT 1, 2, '1-L0', NULL, NULL, '1-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.4, 1.0, 1
   UNION ALL
   SELECT 1, 2, '1-L1', NULL, NULL, '1-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 2.0, 2
+  UNION ALL
+  SELECT 2, 1, '2-S0', '2-L0', '2-S1', NULL, 'Age', 7.0, '30', NULL, '<=', 'left', 'None', 1.0, 15.0, 15
+  UNION ALL
+  SELECT 2, 2, '2-L0', NULL, NULL, '2-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.4, 1.0, 1
+  UNION ALL
+  SELECT 2, 2, '2-S1', '2-L1', '2-S2', '2-S0', 'Segment', 6.0, '0', 'A / C', '==', 'right', 'None', 1.1, 14.0, 14
+  UNION ALL
+  SELECT 2, 3, '2-L1', NULL, NULL, '2-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.5, 1.0, 1
+  UNION ALL
+  SELECT 2, 3, '2-S2', '2-S3', '2-L2', '2-S1', 'Age', 5.0, '40', NULL, '<=', 'left', 'None', 1.2, 13.0, 13
+  UNION ALL
+  SELECT 2, 4, '2-S3', '2-L3', '2-S4', '2-S2', 'Segment', 4.0, '1', 'B / D', '==', 'right', 'None', 1.3, 12.0, 12
+  UNION ALL
+  SELECT 2, 4, '2-L2', NULL, NULL, '2-S2', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.6, 1.0, 1
+  UNION ALL
+  SELECT 2, 5, '2-L3', NULL, NULL, '2-S3', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.7, 1.0, 1
+  UNION ALL
+  SELECT 2, 5, '2-S4', '2-S5', '2-L4', '2-S3', 'Age', 3.0, '50', NULL, '<=', 'left', 'None', 1.4, 11.0, 11
+  UNION ALL
+  SELECT 2, 6, '2-S5', '2-L5', '2-S6', '2-S4', 'Segment', 2.0, '2', 'C / E', '==', 'right', 'None', 1.5, 10.0, 10
+  UNION ALL
+  SELECT 2, 6, '2-L4', NULL, NULL, '2-S4', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 1.0, 1
+  UNION ALL
+  SELECT 2, 7, '2-L5', NULL, NULL, '2-S5', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.9, 1.0, 1
+  UNION ALL
+  SELECT 2, 7, '2-S6', '2-L6', '2-L7', '2-S5', 'Age', 1.0, '60', NULL, '<=', 'left', 'None', 1.6, 9.0, 9
+  UNION ALL
+  SELECT 2, 8, '2-L6', NULL, NULL, '2-S6', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 4.0, 4
+  UNION ALL
+  SELECT 2, 8, '2-L7', NULL, NULL, '2-S6', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.1, 5.0, 5
 """ if model_id == "browser-smoke-model" else ""
                 con = duckdb.connect(database=":memory:")
                 try:
@@ -15477,6 +15507,51 @@ COPY (
                       document.querySelector('[data-gbm-tree-zoom="reset"]').click();
                       await new Promise((resolve) => setTimeout(resolve, 240));
                       const afterResetZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
+                      const treeDirectionButtons = [...document.querySelectorAll("[data-gbm-tree-direction]")];
+                      const directionDefaultPressed = treeDirectionButtons.map((button) => button.getAttribute("aria-pressed"));
+                      const directionDefaultActive = document.querySelector("[data-gbm-tree-direction].active")
+                        ?.dataset.gbmTreeDirection || "";
+                      const directionDefaultColors = treeDirectionButtons.map((button) => getComputedStyle(button).color);
+                      const directionGeometry = () => {
+                        const nodes = [...chart.querySelectorAll(".gbm-tree-node")];
+                        const svg = chart.querySelector("svg.gbm-tree-svg");
+                        const svgBounds = svg?.getBoundingClientRect();
+                        const root = nodes.find((node) => node.__data__?.depth === 0)?.__data__;
+                        const children = nodes
+                          .filter((node) => node.__data__?.parent === root)
+                          .map((node) => ({ x: node.__data__._plotX, y: node.__data__._plotY }));
+                        return {
+                          root: root ? { x: root._plotX, y: root._plotY } : null,
+                          children,
+                          contained: Boolean(svgBounds) && nodes.every((node) => {
+                            const bounds = node.getBoundingClientRect();
+                            return bounds.left >= svgBounds.left - 1
+                              && bounds.right <= svgBounds.right + 1
+                              && bounds.top >= svgBounds.top - 1
+                              && bounds.bottom <= svgBounds.bottom + 1;
+                          }),
+                        };
+                      };
+                      const waitForTreeRedraw = async (value) => {
+                        const previousSvg = chart.querySelector("svg.gbm-tree-svg");
+                        document.querySelector(`[data-gbm-tree-direction="${value}"]`).click();
+                        const deadline = performance.now() + 2_000;
+                        while (performance.now() < deadline) {
+                          await new Promise((resolve) => requestAnimationFrame(resolve));
+                          const nextSvg = chart.querySelector("svg.gbm-tree-svg");
+                          if (nextSvg && nextSvg !== previousSvg) return;
+                        }
+                        throw new Error(`Tree did not redraw for ${value}`);
+                      };
+                      const leftRightGeometry = directionGeometry();
+                      const selectedDirectionNode = [...chart.querySelectorAll(".gbm-tree-node")]
+                        .find((node) => node.__data__?.depth === 1);
+                      selectedDirectionNode?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+                      const selectedDirectionNodeId = selectedDirectionNode?.__data__?.data?.id || "";
+                      await waitForTreeRedraw("top-bottom");
+                      const topBottomGeometry = directionGeometry();
+                      await waitForTreeRedraw("diagonal");
+                      const diagonalGeometry = directionGeometry();
                       const rootLabel = chart.querySelector(".gbm-tree-node-label");
                       const rootLabelSpans = [...(rootLabel?.querySelectorAll("tspan") || [])];
                       const viewer = document.querySelector("#gbmTreeViewer");
@@ -15493,6 +15568,7 @@ COPY (
                       const plotZoomButtons = [...plotZoom.querySelectorAll("[data-gbm-tree-zoom]")];
                       const plotPalette = viewer.querySelector(".gbm-tree-plot-palette");
                       const plotPaletteButtons = [...plotPalette.querySelectorAll("[data-gbm-tree-palette]")];
+                      const plotDirection = viewer.querySelector(".gbm-tree-plot-direction");
                       const paletteSwatches = plotPaletteButtons.map((button) =>
                         button.querySelector(".gbm-tree-palette-swatch")
                       );
@@ -15595,6 +15671,25 @@ COPY (
                             (side) => getComputedStyle(button)[`border${side}Width`]
                           )
                         ),
+                        directionInsideControls: plotDirection.parentElement === plotControls,
+                        directionActions: treeDirectionButtons.map((button) => button.dataset.gbmTreeDirection),
+                        directionTexts: treeDirectionButtons.map((button) => button.textContent.trim()),
+                        directionLabels: treeDirectionButtons.map((button) => button.getAttribute("aria-label")),
+                        directionTitles: treeDirectionButtons.map((button) => button.getAttribute("title")),
+                        directionDefaultPressed,
+                        directionDefaultActive,
+                        directionDefaultColors,
+                        directionPressed: treeDirectionButtons.map((button) => button.getAttribute("aria-pressed")),
+                        activeDirection: plotDirection.querySelector(".active")?.dataset.gbmTreeDirection || "",
+                        directionColors: treeDirectionButtons.map((button) => getComputedStyle(button).color),
+                        directionGeometry: {
+                          leftRight: leftRightGeometry,
+                          topBottom: topBottomGeometry,
+                          diagonal: diagonalGeometry,
+                        },
+                        selectedDirectionNodeId,
+                        selectedDirectionNodeAfterRedraw: chart.querySelector(".gbm-tree-node-selected")
+                          ?.__data__?.data?.id || "",
                         paletteInsideControls: plotPalette.parentElement === plotControls,
                         paletteActions: plotPaletteButtons.map((button) => button.dataset.gbmTreePalette),
                         paletteLabels: paletteLabels.map((label) => label.textContent.trim()),
@@ -15644,6 +15739,8 @@ COPY (
                           plotZoomButtons: plotZoomButtons.map(rect),
                           plotPalette: rect(plotPalette),
                           plotPaletteButtons: plotPaletteButtons.map(rect),
+                          plotDirection: rect(plotDirection),
+                          plotDirectionButtons: treeDirectionButtons.map(rect),
                           svgMount: rect(svgMount),
                           treeSvg: rect(treeSvg),
                         },
@@ -15730,6 +15827,50 @@ COPY (
                 self.assertEqual(tree_state["zoomBackgrounds"], ["rgba(0, 0, 0, 0)"] * 3)
                 self.assertEqual(tree_state["zoomFontWeights"], ["400"] * 3)
                 self.assertEqual(tree_state["zoomBorderWidths"], [["0px"] * 4] * 3)
+                self.assertTrue(tree_state["directionInsideControls"])
+                self.assertEqual(tree_state["directionActions"], ["left-right", "top-bottom", "diagonal"])
+                self.assertEqual(tree_state["directionTexts"], ["→", "↓", "↘"])
+                self.assertEqual(
+                    tree_state["directionLabels"],
+                    ["Left to right", "Top to bottom", "Top left to bottom right"],
+                )
+                self.assertEqual(tree_state["directionTitles"], tree_state["directionLabels"])
+                self.assertEqual(tree_state["directionDefaultPressed"], ["true", "false", "false"])
+                self.assertEqual(tree_state["directionDefaultActive"], "left-right")
+                self.assertEqual(tree_state["directionDefaultColors"][0], tree_state["accentColor"])
+                self.assertEqual(tree_state["directionDefaultColors"][1:], [tree_state["toggleMutedColor"]] * 2)
+                self.assertEqual(tree_state["directionPressed"], ["false", "false", "true"])
+                self.assertEqual(tree_state["activeDirection"], "diagonal")
+                self.assertEqual(tree_state["directionColors"][:2], [tree_state["toggleMutedColor"]] * 2)
+                self.assertEqual(tree_state["directionColors"][2], tree_state["accentColor"])
+                direction_geometry = tree_state["directionGeometry"]
+                left_right_root = direction_geometry["leftRight"]["root"]
+                left_right_children = direction_geometry["leftRight"]["children"]
+                self.assertTrue(left_right_root)
+                self.assertGreaterEqual(len(left_right_children), 2)
+                self.assertTrue(direction_geometry["leftRight"]["contained"])
+                self.assertTrue(all(child["x"] > left_right_root["x"] for child in left_right_children))
+                self.assertGreater(len({round(child["y"], 6) for child in left_right_children}), 1)
+                top_bottom_root = direction_geometry["topBottom"]["root"]
+                top_bottom_children = direction_geometry["topBottom"]["children"]
+                self.assertTrue(top_bottom_root)
+                self.assertTrue(direction_geometry["topBottom"]["contained"])
+                self.assertTrue(all(child["y"] > top_bottom_root["y"] for child in top_bottom_children))
+                self.assertGreater(len({round(child["x"], 6) for child in top_bottom_children}), 1)
+                diagonal_root = direction_geometry["diagonal"]["root"]
+                diagonal_children = direction_geometry["diagonal"]["children"]
+                self.assertTrue(diagonal_root)
+                self.assertTrue(direction_geometry["diagonal"]["contained"])
+                self.assertGreater(
+                    sum(child["x"] for child in diagonal_children) / len(diagonal_children), diagonal_root["x"]
+                )
+                self.assertGreater(
+                    sum(child["y"] for child in diagonal_children) / len(diagonal_children), diagonal_root["y"]
+                )
+                self.assertTrue(tree_state["selectedDirectionNodeId"])
+                self.assertEqual(
+                    tree_state["selectedDirectionNodeAfterRedraw"], tree_state["selectedDirectionNodeId"]
+                )
                 self.assertTrue(tree_state["paletteInsideControls"])
                 self.assertEqual(tree_state["paletteActions"], ["plain", "divergent", "spectral", "viridis"])
                 self.assertEqual(tree_state["paletteLabels"], ["Plain", "Divergent", "Spectral", "Viridis"])
@@ -15841,10 +15982,9 @@ COPY (
                     geometry["plotZoomButtons"][1]["left"] + geometry["plotZoomButtons"][1]["width"] / 2,
                     delta=0.75,
                 )
+                self.assertAlmostEqual(geometry["plotDirection"]["top"], geometry["plotPalette"]["bottom"] + 8, delta=0.75)
                 self.assertAlmostEqual(
-                    geometry["plotControls"]["bottom"] - geometry["plotPaletteButtons"][-1]["bottom"],
-                    6,
-                    delta=0.75,
+                    geometry["plotControls"]["bottom"] - geometry["plotDirection"]["bottom"], 6, delta=0.75
                 )
                 self.assertGreater(geometry["chart"]["bottom"] - geometry["plotControls"]["bottom"], 0)
                 self.assertEqual(len(geometry["plotPaletteButtons"]), 4)
@@ -15860,6 +16000,17 @@ COPY (
                         self.assertAlmostEqual(
                             button_geometry["left"],
                             geometry["plotZoomButtons"][index - 1]["right"],
+                            delta=0.75,
+                        )
+                self.assertEqual(len(geometry["plotDirectionButtons"]), 3)
+                for index, button_geometry in enumerate(geometry["plotDirectionButtons"]):
+                    self.assertAlmostEqual(button_geometry["width"], 24, delta=0.75)
+                    self.assertAlmostEqual(button_geometry["height"], 24, delta=0.75)
+                    self.assertAlmostEqual(button_geometry["top"], geometry["plotDirection"]["top"], delta=0.75)
+                    if index:
+                        self.assertAlmostEqual(
+                            button_geometry["left"],
+                            geometry["plotDirectionButtons"][index - 1]["right"],
                             delta=0.75,
                         )
                 page.locator("#gbmTreeSummaryToggle").hover()
@@ -15916,6 +16067,115 @@ COPY (
                     "none",
                 )
                 page.locator("#themeBtn").click()
+                page.evaluate(
+                    """
+                    () => [...document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-row")]
+                      .find((row) => row.querySelector('.tabulator-cell[tabulator-field="tree"]')
+                        ?.textContent.trim() === "2")
+                      ?.click()
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmTreeDetailSummary")?.textContent.includes("Tree 2")
+                      && document.querySelectorAll("#gbmTreeChart .gbm-tree-node").length === 15
+                    """,
+                    timeout=5_000,
+                )
+                diagonal_size_regression = page.evaluate(
+                    """
+                    async () => {
+                      const chart = document.querySelector("#gbmTreeChart");
+                      const waitForTreeRedraw = async (value) => {
+                        const previousSvg = chart.querySelector("svg.gbm-tree-svg");
+                        document.querySelector(`[data-gbm-tree-direction="${value}"]`).click();
+                        const deadline = performance.now() + 2_000;
+                        while (performance.now() < deadline) {
+                          await new Promise((resolve) => requestAnimationFrame(resolve));
+                          const nextSvg = chart.querySelector("svg.gbm-tree-svg");
+                          if (nextSvg && nextSvg !== previousSvg
+                              && nextSvg.querySelectorAll(".gbm-tree-node").length === 15) return;
+                        }
+                        throw new Error(`Tree did not redraw for ${value}`);
+                      };
+                      const metrics = () => {
+                        const svg = chart.querySelector("svg.gbm-tree-svg");
+                        const svgBounds = svg.getBoundingClientRect();
+                        const nodeElements = [...svg.querySelectorAll(".gbm-tree-node")];
+                        const nodes = nodeElements.map((node) => node.__data__);
+                        const bounds = nodeElements.map((node) => node.getBoundingClientRect());
+                        const widths = bounds.map((box) => box.width).sort((left, right) => left - right);
+                        const root = nodes.find((node) => node.depth === 0);
+                        const maxDepth = Math.max(...nodes.map((node) => node.depth));
+                        const deepest = nodes.filter((node) => node.depth === maxDepth);
+                        let overlaps = 0;
+                        for (let leftIndex = 0; leftIndex < bounds.length; leftIndex += 1) {
+                          for (let rightIndex = leftIndex + 1; rightIndex < bounds.length; rightIndex += 1) {
+                            const left = bounds[leftIndex];
+                            const right = bounds[rightIndex];
+                            if (Math.min(left.right, right.right) - Math.max(left.left, right.left) > 1
+                                && Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top) > 1) {
+                              overlaps += 1;
+                            }
+                          }
+                        }
+                        return {
+                          nodes: nodes.length,
+                          medianWidth: widths[Math.floor(widths.length / 2)],
+                          scale: svg.querySelector(".gbm-tree-viewport").getCTM().a,
+                          contained: bounds.every((box) => box.left >= svgBounds.left - 1
+                            && box.right <= svgBounds.right + 1
+                            && box.top >= svgBounds.top - 1
+                            && box.bottom <= svgBounds.bottom + 1),
+                          overlaps,
+                          root: { x: root._plotX, y: root._plotY },
+                          deepestCentroid: {
+                            x: deepest.reduce((total, node) => total + node._plotX, 0) / deepest.length,
+                            y: deepest.reduce((total, node) => total + node._plotY, 0) / deepest.length,
+                          },
+                        };
+                      };
+                      await waitForTreeRedraw("left-right");
+                      const leftRight = metrics();
+                      const selectedNode = [...chart.querySelectorAll(".gbm-tree-node")]
+                        .find((node) => node.__data__?.depth === 3);
+                      selectedNode.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+                      const selectedNodeId = selectedNode.__data__.data.id;
+                      await waitForTreeRedraw("diagonal");
+                      return {
+                        leftRight,
+                        diagonal: metrics(),
+                        selectedNodeId,
+                        selectedNodeAfterRedraw: chart.querySelector(".gbm-tree-node-selected")
+                          ?.__data__?.data?.id || "",
+                        activeDirection: document.querySelector(".gbm-tree-plot-direction .active")
+                          ?.dataset.gbmTreeDirection || "",
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(diagonal_size_regression["leftRight"]["nodes"], 15)
+                self.assertEqual(diagonal_size_regression["diagonal"]["nodes"], 15)
+                self.assertTrue(diagonal_size_regression["leftRight"]["contained"])
+                self.assertTrue(diagonal_size_regression["diagonal"]["contained"])
+                self.assertEqual(diagonal_size_regression["diagonal"]["overlaps"], 0)
+                self.assertGreaterEqual(
+                    diagonal_size_regression["diagonal"]["medianWidth"],
+                    diagonal_size_regression["leftRight"]["medianWidth"] * 0.8,
+                )
+                self.assertGreater(
+                    diagonal_size_regression["diagonal"]["deepestCentroid"]["x"],
+                    diagonal_size_regression["diagonal"]["root"]["x"],
+                )
+                self.assertGreater(
+                    diagonal_size_regression["diagonal"]["deepestCentroid"]["y"],
+                    diagonal_size_regression["diagonal"]["root"]["y"],
+                )
+                self.assertEqual(
+                    diagonal_size_regression["selectedNodeAfterRedraw"],
+                    diagonal_size_regression["selectedNodeId"],
+                )
+                self.assertEqual(diagonal_size_regression["activeDirection"], "diagonal")
                 page.evaluate(
                     """
                     async () => {
@@ -16354,6 +16614,8 @@ COPY (
                         detailSummary: document.querySelector("#gbmTreeDetailSummary")?.textContent || "",
                         activePalette: document.querySelector(".gbm-tree-plot-palette .active")
                           ?.dataset.gbmTreePalette || "",
+                        activeDirection: document.querySelector(".gbm-tree-plot-direction .active")
+                          ?.dataset.gbmTreeDirection || "",
                       };
                     }
                     """
@@ -16378,6 +16640,7 @@ COPY (
                 self.assertEqual(reopened_tree_selector["selectedTree"], "1")
                 self.assertIn("Tree 1", reopened_tree_selector["detailSummary"])
                 self.assertEqual(reopened_tree_selector["activePalette"], "viridis")
+                self.assertEqual(reopened_tree_selector["activeDirection"], "diagonal")
 
                 page.wait_for_timeout(160)
                 page.locator('[data-gbm-tree-zoom="in"]').click()
@@ -16461,6 +16724,10 @@ COPY (
                       const plotPalette = plotPaletteNode.getBoundingClientRect();
                       const paletteButtons = [...plotPaletteNode.querySelectorAll("[data-gbm-tree-palette]")]
                         .map((button) => button.getBoundingClientRect());
+                      const plotDirectionNode = document.querySelector(".gbm-tree-plot-direction");
+                      const plotDirection = plotDirectionNode.getBoundingClientRect();
+                      const directionButtons = [...plotDirectionNode.querySelectorAll("[data-gbm-tree-direction]")]
+                        .map((button) => button.getBoundingClientRect());
                       const toggle = document.querySelector("#gbmTreeSummaryToggle").getBoundingClientRect();
                       const detailSummary = document.querySelector("#gbmTreeDetailSummary").getBoundingClientRect();
                       const plotControls = document.querySelector(".gbm-tree-plot-controls").getBoundingClientRect();
@@ -16477,6 +16744,8 @@ COPY (
                         paletteWidth: plotPalette.width,
                         paletteHeight: plotPalette.height,
                         paletteZoomGap: plotPalette.top - plotZoom.bottom,
+                        directionPaletteGap: plotDirection.top - plotPalette.bottom,
+                        directionButtonSizes: directionButtons.map((button) => [button.width, button.height]),
                         paletteMinusCentreDelta: (
                           plotPalette.left + plotPalette.width / 2
                         ) - (
@@ -16489,7 +16758,7 @@ COPY (
                           || plotPalette.top >= toggle.bottom
                           || plotPalette.bottom <= toggle.top
                         ),
-                        detailTopGap: detailSummary.top - plotPalette.bottom,
+                        detailTopGap: detailSummary.top - plotDirection.bottom,
                         detailBackdropGap: detailSummary.top - plotControls.bottom,
                         backdropBottomGap: chart.bottom - plotControls.bottom,
                       };
@@ -16511,10 +16780,14 @@ COPY (
                 self.assertAlmostEqual(mobile_tree_geometry["paletteWidth"], 70, delta=0.75)
                 self.assertAlmostEqual(mobile_tree_geometry["paletteHeight"], 298, delta=0.75)
                 self.assertAlmostEqual(mobile_tree_geometry["paletteZoomGap"], 8, delta=0.75)
+                self.assertAlmostEqual(mobile_tree_geometry["directionPaletteGap"], 8, delta=0.75)
                 self.assertAlmostEqual(mobile_tree_geometry["paletteMinusCentreDelta"], 0, delta=0.75)
                 for width, height in mobile_tree_geometry["paletteButtonSizes"]:
                     self.assertAlmostEqual(width, 70, delta=0.75)
                     self.assertAlmostEqual(height, 70, delta=0.75)
+                for width, height in mobile_tree_geometry["directionButtonSizes"]:
+                    self.assertAlmostEqual(width, 24, delta=0.75)
+                    self.assertAlmostEqual(height, 24, delta=0.75)
                 self.assertFalse(mobile_tree_geometry["paletteToggleOverlaps"])
                 self.assertGreaterEqual(mobile_tree_geometry["detailTopGap"], 10 - 0.75)
                 self.assertGreaterEqual(mobile_tree_geometry["detailBackdropGap"], 10 - 0.75)

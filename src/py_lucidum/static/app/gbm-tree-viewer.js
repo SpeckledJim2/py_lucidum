@@ -22,6 +22,8 @@ const RESPONSIVE_SUMMARY_BREAKPOINT = 812;
 const COLLAPSE_DRAG_THRESHOLD = (COLLAPSED_SUMMARY_WIDTH + MIN_SUMMARY_WIDTH) / 2;
 const EXPAND_DRAG_DELTA = 32;
 const SVG_RESIZE_REFIT_DELAY = 120;
+const TREE_DEPTH_STEP = 260;
+const TREE_DIRECTIONS = new Set(["left-right", "top-bottom", "diagonal"]);
 
 let d3Promise = null;
 
@@ -32,6 +34,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
   let summaryTable = null;
   let selectedDetail = null;
   let palette = "plain";
+  let direction = "left-right";
   let resizeObserver = null;
   let zoomBehavior = null;
   let zoomSvg = null;
@@ -69,6 +72,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     bindSummaryLayoutObserver(root);
     bindPaletteControls();
     bindZoomControls();
+    bindDirectionControls();
     bindTreeResizer(root);
     bindSearch();
     if (!currentModelId) {
@@ -266,14 +270,13 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       node.data._boxHeight = lines.length * NODE_LINE_HEIGHT + NODE_VERTICAL_PADDING * 2;
     });
 
-    const layout = d3.tree().nodeSize([110, 260]).separation((left, right) => (left.parent === right.parent ? 1.15 : 1.5));
-    layout(hierarchy);
+    layoutTree(d3, hierarchy, direction);
     const nodes = hierarchy.descendants();
     const links = hierarchy.links();
-    const xMin = Math.min(...nodes.map((node) => node.x - node.data._boxHeight / 2));
-    const xMax = Math.max(...nodes.map((node) => node.x + node.data._boxHeight / 2));
-    const yMin = Math.min(...nodes.map((node) => node.y - node.data._boxWidth / 2));
-    const yMax = Math.max(...nodes.map((node) => node.y + node.data._boxWidth / 2));
+    const xMin = Math.min(...nodes.map((node) => node._plotX - node.data._boxWidth / 2));
+    const xMax = Math.max(...nodes.map((node) => node._plotX + node.data._boxWidth / 2));
+    const yMin = Math.min(...nodes.map((node) => node._plotY - node.data._boxHeight / 2));
+    const yMax = Math.max(...nodes.map((node) => node._plotY + node.data._boxHeight / 2));
     treeBounds = { xMin, xMax, yMin, yMax };
 
     zoomBehavior = d3.zoom()
@@ -297,19 +300,19 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       .join("path")
       .attr("class", (link) => `gbm-tree-link${link.target.data.default_branch ? " gbm-tree-link-default" : ""}`)
       .attr("marker-end", "url(#gbmTreeArrow)")
-      .attr("d", (link) => elbowPath(link.source, link.target));
+      .attr("d", (link) => elbowPath(link.source, link.target, direction));
 
     labelLayer.selectAll("text")
       .data(links)
       .join("text")
       .attr("class", "gbm-tree-edge-label")
-      .attr("x", (link) => edgeLabelPlacement(link).x)
-      .attr("y", (link) => edgeLabelPlacement(link).y)
+      .attr("x", (link) => edgeLabelPlacement(link, direction).x)
+      .attr("y", (link) => edgeLabelPlacement(link, direction).y)
       .attr("text-anchor", "middle")
       .attr("dominant-baseline", "middle")
       .attr("data-tooltip", (link) => link.target.data.edge_tooltip || link.target.data.edge_label || "")
       .each(function renderEdgeLabel(link) {
-        const placement = edgeLabelPlacement(link);
+        const placement = edgeLabelPlacement(link, direction);
         const lines = edgeLabelLines(link.target.data.edge_label || "");
         d3.select(this).selectAll("tspan")
           .data(lines.map((line, index) => ({ line, index, total: lines.length, x: placement.x })))
@@ -323,7 +326,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       .data(nodes)
       .join("g")
       .attr("class", (item) => `gbm-tree-node gbm-tree-node-${item.data.type || "split"}`)
-      .attr("transform", (item) => `translate(${item.y},${item.x})`)
+      .attr("transform", (item) => `translate(${item._plotX},${item._plotY})`)
       .on("click", (event, item) => {
         event.stopPropagation();
         highlightedNodeId = highlightedNodeId === item.data.id ? "" : item.data.id;
@@ -428,6 +431,21 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
   function bindZoomControls() {
     for (const button of document.querySelectorAll("[data-gbm-tree-zoom]")) {
       button.onclick = () => applyZoom(button.dataset.gbmTreeZoom);
+    }
+  }
+
+  function bindDirectionControls() {
+    for (const button of document.querySelectorAll("[data-gbm-tree-direction]")) {
+      const selected = button.dataset.gbmTreeDirection === direction;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+      button.onclick = async () => {
+        const nextDirection = button.dataset.gbmTreeDirection || "left-right";
+        if (!TREE_DIRECTIONS.has(nextDirection) || nextDirection === direction) return;
+        direction = nextDirection;
+        bindDirectionControls();
+        if (selectedDetail) await drawTree(selectedDetail);
+      };
     }
   }
 
@@ -635,14 +653,14 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     if (!treeBounds || !window.d3) return null;
     const { width, height } = svgSize(chartTarget());
     const pad = 44;
-    const graphWidth = Math.max(1, treeBounds.yMax - treeBounds.yMin);
-    const graphHeight = Math.max(1, treeBounds.xMax - treeBounds.xMin);
+    const graphWidth = Math.max(1, treeBounds.xMax - treeBounds.xMin);
+    const graphHeight = Math.max(1, treeBounds.yMax - treeBounds.yMin);
     const fitScale = Math.min(
       1.2,
       Math.max(0.03, Math.min((width - pad * 2) / graphWidth, (height - pad * 2) / graphHeight)),
     );
-    const tx = pad + (width - pad * 2 - graphWidth * fitScale) / 2 - treeBounds.yMin * fitScale;
-    const ty = pad + (height - pad * 2 - graphHeight * fitScale) / 2 - treeBounds.xMin * fitScale;
+    const tx = pad + (width - pad * 2 - graphWidth * fitScale) / 2 - treeBounds.xMin * fitScale;
+    const ty = pad + (height - pad * 2 - graphHeight * fitScale) / 2 - treeBounds.yMin * fitScale;
     return window.d3.zoomIdentity.translate(tx, ty).scale(fitScale);
   }
 
@@ -848,6 +866,61 @@ function measureNodeWidth(lines) {
   return Math.max(NODE_MIN_WIDTH, Math.min(NODE_MAX_WIDTH, maxChars * 7 + NODE_HORIZONTAL_PADDING * 2));
 }
 
+function layoutTree(d3, hierarchy, direction) {
+  const nodes = hierarchy.descendants();
+  const maxBoxWidth = Math.max(...nodes.map((node) => node.data._boxWidth || NODE_MIN_WIDTH));
+  const maxBoxHeight = Math.max(...nodes.map((node) => node.data._boxHeight || NODE_LINE_HEIGHT));
+  const separation = (left, right) => (left.parent === right.parent ? 1.15 : 1.5);
+
+  if (direction === "top-bottom") {
+    d3.tree()
+      .nodeSize([maxBoxWidth + 40, maxBoxHeight + 80])
+      .separation(separation)(hierarchy);
+    assignTreeCoordinates(nodes, direction, (node) => node.y);
+    return;
+  }
+
+  if (direction === "diagonal") {
+    const breadthStep = Math.SQRT2 * (maxBoxWidth + 24);
+    d3.tree().nodeSize([breadthStep, 1]).separation(separation)(hierarchy);
+    assignTreeCoordinates(nodes, direction, (node) => node.depth * TREE_DEPTH_STEP);
+    return;
+  }
+
+  d3.tree().nodeSize([110, TREE_DEPTH_STEP]).separation(separation)(hierarchy);
+  assignTreeCoordinates(nodes, "left-right", (node) => node.y);
+}
+
+function assignTreeCoordinates(nodes, direction, depthForNode) {
+  for (const node of nodes) {
+    node._layoutBreadth = node.x;
+    node._layoutDepth = depthForNode(node);
+    const point = projectTreePoint(node._layoutBreadth, node._layoutDepth, direction);
+    node._plotX = point.x;
+    node._plotY = point.y;
+  }
+}
+
+function projectTreePoint(breadth, depth, direction) {
+  if (direction === "top-bottom") return { x: breadth, y: depth };
+  if (direction === "diagonal") {
+    return {
+      x: (depth - breadth) / Math.SQRT2,
+      y: (depth + breadth) / Math.SQRT2,
+    };
+  }
+  return { x: depth, y: breadth };
+}
+
+function treeDirectionVectors(direction) {
+  if (direction === "top-bottom") return { growthX: 0, growthY: 1, normalX: 1, normalY: 0 };
+  if (direction === "diagonal") {
+    const diagonal = 1 / Math.SQRT2;
+    return { growthX: diagonal, growthY: diagonal, normalX: diagonal, normalY: -diagonal };
+  }
+  return { growthX: 1, growthY: 0, normalX: 0, normalY: -1 };
+}
+
 function edgeLabelLines(label) {
   const text = String(label || "").replace(/\s+/g, " ").trim();
   if (!text) return [];
@@ -855,14 +928,23 @@ function edgeLabelLines(label) {
   return wrapWordLabel(text, EDGE_LABEL_WRAP_CHARS);
 }
 
-function edgeLabelPlacement(link) {
+function edgeLabelPlacement(link, direction) {
   const label = String(link.target.data.edge_label || "");
   const lines = edgeLabelLines(label);
   const categorical = isCategoricalEdgeLabel(label);
   const position = categorical ? CATEGORICAL_EDGE_LABEL_POSITION : 0.5;
-  const x = link.source.y + (link.target.y - link.source.y) * position + (categorical ? CATEGORICAL_EDGE_LABEL_X_OFFSET : 0);
-  const y = link.source.x + (link.target.x - link.source.x) * 0.5 - (lines.length > 1 ? 14 : 6);
-  return { x, y };
+  const breadth = link.source._layoutBreadth
+    + (link.target._layoutBreadth - link.source._layoutBreadth) * 0.5;
+  const depth = link.source._layoutDepth
+    + (link.target._layoutDepth - link.source._layoutDepth) * position;
+  const point = projectTreePoint(breadth, depth, direction);
+  const vectors = treeDirectionVectors(direction);
+  const growthOffset = categorical ? CATEGORICAL_EDGE_LABEL_X_OFFSET : 0;
+  const normalOffset = lines.length > 1 ? 14 : 6;
+  return {
+    x: point.x + vectors.growthX * growthOffset + vectors.normalX * normalOffset,
+    y: point.y + vectors.growthY * growthOffset + vectors.normalY * normalOffset,
+  };
 }
 
 function isCategoricalEdgeLabel(label) {
@@ -903,9 +985,13 @@ function wrapWordLabel(text, maxChars) {
   return lines;
 }
 
-function elbowPath(source, target) {
-  const midY = source.y + (target.y - source.y) * 0.55;
-  return `M${source.y},${source.x}C${midY},${source.x} ${midY},${target.x} ${target.y},${target.x}`;
+function elbowPath(source, target, direction) {
+  const midDepth = source._layoutDepth + (target._layoutDepth - source._layoutDepth) * 0.55;
+  const start = projectTreePoint(source._layoutBreadth, source._layoutDepth, direction);
+  const firstControl = projectTreePoint(source._layoutBreadth, midDepth, direction);
+  const secondControl = projectTreePoint(target._layoutBreadth, midDepth, direction);
+  const end = projectTreePoint(target._layoutBreadth, target._layoutDepth, direction);
+  return `M${start.x},${start.y}C${firstControl.x},${firstControl.y} ${secondControl.x},${secondControl.y} ${end.x},${end.y}`;
 }
 
 function nodeFill(node, values, selectedPalette) {

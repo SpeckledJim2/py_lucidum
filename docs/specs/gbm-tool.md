@@ -92,7 +92,7 @@ This tab shows feature contribution stacks by one selected model feature with ba
 
 ## Tree viewer tab
 
-This tab lets the user select a single tree in the model from a searchable list and graphically plots that tree with zoom and colour controls.
+This tab lets the user select a single tree in the model from a searchable list and graphically plots that tree with zoom, colour, and direction controls. Direction is a session-only presentation choice: left-to-right is the default, with top-to-bottom and top-left-to-bottom-right diagonal layouts also available. Changing direction redraws and refits the loaded tree without changing its selected node path or colour palette.
 
 ## Validation
 

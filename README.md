@@ -410,7 +410,7 @@ Choosing a saved GBM in the sidebar, or selecting one model in the Model navigat
 
 The Model navigator shows the active model with a green dot and lets users select one or more rows for model-folder actions: rename or activate one selected model folder, or delete all selected model folders from the current dataset workspace. Deleting the active model selects the newest remaining model when one exists.
 
-The tree viewer reads saved `tree_table.parquet` artifacts, shows a searchable tree list, and renders the selected tree with zoom and colour controls. Tree split labels use compact numeric formatting, tightly wrap categorical splits on the diagram, and summarize long categorical splits while keeping the full split in tooltips. Node cover shows count and percentage of the selected tree, and clicking a node highlights its path from the root.
+The tree viewer reads saved `tree_table.parquet` artifacts, shows a searchable tree list, and renders the selected tree with zoom, colour, and direction controls. Trees default to left-to-right and can also grow top-to-bottom or diagonally from top-left to bottom-right. Tree split labels use compact numeric formatting, tightly wrap categorical splits on the diagram, and summarize long categorical splits while keeping the full split in tooltips. Node cover shows count and percentage of the selected tree, and clicking a node highlights its path from the root.
 
 ### SHAP plots
 

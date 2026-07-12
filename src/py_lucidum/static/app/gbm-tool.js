@@ -393,6 +393,11 @@ export function createGbmTool({
                       <span class="gbm-tree-palette-label">Viridis</span>
                     </button>
                   </div>
+                  <div class="gbm-tree-plot-direction" role="group" aria-label="Tree direction">
+                    <button class="gbm-tree-plot-zoom-button gbm-tree-plot-direction-button active" type="button" data-gbm-tree-direction="left-right" aria-pressed="true" aria-label="Left to right" title="Left to right">→</button>
+                    <button class="gbm-tree-plot-zoom-button gbm-tree-plot-direction-button" type="button" data-gbm-tree-direction="top-bottom" aria-pressed="false" aria-label="Top to bottom" title="Top to bottom">↓</button>
+                    <button class="gbm-tree-plot-zoom-button gbm-tree-plot-direction-button" type="button" data-gbm-tree-direction="diagonal" aria-pressed="false" aria-label="Top left to bottom right" title="Top left to bottom right">↘</button>
+                  </div>
                 </div>
                 <div id="gbmTreeDetailSummary" class="gbm-tree-detail-summary">
                   <h3 class="gbm-section-title">Tree viewer</h3>
