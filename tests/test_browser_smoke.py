@@ -3099,20 +3099,32 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     initial_toggle_state = page.evaluate(
                         """
-                        () => ({
-                          sideExpanded: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-expanded"),
-                          toolbarExpanded: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-expanded"),
-                          sideLabel: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-label"),
-                          toolbarLabel: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-label"),
-                          sideRight: document.querySelector("#lineBarSideControlsToggleBtn").getBoundingClientRect().right,
-                          toolbarLeft: document.querySelector("#lineBarToolbarToggleBtn").getBoundingClientRect().left,
-                          toolbarRight: document.querySelector("#lineBarToolbarToggleBtn").getBoundingClientRect().right,
-                          copyLeft: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().left,
-                          copyRight: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().right,
-                          chartLeft: document.querySelector("#chartTab").getBoundingClientRect().left,
-                          chartRight: document.querySelector("#chartTab").getBoundingClientRect().right,
-                          tableLeft: document.querySelector("#tableTab").getBoundingClientRect().left,
-                        })
+                        () => {
+                          const textRect = (selector) => {
+                            const node = document.querySelector(selector)?.firstChild;
+                            if (!node) return null;
+                            const range = document.createRange();
+                            range.selectNodeContents(node);
+                            return range.getBoundingClientRect();
+                          };
+                          const chartText = textRect("#chartTab");
+                          const tableText = textRect("#tableTab");
+                          return {
+                            sideExpanded: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-expanded"),
+                            toolbarExpanded: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-expanded"),
+                            sideLabel: document.querySelector("#lineBarSideControlsToggleBtn").getAttribute("aria-label"),
+                            toolbarLabel: document.querySelector("#lineBarToolbarToggleBtn").getAttribute("aria-label"),
+                            sideRight: document.querySelector("#lineBarSideControlsToggleBtn").getBoundingClientRect().right,
+                            toolbarLeft: document.querySelector("#lineBarToolbarToggleBtn").getBoundingClientRect().left,
+                            toolbarRight: document.querySelector("#lineBarToolbarToggleBtn").getBoundingClientRect().right,
+                            copyLeft: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().left,
+                            copyRight: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().right,
+                            chartLeft: document.querySelector("#chartTab").getBoundingClientRect().left,
+                            chartRight: document.querySelector("#chartTab").getBoundingClientRect().right,
+                            tableLeft: document.querySelector("#tableTab").getBoundingClientRect().left,
+                            viewLabelGap: chartText && tableText ? tableText.left - chartText.right : null,
+                          };
+                        }
                         """
                     )
                     self.assertEqual(initial_toggle_state["sideExpanded"], "false")
@@ -3126,6 +3138,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertAlmostEqual(initial_toggle_state["copyLeft"] - initial_toggle_state["toolbarRight"], 0, delta=0.5)
                     self.assertAlmostEqual(initial_toggle_state["chartLeft"] - initial_toggle_state["copyRight"], 14, delta=0.5)
                     self.assertAlmostEqual(initial_toggle_state["tableLeft"] - initial_toggle_state["chartRight"], 0, delta=0.5)
+                    self.assertAlmostEqual(initial_toggle_state["viewLabelGap"], 12, delta=0.5)
                     page.mouse.move(0, 0)
                     overlay_style = page.evaluate(
                         """
@@ -3149,7 +3162,8 @@ class BrowserSmokeTests(unittest.TestCase):
                             iconsMuted: iconButtons.every((button) => getComputedStyle(button).color === muted),
                             tabsBorderless: viewTabs.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
                             tabsTransparent: viewTabs.every((button) => getComputedStyle(button).backgroundColor === "rgba(0, 0, 0, 0)"),
-                            tabsSameWeight: new Set(viewTabs.map((button) => getComputedStyle(button).fontWeight)).size === 1,
+                            activeWeight: getComputedStyle(document.querySelector("#chartTab")).fontWeight,
+                            inactiveWeight: getComputedStyle(document.querySelector("#tableTab")).fontWeight,
                             activeAccent: getComputedStyle(document.querySelector("#chartTab")).color === accent,
                             inactiveMuted: getComputedStyle(document.querySelector("#tableTab")).color === muted,
                             accent,
@@ -3162,7 +3176,8 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertTrue(overlay_style["iconsMuted"])
                     self.assertTrue(overlay_style["tabsBorderless"])
                     self.assertTrue(overlay_style["tabsTransparent"])
-                    self.assertTrue(overlay_style["tabsSameWeight"])
+                    self.assertEqual(overlay_style["activeWeight"], "700")
+                    self.assertEqual(overlay_style["inactiveWeight"], "400")
                     self.assertTrue(overlay_style["activeAccent"])
                     self.assertTrue(overlay_style["inactiveMuted"])
                     table_tab_box = page.locator("#tableTab").bounding_box()
@@ -3369,9 +3384,43 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
+                    before_view_switch = page.evaluate(
+                        """
+                        () => ({
+                          chartLeft: document.querySelector("#chartTab").getBoundingClientRect().left,
+                          tableLeft: document.querySelector("#tableTab").getBoundingClientRect().left,
+                        })
+                        """
+                    )
                     chart_requests_before_search = chart_requests
                     page.locator("#tableTab").click()
                     page.locator("#tableWrap:not(.hidden) #lineBarTableSearch").wait_for(timeout=10_000)
+                    switched_view_weights = page.evaluate(
+                        """
+                        () => {
+                          const chart = document.querySelector("#chartTab");
+                          const table = document.querySelector("#tableTab");
+                          const chartText = document.createRange();
+                          const tableText = document.createRange();
+                          chartText.selectNodeContents(chart.firstChild);
+                          tableText.selectNodeContents(table.firstChild);
+                          const chartBox = chart.getBoundingClientRect();
+                          const tableBox = table.getBoundingClientRect();
+                          return {
+                            chartWeight: getComputedStyle(chart).fontWeight,
+                            tableWeight: getComputedStyle(table).fontWeight,
+                            chartLeft: chartBox.left,
+                            tableLeft: tableBox.left,
+                            labelGap: tableText.getBoundingClientRect().left - chartText.getBoundingClientRect().right,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(switched_view_weights["chartWeight"], "400")
+                    self.assertEqual(switched_view_weights["tableWeight"], "700")
+                    self.assertAlmostEqual(switched_view_weights["chartLeft"], before_view_switch["chartLeft"], delta=0.5)
+                    self.assertAlmostEqual(switched_view_weights["tableLeft"], before_view_switch["tableLeft"], delta=0.5)
+                    self.assertAlmostEqual(switched_view_weights["labelGap"], 12, delta=0.5)
                     page.wait_for_function(
                         """
                         () => {

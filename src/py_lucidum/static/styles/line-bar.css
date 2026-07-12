@@ -588,11 +588,24 @@
         background: transparent;
         border: 0;
         color: var(--accent);
-        font-weight: 400;
+        font-weight: 700;
       }
 
       #lineBarTabs #chartTab {
+        align-items: center;
+        display: inline-flex;
+        justify-content: flex-end;
         margin-left: 14px;
+        padding-right: 6px;
+        width: 48px;
+      }
+
+      #lineBarTabs #tableTab {
+        align-items: center;
+        display: inline-flex;
+        justify-content: flex-start;
+        padding-left: 6px;
+        width: 47px;
       }
 
       .line-bar-tab-icon {
