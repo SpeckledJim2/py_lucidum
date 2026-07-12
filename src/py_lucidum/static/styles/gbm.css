@@ -1277,14 +1277,24 @@
       }
 
       .gbm-tree-detail-summary {
+        background: rgb(255 255 255 / 84%);
+        border: 0;
+        border-radius: 6px;
+        box-shadow: none;
+        box-sizing: border-box;
         color: var(--text);
         line-height: 1.22;
-        left: 19px;
+        left: 13px;
         max-width: min(560px, calc(100% - 56px));
+        padding: 6px;
         pointer-events: none;
         position: absolute;
-        top: 42px;
+        top: 36px;
         z-index: 2;
+      }
+
+      body.dark .gbm-tree-detail-summary {
+        background: rgb(17 24 39 / 84%);
       }
 
       .gbm-tree-summary-toggle {
@@ -1316,13 +1326,31 @@
         outline-offset: 1px;
       }
 
-      .gbm-tree-plot-zoom {
+      .gbm-tree-plot-controls {
+        align-items: center;
+        background: rgb(255 255 255 / 84%);
+        border: 0;
+        border-radius: 6px;
+        box-shadow: 0 6px 20px rgb(15 23 42 / 20%);
+        box-sizing: border-box;
         display: flex;
         flex-direction: column;
+        gap: 8px;
+        padding: 6px;
         position: absolute;
-        right: 9px;
-        top: 10px;
+        right: 3px;
+        top: 4px;
+        width: 84px;
         z-index: 3;
+      }
+
+      body.dark .gbm-tree-plot-controls {
+        background: rgb(17 24 39 / 84%);
+      }
+
+      .gbm-tree-plot-zoom {
+        display: flex;
+        flex-direction: row;
       }
 
       .gbm-tree-plot-zoom-button {
@@ -1358,11 +1386,7 @@
       .gbm-tree-plot-palette {
         display: grid;
         gap: 6px;
-        grid-template-columns: repeat(4, 70px);
-        position: absolute;
-        right: 41px;
-        top: 12px;
-        z-index: 3;
+        grid-template-columns: 70px;
       }
 
       .gbm-tree-palette-tile {
@@ -1604,12 +1628,8 @@
       }
 
       @container (max-width: 379px) {
-        .gbm-tree-plot-palette {
-          grid-template-columns: repeat(2, 70px);
-        }
-
         .gbm-tree-detail-summary {
-          top: 168px;
+          top: 356px;
         }
       }
 

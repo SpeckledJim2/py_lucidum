@@ -369,28 +369,30 @@ export function createGbmTool({
                     <path d="m15 18-6-6 6-6"></path>
                   </svg>
                 </button>
-                <div class="gbm-tree-plot-zoom" role="group" aria-label="Tree zoom">
-                  <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="in" aria-label="Zoom in" title="Zoom in">+</button>
-                  <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="out" aria-label="Zoom out" title="Zoom out">−</button>
-                  <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="reset" aria-label="Reset zoom" title="Reset zoom">↺</button>
-                </div>
-                <div class="gbm-tree-plot-palette" role="group" aria-label="Tree colour mode">
-                  <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="plain" aria-pressed="true" title="Plain">
-                    <span class="gbm-tree-palette-swatch gbm-tree-palette-plain" aria-hidden="true"></span>
-                    <span class="gbm-tree-palette-label">Plain</span>
-                  </button>
-                  <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="divergent" aria-pressed="false" title="Divergent">
-                    <span class="gbm-tree-palette-swatch gbm-tree-palette-divergent" aria-hidden="true"></span>
-                    <span class="gbm-tree-palette-label">Divergent</span>
-                  </button>
-                  <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="spectral" aria-pressed="false" title="Spectral">
-                    <span class="gbm-tree-palette-swatch gbm-tree-palette-spectral" aria-hidden="true"></span>
-                    <span class="gbm-tree-palette-label">Spectral</span>
-                  </button>
-                  <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="viridis" aria-pressed="false" title="Viridis">
-                    <span class="gbm-tree-palette-swatch gbm-tree-palette-viridis" aria-hidden="true"></span>
-                    <span class="gbm-tree-palette-label">Viridis</span>
-                  </button>
+                <div class="gbm-tree-plot-controls">
+                  <div class="gbm-tree-plot-zoom" role="group" aria-label="Tree zoom">
+                    <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="in" aria-label="Zoom in" title="Zoom in">+</button>
+                    <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="out" aria-label="Zoom out" title="Zoom out">−</button>
+                    <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="reset" aria-label="Reset zoom" title="Reset zoom">↺</button>
+                  </div>
+                  <div class="gbm-tree-plot-palette" role="group" aria-label="Tree colour mode">
+                    <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="plain" aria-pressed="true" title="Plain">
+                      <span class="gbm-tree-palette-swatch gbm-tree-palette-plain" aria-hidden="true"></span>
+                      <span class="gbm-tree-palette-label">Plain</span>
+                    </button>
+                    <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="divergent" aria-pressed="false" title="Divergent">
+                      <span class="gbm-tree-palette-swatch gbm-tree-palette-divergent" aria-hidden="true"></span>
+                      <span class="gbm-tree-palette-label">Divergent</span>
+                    </button>
+                    <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="spectral" aria-pressed="false" title="Spectral">
+                      <span class="gbm-tree-palette-swatch gbm-tree-palette-spectral" aria-hidden="true"></span>
+                      <span class="gbm-tree-palette-label">Spectral</span>
+                    </button>
+                    <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="viridis" aria-pressed="false" title="Viridis">
+                      <span class="gbm-tree-palette-swatch gbm-tree-palette-viridis" aria-hidden="true"></span>
+                      <span class="gbm-tree-palette-label">Viridis</span>
+                    </button>
+                  </div>
                 </div>
                 <div id="gbmTreeDetailSummary" class="gbm-tree-detail-summary">
                   <h3 class="gbm-section-title">Tree viewer</h3>

@@ -15488,6 +15488,7 @@ COPY (
                       const diagramPanel = viewer.querySelector(".gbm-tree-diagram-panel");
                       const summaryToggle = viewer.querySelector("#gbmTreeSummaryToggle");
                       const detailSummary = viewer.querySelector("#gbmTreeDetailSummary");
+                      const plotControls = viewer.querySelector(".gbm-tree-plot-controls");
                       const plotZoom = viewer.querySelector(".gbm-tree-plot-zoom");
                       const plotZoomButtons = [...plotZoom.querySelectorAll("[data-gbm-tree-zoom]")];
                       const plotPalette = viewer.querySelector(".gbm-tree-plot-palette");
@@ -15539,6 +15540,13 @@ COPY (
                         selectedRows: document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-row.tabulator-selected").length,
                         selectedTree: document.querySelector("#gbmTreeSummaryGrid .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field='tree']")?.textContent.trim() || "",
                         detailSummary: document.querySelector("#gbmTreeDetailSummary")?.textContent.replace(/\\s+/g, " ").trim() || "",
+                        detailBackground: getComputedStyle(detailSummary).backgroundColor,
+                        detailBorderWidths: ["Top", "Right", "Bottom", "Left"].map(
+                          (side) => getComputedStyle(detailSummary)[`border${side}Width`]
+                        ),
+                        detailBoxShadow: getComputedStyle(detailSummary).boxShadow,
+                        detailPadding: getComputedStyle(detailSummary).padding,
+                        detailZIndex: getComputedStyle(detailSummary).zIndex,
                         summaryInsideChart: Boolean(document.querySelector("#gbmTreeChart > #gbmTreeDetailSummary")),
                         rightHeaderPresent: Boolean(viewer.querySelector(".gbm-tree-diagram-header")),
                         toggleExpanded: summaryToggle.getAttribute("aria-expanded"),
@@ -15568,7 +15576,14 @@ COPY (
                         edgeLabels: [...chart.querySelectorAll(".gbm-tree-edge-label")].map((node) => node.textContent.trim()),
                         arrowheads: chart.querySelectorAll("marker#gbmTreeArrow").length,
                         zoomButtons: document.querySelectorAll("[data-gbm-tree-zoom]").length,
-                        zoomInsideChart: plotZoom.parentElement === chart,
+                        controlsInsideChart: plotControls.parentElement === chart,
+                        controlsBackground: getComputedStyle(plotControls).backgroundColor,
+                        controlsBorderWidths: ["Top", "Right", "Bottom", "Left"].map(
+                          (side) => getComputedStyle(plotControls)[`border${side}Width`]
+                        ),
+                        controlsBoxShadow: getComputedStyle(plotControls).boxShadow,
+                        controlsZIndex: getComputedStyle(plotControls).zIndex,
+                        zoomInsideControls: plotZoom.parentElement === plotControls,
                         zoomActions: plotZoomButtons.map((button) => button.dataset.gbmTreeZoom),
                         zoomTexts: plotZoomButtons.map((button) => button.textContent.trim()),
                         zoomLabels: plotZoomButtons.map((button) => button.getAttribute("aria-label")),
@@ -15580,7 +15595,7 @@ COPY (
                             (side) => getComputedStyle(button)[`border${side}Width`]
                           )
                         ),
-                        paletteInsideChart: plotPalette.parentElement === chart,
+                        paletteInsideControls: plotPalette.parentElement === plotControls,
                         paletteActions: plotPaletteButtons.map((button) => button.dataset.gbmTreePalette),
                         paletteLabels: paletteLabels.map((label) => label.textContent.trim()),
                         paletteTitles: plotPaletteButtons.map((button) => button.getAttribute("title")),
@@ -15624,6 +15639,7 @@ COPY (
                           summaryToggle: rect(summaryToggle),
                           summaryToggleIcon: rect(summaryToggle.querySelector("path")),
                           detailSummary: rect(detailSummary),
+                          plotControls: rect(plotControls),
                           plotZoom: rect(plotZoom),
                           plotZoomButtons: plotZoomButtons.map(rect),
                           plotPalette: rect(plotPalette),
@@ -15678,6 +15694,11 @@ COPY (
                 self.assertIn("Dimensionality: 2", tree_state["detailSummary"])
                 self.assertIn("Tree features:", tree_state["detailSummary"])
                 self.assertIn("Tree gain: 7", tree_state["detailSummary"])
+                self.assertEqual(tree_state["detailBackground"], "rgba(255, 255, 255, 0.84)")
+                self.assertEqual(tree_state["detailBorderWidths"], ["0px"] * 4)
+                self.assertEqual(tree_state["detailBoxShadow"], "none")
+                self.assertEqual(tree_state["detailPadding"], "6px")
+                self.assertEqual(tree_state["detailZIndex"], "2")
                 self.assertTrue(tree_state["summaryInsideChart"])
                 self.assertFalse(tree_state["rightHeaderPresent"])
                 self.assertEqual(tree_state["toggleExpanded"], "true")
@@ -15696,7 +15717,12 @@ COPY (
                 self.assertIn("else", tree_state["edgeLabels"])
                 self.assertEqual(tree_state["arrowheads"], 1)
                 self.assertEqual(tree_state["zoomButtons"], 3)
-                self.assertTrue(tree_state["zoomInsideChart"])
+                self.assertTrue(tree_state["controlsInsideChart"])
+                self.assertEqual(tree_state["controlsBackground"], "rgba(255, 255, 255, 0.84)")
+                self.assertEqual(tree_state["controlsBorderWidths"], ["0px"] * 4)
+                self.assertNotEqual(tree_state["controlsBoxShadow"], "none")
+                self.assertEqual(tree_state["controlsZIndex"], "3")
+                self.assertTrue(tree_state["zoomInsideControls"])
                 self.assertEqual(tree_state["zoomActions"], ["in", "out", "reset"])
                 self.assertEqual(tree_state["zoomTexts"], ["+", "−", "↺"])
                 self.assertEqual(tree_state["zoomLabels"], ["Zoom in", "Zoom out", "Reset zoom"])
@@ -15704,7 +15730,7 @@ COPY (
                 self.assertEqual(tree_state["zoomBackgrounds"], ["rgba(0, 0, 0, 0)"] * 3)
                 self.assertEqual(tree_state["zoomFontWeights"], ["400"] * 3)
                 self.assertEqual(tree_state["zoomBorderWidths"], [["0px"] * 4] * 3)
-                self.assertTrue(tree_state["paletteInsideChart"])
+                self.assertTrue(tree_state["paletteInsideControls"])
                 self.assertEqual(tree_state["paletteActions"], ["plain", "divergent", "spectral", "viridis"])
                 self.assertEqual(tree_state["paletteLabels"], ["Plain", "Divergent", "Spectral", "Viridis"])
                 self.assertEqual(tree_state["paletteTitles"], ["Plain", "Divergent", "Spectral", "Viridis"])
@@ -15714,7 +15740,7 @@ COPY (
                 self.assertEqual(tree_state["paletteLabelFontSizes"], ["11px"] * 4)
                 self.assertTrue(tree_state["paletteLabelsFit"])
                 self.assertEqual(tree_state["paletteBorderRadii"], ["7px"] * 4)
-                self.assertEqual(tree_state["paletteColumns"], 4)
+                self.assertEqual(tree_state["paletteColumns"], 1)
                 self.assertEqual(tree_state["paletteSwatchBackgrounds"][0]["color"], tree_state["leafFillColor"])
                 self.assertEqual(tree_state["paletteSwatchBackgrounds"][0]["image"], "none")
                 self.assertIn("rgb(27, 120, 55)", tree_state["paletteSwatchBackgrounds"][1]["image"])
@@ -15780,26 +15806,47 @@ COPY (
                 self.assertAlmostEqual(geometry["chart"]["right"], geometry["viewer"]["right"], delta=0.75)
                 self.assertAlmostEqual(geometry["chart"]["bottom"], geometry["viewer"]["bottom"], delta=0.75)
                 self.assertAlmostEqual(geometry["svgMount"]["top"], geometry["chart"]["top"], delta=0.75)
+                self.assertAlmostEqual(geometry["svgMount"]["right"], geometry["chart"]["right"], delta=0.75)
                 self.assertAlmostEqual(geometry["svgMount"]["bottom"], geometry["chart"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["svgMount"]["left"], geometry["chart"]["left"], delta=0.75)
                 self.assertAlmostEqual(geometry["treeSvg"]["top"], geometry["chart"]["top"], delta=0.75)
+                self.assertAlmostEqual(geometry["treeSvg"]["right"], geometry["svgMount"]["right"], delta=0.75)
                 self.assertAlmostEqual(geometry["treeSvg"]["bottom"], geometry["chart"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["treeSvg"]["left"], geometry["svgMount"]["left"], delta=0.75)
                 self.assertAlmostEqual(
                     geometry["summaryToggleIcon"]["left"],
-                    geometry["detailSummary"]["left"],
+                    geometry["detailSummary"]["left"] + 6,
                     delta=0.75,
                 )
                 self.assertAlmostEqual(geometry["summaryToggle"]["top"], geometry["chart"]["top"] + 10, delta=0.75)
                 self.assertAlmostEqual(geometry["summaryToggle"]["left"], geometry["chart"]["left"] + 9, delta=0.75)
                 self.assertAlmostEqual(geometry["summaryToggle"]["width"], 24, delta=0.75)
                 self.assertAlmostEqual(geometry["summaryToggle"]["height"], 24, delta=0.75)
-                self.assertGreaterEqual(geometry["detailSummary"]["top"], geometry["summaryToggle"]["bottom"] + 8 - 0.75)
-                self.assertAlmostEqual(geometry["plotZoom"]["top"], geometry["chart"]["top"] + 10, delta=0.75)
-                self.assertAlmostEqual(geometry["plotZoom"]["right"], geometry["chart"]["right"] - 9, delta=0.75)
+                self.assertAlmostEqual(
+                    geometry["detailSummary"]["top"],
+                    geometry["summaryToggle"]["bottom"] + 2,
+                    delta=0.75,
+                )
+                self.assertLess(geometry["detailSummary"]["bottom"], geometry["chart"]["bottom"])
+                self.assertAlmostEqual(geometry["plotControls"]["top"], geometry["chart"]["top"] + 4, delta=0.75)
+                self.assertAlmostEqual(geometry["plotControls"]["right"], geometry["chart"]["right"] - 3, delta=0.75)
+                self.assertAlmostEqual(geometry["plotControls"]["width"], 84, delta=0.75)
                 self.assertAlmostEqual(geometry["plotZoom"]["top"], geometry["summaryToggle"]["top"], delta=0.75)
-                self.assertAlmostEqual(geometry["plotPalette"]["top"], geometry["chart"]["top"] + 12, delta=0.75)
-                self.assertAlmostEqual(geometry["plotZoom"]["left"] - geometry["plotPalette"]["right"], 8, delta=0.75)
-                self.assertAlmostEqual(geometry["plotPalette"]["width"], 298, delta=0.75)
-                self.assertAlmostEqual(geometry["plotPalette"]["height"], 70, delta=0.75)
+                self.assertAlmostEqual(geometry["plotZoom"]["right"], geometry["plotControls"]["right"] - 6, delta=0.75)
+                self.assertAlmostEqual(geometry["plotPalette"]["top"], geometry["plotZoom"]["bottom"] + 8, delta=0.75)
+                self.assertAlmostEqual(geometry["plotPalette"]["width"], 70, delta=0.75)
+                self.assertAlmostEqual(geometry["plotPalette"]["height"], 298, delta=0.75)
+                self.assertAlmostEqual(
+                    geometry["plotPalette"]["left"] + geometry["plotPalette"]["width"] / 2,
+                    geometry["plotZoomButtons"][1]["left"] + geometry["plotZoomButtons"][1]["width"] / 2,
+                    delta=0.75,
+                )
+                self.assertAlmostEqual(
+                    geometry["plotControls"]["bottom"] - geometry["plotPaletteButtons"][-1]["bottom"],
+                    6,
+                    delta=0.75,
+                )
+                self.assertGreater(geometry["chart"]["bottom"] - geometry["plotControls"]["bottom"], 0)
                 self.assertEqual(len(geometry["plotPaletteButtons"]), 4)
                 for button_geometry in geometry["plotPaletteButtons"]:
                     self.assertAlmostEqual(button_geometry["width"], 70, delta=0.75)
@@ -15808,11 +15855,11 @@ COPY (
                 for index, button_geometry in enumerate(geometry["plotZoomButtons"]):
                     self.assertAlmostEqual(button_geometry["width"], 24, delta=0.75)
                     self.assertAlmostEqual(button_geometry["height"], 24, delta=0.75)
-                    self.assertAlmostEqual(button_geometry["right"], geometry["plotZoom"]["right"], delta=0.75)
+                    self.assertAlmostEqual(button_geometry["top"], geometry["plotZoom"]["top"], delta=0.75)
                     if index:
                         self.assertAlmostEqual(
-                            button_geometry["top"],
-                            geometry["plotZoomButtons"][index - 1]["bottom"],
+                            button_geometry["left"],
+                            geometry["plotZoomButtons"][index - 1]["right"],
                             delta=0.75,
                         )
                 page.locator("#gbmTreeSummaryToggle").hover()
@@ -15849,6 +15896,26 @@ COPY (
                     ),
                     tree_state["paletteInactiveBorder"],
                 )
+                page.locator("#themeBtn").click()
+                self.assertEqual(
+                    page.locator(".gbm-tree-plot-controls").evaluate(
+                        "node => getComputedStyle(node).backgroundColor"
+                    ),
+                    "rgba(17, 24, 39, 0.84)",
+                )
+                self.assertEqual(
+                    page.locator(".gbm-tree-detail-summary").evaluate(
+                        "node => getComputedStyle(node).backgroundColor"
+                    ),
+                    "rgba(17, 24, 39, 0.84)",
+                )
+                self.assertEqual(
+                    page.locator(".gbm-tree-detail-summary").evaluate(
+                        "node => getComputedStyle(node).boxShadow"
+                    ),
+                    "none",
+                )
+                page.locator("#themeBtn").click()
                 page.evaluate(
                     """
                     async () => {
@@ -16396,6 +16463,7 @@ COPY (
                         .map((button) => button.getBoundingClientRect());
                       const toggle = document.querySelector("#gbmTreeSummaryToggle").getBoundingClientRect();
                       const detailSummary = document.querySelector("#gbmTreeDetailSummary").getBoundingClientRect();
+                      const plotControls = document.querySelector(".gbm-tree-plot-controls").getBoundingClientRect();
                       return {
                         chartWidth: chart.width,
                         viewerWidth: viewer.width,
@@ -16408,7 +16476,12 @@ COPY (
                         paletteColumns: getComputedStyle(plotPaletteNode).gridTemplateColumns.split(" ").length,
                         paletteWidth: plotPalette.width,
                         paletteHeight: plotPalette.height,
-                        paletteZoomGap: plotZoom.left - plotPalette.right,
+                        paletteZoomGap: plotPalette.top - plotZoom.bottom,
+                        paletteMinusCentreDelta: (
+                          plotPalette.left + plotPalette.width / 2
+                        ) - (
+                          document.querySelector('[data-gbm-tree-zoom="out"]').getBoundingClientRect().left + 12
+                        ),
                         paletteButtonSizes: paletteButtons.map((button) => [button.width, button.height]),
                         paletteToggleOverlaps: !(
                           plotPalette.left >= toggle.right
@@ -16417,6 +16490,8 @@ COPY (
                           || plotPalette.bottom <= toggle.top
                         ),
                         detailTopGap: detailSummary.top - plotPalette.bottom,
+                        detailBackdropGap: detailSummary.top - plotControls.bottom,
+                        backdropBottomGap: chart.bottom - plotControls.bottom,
                       };
                     }
                     """
@@ -16432,15 +16507,18 @@ COPY (
                 self.assertAlmostEqual(mobile_tree_geometry["zoomTopInset"], 10, delta=0.75)
                 self.assertAlmostEqual(mobile_tree_geometry["zoomToggleTopDelta"], 0, delta=0.75)
                 self.assertLessEqual(mobile_tree_geometry["chartWidth"], 379)
-                self.assertEqual(mobile_tree_geometry["paletteColumns"], 2)
-                self.assertAlmostEqual(mobile_tree_geometry["paletteWidth"], 146, delta=0.75)
-                self.assertAlmostEqual(mobile_tree_geometry["paletteHeight"], 146, delta=0.75)
+                self.assertEqual(mobile_tree_geometry["paletteColumns"], 1)
+                self.assertAlmostEqual(mobile_tree_geometry["paletteWidth"], 70, delta=0.75)
+                self.assertAlmostEqual(mobile_tree_geometry["paletteHeight"], 298, delta=0.75)
                 self.assertAlmostEqual(mobile_tree_geometry["paletteZoomGap"], 8, delta=0.75)
+                self.assertAlmostEqual(mobile_tree_geometry["paletteMinusCentreDelta"], 0, delta=0.75)
                 for width, height in mobile_tree_geometry["paletteButtonSizes"]:
                     self.assertAlmostEqual(width, 70, delta=0.75)
                     self.assertAlmostEqual(height, 70, delta=0.75)
                 self.assertFalse(mobile_tree_geometry["paletteToggleOverlaps"])
                 self.assertGreaterEqual(mobile_tree_geometry["detailTopGap"], 10 - 0.75)
+                self.assertGreaterEqual(mobile_tree_geometry["detailBackdropGap"], 10 - 0.75)
+                self.assertGreater(mobile_tree_geometry["backdropBottomGap"], 0)
 
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.wait_for_function(
