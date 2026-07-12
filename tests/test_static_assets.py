@@ -892,8 +892,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('class="gbm-tabs tool-screen-nav"', (static_root / "app/gbm-tool.js").read_text(encoding="utf-8"))
         self.assertIn('class="glm-tabs tool-screen-nav"', glm)
         self.assertIn('class="tool-screen-nav spec-kind-tabs"', specs)
-        self.assertIn('<div class="spec-file-row">', specs)
-        self.assertLess(specs.index('<div class="spec-file-row">'), specs.index('id="specSaveBtn"'))
+        self.assertIn('<div class="spec-file-row app-control-strip">', specs)
+        self.assertLess(specs.index('<div class="spec-file-row app-control-strip">'), specs.index('id="specSaveBtn"'))
         self.assertIn("toolScreenNavButtonHtml", gbm)
         self.assertIn('id="lineBarTabs" class="tabs workspace-tabs hidden"', index)
         self.assertNotIn('id="lineBarTabs" class="tool-screen-nav', index)
@@ -908,6 +908,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         glm_css = (static_root / "styles/glm.css").read_text(encoding="utf-8")
         glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
         gbm = (static_root / "app/gbm-tool.js").read_text(encoding="utf-8")
+        specs = (static_root / "app/specifications-tool.js").read_text(encoding="utf-8")
 
         self.assertIn("--app-tool-row-height: 50px;", foundations)
         self.assertIn("--app-control-strip-height: var(--app-tool-row-height);", foundations)
@@ -937,6 +938,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--titled", glm)
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", glm)
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", gbm)
+        self.assertIn('class="spec-file-row app-control-strip"', specs)
+        self.assertIn('class="spec-save-button app-control-button"', specs)
 
     def test_responsive_sidebar_divider_is_owned_by_shared_shell(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"

@@ -80,13 +80,15 @@ export function createSpecificationsTool({
               })).join("")}
             </div>
           </div>
-          <div class="spec-file-row">
-            <span id="specFilePath" class="spec-file-path"></span>
+          <div class="spec-file-row app-control-strip">
+            <div class="spec-file-copy">
+              <span id="specFilePath" class="spec-file-path"></span>
+              <div id="specNotice" class="spec-notice spec-notice-empty" role="status" aria-live="polite"></div>
+            </div>
             <div class="spec-file-actions">
-              <button id="specSaveBtn" class="spec-save-button" type="button">Save</button>
+              <button id="specSaveBtn" class="spec-save-button app-control-button" type="button">Save</button>
             </div>
           </div>
-          <div id="specNotice" class="spec-notice spec-notice-empty" role="status" aria-live="polite"></div>
         </div>
         <div id="specGrid" class="spec-grid" tabindex="0"></div>
         <div id="specContextMenu" class="spec-context-menu" role="menu" hidden>
@@ -243,7 +245,6 @@ export function createSpecificationsTool({
           layout: "fitDataStretch",
           placeholder: "No specification rows",
           editTriggerEvent: "dblclick",
-          rowHeader: specRowHeader(),
           columns: tabulatorColumns(spec),
         });
         table.on("tableBuilt", () => {
@@ -308,26 +309,6 @@ export function createSpecificationsTool({
       }
       return column;
     });
-  }
-
-  function specRowHeader() {
-    return {
-      title: "",
-      field: "_spec_row_number",
-      formatter: rowNumberFormatter,
-      headerSort: false,
-      hozAlign: "center",
-      headerHozAlign: "center",
-      width: 38,
-      minWidth: 38,
-      resizable: false,
-      frozen: true,
-      cssClass: "spec-row-number-cell",
-    };
-  }
-
-  function rowNumberFormatter(cell) {
-    return escapeHtml(cell.getValue() ?? "");
   }
 
   function fieldTitle(kind, field) {

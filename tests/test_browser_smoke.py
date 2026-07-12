@@ -3984,11 +3984,110 @@ COPY (
                         page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill(value)
                         page.keyboard.press("Enter")
 
+                    def assert_spec_full_bleed_layout(expected_first_title: str) -> None:
+                        page.locator("#specGrid .tabulator-header").wait_for(timeout=10_000)
+                        layout = page.evaluate(
+                            """
+                            () => {
+                              const tool = document.querySelector(".spec-tool");
+                              const tabs = document.querySelector(".spec-control-row");
+                              const control = document.querySelector(".spec-file-row");
+                              const copy = document.querySelector(".spec-file-copy");
+                              const path = document.querySelector("#specFilePath");
+                              const actions = document.querySelector(".spec-file-actions");
+                              const save = document.querySelector("#specSaveBtn");
+                              const notice = document.querySelector("#specNotice");
+                              const grid = document.querySelector("#specGrid");
+                              const firstHeader = grid.querySelector(".tabulator-header .tabulator-col[tabulator-field]");
+                              const rect = (node) => {
+                                const bounds = node.getBoundingClientRect();
+                                return {
+                                  top: bounds.top,
+                                  right: bounds.right,
+                                  bottom: bounds.bottom,
+                                  left: bounds.left,
+                                  width: bounds.width,
+                                  height: bounds.height,
+                                };
+                              };
+                              return {
+                                tool: rect(tool),
+                                tabs: rect(tabs),
+                                control: rect(control),
+                                copy: rect(copy),
+                                path: rect(path),
+                                actions: rect(actions),
+                                save: rect(save),
+                                notice: rect(notice),
+                                grid: rect(grid),
+                                firstHeader: rect(firstHeader),
+                                firstHeaderTitle: firstHeader?.querySelector(".tabulator-col-title")?.textContent.trim() || "",
+                                copyInsideControl: copy.parentElement === control,
+                                pathInsideCopy: path.parentElement === copy,
+                                noticeInsideCopy: notice.parentElement === copy,
+                                actionsInsideControl: actions.parentElement === control,
+                                saveInsideActions: save.parentElement === actions,
+                                dividerHeight: getComputedStyle(control, "::after").height,
+                                gridBorderWidths: ["Top", "Right", "Bottom", "Left"].map(
+                                  (side) => getComputedStyle(grid)[`border${side}Width`]
+                                ),
+                                gridBorderRadius: getComputedStyle(grid).borderRadius,
+                                gridBackground: getComputedStyle(grid).backgroundColor,
+                                tableholderBackground: getComputedStyle(
+                                  grid.querySelector(".tabulator-tableholder")
+                                ).backgroundColor,
+                                panelBackground: (() => {
+                                  const probe = document.createElement("span");
+                                  probe.style.background = "var(--panel)";
+                                  document.body.appendChild(probe);
+                                  const color = getComputedStyle(probe).backgroundColor;
+                                  probe.remove();
+                                  return color;
+                                })(),
+                                rowHeaderCount: grid.querySelectorAll(
+                                  ".tabulator-row-header, [tabulator-field='_spec_row_number'], .spec-row-number-cell"
+                                ).length,
+                              };
+                            }
+                            """
+                        )
+                        self.assertTrue(layout["copyInsideControl"])
+                        self.assertTrue(layout["pathInsideCopy"])
+                        self.assertTrue(layout["noticeInsideCopy"])
+                        self.assertTrue(layout["actionsInsideControl"])
+                        self.assertTrue(layout["saveInsideActions"])
+                        self.assertAlmostEqual(layout["control"]["height"], 50, delta=0.75)
+                        self.assertAlmostEqual(layout["control"]["top"], layout["tabs"]["bottom"], delta=0.75)
+                        self.assertAlmostEqual(layout["control"]["left"], layout["tool"]["left"], delta=0.75)
+                        self.assertAlmostEqual(layout["control"]["right"], layout["tool"]["right"], delta=0.75)
+                        self.assertEqual(layout["dividerHeight"], "1px")
+                        self.assertAlmostEqual(layout["path"]["left"], layout["control"]["left"] + 8, delta=0.75)
+                        self.assertAlmostEqual(layout["save"]["right"], layout["control"]["right"] - 8, delta=0.75)
+                        self.assertAlmostEqual(layout["notice"]["left"], layout["path"]["left"], delta=0.75)
+                        self.assertLessEqual(layout["path"]["bottom"], layout["notice"]["top"] + 0.75)
+                        self.assertAlmostEqual(
+                            layout["save"]["top"] + layout["save"]["height"] / 2,
+                            layout["control"]["top"] + layout["control"]["height"] / 2,
+                            delta=0.75,
+                        )
+                        self.assertAlmostEqual(layout["grid"]["top"], layout["control"]["bottom"], delta=0.75)
+                        self.assertAlmostEqual(layout["grid"]["left"], layout["tool"]["left"], delta=0.75)
+                        self.assertAlmostEqual(layout["grid"]["right"], layout["tool"]["right"], delta=0.75)
+                        self.assertAlmostEqual(layout["grid"]["bottom"], layout["tool"]["bottom"], delta=0.75)
+                        self.assertEqual(layout["gridBorderWidths"], ["0px"] * 4)
+                        self.assertEqual(layout["gridBorderRadius"], "0px")
+                        self.assertEqual(layout["gridBackground"], layout["panelBackground"])
+                        self.assertEqual(layout["tableholderBackground"], layout["panelBackground"])
+                        self.assertEqual(layout["rowHeaderCount"], 0)
+                        self.assertAlmostEqual(layout["firstHeader"]["left"], layout["grid"]["left"], delta=0.75)
+                        self.assertEqual(layout["firstHeaderTitle"], expected_first_title)
+
                     page.locator("#specFilePath", has_text="Save target:").wait_for(timeout=10_000)
                     page.locator("#specFilePath", has_text=re.compile(r"\((new file|existing file ignored by --no-features)\)")).wait_for(timeout=10_000)
                     page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
                     self.assertEqual(page.locator(".spec-kind-tabs #specSaveBtn").count(), 0)
                     self.assertEqual(page.locator(".spec-file-row #specSaveBtn").count(), 1)
+                    assert_spec_full_bleed_layout("Feature")
                     spec_rail_geometry = page.locator(".spec-control-row").evaluate(
                         """
                         (rail) => {
@@ -4029,6 +4128,7 @@ COPY (
                     page.locator("#specFilePath", has_text="kpi_spec.csv (new file)").wait_for(timeout=10_000)
                     page.locator("#specNotice", has_text="Valid KPI spec").wait_for(timeout=10_000)
                     page.locator(".spec-cell-placeholder", has_text="Numeric column").wait_for(timeout=10_000)
+                    assert_spec_full_bleed_layout("Group")
                     wait_for_save_button_state({"disabled": False, "dirty": False, "pending": True})
                     page.locator("#specSaveBtn").click()
                     page.locator("#specNotice", has_text="KPI spec saved").wait_for(timeout=10_000)
@@ -4049,6 +4149,40 @@ COPY (
                     )
                     page.locator("#specSaveBtn").click()
                     wait_for_save_button_state({"disabled": True, "dirty": False, "pending": False})
+                    page.locator('[data-spec-kind="filter"]').click()
+                    page.locator('[data-spec-kind="filter"][aria-selected="true"]').wait_for(timeout=10_000)
+                    page.locator("#specNotice:not(.spec-notice-empty)").wait_for(timeout=10_000)
+                    assert_spec_full_bleed_layout("Group")
+                    page.set_viewport_size({"width": 420, "height": 800})
+                    page.wait_for_timeout(100)
+                    narrow_control = page.evaluate(
+                        """
+                        () => {
+                          const control = document.querySelector(".spec-file-row").getBoundingClientRect();
+                          const save = document.querySelector("#specSaveBtn").getBoundingClientRect();
+                          const pathStyle = getComputedStyle(document.querySelector("#specFilePath"));
+                          const noticeStyle = getComputedStyle(document.querySelector("#specNotice"));
+                          return {
+                            saveVisible: save.width > 0 && save.height > 0,
+                            saveContained: save.left >= control.left && save.right <= control.right,
+                            pathOverflow: pathStyle.overflow,
+                            pathTextOverflow: pathStyle.textOverflow,
+                            pathWhiteSpace: pathStyle.whiteSpace,
+                            noticeOverflow: noticeStyle.overflow,
+                            noticeTextOverflow: noticeStyle.textOverflow,
+                            noticeWhiteSpace: noticeStyle.whiteSpace,
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(narrow_control["saveVisible"])
+                    self.assertTrue(narrow_control["saveContained"])
+                    self.assertEqual(narrow_control["pathOverflow"], "hidden")
+                    self.assertEqual(narrow_control["pathTextOverflow"], "ellipsis")
+                    self.assertEqual(narrow_control["pathWhiteSpace"], "nowrap")
+                    self.assertEqual(narrow_control["noticeOverflow"], "hidden")
+                    self.assertEqual(narrow_control["noticeTextOverflow"], "ellipsis")
+                    self.assertEqual(narrow_control["noticeWhiteSpace"], "nowrap")
                     self.assertEqual(page_errors, [])
                     browser.close()
             finally:
