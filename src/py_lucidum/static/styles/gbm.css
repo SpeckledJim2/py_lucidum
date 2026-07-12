@@ -1235,53 +1235,43 @@
         overflow: hidden;
       }
 
+      .gbm-tree-viewer.gbm-tree-summary-collapsed {
+        grid-template-columns: 108px minmax(0, 1fr);
+      }
+
       .gbm-tree-viewer.resizing {
         user-select: none;
       }
 
       .gbm-tree-summary-panel,
       .gbm-tree-diagram-panel {
-        grid-row: 2;
         min-height: 0;
         overflow: hidden;
       }
 
       .gbm-tree-summary-panel {
         grid-column: 1;
+        grid-row: 2;
       }
 
       .gbm-tree-diagram-panel {
         grid-column: 2;
+        grid-row: 1 / -1;
       }
 
       .gbm-tree-control-strip {
-        grid-column: 1 / -1;
+        grid-column: 1;
         grid-row: 1;
         padding-inline: 0;
       }
 
-      .gbm-tree-control-layout {
-        display: grid;
-        grid-template-columns: minmax(420px, var(--gbm-tree-summary-width, 560px)) minmax(360px, 1fr);
+      .gbm-tree-section-header {
         min-height: var(--app-control-strip-height);
-      }
-
-      .gbm-tree-section-header,
-      .gbm-tree-diagram-header {
         min-width: 0;
         padding-inline: var(--app-control-strip-padding-inline);
       }
 
-      .gbm-tree-section-header {
-        grid-column: 1;
-      }
-
-      .gbm-tree-diagram-header {
-        grid-column: 2;
-      }
-
-      .gbm-tree-section-header .gbm-section-title,
-      .gbm-tree-diagram-header .gbm-section-title {
+      .gbm-tree-section-header .gbm-section-title {
         margin: 0;
         white-space: nowrap;
       }
@@ -1289,12 +1279,179 @@
       .gbm-tree-detail-summary {
         color: var(--text);
         line-height: 1.22;
-        left: 14px;
-        max-width: min(560px, calc(100% - 28px));
+        left: 19px;
+        max-width: min(560px, calc(100% - 56px));
         pointer-events: none;
         position: absolute;
-        top: 12px;
+        top: 42px;
         z-index: 2;
+      }
+
+      .gbm-tree-summary-toggle {
+        appearance: none;
+        align-items: center;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        display: inline-grid;
+        height: 24px;
+        justify-content: center;
+        left: 9px;
+        padding: 2px;
+        position: absolute;
+        top: 10px;
+        width: 24px;
+        z-index: 3;
+      }
+
+      .gbm-tree-summary-toggle:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-tree-summary-toggle:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .gbm-tree-plot-zoom {
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        right: 9px;
+        top: 10px;
+        z-index: 3;
+      }
+
+      .gbm-tree-plot-zoom-button {
+        appearance: none;
+        align-items: center;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        display: inline-grid;
+        font: inherit;
+        font-size: 17px;
+        font-weight: 400;
+        height: 24px;
+        justify-content: center;
+        line-height: 1;
+        margin: 0;
+        padding: 2px;
+        width: 24px;
+      }
+
+      .gbm-tree-plot-zoom-button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-tree-plot-zoom-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .gbm-tree-plot-palette {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: repeat(4, 70px);
+        position: absolute;
+        right: 41px;
+        top: 12px;
+        z-index: 3;
+      }
+
+      .gbm-tree-palette-tile {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        color: var(--text);
+        cursor: pointer;
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) auto;
+        height: 70px;
+        min-width: 0;
+        overflow: hidden;
+        padding: 0;
+        transition:
+          background-color 120ms ease,
+          border-color 120ms ease,
+          box-shadow 120ms ease;
+        width: 70px;
+      }
+
+      .gbm-tree-palette-tile:hover {
+        background: var(--panel-2);
+        border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+      }
+
+      .gbm-tree-palette-tile:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 80%, white);
+        outline-offset: 2px;
+      }
+
+      .gbm-tree-palette-tile.active {
+        border-color: color-mix(in srgb, var(--accent) 82%, var(--line));
+        box-shadow:
+          inset 0 0 0 2px color-mix(in srgb, var(--accent) 78%, transparent),
+          0 2px 8px rgb(15 23 42 / 14%);
+      }
+
+      .gbm-tree-palette-swatch {
+        display: block;
+        height: 100%;
+        width: 100%;
+      }
+
+      .gbm-tree-palette-plain {
+        background: var(--gbm-tree-leaf-fill);
+      }
+
+      .gbm-tree-palette-divergent {
+        background: linear-gradient(135deg, #1b7837 0%, #f7f7f7 50%, #b2182b 100%);
+      }
+
+      .gbm-tree-palette-spectral {
+        background: linear-gradient(135deg, #2c7bb6 0%, #ffffbf 52%, #d7191c 100%);
+      }
+
+      .gbm-tree-palette-viridis {
+        background: linear-gradient(135deg, #fde725 0%, #21918c 52%, #440154 100%);
+      }
+
+      .gbm-tree-palette-label {
+        background: color-mix(in srgb, var(--panel) 88%, transparent);
+        border-top: 1px solid rgb(15 23 42 / 12%);
+        font-size: 11px;
+        font-weight: 650;
+        line-height: 1.1;
+        overflow: hidden;
+        padding: 4px 3px 5px;
+        text-align: center;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      body.dark .gbm-tree-palette-label {
+        border-top-color: rgb(255 255 255 / 12%);
+      }
+
+      .gbm-tree-summary-toggle-icon {
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
+      }
+
+      .gbm-tree-summary-toggle[aria-expanded="false"] .gbm-tree-summary-toggle-icon {
+        transform: rotate(180deg);
       }
 
       .gbm-tree-detail-title {
@@ -1342,6 +1499,18 @@
         border: 0;
       }
 
+      .gbm-tree-viewer.gbm-tree-summary-collapsed .gbm-tree-summary-grid .tabulator-tableholder,
+      .gbm-tree-viewer.gbm-tree-summary-collapsed #gbmTreeSummaryFallback {
+        scrollbar-width: none;
+      }
+
+      .gbm-tree-viewer.gbm-tree-summary-collapsed .gbm-tree-summary-grid .tabulator-tableholder::-webkit-scrollbar,
+      .gbm-tree-viewer.gbm-tree-summary-collapsed #gbmTreeSummaryFallback::-webkit-scrollbar {
+        display: none;
+        height: 0;
+        width: 0;
+      }
+
       #gbmTreeSummaryGrid:has(+ #gbmTreeSummaryFallback:not(:empty)) {
         display: none;
       }
@@ -1361,6 +1530,11 @@
         border: 0;
         border-radius: 0;
         width: 100%;
+      }
+
+      .gbm-tree-viewer.gbm-tree-summary-collapsed .gbm-tree-fallback-table th:nth-child(n + 3),
+      .gbm-tree-viewer.gbm-tree-summary-collapsed .gbm-tree-fallback-table td:nth-child(n + 3) {
+        display: none;
       }
 
       .gbm-tree-resizer {
@@ -1413,31 +1587,6 @@
         width: 100%;
       }
 
-      .gbm-tree-controls {
-        align-items: center;
-        display: flex;
-        flex: 0 0 auto;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
-      }
-
-      .gbm-tree-zoom,
-      .gbm-tree-palette {
-        display: flex;
-        flex: 0 0 auto;
-        gap: 0;
-      }
-
-      .gbm-tree-zoom button,
-      .gbm-tree-palette button {
-        margin: 0;
-      }
-
-      .gbm-tree-zoom button {
-        min-width: 28px;
-      }
-
       .gbm-tree-chart {
         --gbm-tree-split-fill: #dbeafe;
         --gbm-tree-leaf-fill: #fef3c7;
@@ -1451,6 +1600,17 @@
         min-width: 0;
         overflow: hidden;
         position: relative;
+        container-type: inline-size;
+      }
+
+      @container (max-width: 379px) {
+        .gbm-tree-plot-palette {
+          grid-template-columns: repeat(2, 70px);
+        }
+
+        .gbm-tree-detail-summary {
+          top: 168px;
+        }
       }
 
       body.dark .gbm-tree-chart {

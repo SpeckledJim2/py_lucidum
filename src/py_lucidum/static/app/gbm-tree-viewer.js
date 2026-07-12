@@ -17,6 +17,11 @@ const CATEGORICAL_EDGE_LABEL_X_OFFSET = 32;
 const DEFAULT_SUMMARY_WIDTH = 560;
 const MIN_SUMMARY_WIDTH = 420;
 const MIN_DIAGRAM_WIDTH = 360;
+const COLLAPSED_SUMMARY_WIDTH = 108;
+const RESPONSIVE_SUMMARY_BREAKPOINT = 812;
+const COLLAPSE_DRAG_THRESHOLD = (COLLAPSED_SUMMARY_WIDTH + MIN_SUMMARY_WIDTH) / 2;
+const EXPAND_DRAG_DELTA = 32;
+const SVG_RESIZE_REFIT_DELAY = 120;
 
 let d3Promise = null;
 
@@ -33,9 +38,17 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
   let resetTransform = null;
   let treeBounds = null;
   let resizeFrame = null;
+  let resizeFitTimer = null;
+  let observedChartSizeKey = "";
   let summaryWidth = DEFAULT_SUMMARY_WIDTH;
+  let summaryCollapsed = false;
+  let summaryCollapseReason = "";
+  let responsiveSummaryNarrow = null;
+  let summaryLayoutObserver = null;
   let resizePointerId = null;
   let resizePointerOffset = 0;
+  let resizeBounds = null;
+  let resizePreviewWidth = null;
   let highlightedNodeId = "";
   let renderToken = 0;
 
@@ -50,6 +63,10 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     const root = document.getElementById("gbmTreeViewer");
     if (!root) return;
     applySummaryWidth(root, summaryWidth);
+    bindSummaryToggle(root);
+    syncResponsiveSummaryState(root, root.getBoundingClientRect().width, { refreshLayout: false });
+    syncSummaryCollapseState(root, { refreshLayout: false });
+    bindSummaryLayoutObserver(root);
     bindPaletteControls();
     bindZoomControls();
     bindTreeResizer(root);
@@ -95,6 +112,8 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     renderToken += 1;
     resizeObserver?.disconnect();
     resizeObserver = null;
+    summaryLayoutObserver?.disconnect();
+    summaryLayoutObserver = null;
     cancelResizeFrame();
     zoomBehavior = null;
     zoomSvg = null;
@@ -132,13 +151,14 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
           columns: [
             { title: "tree", field: "tree", width: 56, minWidth: 56, hozAlign: "right", headerSortStartingDir: "asc" },
             { title: "dim", field: "dim", width: 52, minWidth: 52, hozAlign: "right" },
-            { title: "features", field: "features", widthGrow: 2, formatter: treeFeaturesFormatter },
-            { title: "gain", field: "gain", width: 96, hozAlign: "right", formatter: treeGainFormatter },
+            { title: "features", field: "features", widthGrow: 2, formatter: treeFeaturesFormatter, visible: !summaryCollapsed },
+            { title: "gain", field: "gain", width: 96, hozAlign: "right", formatter: treeGainFormatter, visible: !summaryCollapsed },
           ],
         });
         summaryTable.on("rowClick", (_, row) => selectTree(Number(row.getData().tree)));
         await waitForTableBuilt(summaryTable);
       }
+      syncSummaryTableColumns();
       filterSummaryTable();
       selectSummaryRow(selectedTree);
     } catch (_) {
@@ -210,6 +230,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     treeBounds = null;
 
     const { width, height } = svgSize(target);
+    observedChartSizeKey = chartSizeKey(target);
     const svg = d3.select(target)
       .append("svg")
       .attr("class", "gbm-tree-svg")
@@ -353,7 +374,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     updateTreeHighlight(highlightedNodeId);
 
     if (window.ResizeObserver) {
-      resizeObserver = new ResizeObserver(scheduleSvgResize);
+      resizeObserver = new ResizeObserver(() => scheduleSvgResize());
       resizeObserver.observe(target);
     }
   }
@@ -410,6 +431,83 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     }
   }
 
+  function bindSummaryToggle(root) {
+    const button = document.getElementById("gbmTreeSummaryToggle");
+    if (!button) return;
+    button.onclick = () => {
+      setSummaryCollapsed(root, !summaryCollapsed, "manual");
+    };
+  }
+
+  function bindSummaryLayoutObserver(root) {
+    summaryLayoutObserver?.disconnect();
+    summaryLayoutObserver = null;
+    if (!window.ResizeObserver) return;
+    summaryLayoutObserver = new ResizeObserver((entries) => {
+      const width = entries.find((entry) => entry.target === root)?.contentRect?.width;
+      syncResponsiveSummaryState(root, width);
+    });
+    summaryLayoutObserver.observe(root);
+  }
+
+  function syncResponsiveSummaryState(root, rawWidth, { refreshLayout = true } = {}) {
+    const width = Number(rawWidth);
+    if (!Number.isFinite(width) || width <= 0) return;
+    const narrow = width < RESPONSIVE_SUMMARY_BREAKPOINT;
+    if (responsiveSummaryNarrow === null) {
+      responsiveSummaryNarrow = narrow;
+      if (narrow && !summaryCollapsed) setSummaryCollapsed(root, true, "auto", { refreshLayout });
+      return;
+    }
+    if (narrow === responsiveSummaryNarrow) return;
+    responsiveSummaryNarrow = narrow;
+    if (narrow && !summaryCollapsed) {
+      setSummaryCollapsed(root, true, "auto", { refreshLayout });
+    } else if (!narrow && summaryCollapsed && summaryCollapseReason === "auto") {
+      setSummaryCollapsed(root, false, "", { refreshLayout });
+    }
+  }
+
+  function setSummaryCollapsed(root, collapsed, reason = "manual", { refreshLayout = true } = {}) {
+    summaryCollapsed = Boolean(collapsed);
+    summaryCollapseReason = summaryCollapsed ? reason : "";
+    syncSummaryCollapseState(root, { refreshLayout });
+  }
+
+  function syncSummaryCollapseState(root, { refreshLayout = true } = {}) {
+    root.classList.toggle("gbm-tree-summary-collapsed", summaryCollapsed);
+    const button = document.getElementById("gbmTreeSummaryToggle");
+    const label = summaryCollapsed ? "Expand tree selector" : "Collapse tree selector";
+    if (button) {
+      button.setAttribute("aria-expanded", String(!summaryCollapsed));
+      button.setAttribute("aria-label", label);
+      button.title = label;
+    }
+    const search = document.getElementById("gbmTreeSearch");
+    if (search) search.hidden = summaryCollapsed;
+    const resizer = document.getElementById("gbmTreeResizer");
+    if (resizer) {
+      resizer.setAttribute("aria-disabled", "false");
+      resizer.setAttribute(
+        "aria-label",
+        summaryCollapsed ? "Drag right to expand tree selector" : "Resize tree selector; drag left to collapse",
+      );
+    }
+    if (!summaryCollapsed) applySummaryWidth(root, summaryWidth);
+    syncSummaryTableColumns();
+    if (refreshLayout) finishSummaryResize();
+  }
+
+  function syncSummaryTableColumns() {
+    if (!summaryTable || typeof summaryTable.getColumn !== "function") return;
+    for (const field of ["features", "gain"]) {
+      const column = summaryTable.getColumn(field);
+      if (!column || typeof column.isVisible !== "function") continue;
+      if (summaryCollapsed && column.isVisible()) column.hide();
+      if (!summaryCollapsed && !column.isVisible()) column.show();
+    }
+  }
+
   function bindTreeResizer(root) {
     const resizer = document.getElementById("gbmTreeResizer");
     if (!resizer || resizer.dataset.bound === "true") return;
@@ -420,6 +518,13 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       const summaryBounds = root.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect();
       const dividerX = summaryBounds?.right ?? bounds.left + summaryWidth;
       resizePointerOffset = event.clientX - dividerX;
+      resizeBounds = {
+        left: bounds.left,
+        maxWidth: maxSummaryWidth(bounds.width),
+        startWidth: summaryBounds?.width ?? summaryWidth,
+        wasCollapsed: summaryCollapsed,
+      };
+      resizePreviewWidth = resizeBounds.startWidth;
       resizePointerId = event.pointerId;
       resizer.classList.add("dragging");
       root.classList.add("resizing");
@@ -427,13 +532,31 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     });
     resizer.addEventListener("pointermove", (event) => {
       if (resizePointerId !== event.pointerId) return;
-      const bounds = root.getBoundingClientRect();
-      setSummaryWidth(root, event.clientX - bounds.left - resizePointerOffset);
+      const rawWidth = event.clientX - resizeBounds.left - resizePointerOffset;
+      resizePreviewWidth = clampResizePreviewWidth(rawWidth, resizeBounds.maxWidth);
+      const offset = Math.round(resizePreviewWidth - resizeBounds.startWidth);
+      resizer.style.transform = `translateX(calc(50% + ${offset}px))`;
     });
     const finishDrag = (event) => {
       if (resizePointerId !== event.pointerId) return;
+      const dragBounds = resizeBounds;
+      const previewWidth = resizePreviewWidth;
+      if (previewWidth !== null && dragBounds?.wasCollapsed) {
+        if (previewWidth >= COLLAPSED_SUMMARY_WIDTH + EXPAND_DRAG_DELTA) {
+          summaryWidth = clampSummaryWidth(previewWidth, dragBounds.maxWidth);
+          setSummaryCollapsed(root, false, "manual", { refreshLayout: false });
+        }
+      } else if (previewWidth !== null && previewWidth <= COLLAPSE_DRAG_THRESHOLD) {
+        setSummaryCollapsed(root, true, "manual", { refreshLayout: false });
+      } else if (previewWidth !== null) {
+        summaryWidth = clampSummaryWidth(previewWidth, dragBounds.maxWidth);
+        root.style.setProperty("--gbm-tree-summary-width", `${Math.round(summaryWidth)}px`);
+      }
       resizePointerId = null;
       resizePointerOffset = 0;
+      resizeBounds = null;
+      resizePreviewWidth = null;
+      resizer.style.removeProperty("transform");
       resizer.classList.remove("dragging");
       root.classList.remove("resizing");
       if (resizer.hasPointerCapture(event.pointerId)) {
@@ -445,25 +568,29 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     resizer.addEventListener("pointercancel", finishDrag);
   }
 
-  function setSummaryWidth(root, rawWidth) {
-    summaryWidth = clampSummaryWidth(root, rawWidth);
-    applySummaryWidth(root, summaryWidth);
-  }
-
   function finishSummaryResize() {
     summaryTable?.redraw(true);
-    updateSvgSize();
+    scheduleSvgResize();
   }
 
   function applySummaryWidth(root, width) {
-    const nextWidth = clampSummaryWidth(root, width || DEFAULT_SUMMARY_WIDTH);
+    const bounds = root.getBoundingClientRect();
+    const nextWidth = clampSummaryWidth(width || DEFAULT_SUMMARY_WIDTH, maxSummaryWidth(bounds.width));
     root.style.setProperty("--gbm-tree-summary-width", `${Math.round(nextWidth)}px`);
   }
 
-  function clampSummaryWidth(root, rawWidth) {
-    const bounds = root.getBoundingClientRect();
-    const maxWidth = Math.max(MIN_SUMMARY_WIDTH, bounds.width - MIN_DIAGRAM_WIDTH - 32);
+  function maxSummaryWidth(viewerWidth) {
+    return Math.max(MIN_SUMMARY_WIDTH, viewerWidth - MIN_DIAGRAM_WIDTH - 32);
+  }
+
+  function clampSummaryWidth(rawWidth, maxWidth) {
     return Math.min(maxWidth, Math.max(MIN_SUMMARY_WIDTH, Number(rawWidth) || DEFAULT_SUMMARY_WIDTH));
+  }
+
+  function clampResizePreviewWidth(rawWidth, maxWidth) {
+    const width = Number(rawWidth);
+    const nextWidth = Number.isFinite(width) ? width : DEFAULT_SUMMARY_WIDTH;
+    return Math.min(maxWidth, Math.max(COLLAPSED_SUMMARY_WIDTH, nextWidth));
   }
 
   function applyZoom(action) {
@@ -520,11 +647,22 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
   }
 
   function scheduleSvgResize() {
-    if (resizeFrame) return;
-    resizeFrame = window.requestAnimationFrame(() => {
-      resizeFrame = null;
+    const target = chartTarget();
+    const nextSizeKey = chartSizeKey(target);
+    if (!nextSizeKey || nextSizeKey === observedChartSizeKey) return;
+    observedChartSizeKey = nextSizeKey;
+    if (!resizeFrame) {
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        updateSvgSize();
+      });
+    }
+    if (resizeFitTimer) window.clearTimeout(resizeFitTimer);
+    resizeFitTimer = window.setTimeout(() => {
+      resizeFitTimer = null;
       updateSvgSize();
-    });
+      fitTree(false);
+    }, SVG_RESIZE_REFIT_DELAY);
   }
 
   function updateSvgSize() {
@@ -542,10 +680,23 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     };
   }
 
+  function chartSizeKey(target) {
+    const bounds = target?.getBoundingClientRect?.();
+    const width = Math.round(bounds?.width || target?.clientWidth || 0);
+    const height = Math.round(bounds?.height || target?.clientHeight || 0);
+    return width > 0 && height > 0 ? `${width}x${height}` : "";
+  }
+
   function cancelResizeFrame() {
-    if (!resizeFrame) return;
-    window.cancelAnimationFrame(resizeFrame);
-    resizeFrame = null;
+    if (resizeFrame) {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = null;
+    }
+    if (resizeFitTimer) {
+      window.clearTimeout(resizeFitTimer);
+      resizeFitTimer = null;
+    }
+    observedChartSizeKey = "";
   }
 
   function bindSearch() {

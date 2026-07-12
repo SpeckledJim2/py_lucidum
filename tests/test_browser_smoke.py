@@ -4370,6 +4370,14 @@ COPY (
                         "test": {"gamma": test_eval},
                     },
                 )
+                additional_tree_sql = """
+  UNION ALL
+  SELECT 1, 1, '1-S0', '1-L0', '1-L1', NULL, 'Age', 1.5, '45', NULL, '<=', 'left', 'None', 0.6, 3.0, 3
+  UNION ALL
+  SELECT 1, 2, '1-L0', NULL, NULL, '1-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.4, 1.0, 1
+  UNION ALL
+  SELECT 1, 2, '1-L1', NULL, NULL, '1-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 2.0, 2
+""" if model_id == "browser-smoke-model" else ""
                 con = duckdb.connect(database=":memory:")
                 try:
                     con.execute(
@@ -4387,6 +4395,7 @@ COPY (
   SELECT 0, 3, '0-L1', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.1, 1.0, 1
   UNION ALL
   SELECT 0, 3, '0-L2', NULL, NULL, '0-S1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.4, 1.0, 1
+  {additional_tree_sql}
 ) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
 """
                     )
@@ -15315,6 +15324,9 @@ COPY (
                       document.querySelector('[data-gbm-tree-zoom="in"]').click();
                       await new Promise((resolve) => setTimeout(resolve, 220));
                       const afterZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
+                      document.querySelector('[data-gbm-tree-zoom="out"]').click();
+                      await new Promise((resolve) => setTimeout(resolve, 220));
+                      const afterZoomOut = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
                       chart.querySelector("svg.gbm-tree-svg")?.dispatchEvent(new WheelEvent("wheel", {
                         deltaY: -420,
                         bubbles: true,
@@ -15328,16 +15340,32 @@ COPY (
                       await new Promise((resolve) => setTimeout(resolve, 50));
                       const afterPaletteZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
                       const viridisFill = chart.querySelector("rect.gbm-tree-split-node")?.getAttribute("fill") || "";
+                      document.querySelector('[data-gbm-tree-zoom="reset"]').click();
+                      await new Promise((resolve) => setTimeout(resolve, 240));
+                      const afterResetZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
                       const rootLabel = chart.querySelector(".gbm-tree-node-label");
                       const rootLabelSpans = [...(rootLabel?.querySelectorAll("tspan") || [])];
                       const viewer = document.querySelector("#gbmTreeViewer");
                       const strip = viewer.querySelector(".gbm-tree-control-strip");
                       const leftControls = viewer.querySelector(".gbm-tree-section-header");
-                      const rightControls = viewer.querySelector(".gbm-tree-diagram-header");
                       const summaryPanel = viewer.querySelector(".gbm-tree-summary-panel");
                       const summaryGrid = viewer.querySelector("#gbmTreeSummaryGrid");
                       const resizer = viewer.querySelector("#gbmTreeResizer");
                       const diagramPanel = viewer.querySelector(".gbm-tree-diagram-panel");
+                      const summaryToggle = viewer.querySelector("#gbmTreeSummaryToggle");
+                      const detailSummary = viewer.querySelector("#gbmTreeDetailSummary");
+                      const plotZoom = viewer.querySelector(".gbm-tree-plot-zoom");
+                      const plotZoomButtons = [...plotZoom.querySelectorAll("[data-gbm-tree-zoom]")];
+                      const plotPalette = viewer.querySelector(".gbm-tree-plot-palette");
+                      const plotPaletteButtons = [...plotPalette.querySelectorAll("[data-gbm-tree-palette]")];
+                      const paletteSwatches = plotPaletteButtons.map((button) =>
+                        button.querySelector(".gbm-tree-palette-swatch")
+                      );
+                      const paletteLabels = plotPaletteButtons.map((button) =>
+                        button.querySelector(".gbm-tree-palette-label")
+                      );
+                      const svgMount = viewer.querySelector("#gbmTreeSvgMount");
+                      const treeSvg = svgMount.querySelector("svg.gbm-tree-svg");
                       const tool = document.querySelector(".gbm-tool");
                       const toolbar = document.querySelector(".gbm-toolbar");
                       const search = viewer.querySelector("#gbmTreeSearch");
@@ -15352,10 +15380,23 @@ COPY (
                           height: bounds.height,
                         };
                       };
-                      const controlNodes = [
-                        viewer.querySelector("#gbmTreeSearch"),
-                        ...viewer.querySelectorAll("[data-gbm-tree-zoom], [data-gbm-tree-palette]"),
-                      ];
+                      const controlNodes = [viewer.querySelector("#gbmTreeSearch")];
+                      const leafFillColor = (() => {
+                        const probe = document.createElement("span");
+                        probe.style.background = "var(--gbm-tree-leaf-fill)";
+                        chart.appendChild(probe);
+                        const color = getComputedStyle(probe).backgroundColor;
+                        probe.remove();
+                        return color;
+                      })();
+                      const panel2Color = (() => {
+                        const probe = document.createElement("span");
+                        probe.style.background = "var(--panel-2)";
+                        chart.appendChild(probe);
+                        const color = getComputedStyle(probe).backgroundColor;
+                        probe.remove();
+                        return color;
+                      })();
                       const sortableColumns = ["tree", "dim"].map((field) =>
                         viewer.querySelector(`#gbmTreeSummaryGrid .tabulator-col[tabulator-field='${field}']`)
                       );
@@ -15365,6 +15406,23 @@ COPY (
                         selectedTree: document.querySelector("#gbmTreeSummaryGrid .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field='tree']")?.textContent.trim() || "",
                         detailSummary: document.querySelector("#gbmTreeDetailSummary")?.textContent.replace(/\\s+/g, " ").trim() || "",
                         summaryInsideChart: Boolean(document.querySelector("#gbmTreeChart > #gbmTreeDetailSummary")),
+                        rightHeaderPresent: Boolean(viewer.querySelector(".gbm-tree-diagram-header")),
+                        toggleExpanded: summaryToggle.getAttribute("aria-expanded"),
+                        toggleLabel: summaryToggle.getAttribute("aria-label"),
+                        toggleIconTransform: getComputedStyle(summaryToggle.querySelector("svg")).transform,
+                        toggleBackground: getComputedStyle(summaryToggle).backgroundColor,
+                        toggleBorderWidths: ["Top", "Right", "Bottom", "Left"].map(
+                          (side) => getComputedStyle(summaryToggle)[`border${side}Width`]
+                        ),
+                        toggleMutedColor: getComputedStyle(summaryToggle).color,
+                        accentColor: (() => {
+                          const probe = document.createElement("span");
+                          probe.style.color = "var(--accent)";
+                          document.body.appendChild(probe);
+                          const color = getComputedStyle(probe).color;
+                          probe.remove();
+                          return color;
+                        })(),
                         summaryWidth: document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width || 0,
                         treeColumnWidth: document.querySelector("#gbmTreeSummaryGrid .tabulator-col[tabulator-field='tree']")?.getBoundingClientRect().width || 0,
                         dimColumnWidth: document.querySelector("#gbmTreeSummaryGrid .tabulator-col[tabulator-field='dim']")?.getBoundingClientRect().width || 0,
@@ -15376,10 +15434,43 @@ COPY (
                         edgeLabels: [...chart.querySelectorAll(".gbm-tree-edge-label")].map((node) => node.textContent.trim()),
                         arrowheads: chart.querySelectorAll("marker#gbmTreeArrow").length,
                         zoomButtons: document.querySelectorAll("[data-gbm-tree-zoom]").length,
+                        zoomInsideChart: plotZoom.parentElement === chart,
+                        zoomActions: plotZoomButtons.map((button) => button.dataset.gbmTreeZoom),
+                        zoomTexts: plotZoomButtons.map((button) => button.textContent.trim()),
+                        zoomLabels: plotZoomButtons.map((button) => button.getAttribute("aria-label")),
+                        zoomTitles: plotZoomButtons.map((button) => button.getAttribute("title")),
+                        zoomBackgrounds: plotZoomButtons.map((button) => getComputedStyle(button).backgroundColor),
+                        zoomFontWeights: plotZoomButtons.map((button) => getComputedStyle(button).fontWeight),
+                        zoomBorderWidths: plotZoomButtons.map((button) =>
+                          ["Top", "Right", "Bottom", "Left"].map(
+                            (side) => getComputedStyle(button)[`border${side}Width`]
+                          )
+                        ),
+                        paletteInsideChart: plotPalette.parentElement === chart,
+                        paletteActions: plotPaletteButtons.map((button) => button.dataset.gbmTreePalette),
+                        paletteLabels: paletteLabels.map((label) => label.textContent.trim()),
+                        paletteTitles: plotPaletteButtons.map((button) => button.getAttribute("title")),
+                        palettePressed: plotPaletteButtons.map((button) => button.getAttribute("aria-pressed")),
+                        activePalette: plotPalette.querySelector(".active")?.dataset.gbmTreePalette || "",
+                        activePaletteBoxShadow: getComputedStyle(plotPalette.querySelector(".active")).boxShadow,
+                        paletteLabelFontSizes: paletteLabels.map((label) => getComputedStyle(label).fontSize),
+                        paletteLabelsFit: paletteLabels.every((label) => label.scrollWidth <= label.clientWidth),
+                        paletteBorderRadii: plotPaletteButtons.map((button) => getComputedStyle(button).borderRadius),
+                        paletteSwatchBackgrounds: paletteSwatches.map((swatch) => ({
+                          color: getComputedStyle(swatch).backgroundColor,
+                          image: getComputedStyle(swatch).backgroundImage,
+                        })),
+                        paletteInactiveBackground: getComputedStyle(plotPaletteButtons[1]).backgroundColor,
+                        paletteInactiveBorder: getComputedStyle(plotPaletteButtons[1]).borderColor,
+                        paletteColumns: getComputedStyle(plotPalette).gridTemplateColumns.split(" ").length,
+                        leafFillColor,
+                        panel2Color,
                         beforeZoom,
                         afterZoom,
+                        afterZoomOut,
                         afterWheelZoom,
                         afterPaletteZoom,
+                        afterResetZoom,
                         textFills: [...chart.querySelectorAll(".gbm-tree-node-label")].map((node) => node.getAttribute("fill")),
                         rootLabelLines: rootLabelSpans.map((node) => node.textContent.trim()),
                         rootLabelWeights: rootLabelSpans.map((node) => node.getAttribute("font-weight")),
@@ -15391,12 +15482,20 @@ COPY (
                           toolbar: rect(toolbar),
                           strip: rect(strip),
                           leftControls: rect(leftControls),
-                          rightControls: rect(rightControls),
                           summaryPanel: rect(summaryPanel),
                           summaryGrid: rect(summaryGrid),
                           resizer: rect(resizer),
                           diagramPanel: rect(diagramPanel),
                           chart: rect(chart),
+                          summaryToggle: rect(summaryToggle),
+                          summaryToggleIcon: rect(summaryToggle.querySelector("path")),
+                          detailSummary: rect(detailSummary),
+                          plotZoom: rect(plotZoom),
+                          plotZoomButtons: plotZoomButtons.map(rect),
+                          plotPalette: rect(plotPalette),
+                          plotPaletteButtons: plotPaletteButtons.map(rect),
+                          svgMount: rect(svgMount),
+                          treeSvg: rect(treeSvg),
                         },
                         stripDividerHeight: getComputedStyle(strip, "::after").height,
                         resizerLineWidth: getComputedStyle(resizer, "::before").width,
@@ -15410,7 +15509,7 @@ COPY (
                         },
                         controlHeights: controlNodes.map((node) => rect(node).height),
                         controlsCentred: controlNodes.every((node) => {
-                          const owner = node.closest(".gbm-tree-section-header, .gbm-tree-diagram-header");
+                          const owner = node.closest(".gbm-tree-section-header");
                           const nodeRect = node.getBoundingClientRect();
                           const ownerRect = owner.getBoundingClientRect();
                           return Math.abs(
@@ -15446,6 +15545,12 @@ COPY (
                 self.assertIn("Tree features:", tree_state["detailSummary"])
                 self.assertIn("Tree gain: 7", tree_state["detailSummary"])
                 self.assertTrue(tree_state["summaryInsideChart"])
+                self.assertFalse(tree_state["rightHeaderPresent"])
+                self.assertEqual(tree_state["toggleExpanded"], "true")
+                self.assertEqual(tree_state["toggleLabel"], "Collapse tree selector")
+                self.assertEqual(tree_state["toggleIconTransform"], "none")
+                self.assertEqual(tree_state["toggleBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(tree_state["toggleBorderWidths"], ["0px"] * 4)
                 self.assertGreaterEqual(tree_state["summaryWidth"], 420)
                 self.assertAlmostEqual(tree_state["treeColumnWidth"], 56, delta=0.75)
                 self.assertAlmostEqual(tree_state["dimColumnWidth"], 52, delta=0.75)
@@ -15457,9 +15562,35 @@ COPY (
                 self.assertIn("else", tree_state["edgeLabels"])
                 self.assertEqual(tree_state["arrowheads"], 1)
                 self.assertEqual(tree_state["zoomButtons"], 3)
+                self.assertTrue(tree_state["zoomInsideChart"])
+                self.assertEqual(tree_state["zoomActions"], ["in", "out", "reset"])
+                self.assertEqual(tree_state["zoomTexts"], ["+", "−", "↺"])
+                self.assertEqual(tree_state["zoomLabels"], ["Zoom in", "Zoom out", "Reset zoom"])
+                self.assertEqual(tree_state["zoomTitles"], ["Zoom in", "Zoom out", "Reset zoom"])
+                self.assertEqual(tree_state["zoomBackgrounds"], ["rgba(0, 0, 0, 0)"] * 3)
+                self.assertEqual(tree_state["zoomFontWeights"], ["400"] * 3)
+                self.assertEqual(tree_state["zoomBorderWidths"], [["0px"] * 4] * 3)
+                self.assertTrue(tree_state["paletteInsideChart"])
+                self.assertEqual(tree_state["paletteActions"], ["plain", "divergent", "spectral", "viridis"])
+                self.assertEqual(tree_state["paletteLabels"], ["Plain", "Divergent", "Spectral", "Viridis"])
+                self.assertEqual(tree_state["paletteTitles"], ["Plain", "Divergent", "Spectral", "Viridis"])
+                self.assertEqual(tree_state["palettePressed"], ["false", "false", "false", "true"])
+                self.assertEqual(tree_state["activePalette"], "viridis")
+                self.assertNotEqual(tree_state["activePaletteBoxShadow"], "none")
+                self.assertEqual(tree_state["paletteLabelFontSizes"], ["11px"] * 4)
+                self.assertTrue(tree_state["paletteLabelsFit"])
+                self.assertEqual(tree_state["paletteBorderRadii"], ["7px"] * 4)
+                self.assertEqual(tree_state["paletteColumns"], 4)
+                self.assertEqual(tree_state["paletteSwatchBackgrounds"][0]["color"], tree_state["leafFillColor"])
+                self.assertEqual(tree_state["paletteSwatchBackgrounds"][0]["image"], "none")
+                self.assertIn("rgb(27, 120, 55)", tree_state["paletteSwatchBackgrounds"][1]["image"])
+                self.assertIn("rgb(44, 123, 182)", tree_state["paletteSwatchBackgrounds"][2]["image"])
+                self.assertIn("rgb(253, 231, 37)", tree_state["paletteSwatchBackgrounds"][3]["image"])
                 self.assertNotEqual(tree_state["beforeZoom"], tree_state["afterZoom"])
-                self.assertNotEqual(tree_state["afterZoom"], tree_state["afterWheelZoom"])
+                self.assertNotEqual(tree_state["afterZoom"], tree_state["afterZoomOut"])
+                self.assertNotEqual(tree_state["afterZoomOut"], tree_state["afterWheelZoom"])
                 self.assertEqual(tree_state["afterWheelZoom"], tree_state["afterPaletteZoom"])
+                self.assertNotEqual(tree_state["afterPaletteZoom"], tree_state["afterResetZoom"])
                 self.assertIn("#111827", tree_state["textFills"])
                 self.assertTrue(set(tree_state["textFills"]).issubset({"#111827", "#ffffff"}))
                 self.assertEqual(tree_state["rootLabelLines"][:2], ["Tree 0", "Age"])
@@ -15471,7 +15602,7 @@ COPY (
                 self.assertEqual(tree_state["stripDividerHeight"], "1px")
                 self.assertEqual(tree_state["resizerLineWidth"], "1px")
                 self.assertEqual(tree_state["resizerLineRadius"], "0px")
-                self.assertEqual(tree_state["controlHeights"], [28] * 8)
+                self.assertEqual(tree_state["controlHeights"], [28])
                 self.assertEqual(
                     tree_state["searchStyle"],
                     {
@@ -15494,9 +15625,8 @@ COPY (
                 self.assertAlmostEqual(geometry["viewer"]["top"], geometry["toolbar"]["bottom"], delta=0.75)
                 self.assertAlmostEqual(geometry["leftControls"]["left"], geometry["summaryPanel"]["left"], delta=0.75)
                 self.assertAlmostEqual(geometry["leftControls"]["right"], geometry["summaryPanel"]["right"], delta=0.75)
-                self.assertAlmostEqual(geometry["rightControls"]["left"], geometry["diagramPanel"]["left"], delta=0.75)
-                self.assertAlmostEqual(geometry["rightControls"]["right"], geometry["diagramPanel"]["right"], delta=0.75)
-                self.assertAlmostEqual(geometry["leftControls"]["right"], geometry["rightControls"]["left"], delta=0.75)
+                self.assertAlmostEqual(geometry["strip"]["left"], geometry["summaryPanel"]["left"], delta=0.75)
+                self.assertAlmostEqual(geometry["strip"]["right"], geometry["summaryPanel"]["right"], delta=0.75)
                 self.assertAlmostEqual(geometry["summaryGrid"]["top"], geometry["strip"]["bottom"], delta=0.75)
                 self.assertAlmostEqual(geometry["summaryGrid"]["left"], geometry["viewer"]["left"], delta=0.75)
                 self.assertAlmostEqual(geometry["summaryGrid"]["right"], geometry["summaryPanel"]["right"], delta=0.75)
@@ -15510,9 +15640,102 @@ COPY (
                 self.assertAlmostEqual(geometry["resizer"]["top"], geometry["viewer"]["top"], delta=0.75)
                 self.assertAlmostEqual(geometry["resizer"]["bottom"], geometry["viewer"]["bottom"], delta=0.75)
                 self.assertAlmostEqual(geometry["resizer"]["width"], 12, delta=0.75)
-                self.assertAlmostEqual(geometry["chart"]["top"], geometry["strip"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["diagramPanel"]["top"], geometry["viewer"]["top"], delta=0.75)
+                self.assertAlmostEqual(geometry["diagramPanel"]["bottom"], geometry["viewer"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["chart"]["top"], geometry["viewer"]["top"], delta=0.75)
                 self.assertAlmostEqual(geometry["chart"]["right"], geometry["viewer"]["right"], delta=0.75)
                 self.assertAlmostEqual(geometry["chart"]["bottom"], geometry["viewer"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["svgMount"]["top"], geometry["chart"]["top"], delta=0.75)
+                self.assertAlmostEqual(geometry["svgMount"]["bottom"], geometry["chart"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(geometry["treeSvg"]["top"], geometry["chart"]["top"], delta=0.75)
+                self.assertAlmostEqual(geometry["treeSvg"]["bottom"], geometry["chart"]["bottom"], delta=0.75)
+                self.assertAlmostEqual(
+                    geometry["summaryToggleIcon"]["left"],
+                    geometry["detailSummary"]["left"],
+                    delta=0.75,
+                )
+                self.assertAlmostEqual(geometry["summaryToggle"]["top"], geometry["chart"]["top"] + 10, delta=0.75)
+                self.assertAlmostEqual(geometry["summaryToggle"]["left"], geometry["chart"]["left"] + 9, delta=0.75)
+                self.assertAlmostEqual(geometry["summaryToggle"]["width"], 24, delta=0.75)
+                self.assertAlmostEqual(geometry["summaryToggle"]["height"], 24, delta=0.75)
+                self.assertGreaterEqual(geometry["detailSummary"]["top"], geometry["summaryToggle"]["bottom"] + 8 - 0.75)
+                self.assertAlmostEqual(geometry["plotZoom"]["top"], geometry["chart"]["top"] + 10, delta=0.75)
+                self.assertAlmostEqual(geometry["plotZoom"]["right"], geometry["chart"]["right"] - 9, delta=0.75)
+                self.assertAlmostEqual(geometry["plotZoom"]["top"], geometry["summaryToggle"]["top"], delta=0.75)
+                self.assertAlmostEqual(geometry["plotPalette"]["top"], geometry["chart"]["top"] + 12, delta=0.75)
+                self.assertAlmostEqual(geometry["plotZoom"]["left"] - geometry["plotPalette"]["right"], 8, delta=0.75)
+                self.assertAlmostEqual(geometry["plotPalette"]["width"], 298, delta=0.75)
+                self.assertAlmostEqual(geometry["plotPalette"]["height"], 70, delta=0.75)
+                self.assertEqual(len(geometry["plotPaletteButtons"]), 4)
+                for button_geometry in geometry["plotPaletteButtons"]:
+                    self.assertAlmostEqual(button_geometry["width"], 70, delta=0.75)
+                    self.assertAlmostEqual(button_geometry["height"], 70, delta=0.75)
+                self.assertEqual(len(geometry["plotZoomButtons"]), 3)
+                for index, button_geometry in enumerate(geometry["plotZoomButtons"]):
+                    self.assertAlmostEqual(button_geometry["width"], 24, delta=0.75)
+                    self.assertAlmostEqual(button_geometry["height"], 24, delta=0.75)
+                    self.assertAlmostEqual(button_geometry["right"], geometry["plotZoom"]["right"], delta=0.75)
+                    if index:
+                        self.assertAlmostEqual(
+                            button_geometry["top"],
+                            geometry["plotZoomButtons"][index - 1]["bottom"],
+                            delta=0.75,
+                        )
+                page.locator("#gbmTreeSummaryToggle").hover()
+                self.assertEqual(
+                    page.locator("#gbmTreeSummaryToggle").evaluate("node => getComputedStyle(node).color"),
+                    tree_state["accentColor"],
+                )
+                self.assertEqual(
+                    page.locator("#gbmTreeSummaryToggle").evaluate("node => getComputedStyle(node).backgroundColor"),
+                    "rgba(0, 0, 0, 0)",
+                )
+                page.locator('[data-gbm-tree-zoom="in"]').hover()
+                self.assertEqual(
+                    page.locator('[data-gbm-tree-zoom="in"]').evaluate("node => getComputedStyle(node).color"),
+                    tree_state["accentColor"],
+                )
+                self.assertEqual(
+                    page.locator('[data-gbm-tree-zoom="in"]').evaluate(
+                        "node => getComputedStyle(node).backgroundColor"
+                    ),
+                    "rgba(0, 0, 0, 0)",
+                )
+                page.locator('[data-gbm-tree-palette="divergent"]').hover()
+                page.wait_for_timeout(160)
+                self.assertEqual(
+                    page.locator('[data-gbm-tree-palette="divergent"]').evaluate(
+                        "node => getComputedStyle(node).backgroundColor"
+                    ),
+                    tree_state["panel2Color"],
+                )
+                self.assertNotEqual(
+                    page.locator('[data-gbm-tree-palette="divergent"]').evaluate(
+                        "node => getComputedStyle(node).borderColor"
+                    ),
+                    tree_state["paletteInactiveBorder"],
+                )
+                page.evaluate(
+                    """
+                    async () => {
+                      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                      const proto = window.Tabulator.prototype;
+                      window.__gbmTreeSummaryRedraws = [];
+                      if (!proto.__lucidumTreeOriginalRedraw) {
+                        Object.defineProperty(proto, "__lucidumTreeOriginalRedraw", {
+                          configurable: true,
+                          value: proto.redraw,
+                        });
+                        proto.redraw = function(force) {
+                          if (this.element?.id === "gbmTreeSummaryGrid") {
+                            (window.__gbmTreeSummaryRedraws ||= []).push(force === true);
+                          }
+                          return proto.__lucidumTreeOriginalRedraw.apply(this, arguments);
+                        };
+                      }
+                    }
+                    """
+                )
                 resizer = page.locator("#gbmTreeResizer")
                 resizer_box = resizer.bounding_box()
                 self.assertIsNotNone(resizer_box)
@@ -15537,14 +15760,635 @@ COPY (
                 self.assertIsNotNone(resizer_box)
                 summary_width_before = page.locator(".gbm-tree-summary-panel").evaluate("node => node.getBoundingClientRect().width")
                 if summary_width_before > 470:
-                    page.mouse.move(resizer_box["x"] + resizer_box["width"] / 2, resizer_box["y"] + 24)
+                    page.wait_for_timeout(160)
+                    page.evaluate(
+                        """
+                        () => {
+                          window.__gbmTreeViewportObserver?.disconnect();
+                          const viewport = document.querySelector(".gbm-tree-viewport");
+                          window.__gbmTreeTransformBeforeResize = viewport?.getAttribute("transform") || "";
+                          window.__gbmTreeFitTransforms = [];
+                          window.__gbmTreeViewportObserver = new MutationObserver((records) => {
+                            for (const record of records) {
+                              if (record.attributeName === "transform") {
+                                window.__gbmTreeFitTransforms.push(
+                                  record.target.getAttribute("transform") || ""
+                                );
+                              }
+                            }
+                          });
+                          if (viewport) {
+                            window.__gbmTreeViewportObserver.observe(viewport, {
+                              attributes: true,
+                              attributeFilter: ["transform"],
+                            });
+                          }
+                        }
+                        """
+                    )
+                    divider_x = resizer_box["x"] + resizer_box["width"] / 2
+                    divider_y = resizer_box["y"] + 24
+                    diagram_width_before = page.locator(".gbm-tree-diagram-panel").evaluate(
+                        "node => node.getBoundingClientRect().width"
+                    )
+                    expected_summary_width = max(108, summary_width_before - 80)
+                    expected_divider_x = divider_x + expected_summary_width - summary_width_before
+                    page.evaluate("window.__gbmTreeSummaryRedraws = []")
+                    page.mouse.move(divider_x, divider_y)
                     page.mouse.down()
-                    page.mouse.move(resizer_box["x"] + resizer_box["width"] / 2 - 80, resizer_box["y"] + 24)
+                    page.mouse.move(divider_x - 80, divider_y, steps=8)
+                    during_drag = page.evaluate(
+                        """
+                        async () => {
+                          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                          const resizer = document.querySelector("#gbmTreeResizer");
+                          const summary = document.querySelector(".gbm-tree-summary-panel");
+                          const diagram = document.querySelector(".gbm-tree-diagram-panel");
+                          const bounds = resizer.getBoundingClientRect();
+                          return {
+                            dividerCenter: bounds.left + bounds.width / 2,
+                            summaryWidth: summary.getBoundingClientRect().width,
+                            diagramWidth: diagram.getBoundingClientRect().width,
+                            redraws: window.__gbmTreeSummaryRedraws || [],
+                            fitTransforms: window.__gbmTreeFitTransforms || [],
+                            inlineTransform: resizer.style.transform,
+                            resizerDragging: resizer.classList.contains("dragging"),
+                            viewerResizing: document.querySelector("#gbmTreeViewer").classList.contains("resizing"),
+                          };
+                        }
+                        """
+                    )
+                    self.assertAlmostEqual(during_drag["dividerCenter"], expected_divider_x, delta=1.25)
+                    self.assertAlmostEqual(during_drag["summaryWidth"], summary_width_before, delta=0.75)
+                    self.assertAlmostEqual(during_drag["diagramWidth"], diagram_width_before, delta=0.75)
+                    self.assertEqual(during_drag["redraws"], [])
+                    self.assertEqual(during_drag["fitTransforms"], [])
+                    self.assertTrue(during_drag["inlineTransform"])
+                    self.assertTrue(during_drag["resizerDragging"])
+                    self.assertTrue(during_drag["viewerResizing"])
                     page.mouse.up()
+                    page.wait_for_function(
+                        """
+                        (before) => document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width
+                          < before - 40
+                        """,
+                        arg=summary_width_before,
+                        timeout=5_000,
+                    )
+                    page.wait_for_function(
+                        "() => (window.__gbmTreeFitTransforms || []).length >= 1",
+                        timeout=5_000,
+                    )
+                    page.wait_for_timeout(160)
                     summary_width_after = page.locator(".gbm-tree-summary-panel").evaluate("node => node.getBoundingClientRect().width")
                     self.assertLess(summary_width_after, summary_width_before - 40)
+                    after_drag = page.evaluate(
+                        """
+                        async () => {
+                          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                          const resizer = document.querySelector("#gbmTreeResizer");
+                          const svg = document.querySelector("#gbmTreeChart svg.gbm-tree-svg");
+                          const svgBounds = svg.getBoundingClientRect();
+                          const treeContained = [...svg.querySelectorAll(".gbm-tree-node")].every((node) => {
+                            const bounds = node.getBoundingClientRect();
+                            return bounds.left >= svgBounds.left - 1
+                              && bounds.right <= svgBounds.right + 1
+                              && bounds.top >= svgBounds.top - 1
+                              && bounds.bottom <= svgBounds.bottom + 1;
+                          });
+                          return {
+                            redraws: window.__gbmTreeSummaryRedraws || [],
+                            fitTransforms: window.__gbmTreeFitTransforms || [],
+                            treeContained,
+                            inlineTransform: resizer.style.transform,
+                            resizerDragging: resizer.classList.contains("dragging"),
+                            viewerResizing: document.querySelector("#gbmTreeViewer").classList.contains("resizing"),
+                            viewerCollapsed: document.querySelector("#gbmTreeViewer").classList.contains(
+                              "gbm-tree-summary-collapsed"
+                            ),
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(after_drag["redraws"])
+                    self.assertEqual(len(after_drag["fitTransforms"]), 1)
+                    self.assertTrue(after_drag["treeContained"])
+                    self.assertEqual(after_drag["inlineTransform"], "")
+                    self.assertFalse(after_drag["resizerDragging"])
+                    self.assertFalse(after_drag["viewerResizing"])
+                    self.assertFalse(after_drag["viewerCollapsed"])
                 else:
                     self.assertGreaterEqual(summary_width_before, 420)
+
+                viewer_box = page.locator("#gbmTreeViewer").bounding_box()
+                resizer_box = resizer.bounding_box()
+                self.assertIsNotNone(viewer_box)
+                self.assertIsNotNone(resizer_box)
+                assert viewer_box is not None
+                assert resizer_box is not None
+                divider_x = resizer_box["x"] + resizer_box["width"] / 2
+                divider_y = resizer_box["y"] + 24
+                width_before_min_drag = page.locator(".gbm-tree-summary-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      window.__gbmTreeSummaryRedraws = [];
+                      document.querySelector("#gbmTreeResizer").addEventListener(
+                        "pointerdown",
+                        (event) => { window.__gbmTreePointerId = event.pointerId; },
+                        { once: true },
+                      );
+                    }
+                    """
+                )
+                page.mouse.move(divider_x, divider_y)
+                page.mouse.down()
+                page.mouse.move(viewer_box["x"] - 200, divider_y, steps=4)
+                minimum_preview = page.evaluate(
+                    """
+                    () => {
+                      const resizer = document.querySelector("#gbmTreeResizer");
+                      const viewer = document.querySelector("#gbmTreeViewer").getBoundingClientRect();
+                      const divider = resizer.getBoundingClientRect();
+                      return {
+                        dividerOffset: divider.left + divider.width / 2 - viewer.left,
+                        summaryWidth: document.querySelector(".gbm-tree-summary-panel").getBoundingClientRect().width,
+                        redraws: window.__gbmTreeSummaryRedraws || [],
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(minimum_preview["dividerOffset"], 108, delta=1.25)
+                self.assertAlmostEqual(minimum_preview["summaryWidth"], width_before_min_drag, delta=0.75)
+                self.assertEqual(minimum_preview["redraws"], [])
+                page.evaluate(
+                    """
+                    () => document.querySelector("#gbmTreeResizer").dispatchEvent(new PointerEvent("pointercancel", {
+                      bubbles: true,
+                      pointerId: window.__gbmTreePointerId,
+                    }))
+                    """
+                )
+                page.wait_for_function(
+                    '() => Math.abs(document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width - 108) < 1',
+                    timeout=5_000,
+                )
+                cancelled_drag = page.evaluate(
+                    """
+                    () => {
+                      const resizer = document.querySelector("#gbmTreeResizer");
+                      return {
+                        inlineTransform: resizer.style.transform,
+                        resizerDragging: resizer.classList.contains("dragging"),
+                        viewerResizing: document.querySelector("#gbmTreeViewer").classList.contains("resizing"),
+                        viewerCollapsed: document.querySelector("#gbmTreeViewer").classList.contains(
+                          "gbm-tree-summary-collapsed"
+                        ),
+                        resizerPointerEvents: getComputedStyle(resizer).pointerEvents,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(cancelled_drag["inlineTransform"], "")
+                self.assertFalse(cancelled_drag["resizerDragging"])
+                self.assertFalse(cancelled_drag["viewerResizing"])
+                self.assertTrue(cancelled_drag["viewerCollapsed"])
+                self.assertEqual(cancelled_drag["resizerPointerEvents"], "auto")
+
+                viewer_box = page.locator("#gbmTreeViewer").bounding_box()
+                resizer_box = resizer.bounding_box()
+                self.assertIsNotNone(viewer_box)
+                self.assertIsNotNone(resizer_box)
+                assert viewer_box is not None
+                assert resizer_box is not None
+                maximum_summary_width = max(420, viewer_box["width"] - 360 - 32)
+                divider_x = resizer_box["x"] + resizer_box["width"] / 2
+                divider_y = resizer_box["y"] + 24
+                width_before_max_drag = page.locator(".gbm-tree-summary-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                page.evaluate("window.__gbmTreeSummaryRedraws = []")
+                page.mouse.move(divider_x, divider_y)
+                page.mouse.down()
+                page.mouse.move(viewer_box["x"] + viewer_box["width"] + 200, divider_y, steps=4)
+                maximum_preview = page.evaluate(
+                    """
+                    () => {
+                      const resizer = document.querySelector("#gbmTreeResizer");
+                      const viewer = document.querySelector("#gbmTreeViewer").getBoundingClientRect();
+                      const divider = resizer.getBoundingClientRect();
+                      return {
+                        dividerOffset: divider.left + divider.width / 2 - viewer.left,
+                        summaryWidth: document.querySelector(".gbm-tree-summary-panel").getBoundingClientRect().width,
+                        redraws: window.__gbmTreeSummaryRedraws || [],
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(maximum_preview["dividerOffset"], maximum_summary_width, delta=1.25)
+                self.assertAlmostEqual(maximum_preview["summaryWidth"], width_before_max_drag, delta=0.75)
+                self.assertEqual(maximum_preview["redraws"], [])
+                page.mouse.up()
+                page.wait_for_function(
+                    """
+                    (maximum) => Math.abs(
+                      document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width - maximum
+                    ) < 1
+                    """,
+                    arg=maximum_summary_width,
+                    timeout=5_000,
+                )
+                self.assertGreaterEqual(
+                    page.locator(".gbm-tree-diagram-panel").evaluate("node => node.getBoundingClientRect().width"),
+                    360,
+                )
+
+                expanded_width_before_collapse = page.locator(".gbm-tree-summary-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                diagram_width_before_collapse = page.locator(".gbm-tree-diagram-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                page.locator("#gbmTreeSummaryToggle").click()
+                page.wait_for_function(
+                    """
+                    () => Math.abs(document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width - 108) < 1
+                      && [...document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-col[tabulator-field]")]
+                        .filter((column) => getComputedStyle(column).display !== "none").length === 2
+                    """,
+                    timeout=5_000,
+                )
+                collapsed_tree_selector = page.evaluate(
+                    """
+                    () => {
+                      const viewer = document.querySelector("#gbmTreeViewer");
+                      const toggle = document.querySelector("#gbmTreeSummaryToggle");
+                      const resizer = document.querySelector("#gbmTreeResizer");
+                      const visibleFields = (selector) => [...document.querySelectorAll(selector)]
+                        .filter((node) => getComputedStyle(node).display !== "none")
+                        .map((node) => node.getAttribute("tabulator-field"));
+                      return {
+                        collapsed: viewer.classList.contains("gbm-tree-summary-collapsed"),
+                        summaryWidth: viewer.querySelector(".gbm-tree-summary-panel").getBoundingClientRect().width,
+                        diagramWidth: viewer.querySelector(".gbm-tree-diagram-panel").getBoundingClientRect().width,
+                        headerFields: visibleFields("#gbmTreeSummaryGrid .tabulator-col[tabulator-field]"),
+                        firstRowFields: visibleFields("#gbmTreeSummaryGrid .tabulator-row:first-child .tabulator-cell[tabulator-field]"),
+                        searchHidden: document.querySelector("#gbmTreeSearch").hidden,
+                        selectTreeVisible: getComputedStyle(viewer.querySelector(".gbm-tree-section-header .gbm-section-title")).display !== "none",
+                        toggleExpanded: toggle.getAttribute("aria-expanded"),
+                        toggleLabel: toggle.getAttribute("aria-label"),
+                        iconTransform: getComputedStyle(toggle.querySelector("svg")).transform,
+                        resizerDisabled: resizer.getAttribute("aria-disabled"),
+                        resizerLabel: resizer.getAttribute("aria-label"),
+                        resizerPointerEvents: getComputedStyle(resizer).pointerEvents,
+                        scrollbarWidth: getComputedStyle(
+                          document.querySelector("#gbmTreeSummaryGrid .tabulator-tableholder")
+                        ).scrollbarWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(collapsed_tree_selector["collapsed"])
+                self.assertAlmostEqual(collapsed_tree_selector["summaryWidth"], 108, delta=0.75)
+                self.assertGreater(
+                    collapsed_tree_selector["diagramWidth"],
+                    diagram_width_before_collapse + expanded_width_before_collapse - 109,
+                )
+                self.assertEqual(collapsed_tree_selector["headerFields"], ["tree", "dim"])
+                self.assertEqual(collapsed_tree_selector["firstRowFields"], ["tree", "dim"])
+                self.assertTrue(collapsed_tree_selector["searchHidden"])
+                self.assertTrue(collapsed_tree_selector["selectTreeVisible"])
+                self.assertEqual(collapsed_tree_selector["toggleExpanded"], "false")
+                self.assertEqual(collapsed_tree_selector["toggleLabel"], "Expand tree selector")
+                self.assertNotEqual(collapsed_tree_selector["iconTransform"], "none")
+                self.assertEqual(collapsed_tree_selector["resizerDisabled"], "false")
+                self.assertEqual(collapsed_tree_selector["resizerLabel"], "Drag right to expand tree selector")
+                self.assertEqual(collapsed_tree_selector["resizerPointerEvents"], "auto")
+                self.assertEqual(collapsed_tree_selector["scrollbarWidth"], "none")
+
+                resizer_box = page.locator("#gbmTreeResizer").bounding_box()
+                self.assertIsNotNone(resizer_box)
+                assert resizer_box is not None
+                collapsed_divider_x = resizer_box["x"] + resizer_box["width"] / 2
+                collapsed_divider_y = resizer_box["y"] + 24
+                page.mouse.move(collapsed_divider_x, collapsed_divider_y)
+                page.mouse.down()
+                page.mouse.move(collapsed_divider_x + 20, collapsed_divider_y, steps=3)
+                page.mouse.up()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")
+                      && Math.abs(document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width - 108) < 1
+                    """,
+                    timeout=5_000,
+                )
+
+                page.evaluate(
+                    """
+                    () => [...document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-row")]
+                      .find((row) => row.querySelector('.tabulator-cell[tabulator-field="tree"]')?.textContent.trim() === "1")
+                      ?.click()
+                    """
+                )
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmTreeDetailSummary")?.textContent.includes("Tree 1")',
+                    timeout=5_000,
+                )
+                self.assertEqual(
+                    page.locator(
+                        "#gbmTreeSummaryGrid .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field='tree']"
+                    ).text_content().strip(),
+                    "1",
+                )
+
+                page.get_by_role("tab", name="Model navigator").click()
+                page.get_by_role("tab", name="Tree viewer").click()
+                page.locator("#gbmTreeChart svg.gbm-tree-svg").wait_for(state="attached", timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")
+                      && Math.abs(document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width - 108) < 1
+                      && document.querySelector(
+                        "#gbmTreeSummaryGrid .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field='tree']"
+                      )?.textContent.trim() === "1"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmTreeSummaryToggle").click()
+                page.wait_for_function(
+                    """
+                    (expandedWidth) => Math.abs(
+                      document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width - expandedWidth
+                    ) < 1
+                      && [...document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-col[tabulator-field]")]
+                        .filter((column) => getComputedStyle(column).display !== "none").length === 4
+                    """,
+                    arg=expanded_width_before_collapse,
+                    timeout=5_000,
+                )
+                reopened_tree_selector = page.evaluate(
+                    """
+                    () => {
+                      const viewer = document.querySelector("#gbmTreeViewer");
+                      const toggle = document.querySelector("#gbmTreeSummaryToggle");
+                      const resizer = document.querySelector("#gbmTreeResizer");
+                      return {
+                        collapsed: viewer.classList.contains("gbm-tree-summary-collapsed"),
+                        summaryWidth: viewer.querySelector(".gbm-tree-summary-panel").getBoundingClientRect().width,
+                        headerFields: [...document.querySelectorAll("#gbmTreeSummaryGrid .tabulator-col[tabulator-field]")]
+                          .filter((column) => getComputedStyle(column).display !== "none")
+                          .map((column) => column.getAttribute("tabulator-field")),
+                        searchHidden: document.querySelector("#gbmTreeSearch").hidden,
+                        toggleExpanded: toggle.getAttribute("aria-expanded"),
+                        toggleLabel: toggle.getAttribute("aria-label"),
+                        iconTransform: getComputedStyle(toggle.querySelector("svg")).transform,
+                        resizerDisabled: resizer.getAttribute("aria-disabled"),
+                        resizerLabel: resizer.getAttribute("aria-label"),
+                        resizerPointerEvents: getComputedStyle(resizer).pointerEvents,
+                        selectedTree: document.querySelector(
+                          "#gbmTreeSummaryGrid .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field='tree']"
+                        )?.textContent.trim() || "",
+                        detailSummary: document.querySelector("#gbmTreeDetailSummary")?.textContent || "",
+                        activePalette: document.querySelector(".gbm-tree-plot-palette .active")
+                          ?.dataset.gbmTreePalette || "",
+                      };
+                    }
+                    """
+                )
+                self.assertFalse(reopened_tree_selector["collapsed"])
+                self.assertAlmostEqual(
+                    reopened_tree_selector["summaryWidth"],
+                    expanded_width_before_collapse,
+                    delta=0.75,
+                )
+                self.assertEqual(reopened_tree_selector["headerFields"], ["tree", "dim", "features", "gain"])
+                self.assertFalse(reopened_tree_selector["searchHidden"])
+                self.assertEqual(reopened_tree_selector["toggleExpanded"], "true")
+                self.assertEqual(reopened_tree_selector["toggleLabel"], "Collapse tree selector")
+                self.assertEqual(reopened_tree_selector["iconTransform"], "none")
+                self.assertEqual(reopened_tree_selector["resizerDisabled"], "false")
+                self.assertEqual(
+                    reopened_tree_selector["resizerLabel"],
+                    "Resize tree selector; drag left to collapse",
+                )
+                self.assertEqual(reopened_tree_selector["resizerPointerEvents"], "auto")
+                self.assertEqual(reopened_tree_selector["selectedTree"], "1")
+                self.assertIn("Tree 1", reopened_tree_selector["detailSummary"])
+                self.assertEqual(reopened_tree_selector["activePalette"], "viridis")
+
+                page.wait_for_timeout(160)
+                page.locator('[data-gbm-tree-zoom="in"]').click()
+                page.wait_for_timeout(220)
+                page.evaluate(
+                    """
+                    () => {
+                      window.__gbmTreeViewportObserver?.disconnect();
+                      const viewport = document.querySelector(".gbm-tree-viewport");
+                      window.__gbmTreeTransformBeforeResize = viewport?.getAttribute("transform") || "";
+                      window.__gbmTreeFitTransforms = [];
+                      window.__gbmTreeViewportObserver = new MutationObserver((records) => {
+                        for (const record of records) {
+                          if (record.attributeName === "transform") {
+                            window.__gbmTreeFitTransforms.push(record.target.getAttribute("transform") || "");
+                          }
+                        }
+                      });
+                      if (viewport) {
+                        window.__gbmTreeViewportObserver.observe(viewport, {
+                          attributes: true,
+                          attributeFilter: ["transform"],
+                        });
+                      }
+                    }
+                    """
+                )
+                page.set_viewport_size({"width": 1000, "height": 800})
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width < 812
+                      && document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")
+                    """,
+                    timeout=5_000,
+                )
+                page.wait_for_function(
+                    "() => (window.__gbmTreeFitTransforms || []).length >= 1",
+                    timeout=5_000,
+                )
+                page.wait_for_timeout(160)
+                window_resize_fit = page.evaluate(
+                    """
+                    () => {
+                      const svg = document.querySelector("#gbmTreeChart svg.gbm-tree-svg");
+                      const svgBounds = svg.getBoundingClientRect();
+                      return {
+                        transforms: window.__gbmTreeFitTransforms || [],
+                        before: window.__gbmTreeTransformBeforeResize || "",
+                        after: document.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "",
+                        treeContained: [...svg.querySelectorAll(".gbm-tree-node")].every((node) => {
+                          const bounds = node.getBoundingClientRect();
+                          return bounds.left >= svgBounds.left - 1
+                            && bounds.right <= svgBounds.right + 1
+                            && bounds.top >= svgBounds.top - 1
+                            && bounds.bottom <= svgBounds.bottom + 1;
+                        }),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(len(window_resize_fit["transforms"]), 1)
+                self.assertNotEqual(window_resize_fit["before"], window_resize_fit["after"])
+                self.assertTrue(window_resize_fit["treeContained"])
+                page.set_viewport_size({"width": 420, "height": 800})
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
+                      && document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")
+                    """,
+                    timeout=5_000,
+                )
+                mobile_tree_geometry = page.evaluate(
+                    """
+                    () => {
+                      const viewer = document.querySelector("#gbmTreeViewer").getBoundingClientRect();
+                      const summary = document.querySelector(".gbm-tree-summary-panel").getBoundingClientRect();
+                      const diagram = document.querySelector(".gbm-tree-diagram-panel").getBoundingClientRect();
+                      const chart = document.querySelector("#gbmTreeChart").getBoundingClientRect();
+                      const plotZoom = document.querySelector(".gbm-tree-plot-zoom").getBoundingClientRect();
+                      const plotPaletteNode = document.querySelector(".gbm-tree-plot-palette");
+                      const plotPalette = plotPaletteNode.getBoundingClientRect();
+                      const paletteButtons = [...plotPaletteNode.querySelectorAll("[data-gbm-tree-palette]")]
+                        .map((button) => button.getBoundingClientRect());
+                      const toggle = document.querySelector("#gbmTreeSummaryToggle").getBoundingClientRect();
+                      const detailSummary = document.querySelector("#gbmTreeDetailSummary").getBoundingClientRect();
+                      return {
+                        chartWidth: chart.width,
+                        viewerWidth: viewer.width,
+                        summaryWidth: summary.width,
+                        diagramWidth: diagram.width,
+                        joinedWidth: summary.width + diagram.width,
+                        zoomRightInset: chart.right - plotZoom.right,
+                        zoomTopInset: plotZoom.top - chart.top,
+                        zoomToggleTopDelta: plotZoom.top - toggle.top,
+                        paletteColumns: getComputedStyle(plotPaletteNode).gridTemplateColumns.split(" ").length,
+                        paletteWidth: plotPalette.width,
+                        paletteHeight: plotPalette.height,
+                        paletteZoomGap: plotZoom.left - plotPalette.right,
+                        paletteButtonSizes: paletteButtons.map((button) => [button.width, button.height]),
+                        paletteToggleOverlaps: !(
+                          plotPalette.left >= toggle.right
+                          || plotPalette.right <= toggle.left
+                          || plotPalette.top >= toggle.bottom
+                          || plotPalette.bottom <= toggle.top
+                        ),
+                        detailTopGap: detailSummary.top - plotPalette.bottom,
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(mobile_tree_geometry["summaryWidth"], 108, delta=0.75)
+                self.assertGreater(mobile_tree_geometry["diagramWidth"], 0)
+                self.assertAlmostEqual(
+                    mobile_tree_geometry["joinedWidth"],
+                    mobile_tree_geometry["viewerWidth"],
+                    delta=0.75,
+                )
+                self.assertAlmostEqual(mobile_tree_geometry["zoomRightInset"], 9, delta=0.75)
+                self.assertAlmostEqual(mobile_tree_geometry["zoomTopInset"], 10, delta=0.75)
+                self.assertAlmostEqual(mobile_tree_geometry["zoomToggleTopDelta"], 0, delta=0.75)
+                self.assertLessEqual(mobile_tree_geometry["chartWidth"], 379)
+                self.assertEqual(mobile_tree_geometry["paletteColumns"], 2)
+                self.assertAlmostEqual(mobile_tree_geometry["paletteWidth"], 146, delta=0.75)
+                self.assertAlmostEqual(mobile_tree_geometry["paletteHeight"], 146, delta=0.75)
+                self.assertAlmostEqual(mobile_tree_geometry["paletteZoomGap"], 8, delta=0.75)
+                for width, height in mobile_tree_geometry["paletteButtonSizes"]:
+                    self.assertAlmostEqual(width, 70, delta=0.75)
+                    self.assertAlmostEqual(height, 70, delta=0.75)
+                self.assertFalse(mobile_tree_geometry["paletteToggleOverlaps"])
+                self.assertGreaterEqual(mobile_tree_geometry["detailTopGap"], 10 - 0.75)
+
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.wait_for_function(
+                    """
+                    (expandedWidth) => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width >= 812
+                      && !document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")
+                      && Math.abs(
+                        document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width - expandedWidth
+                      ) < 1
+                    """,
+                    arg=expanded_width_before_collapse,
+                    timeout=5_000,
+                )
+
+                page.set_viewport_size({"width": 800, "height": 800})
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
+                    timeout=5_000,
+                )
+                page.locator("#gbmTreeSummaryToggle").click()
+                page.wait_for_function(
+                    '() => !document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
+                    timeout=5_000,
+                )
+                page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+                self.assertFalse(
+                    page.locator("#gbmTreeViewer").evaluate(
+                        'node => node.classList.contains("gbm-tree-summary-collapsed")'
+                    )
+                )
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width >= 812',
+                    timeout=5_000,
+                )
+                page.set_viewport_size({"width": 800, "height": 800})
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
+                    timeout=5_000,
+                )
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.wait_for_function(
+                    '() => !document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
+                    timeout=5_000,
+                )
+                page.locator("#gbmTreeSummaryToggle").click()
+                page.set_viewport_size({"width": 800, "height": 800})
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
+                    timeout=5_000,
+                )
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+                self.assertTrue(
+                    page.locator("#gbmTreeViewer").evaluate(
+                        'node => node.classList.contains("gbm-tree-summary-collapsed")'
+                    )
+                )
+                page.locator("#gbmTreeSummaryToggle").click()
+
+                narrow_page = browser.new_page(viewport={"width": 900, "height": 800})
+                try:
+                    narrow_page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
+                    narrow_page.get_by_role("tab", name="Tree viewer").click()
+                    narrow_page.wait_for_function(
+                        """
+                        () => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width < 812
+                          && document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")
+                          && Math.abs(
+                            document.querySelector(".gbm-tree-summary-panel")?.getBoundingClientRect().width - 108
+                          ) < 1
+                        """,
+                        timeout=10_000,
+                    )
+                finally:
+                    narrow_page.close()
+                if page.locator("#sidebarToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#sidebarToggleBtn").click()
+                    page.wait_for_function(
+                        '() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"',
+                        timeout=5_000,
+                    )
                 page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 navigator_state = page.evaluate(

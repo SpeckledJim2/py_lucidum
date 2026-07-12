@@ -352,27 +352,9 @@ export function createGbmTool({
         <div id="gbm-screen-panel-trees" class="${gbmPanelClass(activeTab, "trees")}" data-gbm-panel="trees" role="tabpanel" aria-labelledby="gbm-screen-tab-trees">
           <div id="gbmTreeViewer" class="gbm-tree-viewer">
             <div class="gbm-tree-control-strip app-control-strip">
-              <div class="gbm-tree-control-layout">
-                <div class="gbm-tree-section-header app-control-strip-row app-control-strip--titled">
-                  <h3 class="gbm-section-title">Select tree</h3>
-                  <input id="gbmTreeSearch" class="search gbm-tree-search app-control-input" type="search" placeholder="Search" aria-label="Search trees" />
-                </div>
-                <div class="gbm-tree-diagram-header app-control-strip-row app-control-strip--titled">
-                  <h3 class="gbm-section-title">Tree viewer</h3>
-                  <div class="gbm-tree-controls">
-                    <div class="gbm-tree-zoom segmented" role="group" aria-label="Tree zoom">
-                      <button class="app-control-button" type="button" data-gbm-tree-zoom="out" aria-label="Zoom out">-</button>
-                      <button class="app-control-button" type="button" data-gbm-tree-zoom="reset" aria-label="Reset zoom">Reset</button>
-                      <button class="app-control-button" type="button" data-gbm-tree-zoom="in" aria-label="Zoom in">+</button>
-                    </div>
-                    <div class="gbm-tree-palette segmented" role="group" aria-label="Tree colour mode">
-                      <button class="app-control-button" type="button" data-gbm-tree-palette="plain" aria-pressed="true">Plain</button>
-                      <button class="app-control-button" type="button" data-gbm-tree-palette="divergent" aria-pressed="false">Divergent</button>
-                      <button class="app-control-button" type="button" data-gbm-tree-palette="spectral" aria-pressed="false">Spectral</button>
-                      <button class="app-control-button" type="button" data-gbm-tree-palette="viridis" aria-pressed="false">Viridis</button>
-                    </div>
-                  </div>
-                </div>
+              <div class="gbm-tree-section-header app-control-strip-row app-control-strip--titled">
+                <h3 class="gbm-section-title">Select tree</h3>
+                <input id="gbmTreeSearch" class="search gbm-tree-search app-control-input" type="search" placeholder="Search" aria-label="Search trees" />
               </div>
             </div>
             <section class="gbm-panel-section gbm-tree-summary-panel">
@@ -382,6 +364,34 @@ export function createGbmTool({
             <div id="gbmTreeResizer" class="gbm-tree-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize tree selector"></div>
             <section class="gbm-panel-section gbm-tree-diagram-panel">
               <div id="gbmTreeChart" class="gbm-tree-chart" aria-label="GBM tree diagram">
+                <button id="gbmTreeSummaryToggle" class="gbm-tree-summary-toggle" type="button" aria-controls="gbmTreeSummaryGrid gbmTreeSummaryFallback" aria-expanded="true" aria-label="Collapse tree selector" title="Collapse tree selector">
+                  <svg class="gbm-tree-summary-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="m15 18-6-6 6-6"></path>
+                  </svg>
+                </button>
+                <div class="gbm-tree-plot-zoom" role="group" aria-label="Tree zoom">
+                  <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="in" aria-label="Zoom in" title="Zoom in">+</button>
+                  <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="out" aria-label="Zoom out" title="Zoom out">−</button>
+                  <button class="gbm-tree-plot-zoom-button" type="button" data-gbm-tree-zoom="reset" aria-label="Reset zoom" title="Reset zoom">↺</button>
+                </div>
+                <div class="gbm-tree-plot-palette" role="group" aria-label="Tree colour mode">
+                  <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="plain" aria-pressed="true" title="Plain">
+                    <span class="gbm-tree-palette-swatch gbm-tree-palette-plain" aria-hidden="true"></span>
+                    <span class="gbm-tree-palette-label">Plain</span>
+                  </button>
+                  <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="divergent" aria-pressed="false" title="Divergent">
+                    <span class="gbm-tree-palette-swatch gbm-tree-palette-divergent" aria-hidden="true"></span>
+                    <span class="gbm-tree-palette-label">Divergent</span>
+                  </button>
+                  <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="spectral" aria-pressed="false" title="Spectral">
+                    <span class="gbm-tree-palette-swatch gbm-tree-palette-spectral" aria-hidden="true"></span>
+                    <span class="gbm-tree-palette-label">Spectral</span>
+                  </button>
+                  <button class="gbm-tree-palette-tile" type="button" data-gbm-tree-palette="viridis" aria-pressed="false" title="Viridis">
+                    <span class="gbm-tree-palette-swatch gbm-tree-palette-viridis" aria-hidden="true"></span>
+                    <span class="gbm-tree-palette-label">Viridis</span>
+                  </button>
+                </div>
                 <div id="gbmTreeDetailSummary" class="gbm-tree-detail-summary">
                   <h3 class="gbm-section-title">Tree viewer</h3>
                 </div>
