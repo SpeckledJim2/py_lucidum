@@ -548,6 +548,12 @@
         overflow: hidden;
       }
 
+      .line-bar-workspace-status-detail #lineBarFilter {
+        box-sizing: border-box;
+        height: 13px;
+        padding-block: 0;
+      }
+
       .line-bar-workspace-status-detail .chart-message {
         min-width: 0;
       }

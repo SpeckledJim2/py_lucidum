@@ -2913,6 +2913,197 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_filter_badge_fits_status_row(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_filter_badge.csv"
+            data_path.write_text(
+                "PostcodeArea,vehicle_age,price,value\n"
+                "AB,1,100,10\n"
+                "AB,2,200,20\n"
+                "AL,3,300,30\n"
+                "AL,4,400,40\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "PostcodeArea",
+                    "actual": "value",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page.emulate_media(color_scheme="light")
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def badge_layout() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const chartNode = document.querySelector("#chart");
+                              const filter = document.querySelector("#lineBarFilter");
+                              const text = document.querySelector("#lineBarFilterText");
+                              const clear = document.querySelector("#lineBarFilterClearBtn");
+                              const detail = document.querySelector(".line-bar-workspace-status-detail");
+                              const status = document.querySelector(".line-bar-workspace-status");
+                              const controls = document.querySelector("#lineBarWorkspaceControls");
+                              const groupMeta = document.querySelector("#lineBarGroupMeta");
+                              const chart = window.echarts?.getInstanceByDom(chartNode);
+                              const option = chart?.getOption?.() || {};
+                              const legend = Array.isArray(option.legend) ? option.legend[0] : option.legend;
+                              const grid = Array.isArray(option.grid) ? option.grid[0] : option.grid;
+                              const chartRect = chartNode.getBoundingClientRect();
+                              const filterRect = filter.getBoundingClientRect();
+                              const textRect = text.getBoundingClientRect();
+                              const clearRect = clear.getBoundingClientRect();
+                              const detailRect = detail.getBoundingClientRect();
+                              const statusRect = status.getBoundingClientRect();
+                              const controlsRect = controls.getBoundingClientRect();
+                              const groupMetaRect = groupMeta.getBoundingClientRect();
+                              const filterStyle = getComputedStyle(filter);
+                              const textStyle = getComputedStyle(text);
+                              return {
+                                applied: filter.classList.contains("line-bar-filter--applied"),
+                                filterText: text.textContent.trim(),
+                                filterTop: filterRect.top,
+                                filterBottom: filterRect.bottom,
+                                filterHeight: filterRect.height,
+                                filterWidth: filterRect.width,
+                                detailTop: detailRect.top,
+                                detailBottom: detailRect.bottom,
+                                detailHeight: detailRect.height,
+                                statusWidth: statusRect.width,
+                                controlsHeight: controlsRect.height,
+                                groupMetaBottom: groupMetaRect.bottom,
+                                clearLeft: clearRect.left,
+                                clearRight: clearRect.right,
+                                clearCenter: clearRect.top + clearRect.height / 2,
+                                textLeft: textRect.left,
+                                filterCenter: filterRect.top + filterRect.height / 2,
+                                boxSizing: filterStyle.boxSizing,
+                                paddingTop: filterStyle.paddingTop,
+                                paddingBottom: filterStyle.paddingBottom,
+                                borderTop: filterStyle.borderTopWidth,
+                                borderBottom: filterStyle.borderBottomWidth,
+                                borderRadius: filterStyle.borderRadius,
+                                backgroundColor: filterStyle.backgroundColor,
+                                borderColor: filterStyle.borderTopColor,
+                                color: filterStyle.color,
+                                textClientWidth: text.clientWidth,
+                                textScrollWidth: text.scrollWidth,
+                                textOverflow: textStyle.textOverflow,
+                                textOverflowMode: textStyle.overflow,
+                                filterBottomOffset: filterRect.bottom - chartRect.top,
+                                legendTop: Number(legend?.top),
+                                gridTop: Number(grid?.top),
+                                pageClientWidth: document.documentElement.clientWidth,
+                                pageScrollWidth: document.documentElement.scrollWidth,
+                              };
+                            }
+                            """
+                        )
+
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    long_filter = (
+                        "(vehicle_age >= 2) AND (price >= 200) AND (value >= 20) "
+                        "AND (PostcodeArea IN ('AB', 'AL'))"
+                    )
+                    page.evaluate(
+                        """
+                        (expression) => {
+                          document.querySelector("#filterInput").value = expression;
+                          document.querySelector("#filterApplyBtn").click();
+                        }
+                        """,
+                        long_filter,
+                    )
+                    page.wait_for_function(
+                        """
+                        (expression) => document.querySelector("#filterRowMetaText")?.textContent.trim() === "3 / 4 rows"
+                          && document.querySelector("#lineBarFilterText")?.textContent.trim() === expression
+                        """,
+                        arg=long_filter,
+                        timeout=10_000,
+                    )
+
+                    light_layout = badge_layout()
+                    self.assertTrue(light_layout["applied"])
+                    self.assertEqual(light_layout["filterText"], long_filter)
+                    self.assertEqual(light_layout["boxSizing"], "border-box")
+                    self.assertEqual(light_layout["paddingTop"], "0px")
+                    self.assertEqual(light_layout["paddingBottom"], "0px")
+                    self.assertEqual(light_layout["borderTop"], "1px")
+                    self.assertEqual(light_layout["borderBottom"], "1px")
+                    self.assertEqual(light_layout["borderRadius"], "4px")
+                    self.assertAlmostEqual(light_layout["filterHeight"], 13, delta=0.5)
+                    self.assertAlmostEqual(light_layout["detailHeight"], 13, delta=0.5)
+                    self.assertGreaterEqual(light_layout["filterTop"], light_layout["detailTop"] - 0.5)
+                    self.assertLessEqual(light_layout["filterBottom"], light_layout["detailBottom"] + 0.5)
+                    self.assertAlmostEqual(light_layout["clearCenter"], light_layout["filterCenter"], delta=0.5)
+                    self.assertLessEqual(light_layout["clearLeft"], light_layout["textLeft"])
+                    self.assertLessEqual(light_layout["clearRight"], light_layout["textLeft"] + 1)
+                    self.assertLessEqual(light_layout["groupMetaBottom"], light_layout["filterTop"])
+                    self.assertAlmostEqual(light_layout["controlsHeight"], 28, delta=0.5)
+                    self.assertLess(light_layout["filterWidth"], light_layout["statusWidth"])
+                    self.assertLessEqual(light_layout["textScrollWidth"], light_layout["textClientWidth"] + 1)
+                    self.assertGreater(light_layout["legendTop"], light_layout["filterBottomOffset"])
+                    self.assertGreaterEqual(light_layout["gridTop"], light_layout["legendTop"] + 40)
+
+                    page.locator(".line-bar-workspace-status").evaluate(
+                        "node => { node.style.maxWidth = '220px'; }"
+                    )
+                    page.wait_for_function(
+                        "() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+                    )
+                    constrained_layout = badge_layout()
+                    self.assertLess(constrained_layout["filterWidth"], light_layout["filterWidth"])
+                    self.assertGreater(constrained_layout["textScrollWidth"], constrained_layout["textClientWidth"])
+                    self.assertEqual(constrained_layout["textOverflow"], "ellipsis")
+                    self.assertEqual(constrained_layout["textOverflowMode"], "hidden")
+                    self.assertGreaterEqual(constrained_layout["filterTop"], constrained_layout["detailTop"] - 0.5)
+                    self.assertLessEqual(constrained_layout["filterBottom"], constrained_layout["detailBottom"] + 0.5)
+                    self.assertEqual(constrained_layout["pageScrollWidth"], constrained_layout["pageClientWidth"])
+                    page.locator(".line-bar-workspace-status").evaluate(
+                        "node => { node.style.removeProperty('max-width'); }"
+                    )
+
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function("() => document.body.classList.contains('dark')", timeout=10_000)
+                    dark_layout = badge_layout()
+                    self.assertAlmostEqual(dark_layout["filterHeight"], 13, delta=0.5)
+                    self.assertGreaterEqual(dark_layout["filterTop"], dark_layout["detailTop"] - 0.5)
+                    self.assertLessEqual(dark_layout["filterBottom"], dark_layout["detailBottom"] + 0.5)
+                    self.assertNotEqual(dark_layout["backgroundColor"], light_layout["backgroundColor"])
+                    self.assertNotEqual(dark_layout["borderColor"], light_layout["borderColor"])
+                    self.assertNotEqual(dark_layout["color"], light_layout["color"])
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
+
+                    page.locator("#lineBarFilterClearBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#filterInput")?.value === ""
+                          && document.querySelector("#lineBarFilterText")?.textContent.trim() === "no filter"
+                          && document.querySelector("#lineBarFilterClearBtn")?.hidden
+                          && !document.querySelector("#lineBarFilter")?.classList.contains("line-bar-filter--applied")
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_table_search_filters_complete_table_client_side(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "line_bar_table.csv"
