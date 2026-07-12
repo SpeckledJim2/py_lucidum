@@ -895,7 +895,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('<div class="spec-file-row app-control-strip">', specs)
         self.assertLess(specs.index('<div class="spec-file-row app-control-strip">'), specs.index('id="specSaveBtn"'))
         self.assertIn("toolScreenNavButtonHtml", gbm)
-        self.assertIn('id="lineBarTabs" class="tabs workspace-tabs hidden"', index)
+        self.assertIn('id="lineBarWorkspaceControls" class="line-bar-workspace-controls hidden"', index)
+        self.assertIn('id="lineBarTabs" class="tabs hidden"', index)
         self.assertNotIn('id="lineBarTabs" class="tool-screen-nav', index)
 
     def test_app_control_strips_use_shared_height_tokens(self) -> None:
@@ -911,6 +912,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         gbm = (static_root / "app/gbm-tool.js").read_text(encoding="utf-8")
         gbm_feature_controls = (static_root / "app/gbm-feature-parameter-controls.js").read_text(encoding="utf-8")
         specs = (static_root / "app/specifications-tool.js").read_text(encoding="utf-8")
+        index = (static_root / "index.html").read_text(encoding="utf-8")
+        line_bar = (static_root / "app/line-bar-tool.js").read_text(encoding="utf-8")
+        line_bar_css = (static_root / "styles/line-bar.css").read_text(encoding="utf-8")
 
         self.assertIn("--app-tool-row-height: 50px;", foundations)
         self.assertIn("--app-control-strip-height: var(--app-tool-row-height);", foundations)
@@ -933,6 +937,11 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('import { bindVerticalListNavigation } from "./shared/list-navigation.js";', profile)
         self.assertIn('itemSelector: "[data-profile-column]"', profile)
         self.assertIn('row.tabIndex = selected ? 0 : -1;', profile)
+        self.assertIn('class="toolbar line-bar-settings-strip app-control-strip hidden"', index)
+        self.assertIn('class="line-bar-workspace-controls hidden"', index)
+        self.assertIn('class="line-bar-table-search-row app-control-strip"', line_bar)
+        self.assertIn("height: var(--app-control-strip-height);", line_bar_css)
+        self.assertIn("grid-template-columns: var(--chart-controls-width, 340px) 12px minmax(0, 1fr);", line_bar_css)
         self.assertNotIn(".model-control-strip", model_shell)
         self.assertNotIn("glm-builder-control-strip", glm_css)
         self.assertNotIn("model-control-strip", glm + gbm)

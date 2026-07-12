@@ -2552,9 +2552,9 @@ export function createLineBarTool({
       return;
     }
     tableWrap.innerHTML = `
-      <div class="line-bar-table-search-row">
-        <input id="lineBarTableSearch" class="search" placeholder="search table" />
-        <button id="lineBarTableSearchClear" class="filter-action" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
+      <div class="line-bar-table-search-row app-control-strip">
+        <input id="lineBarTableSearch" class="search app-control-input" placeholder="search table" />
+        <button id="lineBarTableSearchClear" class="filter-action app-control-button" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
       </div>
       <div id="lineBarTableContent" class="line-bar-table-content"></div>`;
     const searchInput = el("lineBarTableSearch");

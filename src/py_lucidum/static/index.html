@@ -225,7 +225,7 @@
         <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 
         <main>
-          <div id="lineBarToolbar" class="toolbar hidden">
+          <div id="lineBarToolbar" class="toolbar line-bar-settings-strip app-control-strip hidden">
             <div class="control">
               <h3>Group low weights</h3>
               <div class="segmented" data-control="lowGroup">
@@ -398,38 +398,44 @@
             <div id="chartControlsResizer" class="chart-controls-resizer app-resizer app-resizer--vertical hidden" role="separator" aria-orientation="vertical" aria-label="Resize chart controls"></div>
 
             <section class="workspace">
-              <div id="lineBarTabs" class="tabs workspace-tabs hidden">
-                <button id="lineBarSideControlsToggleBtn" class="tab line-bar-icon-tab line-bar-side-controls-toggle" type="button" aria-controls="chartSideControls" aria-expanded="true" aria-label="Hide x-axis and Expected controls" title="Hide x-axis and Expected controls">
-                  <svg class="line-bar-tab-icon line-bar-chevron-icon line-bar-chevron-horizontal" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="m15 18-6-6 6-6"></path>
-                  </svg>
-                </button>
-                <button id="lineBarToolbarToggleBtn" class="tab line-bar-icon-tab line-bar-toolbar-toggle" type="button" aria-controls="lineBarToolbar" aria-expanded="true" aria-label="Hide chart control row" title="Hide chart control row">
-                  <svg class="line-bar-tab-icon line-bar-chevron-icon line-bar-chevron-vertical" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="m18 15-6-6-6 6"></path>
-                  </svg>
-                </button>
-                <button id="lineBarCopyBtn" class="tab line-bar-icon-tab" type="button" aria-label="Copy chart or table" title="Copy chart or table">
-                  <svg class="line-bar-tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <rect x="8" y="8" width="10" height="10" rx="1.5"></rect>
-                    <path d="M6 14H5.5A1.5 1.5 0 0 1 4 12.5v-7A1.5 1.5 0 0 1 5.5 4h7A1.5 1.5 0 0 1 14 5.5V6"></path>
-                  </svg>
-                </button>
-                <button id="chartTab" class="tab active" type="button">Chart</button>
-                <button id="tableTab" class="tab" type="button">Table</button>
+              <div id="lineBarWorkspaceControls" class="line-bar-workspace-controls hidden">
+                <div id="lineBarTabs" class="tabs hidden">
+                  <button id="lineBarSideControlsToggleBtn" class="tab line-bar-icon-tab line-bar-overlay-icon-button line-bar-side-controls-toggle app-control-button" type="button" aria-controls="chartSideControls" aria-expanded="true" aria-label="Hide x-axis and Expected controls" title="Hide x-axis and Expected controls">
+                    <svg class="line-bar-tab-icon line-bar-chevron-icon line-bar-chevron-horizontal" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="m15 18-6-6 6-6"></path>
+                    </svg>
+                  </button>
+                  <button id="lineBarToolbarToggleBtn" class="tab line-bar-icon-tab line-bar-overlay-icon-button line-bar-toolbar-toggle app-control-button" type="button" aria-controls="lineBarToolbar" aria-expanded="true" aria-label="Hide chart control row" title="Hide chart control row">
+                    <svg class="line-bar-tab-icon line-bar-chevron-icon line-bar-chevron-vertical" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="m18 15-6-6-6 6"></path>
+                    </svg>
+                  </button>
+                  <button id="lineBarCopyBtn" class="tab line-bar-icon-tab line-bar-overlay-icon-button app-control-button" type="button" aria-label="Copy chart or table" title="Copy chart or table">
+                    <svg class="line-bar-tab-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <rect x="8" y="8" width="10" height="10" rx="1.5"></rect>
+                      <path d="M6 14H5.5A1.5 1.5 0 0 1 4 12.5v-7A1.5 1.5 0 0 1 5.5 4h7A1.5 1.5 0 0 1 14 5.5V6"></path>
+                    </svg>
+                  </button>
+                  <button id="chartTab" class="tab line-bar-view-tab active app-control-button" type="button">Chart</button>
+                  <button id="tableTab" class="tab line-bar-view-tab app-control-button" type="button">Table</button>
+                </div>
+                <div class="line-bar-workspace-status">
+                  <div id="lineBarGroupMeta" class="workspace-meta hidden"></div>
+                  <div class="line-bar-workspace-status-detail">
+                    <div id="lineBarFilter" class="hidden"><button id="lineBarFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="lineBarFilterText" class="filter-badge-text">no filter</span></div>
+                    <div id="chartMessage" class="chart-message hidden"></div>
+                  </div>
+                </div>
               </div>
               <div class="workspace-messages">
                 <div id="datasetViewerGroupMeta" class="workspace-meta hidden"></div>
                 <div id="datasetViewerFilter" class="hidden"><button id="datasetViewerFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="datasetViewerFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="profileGroupMeta" class="workspace-meta"></div>
                 <div id="profileFilter" class="hidden"><button id="profileFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="profileFilterText" class="filter-badge-text">no filter</span></div>
-                <div id="lineBarGroupMeta" class="workspace-meta hidden"></div>
-                <div id="lineBarFilter" class="hidden"><button id="lineBarFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="lineBarFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="histogramGroupMeta" class="workspace-meta hidden"></div>
                 <div id="histogramFilter" class="hidden"><button id="histogramFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="histogramFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="modelToolGroupMeta" class="workspace-meta hidden"></div>
                 <div id="modelToolFilter" class="hidden">no filter</div>
-                <div id="chartMessage" class="chart-message hidden"></div>
               </div>
               <div id="chart" class="hidden"></div>
               <div id="tableWrap" class="table-wrap hidden"></div>

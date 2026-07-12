@@ -296,6 +296,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - When multiple tools are enabled, the sidebar tool selector is a vertical rail that remains visible while the sidebar is collapsed. Clicking the active tool button toggles the sidebar open or closed; clicking an inactive tool switches tools without changing the sidebar state. Single-tool mode still hides the selector.
 - Response controls sit above the x-axis feature list because response selection is usually the first workflow choice.
 - Chart/Table controls sit before the filter bar.
+- Line/Bar keeps its compact action buttons and grey status text overlaid inside the full-bleed chart/table workspace, with a separate collapsible 50px settings strip above it. Its x-axis/Expected chooser is a border-separated, resizable pane rather than a framed card; at viewport widths up to 900px an opened chooser stacks above the workspace.
 - Saved-filter selections populate and apply the filter expression immediately. Manual filter edits require Enter or Apply.
 - Chart animations are disabled for fast interaction.
 - The app should continue to work as a static ECharts and Leaflet frontend unless future tool complexity justifies a larger frontend framework.

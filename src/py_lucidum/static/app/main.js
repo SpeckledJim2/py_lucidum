@@ -1675,12 +1675,14 @@
         syncSidebarAccordion();
         syncFavouriteActionButtons();
         el("histogramToolbar").classList.toggle("hidden", tool !== "histogram");
+        el("visualArea").classList.toggle("line-bar-mode", tool === "line_bar");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
         el("visualArea").classList.toggle("dataset-viewer-mode", tool === "dataset_viewer");
         el("visualArea").classList.toggle("profile-mode", tool === "column_profile");
         el("visualArea").classList.toggle("histogram-mode", tool === "histogram");
         el("visualArea").classList.toggle("specs-mode", tool === "specs");
         el("visualArea").classList.toggle("model-mode", isModelTool(tool));
+        el("lineBarWorkspaceControls").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
         syncLineBarLayoutVisibility();
         el("datasetViewerGroupMeta").classList.toggle("hidden", tool !== "dataset_viewer");
@@ -4284,7 +4286,7 @@
         const controls = document.querySelector(".chart-side-controls");
         const availableHeight = controls?.getBoundingClientRect().height || window.innerHeight;
         const splitterHeight = el("chartControlHeightRow")?.getBoundingClientRect().height || 18;
-        const gridGap = 8;
+        const gridGap = 0;
         const minFeaturePanelHeight = 96;
         const usableHeight = Math.max(minFeaturePanelHeight, availableHeight - splitterHeight - gridGap * 2);
         return Math.max(minFeaturePanelHeight, Math.round(usableHeight / 2));
@@ -4347,7 +4349,7 @@
         const controls = document.querySelector(".chart-side-controls");
         const availableHeight = controls?.getBoundingClientRect().height || window.innerHeight;
         const splitterHeight = el("chartControlHeightRow")?.getBoundingClientRect().height || 18;
-        const gridGap = 8;
+        const gridGap = 0;
         const expandedSplitterSpace = splitterHeight + gridGap * 2;
         const collapsedSplitterSpace = splitterHeight + gridGap;
         const minFeaturePanelHeight = 96;

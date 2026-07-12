@@ -2815,6 +2815,41 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertGreaterEqual(rect["left"], -1, selector)
                         self.assertLessEqual(rect["right"], layout["innerWidth"] + 1, selector)
                     self.assertLessEqual(layout["canvas"]["right"], layout["innerWidth"] + 1)
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    stacked_layout = page.evaluate(
+                        """
+                        () => {
+                          const controls = document.querySelector("#chartSideControls").getBoundingClientRect();
+                          const visual = document.querySelector("#visualArea").getBoundingClientRect();
+                          const workspace = document.querySelector(".workspace").getBoundingClientRect();
+                          const chart = document.querySelector("#chart").getBoundingClientRect();
+                          return {
+                            bodyClientWidth: document.body.clientWidth,
+                            bodyScrollWidth: document.body.scrollWidth,
+                            chartWidth: chart.width,
+                            controlsBottom: controls.bottom,
+                            controlsWidth: controls.width,
+                            resizerDisplay: getComputedStyle(document.querySelector("#chartControlsResizer")).display,
+                            visualWidth: visual.width,
+                            workspaceTop: workspace.top,
+                            workspaceWidth: workspace.width,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(stacked_layout["resizerDisplay"], "none")
+                    self.assertAlmostEqual(stacked_layout["controlsWidth"], stacked_layout["visualWidth"], delta=1)
+                    self.assertAlmostEqual(stacked_layout["workspaceWidth"], stacked_layout["visualWidth"], delta=1)
+                    self.assertGreaterEqual(stacked_layout["workspaceTop"], stacked_layout["controlsBottom"])
+                    self.assertAlmostEqual(stacked_layout["chartWidth"], stacked_layout["workspaceWidth"], delta=1)
+                    self.assertLessEqual(stacked_layout["bodyScrollWidth"], stacked_layout["bodyClientWidth"])
                     self.assertEqual(page_errors, [])
                     browser.close()
             finally:
@@ -3011,11 +3046,27 @@ class BrowserSmokeTests(unittest.TestCase):
                           const rootStyle = getComputedStyle(document.documentElement);
                           const displayFor = (selector) => getComputedStyle(document.querySelector(selector)).display;
                           const chartRect = document.querySelector("#chart").getBoundingClientRect();
+                          const actionRect = document.querySelector("#lineBarWorkspaceControls").getBoundingClientRect();
+                          const groupMetaRect = document.querySelector("#lineBarGroupMeta").getBoundingClientRect();
+                          const workspaceRect = document.querySelector(".workspace").getBoundingClientRect();
+                          const workspaceStyle = getComputedStyle(document.querySelector(".workspace"));
                           return {
                             sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
                             chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
                             sidebarExpanded: document.querySelector("#sidebarToggleBtn").getAttribute("aria-expanded"),
                             chartWidth: chartRect.width,
+                            chartTop: chartRect.top,
+                            actionTop: actionRect.top,
+                            actionBottom: actionRect.bottom,
+                            actionPosition: getComputedStyle(document.querySelector("#lineBarWorkspaceControls")).position,
+                            actionDisplay: displayFor("#lineBarWorkspaceControls"),
+                            actionHeight: actionRect.height,
+                            groupMetaTop: groupMetaRect.top,
+                            groupMetaBottom: groupMetaRect.bottom,
+                            workspaceTop: workspaceRect.top,
+                            mainPadding: getComputedStyle(document.querySelector("main")).padding,
+                            workspaceBorder: workspaceStyle.borderTopWidth,
+                            workspaceRadius: workspaceStyle.borderRadius,
                             toolbarDisplay: displayFor("#lineBarToolbar"),
                             controlsDisplay: displayFor("#chartSideControls"),
                           };
@@ -3025,6 +3076,17 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(initial_focus_state["sidebarExpanded"], "true")
                     self.assertEqual(initial_focus_state["toolbarDisplay"], "none")
                     self.assertEqual(initial_focus_state["controlsDisplay"], "none")
+                    self.assertEqual(initial_focus_state["actionDisplay"], "flex")
+                    self.assertAlmostEqual(initial_focus_state["actionHeight"], 28, delta=0.5)
+                    self.assertEqual(initial_focus_state["actionPosition"], "absolute")
+                    self.assertAlmostEqual(initial_focus_state["chartTop"], initial_focus_state["workspaceTop"], delta=0.5)
+                    self.assertGreaterEqual(initial_focus_state["actionTop"], initial_focus_state["chartTop"])
+                    self.assertGreater(initial_focus_state["actionBottom"], initial_focus_state["actionTop"])
+                    self.assertGreaterEqual(initial_focus_state["groupMetaTop"], initial_focus_state["actionTop"])
+                    self.assertLessEqual(initial_focus_state["groupMetaBottom"], initial_focus_state["actionBottom"])
+                    self.assertEqual(initial_focus_state["mainPadding"], "0px")
+                    self.assertEqual(initial_focus_state["workspaceBorder"], "0px")
+                    self.assertEqual(initial_focus_state["workspaceRadius"], "0px")
                     page.locator("#lineBarCopyBtn").click()
                     page.wait_for_function(
                         """
@@ -3048,6 +3110,8 @@ class BrowserSmokeTests(unittest.TestCase):
                           copyLeft: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().left,
                           copyRight: document.querySelector("#lineBarCopyBtn").getBoundingClientRect().right,
                           chartLeft: document.querySelector("#chartTab").getBoundingClientRect().left,
+                          chartRight: document.querySelector("#chartTab").getBoundingClientRect().right,
+                          tableLeft: document.querySelector("#tableTab").getBoundingClientRect().left,
                         })
                         """
                     )
@@ -3058,6 +3122,61 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertLessEqual(initial_toggle_state["sideRight"], initial_toggle_state["toolbarLeft"])
                     self.assertLessEqual(initial_toggle_state["toolbarRight"], initial_toggle_state["copyLeft"])
                     self.assertLessEqual(initial_toggle_state["copyRight"], initial_toggle_state["chartLeft"])
+                    self.assertAlmostEqual(initial_toggle_state["toolbarLeft"] - initial_toggle_state["sideRight"], 0, delta=0.5)
+                    self.assertAlmostEqual(initial_toggle_state["copyLeft"] - initial_toggle_state["toolbarRight"], 0, delta=0.5)
+                    self.assertAlmostEqual(initial_toggle_state["chartLeft"] - initial_toggle_state["copyRight"], 14, delta=0.5)
+                    self.assertAlmostEqual(initial_toggle_state["tableLeft"] - initial_toggle_state["chartRight"], 0, delta=0.5)
+                    page.mouse.move(0, 0)
+                    overlay_style = page.evaluate(
+                        """
+                        () => {
+                          const normalizeColor = (value) => {
+                            const probe = document.createElement("span");
+                            probe.style.color = value;
+                            document.body.append(probe);
+                            const color = getComputedStyle(probe).color;
+                            probe.remove();
+                            return color;
+                          };
+                          const root = getComputedStyle(document.documentElement);
+                          const muted = normalizeColor(root.getPropertyValue("--muted").trim());
+                          const accent = normalizeColor(root.getPropertyValue("--accent").trim());
+                          const iconButtons = [...document.querySelectorAll("#lineBarTabs .line-bar-overlay-icon-button")];
+                          const viewTabs = [...document.querySelectorAll("#lineBarTabs .line-bar-view-tab")];
+                          return {
+                            iconsBorderless: iconButtons.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
+                            iconsTransparent: iconButtons.every((button) => getComputedStyle(button).backgroundColor === "rgba(0, 0, 0, 0)"),
+                            iconsMuted: iconButtons.every((button) => getComputedStyle(button).color === muted),
+                            tabsBorderless: viewTabs.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
+                            tabsTransparent: viewTabs.every((button) => getComputedStyle(button).backgroundColor === "rgba(0, 0, 0, 0)"),
+                            tabsSameWeight: new Set(viewTabs.map((button) => getComputedStyle(button).fontWeight)).size === 1,
+                            activeAccent: getComputedStyle(document.querySelector("#chartTab")).color === accent,
+                            inactiveMuted: getComputedStyle(document.querySelector("#tableTab")).color === muted,
+                            accent,
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(overlay_style["iconsBorderless"])
+                    self.assertTrue(overlay_style["iconsTransparent"])
+                    self.assertTrue(overlay_style["iconsMuted"])
+                    self.assertTrue(overlay_style["tabsBorderless"])
+                    self.assertTrue(overlay_style["tabsTransparent"])
+                    self.assertTrue(overlay_style["tabsSameWeight"])
+                    self.assertTrue(overlay_style["activeAccent"])
+                    self.assertTrue(overlay_style["inactiveMuted"])
+                    table_tab_box = page.locator("#tableTab").bounding_box()
+                    self.assertIsNotNone(table_tab_box)
+                    assert table_tab_box is not None
+                    page.mouse.move(
+                        table_tab_box["x"] + table_tab_box["width"] / 2,
+                        table_tab_box["y"] + table_tab_box["height"] / 2,
+                    )
+                    self.assertEqual(
+                        page.locator("#tableTab").evaluate("node => getComputedStyle(node).color"),
+                        overlay_style["accent"],
+                    )
+                    page.mouse.move(0, 0)
                     page.locator("#lineBarSideControlsToggleBtn").click()
                     page.locator("#lineBarToolbarToggleBtn").click()
                     page.wait_for_function(
@@ -3074,14 +3193,38 @@ class BrowserSmokeTests(unittest.TestCase):
                         () => {
                           const rootStyle = getComputedStyle(document.documentElement);
                           const chartRect = document.querySelector("#chart").getBoundingClientRect();
+                          const toolbarRect = document.querySelector("#lineBarToolbar").getBoundingClientRect();
+                          const resizerRect = document.querySelector("#chartControlsResizer").getBoundingClientRect();
+                          const firstControlStyle = getComputedStyle(document.querySelector("#lineBarToolbar .control"));
+                          const settingsButtonStyle = getComputedStyle(document.querySelector("#lineBarToolbar .segmented button"));
+                          const actionButtonStyle = getComputedStyle(document.querySelector("#lineBarTabs button"));
+                          const settingsLabelStyle = getComputedStyle(document.querySelector("#lineBarToolbar .control h3"));
                           return {
                             sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
                             chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
                             chartWidth: chartRect.width,
+                            toolbarHeight: toolbarRect.height,
+                            resizerWidth: resizerRect.width,
+                            visualGap: getComputedStyle(document.querySelector("#visualArea")).gap,
+                            controlBorderTop: firstControlStyle.borderTopWidth,
+                            controlShadow: firstControlStyle.boxShadow,
+                            settingsButtonHeight: settingsButtonStyle.height,
+                            actionButtonHeight: actionButtonStyle.height,
+                            settingsLabelFontSize: settingsLabelStyle.fontSize,
+                            settingsLabelMarginBottom: settingsLabelStyle.marginBottom,
                           };
                         }
                         """
                     )
+                    self.assertAlmostEqual(expanded_focus_state["toolbarHeight"], 50, delta=0.5)
+                    self.assertAlmostEqual(expanded_focus_state["resizerWidth"], 12, delta=0.5)
+                    self.assertEqual(expanded_focus_state["visualGap"], "0px")
+                    self.assertEqual(expanded_focus_state["controlBorderTop"], "0px")
+                    self.assertEqual(expanded_focus_state["controlShadow"], "none")
+                    self.assertEqual(expanded_focus_state["settingsButtonHeight"], "24px")
+                    self.assertEqual(expanded_focus_state["actionButtonHeight"], "24px")
+                    self.assertEqual(expanded_focus_state["settingsLabelFontSize"], "12px")
+                    self.assertEqual(expanded_focus_state["settingsLabelMarginBottom"], "4px")
                     page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
@@ -3256,17 +3399,25 @@ class BrowserSmokeTests(unittest.TestCase):
                         """
                         () => {
                           const tabs = document.querySelector("#lineBarTabs").getBoundingClientRect();
+                          const search = document.querySelector("#tableWrap .line-bar-table-search-row").getBoundingClientRect();
                           const grid = document.querySelector("#lineBarTableGrid").getBoundingClientRect();
                           return {
                             tabsBottom: tabs.bottom,
+                            searchTop: search.top,
+                            searchBottom: search.bottom,
+                            searchHeight: search.height,
                             gridTop: grid.top,
                             paddingTop: getComputedStyle(document.querySelector("#tableWrap")).paddingTop,
+                            gridBorder: getComputedStyle(document.querySelector("#lineBarTableGrid")).borderTopWidth,
                           };
                         }
                         """
                     )
                     self.assertEqual(focused_table_spacing["paddingTop"], "36px")
-                    self.assertGreaterEqual(focused_table_spacing["gridTop"], focused_table_spacing["tabsBottom"])
+                    self.assertGreaterEqual(focused_table_spacing["searchTop"], focused_table_spacing["tabsBottom"])
+                    self.assertAlmostEqual(focused_table_spacing["searchHeight"], 50, delta=0.5)
+                    self.assertGreaterEqual(focused_table_spacing["gridTop"], focused_table_spacing["searchBottom"])
+                    self.assertEqual(focused_table_spacing["gridBorder"], "0px")
                     page.locator("#chartTab").click()
                     page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                     page.locator("#tableTab").click()
@@ -3589,10 +3740,10 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertNotIn("…", header["text"])
                         self.assertEqual(header["textOverflow"], "clip")
                         self.assertEqual(header["whiteSpace"], "normal")
-                    self.assertEqual(table_state["gridBorderLeftWidth"], "1px")
-                    self.assertEqual(table_state["gridBorderLeftStyle"], "solid")
-                    self.assertEqual(table_state["gridBorderTopWidth"], "1px")
-                    self.assertEqual(table_state["gridBorderTopStyle"], "solid")
+                    self.assertEqual(table_state["gridBorderLeftWidth"], "0px")
+                    self.assertEqual(table_state["gridBorderLeftStyle"], "none")
+                    self.assertEqual(table_state["gridBorderTopWidth"], "0px")
+                    self.assertEqual(table_state["gridBorderTopStyle"], "none")
                     self.assertIsNotNone(table_state["totalGap"])
                     self.assertGreaterEqual(table_state["totalGap"], -1)
                     self.assertLessEqual(table_state["totalGap"], 6)
@@ -12705,6 +12856,7 @@ COPY (
                       const sidebar = document.querySelector("#appSidebar");
                       const sidebarResizer = document.querySelector("#sidebarResizer");
                       const lineBarSidePanel = document.querySelector(".chart-side-section");
+                      const lineBarWorkspace = document.querySelector(".workspace");
                       const railRect = rail.getBoundingClientRect();
                       const paneRect = pane.getBoundingClientRect();
                       const sidebarRect = sidebar.getBoundingClientRect();
@@ -12721,7 +12873,7 @@ COPY (
                         count: buttons.length,
                         selectorDisplay: getComputedStyle(selector).display,
                         selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === sidebarBackground,
-                        sidebarMatchesLineBarSidePanel: sidebarBackground === getComputedStyle(lineBarSidePanel).backgroundColor,
+                        lineBarSidePanelMatchesWorkspace: getComputedStyle(lineBarWorkspace).backgroundColor === getComputedStyle(lineBarSidePanel).backgroundColor,
                         gap: getComputedStyle(selector).gap,
                         overflowX: getComputedStyle(selector).overflowX,
                         overflowY: getComputedStyle(selector).overflowY,
@@ -12756,7 +12908,7 @@ COPY (
                         "count": 6,
                         "selectorDisplay": "grid",
                         "selectorMatchesSidebar": True,
-                        "sidebarMatchesLineBarSidePanel": True,
+                        "lineBarSidePanelMatchesWorkspace": True,
                         "gap": "12px",
                         "overflowX": "visible",
                         "overflowY": "visible",
@@ -12793,6 +12945,7 @@ COPY (
                       const selector = document.querySelector("#toolSelectorSection .tool-selector");
                       const sidebar = document.querySelector("#appSidebar");
                       const lineBarSidePanel = document.querySelector(".chart-side-section");
+                      const lineBarWorkspace = document.querySelector(".workspace");
                       const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
                       const sidebarBackground = getComputedStyle(sidebar).backgroundColor;
@@ -12800,7 +12953,7 @@ COPY (
                         count: buttons.length,
                         selectorDisplay: getComputedStyle(selector).display,
                         selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === sidebarBackground,
-                        sidebarMatchesLineBarSidePanel: sidebarBackground === getComputedStyle(lineBarSidePanel).backgroundColor,
+                        lineBarSidePanelMatchesWorkspace: getComputedStyle(lineBarWorkspace).backgroundColor === getComputedStyle(lineBarSidePanel).backgroundColor,
                         gap: getComputedStyle(selector).gap,
                         overflowX: getComputedStyle(selector).overflowX,
                         overflowY: getComputedStyle(selector).overflowY,
@@ -12836,7 +12989,7 @@ COPY (
                         "count": 6,
                         "selectorDisplay": "grid",
                         "selectorMatchesSidebar": True,
-                        "sidebarMatchesLineBarSidePanel": True,
+                        "lineBarSidePanelMatchesWorkspace": True,
                         "gap": "12px",
                         "overflowX": "visible",
                         "overflowY": "visible",
