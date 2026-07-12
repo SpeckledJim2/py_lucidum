@@ -902,6 +902,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
         controls = (static_root / "styles/controls.css").read_text(encoding="utf-8")
+        dataset_viewer = (static_root / "app/dataset-viewer-tool.js").read_text(encoding="utf-8")
         profile = (static_root / "app/column-profile-tool.js").read_text(encoding="utf-8")
         model_shell = (static_root / "styles/model-shell.css").read_text(encoding="utf-8")
         glm_css = (static_root / "styles/glm.css").read_text(encoding="utf-8")
@@ -918,6 +919,9 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".app-control-button,", controls)
         self.assertIn("height: var(--app-control-button-height);", controls)
         self.assertIn(".app-control-input {", controls)
+        self.assertIn('class="dataset-viewer-toolbar app-control-strip app-control-strip-row"', dataset_viewer)
+        self.assertIn('class="search dataset-viewer-search app-control-input"', dataset_viewer)
+        self.assertIn('class="filter-action app-control-button"', dataset_viewer)
         self.assertIn('class="profile-toolbar app-control-strip app-control-strip-row"', profile)
         self.assertIn('class="search profile-column-search app-control-input"', profile)
         self.assertIn('id="profilePaneResizer"', profile)
@@ -933,6 +937,18 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--titled", glm)
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", glm)
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", gbm)
+
+    def test_responsive_sidebar_divider_is_owned_by_shared_shell(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        shell = (static_root / "styles/shell.css").read_text(encoding="utf-8")
+        gbm = (static_root / "styles/gbm.css").read_text(encoding="utf-8")
+
+        self.assertIn("@media (min-width: 641px) and (max-width: 1180px)", shell)
+        self.assertIn(
+            "grid-template-columns: var(--sidebar-width, 280px) 1px minmax(0, 1fr);",
+            shell,
+        )
+        self.assertNotIn("grid-template-columns: var(--sidebar-width, 280px) 3px 1fr;", gbm)
 
     def test_uk_map_overlay_markup_starts_collapsed(self) -> None:
         index = (

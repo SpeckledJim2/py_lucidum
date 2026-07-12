@@ -591,16 +591,34 @@ class BrowserSmokeTests(unittest.TestCase):
                                       };
                                       return {
                                         alphabetical: rectFor('label:has(#datasetViewerAlphabeticalColumns)'),
+                                        clear: rectFor("#datasetViewerSearchClear"),
+                                        grid: rectFor("#datasetViewerGrid"),
                                         search: rectFor(".dataset-viewer-search-row"),
+                                        searchInput: rectFor("#datasetViewerSearch"),
                                         toolbar: rectFor(".dataset-viewer-toolbar"),
                                         transpose: rectFor('label:has(#datasetViewerTranspose)'),
+                                        geometry: (() => {
+                                          const toolbar = document.querySelector(".dataset-viewer-toolbar");
+                                          const divider = getComputedStyle(toolbar, "::after");
+                                          const style = getComputedStyle(toolbar);
+                                          return {
+                                            shared: toolbar.classList.contains("app-control-strip")
+                                              && toolbar.classList.contains("app-control-strip-row"),
+                                            dividerHeight: divider.height,
+                                            dividerLeft: divider.left,
+                                            dividerRight: divider.right,
+                                            paddingLeft: style.paddingLeft,
+                                            paddingRight: style.paddingRight,
+                                          };
+                                        })(),
                                       };
                                     }
                                     """
                                 )
-                                self.assertGreaterEqual(
+                                self.assertAlmostEqual(
                                     dataset_viewer_mobile_toolbar["search"]["width"],
-                                    dataset_viewer_mobile_toolbar["toolbar"]["width"] - 2,
+                                    dataset_viewer_mobile_toolbar["toolbar"]["width"] - 16,
+                                    delta=0.5,
                                 )
                                 self.assertGreaterEqual(
                                     dataset_viewer_mobile_toolbar["transpose"]["top"],
@@ -609,6 +627,29 @@ class BrowserSmokeTests(unittest.TestCase):
                                 self.assertGreaterEqual(
                                     dataset_viewer_mobile_toolbar["alphabetical"]["top"],
                                     dataset_viewer_mobile_toolbar["search"]["bottom"] - 1,
+                                )
+                                self.assertTrue(dataset_viewer_mobile_toolbar["geometry"]["shared"])
+                                self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["dividerHeight"], "1px")
+                                self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["dividerLeft"], "0px")
+                                self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["dividerRight"], "0px")
+                                self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["paddingLeft"], "8px")
+                                self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["paddingRight"], "8px")
+                                self.assertEqual(dataset_viewer_mobile_toolbar["searchInput"]["bottom"] - dataset_viewer_mobile_toolbar["searchInput"]["top"], 28)
+                                self.assertEqual(dataset_viewer_mobile_toolbar["clear"]["bottom"] - dataset_viewer_mobile_toolbar["clear"]["top"], 28)
+                                self.assertAlmostEqual(
+                                    dataset_viewer_mobile_toolbar["grid"]["top"],
+                                    dataset_viewer_mobile_toolbar["toolbar"]["bottom"],
+                                    delta=0.5,
+                                )
+                                self.assertAlmostEqual(
+                                    dataset_viewer_mobile_toolbar["grid"]["left"],
+                                    dataset_viewer_mobile_toolbar["toolbar"]["left"],
+                                    delta=0.5,
+                                )
+                                self.assertAlmostEqual(
+                                    dataset_viewer_mobile_toolbar["grid"]["left"] + dataset_viewer_mobile_toolbar["grid"]["width"],
+                                    dataset_viewer_mobile_toolbar["toolbar"]["left"] + dataset_viewer_mobile_toolbar["toolbar"]["width"],
+                                    delta=0.5,
                                 )
                                 page.locator("#sidebarToggleBtn").click()
                                 page.wait_for_function(
@@ -772,6 +813,140 @@ class BrowserSmokeTests(unittest.TestCase):
 
                     browser.close()
                     self.assertEqual(page_errors, [])
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_sidebar_divider_remains_single_pixel_across_responsive_widths(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,vehicle_age,price\n"
+                "AB,1,100\n"
+                "AL,2,200\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "dataset_viewer"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+
+                        def ensure_sidebar_expanded() -> None:
+                            if page.locator("#sidebarToggleBtn").get_attribute("aria-expanded") == "false":
+                                page.locator("#sidebarToggleBtn").click()
+                            page.wait_for_function(
+                                '() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"',
+                                timeout=10_000,
+                            )
+
+                        def divider_state(width: int) -> dict[str, Any]:
+                            page.set_viewport_size({"width": width, "height": 800})
+                            if width > 640:
+                                ensure_sidebar_expanded()
+                            page.mouse.move(width - 12, 80)
+                            page.locator("#sidebarResizer").dispatch_event("pointerleave")
+                            return page.evaluate(
+                                """
+                                () => {
+                                  const shell = document.querySelector(".shell");
+                                  const sidebar = document.querySelector("#appSidebar");
+                                  const resizer = document.querySelector("#sidebarResizer");
+                                  const main = document.querySelector("main");
+                                  const sidebarRect = sidebar.getBoundingClientRect();
+                                  const resizerRect = resizer.getBoundingClientRect();
+                                  const mainRect = main.getBoundingClientRect();
+                                  const sidebarStyle = getComputedStyle(sidebar);
+                                  const resizerStyle = getComputedStyle(resizer);
+                                  return {
+                                    columns: getComputedStyle(shell).gridTemplateColumns.trim().split(" "),
+                                    mainLeft: mainRect.left,
+                                    resizerBackground: resizerStyle.backgroundColor,
+                                    resizerDisplay: resizerStyle.display,
+                                    resizerLeft: resizerRect.left,
+                                    resizerRight: resizerRect.right,
+                                    resizerShadow: resizerStyle.boxShadow,
+                                    resizerWidth: resizerRect.width,
+                                    sidebarRight: sidebarRect.right,
+                                    sidebarShadow: sidebarStyle.boxShadow,
+                                  };
+                                }
+                                """
+                            )
+
+                        for width in (1280, 1181, 1180, 900, 641):
+                            with self.subTest(width=width):
+                                state = divider_state(width)
+                                self.assertEqual(state["columns"][1], "1px")
+                                self.assertEqual(state["resizerDisplay"], "block")
+                                self.assertAlmostEqual(state["resizerWidth"], 1, delta=0.1)
+                                self.assertAlmostEqual(state["sidebarRight"], state["resizerLeft"], delta=0.1)
+                                self.assertAlmostEqual(state["resizerRight"], state["mainLeft"], delta=0.1)
+                                self.assertEqual(state["sidebarShadow"], "none")
+                                self.assertEqual(state["resizerShadow"], "none")
+                                self.assertNotEqual(state["resizerBackground"], "rgba(0, 0, 0, 0)")
+
+                        divider_state(900)
+                        resizer = page.locator("#sidebarResizer")
+                        resizer_box = resizer.bounding_box()
+                        self.assertIsNotNone(resizer_box)
+                        assert resizer_box is not None
+                        page.mouse.move(
+                            resizer_box["x"] + resizer_box["width"] / 2,
+                            resizer_box["y"] + 100,
+                        )
+                        hover_state = resizer.evaluate(
+                            """
+                            node => ({
+                              accent: getComputedStyle(document.querySelector(".tool-option.active")).color,
+                              background: getComputedStyle(node).backgroundColor,
+                              boxShadow: getComputedStyle(node).boxShadow,
+                              hovering: node.classList.contains("hovering"),
+                              width: node.getBoundingClientRect().width,
+                            })
+                            """
+                        )
+                        self.assertTrue(hover_state["hovering"])
+                        self.assertEqual(hover_state["background"], hover_state["accent"])
+                        self.assertNotEqual(hover_state["boxShadow"], "none")
+                        self.assertAlmostEqual(hover_state["width"], 1, delta=0.1)
+
+                        page.mouse.down()
+                        drag_state = resizer.evaluate(
+                            """
+                            node => ({
+                              background: getComputedStyle(node).backgroundColor,
+                              boxShadow: getComputedStyle(node).boxShadow,
+                              dragging: node.classList.contains("dragging"),
+                            })
+                            """
+                        )
+                        self.assertTrue(drag_state["dragging"])
+                        self.assertEqual(drag_state["background"], hover_state["background"])
+                        self.assertEqual(drag_state["boxShadow"], hover_state["boxShadow"])
+                        page.mouse.up()
+                        restored_state = divider_state(900)
+                        self.assertEqual(restored_state["resizerShadow"], "none")
+                        self.assertAlmostEqual(restored_state["resizerWidth"], 1, delta=0.1)
+
+                        mobile_state = divider_state(640)
+                        self.assertEqual(mobile_state["resizerDisplay"], "none")
+                        self.assertEqual(mobile_state["sidebarShadow"], "none")
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        page.close()
+                        browser.close()
             finally:
                 server.should_exit = True
                 thread.join(timeout=5)
@@ -10876,6 +11051,136 @@ COPY (
                       );
                     }
                     """,
+                    timeout=10_000,
+                )
+                dataset_viewer_geometry = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector(".dataset-viewer-toolbar");
+                      const grid = document.querySelector("#datasetViewerGrid");
+                      const header = grid.querySelector(".tabulator-header");
+                      const main = document.querySelector("main");
+                      const visual = document.querySelector("#visualArea");
+                      const workspace = document.querySelector(".workspace");
+                      const wrap = document.querySelector("#datasetViewerWrap");
+                      const sidebarResizer = document.querySelector("#sidebarResizer");
+                      const search = document.querySelector("#datasetViewerSearch");
+                      const clear = document.querySelector("#datasetViewerSearchClear");
+                      const meta = document.querySelector("#datasetViewerMeta");
+                      const checkboxes = [...toolbar.querySelectorAll(".dataset-viewer-checkbox")];
+                      const toolbarRect = toolbar.getBoundingClientRect();
+                      const gridRect = grid.getBoundingClientRect();
+                      const headerRect = header.getBoundingClientRect();
+                      const mainRect = main.getBoundingClientRect();
+                      const visualRect = visual.getBoundingClientRect();
+                      const workspaceRect = workspace.getBoundingClientRect();
+                      const wrapRect = wrap.getBoundingClientRect();
+                      const sidebarResizerRect = sidebarResizer.getBoundingClientRect();
+                      const searchRect = search.getBoundingClientRect();
+                      const clearRect = clear.getBoundingClientRect();
+                      const metaRect = meta.getBoundingClientRect();
+                      const toolbarStyle = getComputedStyle(toolbar);
+                      const divider = getComputedStyle(toolbar, "::after");
+                      const gridStyle = getComputedStyle(grid);
+                      const headerStyle = getComputedStyle(header);
+                      return {
+                        toolbarShared: toolbar.classList.contains("app-control-strip")
+                          && toolbar.classList.contains("app-control-strip-row"),
+                        toolbarHeight: toolbarRect.height,
+                        toolbarPaddingLeft: toolbarStyle.paddingLeft,
+                        toolbarPaddingRight: toolbarStyle.paddingRight,
+                        dividerHeight: divider.height,
+                        dividerLeft: divider.left,
+                        dividerRight: divider.right,
+                        toolbarLeftGap: toolbarRect.left - sidebarResizerRect.right,
+                        toolbarRightGap: window.innerWidth - toolbarRect.right,
+                        toolbarTopGap: toolbarRect.top - mainRect.top,
+                        gridTopGap: gridRect.top - toolbarRect.bottom,
+                        gridLeftGap: gridRect.left - mainRect.left,
+                        gridRightGap: mainRect.right - gridRect.right,
+                        gridBottomGap: mainRect.bottom - gridRect.bottom,
+                        headerTopGap: headerRect.top - gridRect.top,
+                        headerBorderTopWidth: headerStyle.borderTopWidth,
+                        gridBorders: [
+                          gridStyle.borderTopWidth,
+                          gridStyle.borderRightWidth,
+                          gridStyle.borderBottomWidth,
+                          gridStyle.borderLeftWidth,
+                        ],
+                        gridRadius: gridStyle.borderRadius,
+                        mainPadding: [
+                          getComputedStyle(main).paddingTop,
+                          getComputedStyle(main).paddingRight,
+                          getComputedStyle(main).paddingBottom,
+                          getComputedStyle(main).paddingLeft,
+                        ],
+                        visualGaps: [visualRect.left - mainRect.left, mainRect.right - visualRect.right],
+                        workspaceGaps: [workspaceRect.left - mainRect.left, mainRect.right - workspaceRect.right],
+                        wrapGaps: [wrapRect.left - mainRect.left, mainRect.right - wrapRect.right],
+                        searchShared: search.classList.contains("app-control-input"),
+                        clearShared: clear.classList.contains("app-control-button"),
+                        searchHeight: searchRect.height,
+                        clearHeight: clearRect.height,
+                        searchCenterDelta: Math.abs(
+                          (searchRect.top + searchRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)
+                        ),
+                        clearCenterDelta: Math.abs(
+                          (clearRect.top + clearRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)
+                        ),
+                        checkboxHeights: checkboxes.map((checkbox) => checkbox.getBoundingClientRect().height),
+                        checkboxCenterDeltas: checkboxes.map((checkbox) => {
+                          const rect = checkbox.getBoundingClientRect();
+                          return Math.abs((rect.top + rect.height / 2) - (toolbarRect.top + toolbarRect.height / 2));
+                        }),
+                        metaInToolbar: toolbar.contains(meta),
+                        metaCenterDelta: Math.abs(
+                          (metaRect.top + metaRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)
+                        ),
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(dataset_viewer_geometry["toolbarShared"])
+                self.assertEqual(dataset_viewer_geometry["toolbarHeight"], 50)
+                self.assertEqual(dataset_viewer_geometry["toolbarPaddingLeft"], "8px")
+                self.assertEqual(dataset_viewer_geometry["toolbarPaddingRight"], "8px")
+                self.assertEqual(dataset_viewer_geometry["dividerHeight"], "1px")
+                self.assertEqual(dataset_viewer_geometry["dividerLeft"], "0px")
+                self.assertEqual(dataset_viewer_geometry["dividerRight"], "0px")
+                for gap in (
+                    "toolbarLeftGap", "toolbarRightGap", "toolbarTopGap", "gridTopGap", "gridLeftGap",
+                    "gridRightGap", "gridBottomGap", "headerTopGap",
+                ):
+                    self.assertAlmostEqual(dataset_viewer_geometry[gap], 0, delta=0.5)
+                self.assertEqual(dataset_viewer_geometry["headerBorderTopWidth"], "0px")
+                self.assertEqual(set(dataset_viewer_geometry["gridBorders"]), {"0px"})
+                self.assertEqual(dataset_viewer_geometry["gridRadius"], "0px")
+                self.assertEqual(set(dataset_viewer_geometry["mainPadding"]), {"0px"})
+                self.assertTrue(all(abs(gap) <= 0.5 for gap in dataset_viewer_geometry["visualGaps"]))
+                self.assertTrue(all(abs(gap) <= 0.5 for gap in dataset_viewer_geometry["workspaceGaps"]))
+                self.assertTrue(all(abs(gap) <= 0.5 for gap in dataset_viewer_geometry["wrapGaps"]))
+                self.assertTrue(dataset_viewer_geometry["searchShared"])
+                self.assertTrue(dataset_viewer_geometry["clearShared"])
+                self.assertEqual(dataset_viewer_geometry["searchHeight"], 28)
+                self.assertEqual(dataset_viewer_geometry["clearHeight"], 28)
+                self.assertLessEqual(dataset_viewer_geometry["searchCenterDelta"], 0.5)
+                self.assertLessEqual(dataset_viewer_geometry["clearCenterDelta"], 0.5)
+                self.assertEqual(set(dataset_viewer_geometry["checkboxHeights"]), {28})
+                self.assertTrue(all(delta <= 0.5 for delta in dataset_viewer_geometry["checkboxCenterDeltas"]))
+                self.assertTrue(dataset_viewer_geometry["metaInToolbar"])
+                self.assertLessEqual(dataset_viewer_geometry["metaCenterDelta"], 0.5)
+                page.evaluate('() => document.documentElement.style.setProperty("--app-tool-row-height", "58px")')
+                page.wait_for_function(
+                    """
+                    () => document.querySelector(".dataset-viewer-toolbar")?.getBoundingClientRect().height === 58
+                      && document.querySelector("#datasetViewerSearch")?.getBoundingClientRect().height === 28
+                      && document.querySelector("#datasetViewerSearchClear")?.getBoundingClientRect().height === 28
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate('() => document.documentElement.style.removeProperty("--app-tool-row-height")')
+                page.wait_for_function(
+                    '() => document.querySelector(".dataset-viewer-toolbar")?.getBoundingClientRect().height === 50',
                     timeout=10_000,
                 )
                 dataset_viewer_meta_position = page.evaluate(

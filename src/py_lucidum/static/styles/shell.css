@@ -583,6 +583,12 @@
         font-size: 13px;
       }
 
+      @media (min-width: 641px) and (max-width: 1180px) {
+        .shell {
+          grid-template-columns: var(--sidebar-width, 280px) 1px minmax(0, 1fr);
+        }
+      }
+
       @media (max-width: 640px) {
         header {
           gap: 8px;

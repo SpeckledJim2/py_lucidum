@@ -124,10 +124,10 @@ export function createDatasetViewerTool({
     if (!wrap) return null;
     if (!document.getElementById("datasetViewerGrid")) {
       wrap.innerHTML = `
-        <div class="dataset-viewer-toolbar">
+        <div class="dataset-viewer-toolbar app-control-strip app-control-strip-row">
           <div class="dataset-viewer-search-row">
-            <input id="datasetViewerSearch" class="search dataset-viewer-search" placeholder="Select columns, separate with commas" />
-            <button id="datasetViewerSearchClear" class="filter-action" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
+            <input id="datasetViewerSearch" class="search dataset-viewer-search app-control-input" placeholder="Select columns, separate with commas" />
+            <button id="datasetViewerSearchClear" class="filter-action app-control-button" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
           </div>
           <label class="dataset-viewer-checkbox">
             <input id="datasetViewerTranspose" type="checkbox" />
