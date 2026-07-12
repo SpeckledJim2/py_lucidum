@@ -127,6 +127,7 @@
       .gbm-sample-status-title {
         font-size: 11px;
         font-weight: 800;
+        white-space: nowrap;
       }
 
       .gbm-sample-status-detail,
@@ -182,6 +183,10 @@
       }
 
       #gbm-screen-panel-models {
+        margin: -8px -8px -8px;
+      }
+
+      #gbm-screen-panel-features {
         margin: -8px -8px -8px;
       }
 
@@ -466,18 +471,110 @@
         overflow: hidden;
       }
 
-      .gbm-feature-layout {
+      .gbm-feature-workspace {
+        --gbm-feature-workspace-columns:
+          minmax(360px, 1.6fr)
+          1px
+          minmax(240px, var(--gbm-parameter-pane-width, 1fr))
+          1px
+          162px;
         display: grid;
-        grid-template-columns: minmax(360px, 1fr) minmax(320px, 0.9fr);
-        gap: 12px;
+        gap: 0;
+        grid-template-columns: var(--gbm-feature-workspace-columns);
+        grid-template-rows:
+          var(--app-control-strip-height)
+          minmax(120px, var(--gbm-parameter-pane-height, 280px))
+          var(--app-control-strip-height)
+          minmax(120px, 1fr);
         height: 100%;
         min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .gbm-feature-main-control-strip {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        padding-inline: 0;
+      }
+
+      .gbm-feature-control-layout {
+        display: grid;
+        grid-template-columns: var(--gbm-feature-workspace-columns);
+        height: var(--app-control-strip-height);
+        min-width: 0;
+      }
+
+      .gbm-feature-control-cell,
+      .gbm-parameter-control-cell,
+      .gbm-training-control-cell,
+      .gbm-evaluation-section-header {
+        min-width: 0;
+        padding-inline: var(--app-control-strip-padding-inline);
+      }
+
+      .gbm-feature-control-cell .gbm-section-title,
+      .gbm-parameter-control-cell .gbm-section-title,
+      .gbm-training-control-cell .gbm-section-title,
+      .gbm-evaluation-section-header .gbm-section-title {
+        margin: 0;
+      }
+
+      .gbm-feature-control-cell {
+        grid-column: 1;
+        overflow: hidden;
+      }
+
+      .gbm-parameter-control-cell {
+        grid-column: 3;
+      }
+
+      .gbm-training-control-cell {
+        grid-column: 5;
       }
 
       .gbm-grid-panel,
-      .gbm-right-panel {
+      .gbm-parameter-section,
+      .gbm-parameter-controls-column,
+      .gbm-evaluation-panel {
         min-height: 0;
         min-width: 0;
+      }
+
+      .gbm-grid-panel {
+        grid-column: 1;
+        grid-row: 2 / -1;
+        overflow: hidden;
+      }
+
+      .gbm-parameter-section {
+        grid-column: 3;
+        grid-row: 2;
+        overflow: hidden;
+      }
+
+      .gbm-parameter-controls-column {
+        grid-column: 5;
+        grid-row: 2;
+        overflow: auto;
+        padding: 8px;
+      }
+
+      .gbm-evaluation-control-strip {
+        grid-column: 2 / -1;
+        grid-row: 3;
+        padding-inline: 0;
+      }
+
+      .gbm-evaluation-section-header {
+        height: var(--app-control-strip-height);
+        padding-left: calc(var(--app-control-strip-padding-inline) + 1px);
+      }
+
+      .gbm-evaluation-panel {
+        grid-column: 3 / -1;
+        grid-row: 4;
+        overflow: hidden;
       }
 
       .gbm-panel-section {
@@ -519,15 +616,17 @@
         gap: 6px;
       }
 
-      .gbm-feature-section-header {
-        flex-wrap: wrap;
-      }
-
       .gbm-feature-actions {
         flex: 1 1 260px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
+        flex-wrap: nowrap;
+        justify-content: flex-start;
         min-width: 0;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      .gbm-feature-actions::-webkit-scrollbar {
+        display: none;
       }
 
       .gbm-evaluation-view-mode {
@@ -696,9 +795,9 @@
         min-width: 180px;
         overflow: auto;
         padding: 4px;
-        position: absolute;
-        top: calc(100% + 3px);
-        z-index: 30;
+        position: fixed;
+        top: 0;
+        z-index: 1000;
       }
 
       .gbm-interaction-constraint-row,
@@ -856,51 +955,75 @@
         flex: 1 1 auto;
       }
 
-      .gbm-right-panel {
-        display: grid;
-        grid-template-rows: 330px minmax(0, 1fr);
-        gap: 10px;
-      }
-
-      .gbm-parameter-section {
+      .gbm-feature-column-resizer {
+        align-self: stretch;
+        cursor: col-resize;
+        justify-self: center;
         min-height: 0;
+        width: 12px;
+        z-index: 4;
       }
 
-      .gbm-parameter-layout {
-        display: grid;
-        gap: 10px;
-        grid-template-columns: minmax(0, 7fr) minmax(150px, 3fr);
-        height: 100%;
-        min-height: 0;
+      .gbm-feature-column-resizer {
+        grid-column: 2;
+        grid-row: 1 / -1;
       }
 
-      .gbm-parameter-table-column,
-      .gbm-parameter-controls-column {
-        min-height: 0;
-        min-width: 0;
+      .gbm-parameter-control-divider {
+        align-self: stretch;
+        background: var(--line);
+        grid-column: 4;
+        grid-row: 1 / 3;
+        z-index: 4;
       }
 
-      .gbm-parameter-table-column {
-        display: flex;
-        flex-direction: column;
+      .gbm-feature-column-resizer::before {
+        background: var(--line);
+        border-radius: 0;
+        bottom: 0;
+        top: 0;
+        width: 1px;
       }
 
-      .gbm-parameter-table-column > .gbm-grid {
-        flex: 1 1 auto;
+      .gbm-feature-column-resizer:hover::before,
+      .gbm-feature-column-resizer.dragging::before {
+        width: 3px;
       }
 
-      .gbm-parameter-table-column > .gbm-section-title,
-      .gbm-parameter-controls-column > .gbm-section-title {
-        align-items: flex-start;
-        display: flex;
-        margin: 0 0 5px;
-        min-height: 22px;
+      .gbm-evaluation-resizer {
+        align-self: start;
+        cursor: row-resize;
+        grid-column: 2 / -1;
+        grid-row: 3;
+        height: 12px;
+        transform: translateY(-50%);
+        width: 100%;
+        z-index: 5;
       }
 
-      .gbm-parameter-controls-column {
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-start;
+      .gbm-evaluation-resizer::before {
+        background: var(--line);
+        border-radius: 0;
+        height: 1px;
+        left: 0;
+        right: 0;
+      }
+
+      .gbm-evaluation-resizer:hover::before,
+      .gbm-evaluation-resizer.dragging::before {
+        height: 3px;
+      }
+
+      body.gbm-feature-column-resizing,
+      body.gbm-feature-column-resizing * {
+        cursor: col-resize !important;
+        user-select: none !important;
+      }
+
+      body.gbm-feature-row-resizing,
+      body.gbm-feature-row-resizing * {
+        cursor: row-resize !important;
+        user-select: none !important;
       }
 
       .gbm-grid {
@@ -921,9 +1044,48 @@
         width: 100%;
       }
 
+      #gbmFeatureGrid,
+      #gbmEbmGainSummaryGrid,
+      #gbmParameterGrid,
+      #gbmFeatureGrid.tabulator,
+      #gbmEbmGainSummaryGrid.tabulator,
+      #gbmParameterGrid.tabulator {
+        border: 0;
+        border-radius: 0;
+      }
+
       .gbm-parameter-grid {
         height: 100%;
         min-height: 0;
+        width: 100%;
+      }
+
+      #gbmFeatureFallback:empty,
+      #gbmEbmGainSummaryFallback:empty,
+      #gbmParameterFallback:empty {
+        display: none;
+      }
+
+      #gbmFeatureGrid:has(+ #gbmFeatureFallback:not(:empty)),
+      #gbmEbmGainSummaryGrid:has(+ #gbmEbmGainSummaryFallback:not(:empty)),
+      #gbmParameterGrid:has(+ #gbmParameterFallback:not(:empty)) {
+        display: none;
+      }
+
+      #gbmFeatureFallback:not(:empty),
+      #gbmEbmGainSummaryFallback:not(:empty),
+      #gbmParameterFallback:not(:empty) {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        width: 100%;
+      }
+
+      #gbmFeatureFallback table,
+      #gbmEbmGainSummaryFallback table,
+      #gbmParameterFallback table {
+        border: 0;
+        border-radius: 0;
       }
 
       .gbm-grid .tabulator,
@@ -972,6 +1134,15 @@
         padding: 1px 6px;
         font-size: 11px;
         line-height: 1.15;
+      }
+
+      #gbmFeatureGrid .tabulator-header .tabulator-col:not(:has(~ .tabulator-col)),
+      #gbmEbmGainSummaryGrid .tabulator-header .tabulator-col:not(:has(~ .tabulator-col)),
+      #gbmParameterGrid .tabulator-header .tabulator-col:not(:has(~ .tabulator-col)),
+      #gbmFeatureGrid .tabulator-row .tabulator-cell:not(:has(~ .tabulator-cell)),
+      #gbmEbmGainSummaryGrid .tabulator-row .tabulator-cell:not(:has(~ .tabulator-cell)),
+      #gbmParameterGrid .tabulator-row .tabulator-cell:not(:has(~ .tabulator-cell)) {
+        border-right: 0;
       }
 
       .gbm-grid .tabulator-row.tabulator-selected,
@@ -1214,12 +1385,8 @@
       }
 
       .gbm-evaluation-chart {
-        min-height: 220px;
-        border: 1px solid var(--gbm-table-border);
-        border-radius: 6px;
-      }
-
-      .gbm-evaluation-chart {
+        border: 0;
+        border-radius: 0;
         height: 100%;
         min-height: 0;
         width: 100%;

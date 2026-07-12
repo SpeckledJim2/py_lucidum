@@ -358,6 +358,8 @@ The GBM tool is opt-in and must be requested with `line-bar`. Request `glm` sepa
 
 The GBM tool uses the same sidebar Actual, Weight, FAVOURITES, and KPI controls as Line and Bar, so users can choose the modelling response before training.
 
+The Features and parameters screen uses full-bleed Feature and Parameter grids beneath a shared control strip. Drag the Features/Parameters divider to trade width between those tables, or drag the top edge of the Evaluation Log strip to trade height between the Parameter grid and evaluation chart. The Control column stays narrow and fixed. Resized table and chart boundaries last for the current app session.
+
 If a Feature Specification is loaded, the Feature table shows its `Grouping` values, a multi-select interaction-constraint dropdown, and a scenario dropdown next to `Clear all`; choosing a scenario selects only that scenario's usable features.
 
 Choosing one or more interaction groups constrains the currently selected trainable features in each group so they can only interact with features in the same group, with all other selected features left together in a remainder constraint.

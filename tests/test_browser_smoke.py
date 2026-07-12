@@ -13617,7 +13617,14 @@ COPY (
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
+            gbm_layout_api_requests: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.on(
+                "request",
+                lambda request: gbm_layout_api_requests.append(request.url)
+                if "/api/gbm/" in request.url
+                else None,
+            )
 
             def assert_feature_heading_matches_checked(expected_count: int | None = None) -> None:
                 page.wait_for_function(
@@ -13993,6 +14000,32 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                constraint_menu_geometry = page.evaluate(
+                    """
+                    () => {
+                      const button = document.querySelector("#gbmFeatureInteractionConstraintButton");
+                      const menu = document.querySelector("#gbmFeatureInteractionConstraintMenu");
+                      const buttonRect = button.getBoundingClientRect();
+                      const menuRect = menu.getBoundingClientRect();
+                      const hit = document.elementFromPoint(menuRect.left + 5, menuRect.top + 5);
+                      return {
+                        buttonBottom: buttonRect.bottom,
+                        menuTop: menuRect.top,
+                        menuBottom: menuRect.bottom,
+                        menuLeft: menuRect.left,
+                        menuRight: menuRect.right,
+                        viewportWidth: window.innerWidth,
+                        viewportHeight: window.innerHeight,
+                        hitVisibleMenu: hit === menu || menu.contains(hit),
+                      };
+                    }
+                    """
+                )
+                self.assertGreaterEqual(constraint_menu_geometry["menuTop"], constraint_menu_geometry["buttonBottom"])
+                self.assertGreaterEqual(constraint_menu_geometry["menuLeft"], 0)
+                self.assertLessEqual(constraint_menu_geometry["menuRight"], constraint_menu_geometry["viewportWidth"])
+                self.assertLessEqual(constraint_menu_geometry["menuBottom"], constraint_menu_geometry["viewportHeight"])
+                self.assertTrue(constraint_menu_geometry["hitVisibleMenu"])
                 page.locator("#gbmFeatureSectionTitle").click()
                 page.wait_for_function(
                     """
@@ -17232,13 +17265,15 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.set_viewport_size({"width": 1280, "height": 1000})
                 layout = page.evaluate(
                     """
                     () => {
                         const visual = document.querySelector("#visualArea").getBoundingClientRect();
                         const tool = document.querySelector(".gbm-tool").getBoundingClientRect();
-                        const grid = document.querySelector("#gbmFeatureGrid").getBoundingClientRect();
-                        const right = document.querySelector(".gbm-right-panel").getBoundingClientRect();
+                        const workspace = document.querySelector("#gbmFeatureWorkspace").getBoundingClientRect();
+                        const gridNode = document.querySelector("#gbmFeatureGrid");
+                        const grid = gridNode.getBoundingClientRect();
                         const firstRow = document.querySelector("#gbmFeatureGrid .tabulator-row");
                         const normalRow = document.querySelector("#gbmFeatureGrid .tabulator-row:not(.gbm-feature-disabled):not(.gbm-feature-warning)");
                         const firstMetric = document.querySelector("#gbmFeatureGrid .tabulator-cell[tabulator-field='gain'], #gbmFeatureGrid .tabulator-cell[tabulator-field='mean_abs_shap']");
@@ -17255,21 +17290,38 @@ COPY (
                         const modeLabel = document.querySelector("#gbmTrainingMode .gbm-shap-label");
                         const checkedModeOption = document.querySelector(".gbm-mode-option:has(input:checked)");
                         const sampleStatus = document.querySelector("#gbmSampleStatus");
+                        const sampleStatusTitle = document.querySelector("#gbmSampleStatus .gbm-sample-status-title");
                         const train = document.querySelector("#gbmTrainBtn");
                         const featureTitle = document.querySelector("#gbmFeatureSectionTitle");
-                        const controlTitle = document.querySelector(".gbm-parameter-controls-column .gbm-section-title");
-                        const parameterTitle = document.querySelector(".gbm-parameter-table-column .gbm-section-title");
-                        const parameterLayout = document.querySelector(".gbm-parameter-layout");
-                        const parameterTableColumn = document.querySelector(".gbm-parameter-table-column");
+                        const controlTitle = document.querySelector(".gbm-training-control-cell .gbm-section-title");
+                        const parameterTitle = document.querySelector(".gbm-parameter-control-cell .gbm-section-title");
+                        const evaluationTitle = document.querySelector(".gbm-evaluation-section-header .gbm-section-title");
+                        const evaluationViewMode = document.querySelector(".gbm-evaluation-view-mode");
+                        const parameterLayout = document.querySelector("#gbmFeatureWorkspace");
+                        const parameterTableColumn = document.querySelector(".gbm-parameter-section");
                         const parameterControlsColumn = document.querySelector(".gbm-parameter-controls-column");
                         const parameterActions = document.querySelector(".gbm-parameter-controls-column .gbm-actions");
                         const parameterGrid = document.querySelector("#gbmParameterGrid");
                         const evaluationChart = document.querySelector("#gbmEvaluationChart");
                         const evaluationPanel = evaluationChart?.parentElement;
+                        const mainControlStrip = document.querySelector(".gbm-feature-main-control-strip");
+                        const evaluationControlStrip = document.querySelector(".gbm-evaluation-control-strip");
+                        const featureControlCell = document.querySelector(".gbm-feature-control-cell");
+                        const parameterControlCell = document.querySelector(".gbm-parameter-control-cell");
+                        const trainingControlCell = document.querySelector(".gbm-training-control-cell");
+                        const featureResizer = document.querySelector("#gbmFeatureResizer");
+                        const parameterDivider = document.querySelector("#gbmParameterControlDivider");
+                        const evaluationResizer = document.querySelector("#gbmEvaluationResizer");
+                        const featureRule = getComputedStyle(featureResizer, "::before");
+                        const evaluationRule = getComputedStyle(evaluationResizer, "::before");
                         const featureCell = document.querySelector("#gbmFeatureGrid .tabulator-row .tabulator-cell");
                         const parameterCell = document.querySelector("#gbmParameterGrid .tabulator-row .tabulator-cell");
                         const featureHeader = document.querySelector("#gbmFeatureGrid .tabulator-col");
                         const parameterHeader = document.querySelector("#gbmParameterGrid .tabulator-col");
+                        const featureTerminalHeader = document.querySelector("#gbmFeatureGrid .tabulator-col:not(:has(~ .tabulator-col))");
+                        const parameterTerminalHeader = document.querySelector("#gbmParameterGrid .tabulator-col:not(:has(~ .tabulator-col))");
+                        const featureTerminalCell = document.querySelector("#gbmFeatureGrid .tabulator-cell:not(:has(~ .tabulator-cell))");
+                        const parameterTerminalCell = document.querySelector("#gbmParameterGrid .tabulator-cell:not(:has(~ .tabulator-cell))");
                         const featureHeaderContent = document.querySelector("#gbmFeatureGrid .tabulator-col .tabulator-col-content");
                         const parameterHeaderContent = document.querySelector("#gbmParameterGrid .tabulator-col .tabulator-col-content");
                         const featureNameCell = document.querySelector("#gbmFeatureGrid .tabulator-row .gbm-feature-name-cell");
@@ -17283,8 +17335,11 @@ COPY (
                         return {
                             visualWidth: visual.width,
                             toolWidth: tool.width,
+                            workspaceWidth: workspace.width,
                             gridWidth: grid.width,
-                            rightWidth: right.width,
+                            rightWidth: parameterTableColumn.getBoundingClientRect().width
+                              + parameterDivider.getBoundingClientRect().width
+                              + parameterControlsColumn.getBoundingClientRect().width,
                             shapRadios: document.querySelectorAll("input[name='gbmShapRows']").length,
                             shapLabels: [...document.querySelectorAll("#gbmShapRows .gbm-shap-option span")].map((node) => node.textContent.trim()),
                             shapOptionsDisplay: shapOptions ? getComputedStyle(shapOptions).display : "",
@@ -17312,16 +17367,27 @@ COPY (
                             shapTop: shap ? Math.round(shap.getBoundingClientRect().top) : 0,
                             shapRight: shap ? Math.round(shap.getBoundingClientRect().right) : 0,
                             sampleStatusText: sampleStatus ? sampleStatus.textContent.trim() : "",
+                            sampleStatusTitleScrollWidth: sampleStatusTitle?.scrollWidth || 0,
+                            sampleStatusTitleClientWidth: sampleStatusTitle?.clientWidth || 0,
                             sampleTop: sampleStatus ? Math.round(sampleStatus.getBoundingClientRect().top) : 0,
                             trainTop: train ? Math.round(train.getBoundingClientRect().top) : 0,
                             featureTitleTop: featureTitle ? Math.round(featureTitle.getBoundingClientRect().top) : 0,
+                            featureTitleCenter: featureTitle ? featureTitle.getBoundingClientRect().top + featureTitle.getBoundingClientRect().height / 2 : 0,
+                            featureControlCenter: featureControlCell ? featureControlCell.getBoundingClientRect().top + featureControlCell.getBoundingClientRect().height / 2 : 0,
                             featureTitleFontSize: featureTitle ? getComputedStyle(featureTitle).fontSize : "",
                             featureTitleFontWeight: featureTitle ? getComputedStyle(featureTitle).fontWeight : "",
                             controlTitleTop: controlTitle ? Math.round(controlTitle.getBoundingClientRect().top) : 0,
                             controlTitleText: controlTitle ? controlTitle.textContent.trim() : "",
                             parameterTitleTop: parameterTitle ? Math.round(parameterTitle.getBoundingClientRect().top) : 0,
+                            parameterTitleLeft: parameterTitle?.getBoundingClientRect().left || 0,
+                            evaluationTitleLeft: evaluationTitle?.getBoundingClientRect().left || 0,
+                            evaluationTitleCenter: evaluationTitle ? evaluationTitle.getBoundingClientRect().top + evaluationTitle.getBoundingClientRect().height / 2 : 0,
+                            evaluationViewModeCenter: evaluationViewMode ? evaluationViewMode.getBoundingClientRect().top + evaluationViewMode.getBoundingClientRect().height / 2 : 0,
                             featureGridTop: grid ? Math.round(grid.top) : 0,
+                            featureGridRight: grid?.right || 0,
                             parameterGridTop: parameterGrid ? Math.round(parameterGrid.getBoundingClientRect().top) : 0,
+                            parameterGridLeft: parameterGrid?.getBoundingClientRect().left || 0,
+                            parameterGridRight: parameterGrid?.getBoundingClientRect().right || 0,
                             parameterLayoutWidth: parameterLayout ? Math.round(parameterLayout.getBoundingClientRect().width) : 0,
                             parameterTableColumnWidth: parameterTableColumn ? Math.round(parameterTableColumn.getBoundingClientRect().width) : 0,
                             parameterControlsColumnWidth: parameterControlsColumn ? Math.round(parameterControlsColumn.getBoundingClientRect().width) : 0,
@@ -17333,6 +17399,35 @@ COPY (
                             parameterGridHeight: parameterGrid ? Math.round(parameterGrid.getBoundingClientRect().height) : 0,
                             evaluationChartHeight: evaluationChart ? Math.round(evaluationChart.getBoundingClientRect().height) : 0,
                             evaluationPanelHeight: evaluationPanel ? Math.round(evaluationPanel.getBoundingClientRect().height) : 0,
+                            mainControlStripHeight: mainControlStrip?.getBoundingClientRect().height || 0,
+                            evaluationControlStripHeight: evaluationControlStrip?.getBoundingClientRect().height || 0,
+                            evaluationControlLeft: evaluationControlStrip?.getBoundingClientRect().left || 0,
+                            parameterControlLeft: parameterControlCell?.getBoundingClientRect().left || 0,
+                            evaluationControlRight: evaluationControlStrip?.getBoundingClientRect().right || 0,
+                            trainingControlRight: trainingControlCell?.getBoundingClientRect().right || 0,
+                            featureControlWidth: featureControlCell?.getBoundingClientRect().width || 0,
+                            parameterControlWidth: parameterControlCell?.getBoundingClientRect().width || 0,
+                            trainingControlWidth: trainingControlCell?.getBoundingClientRect().width || 0,
+                            featureResizerWidth: featureResizer?.getBoundingClientRect().width || 0,
+                            featureDividerX: featureResizer ? featureResizer.getBoundingClientRect().left + featureResizer.getBoundingClientRect().width / 2 : 0,
+                            parameterDividerWidth: parameterDivider?.getBoundingClientRect().width || 0,
+                            parameterDividerX: parameterDivider ? parameterDivider.getBoundingClientRect().left + parameterDivider.getBoundingClientRect().width / 2 : 0,
+                            parameterDividerRole: parameterDivider?.getAttribute("role") || "",
+                            parameterDividerTabIndex: parameterDivider?.getAttribute("tabindex") || "",
+                            evaluationResizerHeight: evaluationResizer?.getBoundingClientRect().height || 0,
+                            evaluationTopLineLeft: evaluationResizer?.getBoundingClientRect().left || 0,
+                            evaluationBottomLineLeft: evaluationControlStrip?.getBoundingClientRect().left || 0,
+                            workspaceColumns: getComputedStyle(document.querySelector("#gbmFeatureWorkspace")).gridTemplateColumns,
+                            featureRuleWidth: featureRule.width,
+                            evaluationRuleHeight: evaluationRule.height,
+                            featureResizerOrientation: featureResizer?.getAttribute("aria-orientation") || "",
+                            evaluationResizerOrientation: evaluationResizer?.getAttribute("aria-orientation") || "",
+                            featureBorderWidth: getComputedStyle(gridNode).borderWidth,
+                            featureBorderRadius: getComputedStyle(gridNode).borderRadius,
+                            parameterBorderWidth: getComputedStyle(parameterGrid).borderWidth,
+                            parameterBorderRadius: getComputedStyle(parameterGrid).borderRadius,
+                            evaluationBorderWidth: getComputedStyle(evaluationChart).borderWidth,
+                            evaluationBorderRadius: getComputedStyle(evaluationChart).borderRadius,
                             featureCellFontSize: featureCell ? getComputedStyle(featureCell).fontSize : "",
                             featureCellLineHeight: featureCell ? getComputedStyle(featureCell).lineHeight : "",
                             featureCellDisplay: featureCell ? getComputedStyle(featureCell).display : "",
@@ -17349,6 +17444,10 @@ COPY (
                             parameterHeaderJustifyContent: parameterHeader ? getComputedStyle(parameterHeader).justifyContent : "",
                             parameterHeaderContentDisplay: parameterHeaderContent ? getComputedStyle(parameterHeaderContent).display : "",
                             parameterHeaderContentAlignItems: parameterHeaderContent ? getComputedStyle(parameterHeaderContent).alignItems : "",
+                            featureTerminalHeaderRightBorder: featureTerminalHeader ? getComputedStyle(featureTerminalHeader).borderRightWidth : "",
+                            parameterTerminalHeaderRightBorder: parameterTerminalHeader ? getComputedStyle(parameterTerminalHeader).borderRightWidth : "",
+                            featureTerminalCellRightBorder: featureTerminalCell ? getComputedStyle(featureTerminalCell).borderRightWidth : "",
+                            parameterTerminalCellRightBorder: parameterTerminalCell ? getComputedStyle(parameterTerminalCell).borderRightWidth : "",
                             featureNameJustifyContent: featureNameCell ? getComputedStyle(featureNameCell).justifyContent : "",
                             featureKindFontSize: featureKind ? getComputedStyle(featureKind).fontSize : "",
                             segmentKindText: segmentKind ? segmentKind.textContent.trim() : "",
@@ -17362,6 +17461,7 @@ COPY (
                     """
                 )
                 self.assertGreater(layout["toolWidth"], layout["visualWidth"] * 0.85)
+                self.assertGreater(layout["workspaceWidth"], layout["visualWidth"] * 0.85)
                 self.assertGreater(layout["gridWidth"], 320)
                 self.assertGreater(layout["rightWidth"], 300)
                 self.assertEqual(layout["shapRadios"], 4)
@@ -17390,26 +17490,56 @@ COPY (
                 self.assertTrue(layout["sampleParentInControls"])
                 self.assertTrue(layout["trainParentInControls"])
                 self.assertIn("SAMPLE column found", layout["sampleStatusText"])
+                self.assertLessEqual(layout["sampleStatusTitleScrollWidth"], layout["sampleStatusTitleClientWidth"])
                 self.assertEqual(layout["controlTitleText"], "Control")
                 self.assertLessEqual(abs(layout["featureTitleTop"] - layout["parameterTitleTop"]), 2)
                 self.assertLessEqual(abs(layout["featureTitleTop"] - layout["controlTitleTop"]), 2)
                 self.assertLessEqual(abs(layout["controlTitleTop"] - layout["parameterTitleTop"]), 2)
-                self.assertGreaterEqual(layout["featureGridTop"], layout["parameterGridTop"])
-                self.assertLessEqual(layout["featureGridTop"] - layout["parameterGridTop"], 32)
+                self.assertAlmostEqual(layout["featureTitleCenter"], layout["featureControlCenter"], delta=1)
+                self.assertAlmostEqual(layout["evaluationTitleCenter"], layout["evaluationViewModeCenter"], delta=1)
+                self.assertAlmostEqual(layout["evaluationTitleLeft"], layout["parameterTitleLeft"], delta=0.5)
+                self.assertLessEqual(abs(layout["featureGridTop"] - layout["parameterGridTop"]), 1)
                 self.assertEqual(layout["parameterActionsDirection"], "column")
                 self.assertGreater(layout["parameterLayoutWidth"], 0)
-                parameter_table_ratio = layout["parameterTableColumnWidth"] / layout["parameterLayoutWidth"]
-                self.assertGreaterEqual(parameter_table_ratio, 0.55)
-                self.assertLessEqual(parameter_table_ratio, 0.72)
                 self.assertGreater(layout["parameterTableColumnWidth"], layout["parameterControlsColumnWidth"])
-                self.assertGreater(layout["parameterControlsColumnWidth"], 120)
-                self.assertLessEqual(abs(layout["trainTop"] - layout["parameterGridTop"]), 2)
+                self.assertGreaterEqual(layout["parameterTableColumnWidth"], 240)
+                self.assertEqual(layout["parameterControlsColumnWidth"], 162)
+                self.assertGreaterEqual(layout["trainTop"] - layout["parameterGridTop"], 7)
                 self.assertLess(layout["trainTop"], layout["sampleTop"])
                 self.assertLess(layout["sampleTop"], layout["shapTop"])
                 self.assertLess(layout["shapTop"], layout["gridSamplesTop"])
-                self.assertGreaterEqual(layout["parameterGridHeight"], 260)
-                self.assertGreaterEqual(layout["evaluationChartHeight"], 220)
-                self.assertLess(layout["evaluationChartHeight"], layout["evaluationPanelHeight"])
+                self.assertGreaterEqual(layout["parameterGridHeight"], 120)
+                self.assertGreaterEqual(layout["evaluationChartHeight"], 120)
+                self.assertEqual(layout["evaluationChartHeight"], layout["evaluationPanelHeight"])
+                self.assertEqual(layout["mainControlStripHeight"], 50)
+                self.assertEqual(layout["evaluationControlStripHeight"], 50)
+                self.assertAlmostEqual(layout["featureGridRight"], layout["featureDividerX"], delta=1)
+                self.assertAlmostEqual(layout["parameterGridLeft"], layout["featureDividerX"], delta=1)
+                self.assertAlmostEqual(layout["parameterGridRight"], layout["parameterDividerX"], delta=1)
+                self.assertAlmostEqual(layout["evaluationControlLeft"], layout["featureDividerX"], delta=1)
+                self.assertAlmostEqual(layout["evaluationTopLineLeft"], layout["featureDividerX"], delta=1)
+                self.assertAlmostEqual(layout["evaluationBottomLineLeft"], layout["featureDividerX"], delta=1)
+                self.assertAlmostEqual(layout["evaluationControlRight"], layout["trainingControlRight"], delta=0.5)
+                self.assertAlmostEqual(layout["featureControlWidth"], layout["gridWidth"], delta=0.5)
+                self.assertAlmostEqual(layout["parameterControlWidth"], layout["parameterTableColumnWidth"], delta=0.5)
+                self.assertAlmostEqual(layout["trainingControlWidth"], layout["parameterControlsColumnWidth"], delta=0.5)
+                self.assertEqual(layout["featureResizerWidth"], 12)
+                self.assertEqual(layout["parameterDividerWidth"], 1)
+                self.assertEqual(layout["parameterDividerRole"], "")
+                self.assertEqual(layout["parameterDividerTabIndex"], "")
+                self.assertEqual(layout["evaluationResizerHeight"], 12)
+                self.assertEqual(layout["workspaceColumns"].split()[1], "1px")
+                self.assertEqual(layout["workspaceColumns"].split()[3], "1px")
+                self.assertEqual(layout["featureRuleWidth"], "1px")
+                self.assertEqual(layout["evaluationRuleHeight"], "1px")
+                self.assertEqual(layout["featureResizerOrientation"], "vertical")
+                self.assertEqual(layout["evaluationResizerOrientation"], "horizontal")
+                self.assertEqual(layout["featureBorderWidth"], "0px")
+                self.assertEqual(layout["featureBorderRadius"], "0px")
+                self.assertEqual(layout["parameterBorderWidth"], "0px")
+                self.assertEqual(layout["parameterBorderRadius"], "0px")
+                self.assertEqual(layout["evaluationBorderWidth"], "0px")
+                self.assertEqual(layout["evaluationBorderRadius"], "0px")
                 self.assertEqual(layout["featureCellFontSize"], "11px")
                 self.assertEqual(layout["parameterCellFontSize"], "11px")
                 self.assertEqual(layout["featureCellLineHeight"], layout["parameterCellLineHeight"])
@@ -17425,6 +17555,10 @@ COPY (
                 self.assertEqual(layout["parameterHeaderContentDisplay"], "flex")
                 self.assertEqual(layout["featureHeaderContentAlignItems"], "center")
                 self.assertEqual(layout["parameterHeaderContentAlignItems"], "center")
+                self.assertEqual(layout["featureTerminalHeaderRightBorder"], "0px")
+                self.assertEqual(layout["parameterTerminalHeaderRightBorder"], "0px")
+                self.assertEqual(layout["featureTerminalCellRightBorder"], "0px")
+                self.assertEqual(layout["parameterTerminalCellRightBorder"], "0px")
                 self.assertEqual(layout["featureNameJustifyContent"], "space-between")
                 self.assertEqual(layout["featureKindFontSize"], "9px")
                 self.assertEqual(layout["segmentKindText"], "categorical (3)")
@@ -17437,6 +17571,108 @@ COPY (
                 self.assertIn("Monotonicity", layout["featureHeaders"])
                 self.assertEqual(sum(header in layout["featureHeaders"] for header in ("Gain", "SHAP")), 1)
                 self.assertNotIn("Type", layout["featureHeaders"])
+
+                def gbm_pane_sizes() -> dict[str, float]:
+                    return page.evaluate(
+                        """
+                        () => ({
+                          feature: document.querySelector(".gbm-grid-panel").getBoundingClientRect().width,
+                          parameter: document.querySelector(".gbm-parameter-section").getBoundingClientRect().width,
+                          control: document.querySelector(".gbm-parameter-controls-column").getBoundingClientRect().width,
+                          parameterDividerX: (() => {
+                            const rect = document.querySelector("#gbmParameterControlDivider").getBoundingClientRect();
+                            return rect.left + rect.width / 2;
+                          })(),
+                          upper: document.querySelector(".gbm-parameter-section").getBoundingClientRect().height,
+                          chart: document.querySelector(".gbm-evaluation-panel").getBoundingClientRect().height,
+                        })
+                        """
+                    )
+
+                requests_before_layout_resize = len(gbm_layout_api_requests)
+                initial_panes = gbm_pane_sizes()
+                feature_resizer = page.locator("#gbmFeatureResizer")
+                feature_resizer.hover()
+                self.assertEqual(feature_resizer.evaluate('node => getComputedStyle(node, "::before").width'), "3px")
+                feature_box = feature_resizer.bounding_box()
+                self.assertIsNotNone(feature_box)
+                assert feature_box is not None
+                page.mouse.move(feature_box["x"] + feature_box["width"] / 2, feature_box["y"] + 80)
+                page.mouse.down()
+                page.mouse.move(feature_box["x"] + feature_box["width"] / 2 - 48, feature_box["y"] + 80, steps=4)
+                page.mouse.up()
+                feature_dragged_panes = gbm_pane_sizes()
+                self.assertAlmostEqual(feature_dragged_panes["feature"], initial_panes["feature"] - 48, delta=2)
+                self.assertAlmostEqual(feature_dragged_panes["parameter"], initial_panes["parameter"] + 48, delta=2)
+                self.assertAlmostEqual(feature_dragged_panes["control"], initial_panes["control"], delta=2)
+                self.assertAlmostEqual(feature_dragged_panes["parameterDividerX"], initial_panes["parameterDividerX"], delta=1)
+                feature_resizer.focus()
+                page.keyboard.press("ArrowRight")
+                feature_key_panes = gbm_pane_sizes()
+                self.assertAlmostEqual(feature_key_panes["feature"], feature_dragged_panes["feature"] + 24, delta=2)
+                self.assertAlmostEqual(feature_key_panes["parameter"], feature_dragged_panes["parameter"] - 24, delta=2)
+                self.assertAlmostEqual(feature_key_panes["control"], feature_dragged_panes["control"], delta=2)
+                self.assertAlmostEqual(feature_key_panes["parameterDividerX"], feature_dragged_panes["parameterDividerX"], delta=1)
+                self.assertGreaterEqual(float(feature_resizer.get_attribute("aria-valuenow") or 0), 360)
+
+                self.assertEqual(page.locator("#gbmParameterControlResizer").count(), 0)
+                self.assertEqual(page.locator("#gbmParameterControlDivider").get_attribute("aria-hidden"), "true")
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function("() => document.body.classList.contains('sidebar-collapsed')", timeout=10_000)
+                collapsed_sidebar_panes = gbm_pane_sizes()
+                self.assertGreater(collapsed_sidebar_panes["feature"], feature_key_panes["feature"])
+                self.assertAlmostEqual(collapsed_sidebar_panes["parameter"], feature_key_panes["parameter"], delta=2)
+                self.assertAlmostEqual(collapsed_sidebar_panes["control"], feature_key_panes["control"], delta=1)
+                self.assertEqual(collapsed_sidebar_panes["control"], 162)
+                sample_title_fits = page.locator("#gbmSampleStatus .gbm-sample-status-title").evaluate(
+                    "node => node.scrollWidth <= node.clientWidth"
+                )
+                self.assertTrue(sample_title_fits)
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function("() => !document.body.classList.contains('sidebar-collapsed')", timeout=10_000)
+                parameter_key_panes = gbm_pane_sizes()
+                for pane_name in ("feature", "parameter", "control"):
+                    self.assertAlmostEqual(parameter_key_panes[pane_name], feature_key_panes[pane_name], delta=2)
+
+                evaluation_resizer = page.locator("#gbmEvaluationResizer")
+                evaluation_resizer.hover()
+                self.assertEqual(evaluation_resizer.evaluate('node => getComputedStyle(node, "::before").height'), "3px")
+                evaluation_box = evaluation_resizer.bounding_box()
+                self.assertIsNotNone(evaluation_box)
+                assert evaluation_box is not None
+                page.mouse.move(evaluation_box["x"] + 120, evaluation_box["y"] + evaluation_box["height"] / 2)
+                page.mouse.down()
+                page.mouse.move(evaluation_box["x"] + 120, evaluation_box["y"] + evaluation_box["height"] / 2 + 40, steps=4)
+                page.mouse.up()
+                evaluation_dragged_panes = gbm_pane_sizes()
+                self.assertAlmostEqual(evaluation_dragged_panes["upper"], parameter_key_panes["upper"] + 40, delta=2)
+                self.assertAlmostEqual(evaluation_dragged_panes["chart"], parameter_key_panes["chart"] - 40, delta=2)
+                evaluation_resizer.focus()
+                page.keyboard.press("ArrowUp")
+                evaluation_key_panes = gbm_pane_sizes()
+                self.assertAlmostEqual(evaluation_key_panes["upper"], evaluation_dragged_panes["upper"] - 24, delta=2)
+                self.assertGreaterEqual(float(evaluation_resizer.get_attribute("aria-valuenow") or 0), 120)
+
+                feature_box = feature_resizer.bounding_box()
+                self.assertIsNotNone(feature_box)
+                assert feature_box is not None
+                page.mouse.move(feature_box["x"] + feature_box["width"] / 2, feature_box["y"] + 80)
+                page.mouse.down()
+                self.assertTrue(page.locator("body").evaluate("node => node.classList.contains('gbm-feature-column-resizing')"))
+                feature_resizer.dispatch_event("pointercancel", {"pointerId": 1})
+                page.mouse.up()
+                self.assertFalse(page.locator("body").evaluate("node => node.classList.contains('gbm-feature-column-resizing')"))
+                self.assertEqual(len(gbm_layout_api_requests), requests_before_layout_resize)
+
+                resized_panes = gbm_pane_sizes()
+                page.get_by_role("tab", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
+                page.get_by_role("tab", name="Features and parameters").click()
+                page.locator("#gbmFeatureGrid .tabulator-row").first.wait_for(timeout=10_000)
+                restored_panes = gbm_pane_sizes()
+                for pane_name in ("feature", "parameter", "control", "upper", "chart"):
+                    self.assertAlmostEqual(restored_panes[pane_name], resized_panes[pane_name], delta=2)
+
                 page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 final_model_count = page.locator("#gbmModelGrid .tabulator-row").count()

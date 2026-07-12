@@ -1,6 +1,9 @@
 import { createGbmTreeViewer } from "./gbm-tree-viewer.js";
 import { createGbmEvaluationChart } from "./gbm-evaluation-chart.js";
-import { createGbmParameterControls } from "./gbm-feature-parameter-controls.js";
+import {
+  createGbmFeatureParameterLayout,
+  createGbmParameterControls,
+} from "./gbm-feature-parameter-controls.js";
 import { createGbmModelNavigator } from "./gbm-model-navigator.js";
 import { createGbmShapTool } from "./gbm-shap-tool.js";
 import { createGbmStackedShapTool } from "./gbm-stacked-shap-tool.js";
@@ -146,6 +149,9 @@ export function createGbmTool({
     escapeHtml,
     parameterOptions: () => config?.parameter_options || {},
   });
+  const featureParameterLayout = createGbmFeatureParameterLayout({
+    onResize: () => scheduleGbmTableRedraws(),
+  });
   const modelNavigator = createGbmModelNavigator({
     escapeHtml,
     formatModelMetric,
@@ -271,6 +277,7 @@ export function createGbmTool({
     if (!mount) return;
     closeGbmFeatureContextMenu();
     evaluationChart.dispose();
+    featureParameterLayout.dispose();
     treeViewer.dispose();
     shapTool.dispose();
     stackedShapTool.dispose();
@@ -284,57 +291,64 @@ export function createGbmTool({
           <div id="gbmTrainingStatus" class="gbm-training-status ${liveProgress ? "" : "hidden"}" aria-live="polite">${trainingStatusHtml(liveProgress)}</div>
         </div>
         <div id="gbm-screen-panel-features" class="${gbmPanelClass(activeTab, "features")}" data-gbm-panel="features" role="tabpanel" aria-labelledby="gbm-screen-tab-features">
-          <div class="gbm-feature-layout">
-            <section class="gbm-panel-section gbm-grid-panel">
-              <div class="gbm-section-header gbm-feature-section-header">
-                <h3 id="gbmFeatureSectionTitle" class="gbm-section-title">${escapeHtml(featureSectionTitle(data.features || []))}</h3>
-                <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
-                  ${featureMetricToggleHtml(data.features || [], data)}
-                  ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
-                  ${featureInteractionPairsDropdownHtml(data.active_feature_interaction_constraints || null, data.features || [])}
-                  ${featureScenarioDropdownHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
-                  <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Clear all features" title="Clear all">×</button>
-                  <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Select all features" title="Select all">✓</button>
+          <div id="gbmFeatureWorkspace" class="gbm-feature-workspace">
+            <div class="gbm-feature-main-control-strip app-control-strip">
+              <div class="gbm-feature-control-layout">
+                <div class="gbm-feature-control-cell app-control-strip-row app-control-strip--titled">
+                  <h3 id="gbmFeatureSectionTitle" class="gbm-section-title">${escapeHtml(featureSectionTitle(data.features || []))}</h3>
+                  <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
+                    ${featureMetricToggleHtml(data.features || [], data)}
+                    ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
+                    ${featureInteractionPairsDropdownHtml(data.active_feature_interaction_constraints || null, data.features || [])}
+                    ${featureScenarioDropdownHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
+                    <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Clear all features" title="Clear all">×</button>
+                    <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Select all features" title="Select all">✓</button>
+                  </div>
+                </div>
+                <div class="gbm-parameter-control-cell app-control-strip-row">
+                  <h3 class="gbm-section-title">Parameters</h3>
+                </div>
+                <div class="gbm-training-control-cell app-control-strip-row">
+                  <h3 class="gbm-section-title">Control</h3>
                 </div>
               </div>
+            </div>
+            <section class="gbm-panel-section gbm-grid-panel">
               <div id="gbmFeatureGrid" class="gbm-grid"></div>
               <div id="gbmFeatureFallback" class="gbm-fallback-table"></div>
               <div id="gbmEbmGainSummaryGrid" class="gbm-grid gbm-ebm-gain-summary-grid hidden"></div>
               <div id="gbmEbmGainSummaryFallback" class="gbm-fallback-table hidden"></div>
             </section>
-            <section class="gbm-right-panel">
-              <section class="gbm-panel-section gbm-parameter-section">
-                <div class="gbm-parameter-layout">
-                  <div class="gbm-parameter-table-column">
-                    <h3 class="gbm-section-title">Parameters</h3>
-                    <div id="gbmParameterGrid" class="gbm-grid gbm-parameter-grid"></div>
-                    <div id="gbmParameterFallback" class="gbm-fallback-table"></div>
-                  </div>
-                  <div class="gbm-parameter-controls-column">
-                    <h3 class="gbm-section-title">Control</h3>
-                    <div class="gbm-actions">
-                      <button id="gbmTrainBtn" class="tab model-busy-button gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining ? "disabled aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
-                      ${sampleStatusHtml(data.sample)}
-                      <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
-                        <span class="gbm-shap-label">SHAP rows</span>
-                        <div class="gbm-shap-options">
-                          ${shapOptionsHtml(data.shap_options || [], gbmShapSelectionValue(data))}
-                        </div>
-                      </div>
-                      ${gridSampleHtml(data.parameters || [])}
-                      ${data.ebm_available ? trainingModeHtml(data.training_mode) : ""}
-                      ${shouldShowCreateSampleButton(data.sample) ? '<button id="gbmCreateSampleBtn" class="tab gbm-action-button gbm-sample-button" type="button">Create sample column</button>' : ""}
-                    </div>
+            <div id="gbmFeatureResizer" class="gbm-feature-column-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize Features and Parameters panels" tabindex="0"></div>
+            <section class="gbm-panel-section gbm-parameter-section">
+              <div id="gbmParameterGrid" class="gbm-grid gbm-parameter-grid"></div>
+              <div id="gbmParameterFallback" class="gbm-fallback-table"></div>
+            </section>
+            <div id="gbmParameterControlDivider" class="gbm-parameter-control-divider" aria-hidden="true"></div>
+            <section class="gbm-parameter-controls-column">
+              <div class="gbm-actions">
+                <button id="gbmTrainBtn" class="tab model-busy-button gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining ? "disabled aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
+                ${sampleStatusHtml(data.sample)}
+                <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
+                  <span class="gbm-shap-label">SHAP rows</span>
+                  <div class="gbm-shap-options">
+                    ${shapOptionsHtml(data.shap_options || [], gbmShapSelectionValue(data))}
                   </div>
                 </div>
-              </section>
-              <section class="gbm-panel-section">
-                <div class="gbm-section-header gbm-evaluation-section-header">
-                  <h3 class="gbm-section-title">Evaluation Log</h3>
-                  ${evaluationViewModeHtml()}
-                </div>
-                <div id="gbmEvaluationChart" class="gbm-evaluation-chart"></div>
-              </section>
+                ${gridSampleHtml(data.parameters || [])}
+                ${data.ebm_available ? trainingModeHtml(data.training_mode) : ""}
+                ${shouldShowCreateSampleButton(data.sample) ? '<button id="gbmCreateSampleBtn" class="tab gbm-action-button gbm-sample-button" type="button">Create sample column</button>' : ""}
+              </div>
+            </section>
+            <div class="gbm-evaluation-control-strip app-control-strip">
+              <div class="gbm-evaluation-section-header app-control-strip-row app-control-strip--titled">
+                <h3 class="gbm-section-title">Evaluation Log</h3>
+                ${evaluationViewModeHtml()}
+              </div>
+            </div>
+            <div id="gbmEvaluationResizer" class="gbm-evaluation-resizer app-resizer app-resizer--horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize Parameters and Evaluation Log panels" tabindex="0"></div>
+            <section class="gbm-panel-section gbm-evaluation-panel">
+              <div id="gbmEvaluationChart" class="gbm-evaluation-chart"></div>
             </section>
           </div>
         </div>
@@ -416,6 +430,7 @@ export function createGbmTool({
       </div>
     `;
     bindTabs(mount);
+    featureParameterLayout.bind(mount);
     bindModelActions();
     syncSidebarModelChooser(data.models || [], data.active_model_id);
     bindFeatureActions();
@@ -1634,6 +1649,7 @@ export function createGbmTool({
         if (beforeOpen) beforeOpen();
         menu.classList.remove("hidden");
         button.setAttribute("aria-expanded", "true");
+        positionGbmFeatureToolbarMenu(button, menu);
       } else {
         closeGbmFeatureToolbarMenu(root);
       }
@@ -1643,6 +1659,23 @@ export function createGbmTool({
       closeGbmFeatureToolbarMenu(root, { focus: true });
     });
     menu.addEventListener("click", (event) => event.stopPropagation());
+  }
+
+  function positionGbmFeatureToolbarMenu(button, menu) {
+    const viewportPadding = 8;
+    const buttonRect = button.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const left = Math.max(
+      viewportPadding,
+      Math.min(buttonRect.left, window.innerWidth - menuRect.width - viewportPadding),
+    );
+    const belowTop = buttonRect.bottom + 3;
+    const aboveTop = buttonRect.top - menuRect.height - 3;
+    const top = belowTop + menuRect.height <= window.innerHeight - viewportPadding
+      ? belowTop
+      : Math.max(viewportPadding, aboveTop);
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
   }
 
   function closeGbmFeatureToolbarMenus(exceptRoot = null) {
@@ -2341,7 +2374,7 @@ export function createGbmTool({
     window.addEventListener("pointerdown", handleGbmFeatureContextMenuPointerDown, true);
     window.addEventListener("keydown", handleGbmFeatureContextMenuKeydown, true);
     window.addEventListener("resize", closeGbmFeatureContextMenu, true);
-    window.addEventListener("scroll", closeGbmFeatureContextMenu, true);
+    window.addEventListener("scroll", closeGbmFeatureContextMenu);
   }
 
   function gbmFeatureContextMenu() {
@@ -2613,7 +2646,7 @@ export function createGbmTool({
     window.removeEventListener("pointerdown", handleGbmFeatureContextMenuPointerDown, true);
     window.removeEventListener("keydown", handleGbmFeatureContextMenuKeydown, true);
     window.removeEventListener("resize", closeGbmFeatureContextMenu, true);
-    window.removeEventListener("scroll", closeGbmFeatureContextMenu, true);
+    window.removeEventListener("scroll", closeGbmFeatureContextMenu);
   }
 
   function sortedFeatureRowsForMetric(features = []) {
