@@ -329,7 +329,7 @@ export function createLineBarTool({
 
   function currentDateBucketFeatureKey() {
     const sourceId = selectedColumn()?.source_id || state.xSource || state.source || "dataset";
-    return JSON.stringify([sourceId, state.x || "", state.activeFilter || ""]);
+    return JSON.stringify([sourceId, state.x || ""]);
   }
 
   function clearPendingDateBucketSuggestion() {

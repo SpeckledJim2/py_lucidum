@@ -2843,7 +2843,6 @@
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
         syncFilterOperatorControl();
         restoreSavedFilterRows(view.savedFilterRows);
-        invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
       }
@@ -3871,7 +3870,7 @@
         const sourceId = state.xSource || state.source || "dataset";
         const feature = state.x || "";
         state.bandFeature = JSON.stringify([sourceId, feature]);
-        state.dateBucketFeature = JSON.stringify([sourceId, feature, state.activeFilter || ""]);
+        state.dateBucketFeature = JSON.stringify([sourceId, feature]);
         state.dateBucketManualKey = state.dateBucketFeature;
         state.bandSuggestionPendingKey = null;
         state.dateBucketSuggestionPendingKey = null;
@@ -3991,7 +3990,6 @@
         }
         state.activeFilter = nextFilter;
         clearActiveFavouriteSelectionForScope("filter");
-        invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshMetricSummary();
@@ -4015,7 +4013,6 @@
         }
         state.activeFilter = "";
         clearActiveFavouriteSelectionForScope("filter");
-        invalidateLineBarDateBucketSuggestion();
         clearProfileDetailCache();
         syncActiveFilterLabels();
         refreshMetricSummary();

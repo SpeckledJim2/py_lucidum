@@ -4520,6 +4520,129 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_date_bucket_persists_across_filter_changes(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "date_bucket_filter_state.parquet"
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT DATE '2024-01-01' AS EventDate, 'short' AS Segment, 10 AS Actual
+  UNION ALL SELECT DATE '2024-11-01', 'short', 20
+  UNION ALL SELECT DATE '2024-01-01', 'long', 30
+  UNION ALL SELECT DATE '2026-06-01', 'long', 40
+) TO {sql_literal(str(data_path))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "Segment",
+                    "actual": "Actual",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    date_suggestion_requests: list[dict[str, Any]] = []
+
+                    def capture_date_suggestion(request: Any) -> None:
+                        if request.method == "POST" and request.url.endswith("/api/date-bucket/suggestion"):
+                            date_suggestion_requests.append(json.loads(request.post_data or "{}"))
+
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", capture_date_suggestion)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("date_bucket_filter_state.parquet").wait_for(timeout=10_000)
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    if not page.locator("#filterInput").is_visible():
+                        page.locator("#filterFooterToggleBtn").click()
+                        page.locator("#filterInput").wait_for(state="visible", timeout=10_000)
+
+                    page.locator("#filterInput").fill("Segment = 'short'")
+                    page.locator("#filterApplyBtn").click()
+                    page.wait_for_function(
+                        """(filter) => document.querySelector("#lineBarFilterText")?.textContent.trim() === filter""",
+                        arg="Segment = 'short'",
+                        timeout=10_000,
+                    )
+                    with page.expect_request(
+                        lambda request: request.method == "POST" and request.url.endswith("/api/date-bucket/suggestion"),
+                        timeout=10_000,
+                    ) as suggestion_request_info:
+                        page.locator('#featureList .feature[data-value="EventDate"]').click()
+                    suggestion_request = json.loads(suggestion_request_info.value.post_data or "{}")
+                    page.wait_for_function(
+                        """() => document.querySelector('#dateControl [data-value="week"]')?.classList.contains("active")""",
+                        timeout=10_000,
+                    )
+                    self.assertEqual(suggestion_request["feature"], "EventDate")
+                    self.assertEqual(suggestion_request["filter"], "Segment = 'short'")
+                    self.assertEqual(len(date_suggestion_requests), 1)
+
+                    with page.expect_request(
+                        lambda request: request.method == "POST" and request.url.endswith("/api/chart"),
+                        timeout=10_000,
+                    ) as day_chart_request_info:
+                        page.locator('#dateControl [data-value="day"]').click()
+                    day_chart_request = json.loads(day_chart_request_info.value.post_data or "{}")
+                    page.wait_for_function(
+                        """() => document.querySelector('#dateControl [data-value="day"]')?.classList.contains("active")""",
+                        timeout=10_000,
+                    )
+                    self.assertEqual(day_chart_request["filter"], "Segment = 'short'")
+                    self.assertEqual(day_chart_request["dateBucket"], "day")
+
+                    suggestion_count = len(date_suggestion_requests)
+                    page.locator("#filterInput").fill("Segment = 'long'")
+                    with page.expect_request(
+                        lambda request: request.method == "POST" and request.url.endswith("/api/chart"),
+                        timeout=10_000,
+                    ) as filtered_chart_request_info:
+                        page.locator("#filterApplyBtn").click()
+                    filtered_chart_request = json.loads(filtered_chart_request_info.value.post_data or "{}")
+                    self.assertEqual(filtered_chart_request["filter"], "Segment = 'long'")
+                    self.assertEqual(filtered_chart_request["dateBucket"], "day")
+                    self.assertTrue(page.locator('#dateControl [data-value="day"]').evaluate("node => node.classList.contains('active')"))
+                    self.assertEqual(len(date_suggestion_requests), suggestion_count)
+
+                    with page.expect_request(
+                        lambda request: request.method == "POST" and request.url.endswith("/api/chart"),
+                        timeout=10_000,
+                    ) as cleared_chart_request_info:
+                        page.locator("#filterClearBtn").click()
+                    cleared_chart_request = json.loads(cleared_chart_request_info.value.post_data or "{}")
+                    self.assertEqual(cleared_chart_request["filter"], "")
+                    self.assertEqual(cleared_chart_request["dateBucket"], "day")
+                    self.assertTrue(page.locator('#dateControl [data-value="day"]').evaluate("node => node.classList.contains('active')"))
+                    self.assertEqual(len(date_suggestion_requests), suggestion_count)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_quantile_ranges_and_band_restore(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "line_bar_quantiles.csv"
