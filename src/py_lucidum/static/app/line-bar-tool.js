@@ -3153,9 +3153,46 @@ export function createLineBarTool({
     setChartPendingHidden(true);
   }
 
+  function bindSettingsStripOverflowCue() {
+    const toolbar = el("lineBarToolbar");
+    if (!toolbar) return;
+    let syncScheduled = false;
+    const syncOverflow = () => {
+      syncScheduled = false;
+      const maxScrollLeft = Math.max(0, toolbar.scrollWidth - toolbar.clientWidth);
+      toolbar.classList.toggle("line-bar-settings-overflow-left", toolbar.scrollLeft > 1);
+      toolbar.classList.toggle(
+        "line-bar-settings-overflow-right",
+        maxScrollLeft > 1 && toolbar.scrollLeft < maxScrollLeft - 1,
+      );
+    };
+    const scheduleSync = () => {
+      if (syncScheduled) return;
+      syncScheduled = true;
+      requestAnimationFrame(syncOverflow);
+    };
+    toolbar.addEventListener("scroll", scheduleSync, { passive: true });
+    if (typeof ResizeObserver === "function") {
+      const resizeObserver = new ResizeObserver(scheduleSync);
+      resizeObserver.observe(toolbar);
+    }
+    if (typeof MutationObserver === "function") {
+      const mutationObserver = new MutationObserver(scheduleSync);
+      mutationObserver.observe(toolbar, {
+        attributes: true,
+        attributeFilter: ["class"],
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+    }
+    scheduleSync();
+  }
+
   function bindControls() {
     chart.on("legendselectchanged", updateResponseAxisForLegendSelection);
     chart.on("datazoom", scheduleDateXAxisLabelRefresh);
+    bindSettingsStripOverflowCue();
     const lineBarControls = new Set(["sort", "lowGroup", "labels", "bandWidth", "quantileMode", "dateBucket", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
     document.querySelectorAll(".segmented").forEach((group) => {
       if (!lineBarControls.has(group.dataset.control)) return;

@@ -166,6 +166,51 @@
         margin: 0 8px 8px;
       }
 
+      .chart-side-section .segmented[data-control="featureSort"] button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        color: var(--muted);
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: 24px;
+        line-height: 1.2;
+        min-height: 24px;
+        padding: 2px 6px;
+        text-align: center;
+      }
+
+      .chart-side-section .segmented[data-control="featureSort"] button::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .chart-side-section .segmented[data-control="featureSort"] button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .chart-side-section .segmented[data-control="featureSort"] button:focus-visible {
+        background: transparent;
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .chart-side-section .segmented[data-control="featureSort"] button.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
       .line-bar-favourite-icon-button {
         min-height: 24px;
         border: 1px solid var(--line);
@@ -436,8 +481,10 @@
       }
 
       .line-bar-settings-strip.toolbar {
+        --line-bar-settings-edge-fade: 24px;
         align-items: stretch;
         background: var(--panel);
+        border-bottom: var(--app-control-strip-divider-width) solid var(--line);
         gap: 0;
         height: var(--app-control-strip-height);
         margin: 0;
@@ -445,6 +492,83 @@
         overflow-x: auto;
         overflow-y: hidden;
         padding: 0 var(--app-control-strip-padding-inline);
+      }
+
+      .line-bar-settings-strip.app-control-strip::after {
+        content: none;
+      }
+
+      .line-bar-settings-strip.line-bar-settings-overflow-right {
+        -webkit-mask-image:
+          linear-gradient(
+            to right,
+            #000 0,
+            #000 calc(100% - var(--line-bar-settings-edge-fade)),
+            transparent 100%
+          ),
+          linear-gradient(#000, #000);
+        mask-image:
+          linear-gradient(
+            to right,
+            #000 0,
+            #000 calc(100% - var(--line-bar-settings-edge-fade)),
+            transparent 100%
+          ),
+          linear-gradient(#000, #000);
+      }
+
+      .line-bar-settings-strip.line-bar-settings-overflow-left {
+        -webkit-mask-image:
+          linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--line-bar-settings-edge-fade),
+            #000 100%
+          ),
+          linear-gradient(#000, #000);
+        mask-image:
+          linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--line-bar-settings-edge-fade),
+            #000 100%
+          ),
+          linear-gradient(#000, #000);
+      }
+
+      .line-bar-settings-strip.line-bar-settings-overflow-left.line-bar-settings-overflow-right {
+        -webkit-mask-image:
+          linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--line-bar-settings-edge-fade),
+            #000 calc(100% - var(--line-bar-settings-edge-fade)),
+            transparent 100%
+          ),
+          linear-gradient(#000, #000);
+        mask-image:
+          linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--line-bar-settings-edge-fade),
+            #000 calc(100% - var(--line-bar-settings-edge-fade)),
+            transparent 100%
+          ),
+          linear-gradient(#000, #000);
+      }
+
+      .line-bar-settings-strip.line-bar-settings-overflow-left,
+      .line-bar-settings-strip.line-bar-settings-overflow-right {
+        -webkit-mask-position: 0 0, 0 100%;
+        mask-position: 0 0, 0 100%;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-size:
+          100% calc(100% - var(--app-control-strip-divider-width)),
+          100% var(--app-control-strip-divider-width);
+        mask-size:
+          100% calc(100% - var(--app-control-strip-divider-width)),
+          100% var(--app-control-strip-divider-width);
       }
 
       .line-bar-settings-strip .control {
@@ -458,7 +582,7 @@
         flex-direction: column;
         height: var(--app-control-strip-height);
         justify-content: center;
-        padding: 4px 8px;
+        padding: 7px 8px 1px;
       }
 
       .line-bar-settings-strip .control:first-child {
@@ -467,18 +591,57 @@
       }
 
       .line-bar-settings-strip .control h3 {
-        font-size: 12px;
-        line-height: 1.1;
-        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1;
+        margin: 0 0 5px;
+        padding-inline-start: var(--app-control-button-padding-inline);
       }
 
       .line-bar-settings-strip .segmented button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
         box-sizing: border-box;
+        color: var(--muted);
         font-size: var(--app-control-button-font-size);
+        font-weight: 400;
         height: 24px;
         line-height: 1.2;
         min-height: 24px;
         padding: 2px var(--app-control-button-padding-inline);
+        text-align: center;
+      }
+
+      .line-bar-settings-strip .segmented button::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .line-bar-settings-strip .segmented button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .line-bar-settings-strip .segmented button:focus-visible {
+        background: transparent;
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .line-bar-settings-strip .segmented button.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
       }
 
       .visual-area.line-bar-mode .workspace {

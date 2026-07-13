@@ -3104,6 +3104,414 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_settings_buttons_do_not_shift_when_selected(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_settings_buttons.csv"
+            data_path.write_text(
+                "group,value\n"
+                "1,10\n"
+                "2,20\n"
+                "3,30\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "group",
+                    "actual": "value",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page.emulate_media(color_scheme="light")
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def settings_layout() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const normalizeColor = (value) => {
+                                const probe = document.createElement("span");
+                                probe.style.color = value;
+                                document.body.append(probe);
+                                const color = getComputedStyle(probe).color;
+                                probe.remove();
+                                return color;
+                              };
+                              const toolbar = document.querySelector("#lineBarToolbar");
+                              const root = getComputedStyle(document.documentElement);
+                              const muted = normalizeColor(root.getPropertyValue("--muted").trim());
+                              const accent = normalizeColor(root.getPropertyValue("--accent").trim());
+                              const buttons = [...toolbar.querySelectorAll(".segmented button")];
+                              const visibleButtons = buttons.filter((button) => button.getClientRects().length > 0);
+                              const keyFor = (button) => {
+                                const control = button.closest(".segmented")?.dataset.control || "";
+                                const choice = button.dataset.value
+                                  ? `value:${button.dataset.value}`
+                                  : `action:${button.dataset.action || ""}`;
+                                return `${control}:${choice}`;
+                              };
+                              const positions = Object.fromEntries(visibleButtons.map((button) => {
+                                const buttonRect = button.getBoundingClientRect();
+                                const labelRange = document.createRange();
+                                labelRange.selectNodeContents(button);
+                                const labelRect = labelRange.getBoundingClientRect();
+                                return [keyFor(button), {
+                                  left: buttonRect.left,
+                                  top: buttonRect.top,
+                                  width: buttonRect.width,
+                                  height: buttonRect.height,
+                                  labelCenterDelta: Math.abs(
+                                    (labelRect.left + labelRect.width / 2)
+                                      - (buttonRect.left + buttonRect.width / 2)
+                                  ),
+                                }];
+                              }));
+                              const styles = buttons.map((button) => getComputedStyle(button));
+                              const activeButtons = buttons.filter((button) => button.classList.contains("active"));
+                              const inactiveButtons = buttons.filter((button) => !button.classList.contains("active"));
+                              return {
+                                labelsReserved: buttons.every(
+                                  (button) => button.dataset.stableLabel === button.textContent.trim()
+                                ),
+                                borderless: styles.every((style) => style.borderTopWidth === "0px"),
+                                transparent: styles.every(
+                                  (style) => style.backgroundColor === "rgba(0, 0, 0, 0)"
+                                ),
+                                activeAccent: activeButtons.every(
+                                  (button) => getComputedStyle(button).color === accent
+                                ),
+                                activeBold: activeButtons.every(
+                                  (button) => getComputedStyle(button).fontWeight === "700"
+                                ),
+                                inactiveMuted: inactiveButtons.every(
+                                  (button) => getComputedStyle(button).color === muted
+                                ),
+                                inactiveRegular: inactiveButtons.every(
+                                  (button) => getComputedStyle(button).fontWeight === "400"
+                                ),
+                                positions,
+                                scrollWidth: toolbar.scrollWidth,
+                              };
+                            }
+                            """
+                        )
+
+                    def overflow_state() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const toolbar = document.querySelector("#lineBarToolbar");
+                              const style = getComputedStyle(toolbar);
+                              return {
+                                clientWidth: toolbar.clientWidth,
+                                scrollWidth: toolbar.scrollWidth,
+                                scrollLeft: toolbar.scrollLeft,
+                                left: toolbar.classList.contains("line-bar-settings-overflow-left"),
+                                right: toolbar.classList.contains("line-bar-settings-overflow-right"),
+                                maskImage: style.maskImage || style.webkitMaskImage,
+                                maskSize: style.maskSize || style.webkitMaskSize,
+                                borderBottomColor: style.borderBottomColor,
+                                borderBottomWidth: style.borderBottomWidth,
+                                pseudoDividerContent: getComputedStyle(toolbar, "::after").content,
+                              };
+                            }
+                            """
+                        )
+
+                    def feature_sort_layout() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const normalizeColor = (value) => {
+                                const probe = document.createElement("span");
+                                probe.style.color = value;
+                                document.body.append(probe);
+                                const color = getComputedStyle(probe).color;
+                                probe.remove();
+                                return color;
+                              };
+                              const group = document.querySelector('.segmented[data-control="featureSort"]');
+                              const toolbarButton = document.querySelector("#lineBarToolbar .segmented button");
+                              const root = getComputedStyle(document.documentElement);
+                              const muted = normalizeColor(root.getPropertyValue("--muted").trim());
+                              const accent = normalizeColor(root.getPropertyValue("--accent").trim());
+                              const buttons = [...group.querySelectorAll("button")];
+                              const positions = Object.fromEntries(buttons.map((button) => {
+                                const buttonRect = button.getBoundingClientRect();
+                                const labelRange = document.createRange();
+                                labelRange.selectNodeContents(button);
+                                const labelRect = labelRange.getBoundingClientRect();
+                                return [button.dataset.value, {
+                                  left: buttonRect.left,
+                                  top: buttonRect.top,
+                                  width: buttonRect.width,
+                                  height: buttonRect.height,
+                                  labelCenterDelta: Math.abs(
+                                    (labelRect.left + labelRect.width / 2)
+                                      - (buttonRect.left + buttonRect.width / 2)
+                                  ),
+                                }];
+                              }));
+                              const styles = buttons.map((button) => getComputedStyle(button));
+                              const activeButtons = buttons.filter((button) => button.classList.contains("active"));
+                              const inactiveButtons = buttons.filter((button) => !button.classList.contains("active"));
+                              const toolbarButtonStyle = getComputedStyle(toolbarButton);
+                              return {
+                                labelsReserved: buttons.every(
+                                  (button) => button.dataset.stableLabel === button.textContent.trim()
+                                ),
+                                borderless: styles.every((style) => style.borderTopWidth === "0px"),
+                                transparent: styles.every(
+                                  (style) => style.backgroundColor === "rgba(0, 0, 0, 0)"
+                                ),
+                                sameFontSize: styles.every(
+                                  (style) => style.fontSize === toolbarButtonStyle.fontSize
+                                ),
+                                compactPadding: styles.every(
+                                  (style) => style.paddingLeft === "6px" && style.paddingRight === "6px"
+                                ),
+                                activeAccent: activeButtons.every(
+                                  (button) => getComputedStyle(button).color === accent
+                                ),
+                                activeBold: activeButtons.every(
+                                  (button) => getComputedStyle(button).fontWeight === "700"
+                                ),
+                                inactiveMuted: inactiveButtons.every(
+                                  (button) => getComputedStyle(button).color === muted
+                                ),
+                                inactiveRegular: inactiveButtons.every(
+                                  (button) => getComputedStyle(button).fontWeight === "400"
+                                ),
+                                positions,
+                                width: group.getBoundingClientRect().width,
+                              };
+                            }
+                            """
+                        )
+
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarToolbar").evaluate("node => { node.style.maxWidth = '520px'; }")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#lineBarToolbar");
+                          return toolbar.scrollWidth > toolbar.clientWidth
+                            && !toolbar.classList.contains("line-bar-settings-overflow-left")
+                            && toolbar.classList.contains("line-bar-settings-overflow-right");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.mouse.move(0, 0)
+
+                    before = settings_layout()
+                    start_overflow = overflow_state()
+                    self.assertTrue(before["labelsReserved"])
+                    self.assertTrue(before["borderless"])
+                    self.assertTrue(before["transparent"])
+                    self.assertTrue(before["activeAccent"])
+                    self.assertTrue(before["activeBold"])
+                    self.assertTrue(before["inactiveMuted"])
+                    self.assertTrue(before["inactiveRegular"])
+                    self.assertTrue(before["positions"])
+                    self.assertGreater(start_overflow["scrollWidth"], start_overflow["clientWidth"])
+                    self.assertFalse(start_overflow["left"])
+                    self.assertTrue(start_overflow["right"])
+                    self.assertNotEqual(start_overflow["maskImage"], "none")
+                    self.assertEqual(start_overflow["maskImage"].count("linear-gradient"), 2)
+                    self.assertIn("100% 1px", start_overflow["maskSize"])
+                    self.assertEqual(start_overflow["borderBottomWidth"], "1px")
+                    self.assertNotEqual(start_overflow["borderBottomColor"], "rgba(0, 0, 0, 0)")
+                    self.assertEqual(start_overflow["pseudoDividerContent"], "none")
+                    self.assertTrue(
+                        all(position["labelCenterDelta"] <= 0.5 for position in before["positions"].values())
+                    )
+
+                    page.locator('.segmented[data-control="labels"] button[data-value="bar"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('.segmented[data-control="labels"] button[data-value="bar"]')
+                          ?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.mouse.move(0, 0)
+                    after = settings_layout()
+
+                    self.assertTrue(after["labelsReserved"])
+                    self.assertTrue(after["borderless"])
+                    self.assertTrue(after["transparent"])
+                    self.assertTrue(after["activeAccent"])
+                    self.assertTrue(after["activeBold"])
+                    self.assertTrue(after["inactiveMuted"])
+                    self.assertTrue(after["inactiveRegular"])
+                    self.assertEqual(after["scrollWidth"], before["scrollWidth"])
+                    self.assertEqual(set(after["positions"]), set(before["positions"]))
+                    for key, before_position in before["positions"].items():
+                        after_position = after["positions"][key]
+                        for dimension in ("left", "top", "width", "height"):
+                            self.assertAlmostEqual(
+                                after_position[dimension],
+                                before_position[dimension],
+                                delta=0.5,
+                            )
+                        self.assertLessEqual(after_position["labelCenterDelta"], 0.5)
+
+                    page.locator("#lineBarToolbar").evaluate(
+                        "node => { node.scrollLeft = (node.scrollWidth - node.clientWidth) / 2; }"
+                    )
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#lineBarToolbar");
+                          return toolbar.classList.contains("line-bar-settings-overflow-left")
+                            && toolbar.classList.contains("line-bar-settings-overflow-right");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    middle_overflow = overflow_state()
+                    self.assertTrue(middle_overflow["left"])
+                    self.assertTrue(middle_overflow["right"])
+                    self.assertNotEqual(middle_overflow["maskImage"], "none")
+                    self.assertEqual(middle_overflow["maskImage"].count("linear-gradient"), 2)
+                    self.assertIn("100% 1px", middle_overflow["maskSize"])
+
+                    page.locator("#lineBarToolbar").evaluate(
+                        "node => { node.scrollLeft = node.scrollWidth; }"
+                    )
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#lineBarToolbar");
+                          return toolbar.classList.contains("line-bar-settings-overflow-left")
+                            && !toolbar.classList.contains("line-bar-settings-overflow-right");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    end_overflow = overflow_state()
+                    self.assertTrue(end_overflow["left"])
+                    self.assertFalse(end_overflow["right"])
+                    self.assertNotEqual(end_overflow["maskImage"], "none")
+                    self.assertEqual(end_overflow["maskImage"].count("linear-gradient"), 2)
+                    self.assertIn("100% 1px", end_overflow["maskSize"])
+
+                    page.locator("#lineBarToolbar").evaluate(
+                        "node => { node.style.maxWidth = '600px'; }"
+                    )
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#lineBarToolbar");
+                          return toolbar.clientWidth > 520 && toolbar.scrollLeft > 1;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    resized_after_scroll = overflow_state()
+                    self.assertGreater(resized_after_scroll["scrollLeft"], 1)
+                    self.assertEqual(resized_after_scroll["borderBottomWidth"], "1px")
+                    self.assertEqual(
+                        resized_after_scroll["borderBottomColor"],
+                        start_overflow["borderBottomColor"],
+                    )
+                    self.assertEqual(resized_after_scroll["pseudoDividerContent"], "none")
+
+                    side_controls_toggle = page.locator("#lineBarSideControlsToggleBtn")
+                    if side_controls_toggle.get_attribute("aria-expanded") == "false":
+                        side_controls_toggle.click()
+                    page.wait_for_function(
+                        """
+                        () => getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator(
+                        '.segmented[data-control="featureSort"] button[data-value="importance"]'
+                    ).evaluate("button => button.classList.remove('hidden')")
+                    page.mouse.move(0, 0)
+                    feature_sort_before = feature_sort_layout()
+                    self.assertTrue(feature_sort_before["labelsReserved"])
+                    self.assertTrue(feature_sort_before["borderless"])
+                    self.assertTrue(feature_sort_before["transparent"])
+                    self.assertTrue(feature_sort_before["sameFontSize"])
+                    self.assertTrue(feature_sort_before["compactPadding"])
+                    self.assertTrue(feature_sort_before["activeAccent"])
+                    self.assertTrue(feature_sort_before["activeBold"])
+                    self.assertTrue(feature_sort_before["inactiveMuted"])
+                    self.assertTrue(feature_sort_before["inactiveRegular"])
+                    self.assertEqual(
+                        set(feature_sort_before["positions"]),
+                        {"importance", "original", "alpha"},
+                    )
+                    self.assertTrue(
+                        all(
+                            position["labelCenterDelta"] <= 0.5
+                            for position in feature_sort_before["positions"].values()
+                        )
+                    )
+
+                    page.evaluate(
+                        """
+                        () => {
+                          const buttons = document.querySelectorAll(
+                            '.segmented[data-control="featureSort"] button'
+                          );
+                          buttons.forEach((button) => {
+                            button.classList.toggle("active", button.dataset.value === "original");
+                          });
+                        }
+                        """
+                    )
+                    feature_sort_after = feature_sort_layout()
+                    self.assertTrue(feature_sort_after["activeAccent"])
+                    self.assertTrue(feature_sort_after["activeBold"])
+                    self.assertTrue(feature_sort_after["inactiveMuted"])
+                    self.assertTrue(feature_sort_after["inactiveRegular"])
+                    self.assertAlmostEqual(
+                        feature_sort_after["width"],
+                        feature_sort_before["width"],
+                        delta=0.5,
+                    )
+                    self.assertEqual(
+                        set(feature_sort_after["positions"]),
+                        set(feature_sort_before["positions"]),
+                    )
+                    for key, before_position in feature_sort_before["positions"].items():
+                        after_position = feature_sort_after["positions"][key]
+                        for dimension in ("left", "top", "width", "height"):
+                            self.assertAlmostEqual(
+                                after_position[dimension],
+                                before_position[dimension],
+                                delta=0.5,
+                            )
+                        self.assertLessEqual(after_position["labelCenterDelta"], 0.5)
+
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_table_search_filters_complete_table_client_side(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "line_bar_table.csv"
@@ -3404,7 +3812,20 @@ class BrowserSmokeTests(unittest.TestCase):
                           const firstControlStyle = getComputedStyle(document.querySelector("#lineBarToolbar .control"));
                           const settingsButtonStyle = getComputedStyle(document.querySelector("#lineBarToolbar .segmented button"));
                           const actionButtonStyle = getComputedStyle(document.querySelector("#lineBarTabs button"));
-                          const settingsLabelStyle = getComputedStyle(document.querySelector("#lineBarToolbar .control h3"));
+                          const settingsLabel = document.querySelector("#lineBarToolbar .control h3");
+                          const firstSettingsButton = document.querySelector("#lineBarToolbar .segmented button");
+                          const settingsLabelStyle = getComputedStyle(settingsLabel);
+                          const settingsLabelText = document.createRange();
+                          settingsLabelText.selectNodeContents(settingsLabel);
+                          const settingsLabelTextRect = settingsLabelText.getBoundingClientRect();
+                          const firstSettingsButtonLabel = document.createRange();
+                          firstSettingsButtonLabel.selectNodeContents(firstSettingsButton);
+                          const firstSettingsButtonLabelRect = firstSettingsButtonLabel.getBoundingClientRect();
+                          const colorProbe = document.createElement("span");
+                          colorProbe.style.color = "var(--muted)";
+                          document.body.append(colorProbe);
+                          const muted = getComputedStyle(colorProbe).color;
+                          colorProbe.remove();
                           return {
                             sidebarWidth: rootStyle.getPropertyValue("--sidebar-width").trim(),
                             chartControlsWidth: rootStyle.getPropertyValue("--chart-controls-width").trim(),
@@ -3413,11 +3834,23 @@ class BrowserSmokeTests(unittest.TestCase):
                             resizerWidth: resizerRect.width,
                             visualGap: getComputedStyle(document.querySelector("#visualArea")).gap,
                             controlBorderTop: firstControlStyle.borderTopWidth,
+                            controlPaddingTop: firstControlStyle.paddingTop,
+                            controlPaddingBottom: firstControlStyle.paddingBottom,
                             controlShadow: firstControlStyle.boxShadow,
                             settingsButtonHeight: settingsButtonStyle.height,
                             actionButtonHeight: actionButtonStyle.height,
                             settingsLabelFontSize: settingsLabelStyle.fontSize,
+                            settingsLabelFontWeight: settingsLabelStyle.fontWeight,
+                            settingsLabelLineHeight: settingsLabelStyle.lineHeight,
                             settingsLabelMarginBottom: settingsLabelStyle.marginBottom,
+                            settingsLabelPaddingLeft: settingsLabelStyle.paddingInlineStart,
+                            settingsLabelColorMatchesMuted: settingsLabelStyle.color === muted,
+                            settingsLabelTextTransform: settingsLabelStyle.textTransform,
+                            settingsLabelLetterSpacing: settingsLabelStyle.letterSpacing,
+                            settingsLabelLeft: settingsLabelTextRect.left,
+                            firstButtonLabelLeft: firstSettingsButtonLabelRect.left,
+                            settingsLabelTopGap: settingsLabelTextRect.top - toolbarRect.top,
+                            firstButtonLabelBottomGap: toolbarRect.bottom - firstSettingsButtonLabelRect.bottom,
                           };
                         }
                         """
@@ -3426,11 +3859,29 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertAlmostEqual(expanded_focus_state["resizerWidth"], 12, delta=0.5)
                     self.assertEqual(expanded_focus_state["visualGap"], "0px")
                     self.assertEqual(expanded_focus_state["controlBorderTop"], "0px")
+                    self.assertEqual(expanded_focus_state["controlPaddingTop"], "7px")
+                    self.assertEqual(expanded_focus_state["controlPaddingBottom"], "1px")
                     self.assertEqual(expanded_focus_state["controlShadow"], "none")
                     self.assertEqual(expanded_focus_state["settingsButtonHeight"], "24px")
                     self.assertEqual(expanded_focus_state["actionButtonHeight"], "24px")
-                    self.assertEqual(expanded_focus_state["settingsLabelFontSize"], "12px")
-                    self.assertEqual(expanded_focus_state["settingsLabelMarginBottom"], "4px")
+                    self.assertEqual(expanded_focus_state["settingsLabelFontSize"], "11px")
+                    self.assertEqual(expanded_focus_state["settingsLabelFontWeight"], "600")
+                    self.assertEqual(expanded_focus_state["settingsLabelLineHeight"], "11px")
+                    self.assertEqual(expanded_focus_state["settingsLabelMarginBottom"], "5px")
+                    self.assertEqual(expanded_focus_state["settingsLabelPaddingLeft"], "8px")
+                    self.assertTrue(expanded_focus_state["settingsLabelColorMatchesMuted"])
+                    self.assertEqual(expanded_focus_state["settingsLabelTextTransform"], "none")
+                    self.assertEqual(expanded_focus_state["settingsLabelLetterSpacing"], "normal")
+                    self.assertAlmostEqual(
+                        expanded_focus_state["settingsLabelLeft"],
+                        expanded_focus_state["firstButtonLabelLeft"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        expanded_focus_state["settingsLabelTopGap"],
+                        expanded_focus_state["firstButtonLabelBottomGap"],
+                        delta=1,
+                    )
                     page.locator("#lineBarSideControlsToggleBtn").click()
                     page.wait_for_function(
                         """
