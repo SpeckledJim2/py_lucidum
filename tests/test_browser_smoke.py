@@ -235,6 +235,738 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_histogram_full_bleed_settings_and_splitter(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "histogram_full_bleed.csv"
+            data_path.write_text(
+                "value,weight\n"
+                + "\n".join(f"{index % 20 + 1},{index % 5 + 1}" for index in range(1, 121))
+                + "\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "value",
+                    "actual": "value",
+                    "denominator": "__none__",
+                },
+                tools=["histogram", "line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page.emulate_media(color_scheme="light")
+                    page_errors: list[str] = []
+                    histogram_requests = 0
+
+                    def on_request(request: Any) -> None:
+                        nonlocal histogram_requests
+                        if request.url.endswith("/api/histogram/chart"):
+                            histogram_requests += 1
+
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", on_request)
+
+                    def settings_layout() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const normalizeColor = (value) => {
+                                const probe = document.createElement("span");
+                                probe.style.color = value;
+                                document.body.append(probe);
+                                const color = getComputedStyle(probe).color;
+                                probe.remove();
+                                return color;
+                              };
+                              const toolbar = document.querySelector("#histogramToolbar");
+                              const root = getComputedStyle(document.documentElement);
+                              const muted = normalizeColor(root.getPropertyValue("--muted").trim());
+                              const accent = normalizeColor(root.getPropertyValue("--accent").trim());
+                              const buttons = [...toolbar.querySelectorAll(".segmented button")];
+                              const positions = Object.fromEntries(buttons.map((button) => {
+                                const buttonRect = button.getBoundingClientRect();
+                                const labelRange = document.createRange();
+                                labelRange.selectNodeContents(button);
+                                const labelRect = labelRange.getBoundingClientRect();
+                                const control = button.closest(".segmented")?.dataset.control || "";
+                                return [`${control}:${button.dataset.value}`, {
+                                  left: buttonRect.left,
+                                  top: buttonRect.top,
+                                  width: buttonRect.width,
+                                  height: buttonRect.height,
+                                  labelCenterDelta: Math.abs(
+                                    (labelRect.left + labelRect.width / 2)
+                                      - (buttonRect.left + buttonRect.width / 2)
+                                  ),
+                                }];
+                              }));
+                              const styles = buttons.map((button) => getComputedStyle(button));
+                              const activeButtons = buttons.filter((button) => button.classList.contains("active"));
+                              const inactiveButtons = buttons.filter((button) => !button.classList.contains("active"));
+                              const headers = [...toolbar.querySelectorAll(":scope > .control h3")];
+                              const headerStyles = headers.map((header) => getComputedStyle(header));
+                              const binsHeader = toolbar.querySelector(".histogram-bin-control h3");
+                              const binsHeaderRange = document.createRange();
+                              binsHeaderRange.selectNodeContents(binsHeader);
+                              const binsHeaderRect = binsHeaderRange.getBoundingClientRect();
+                              const binsInput = document.querySelector("#histogramBins");
+                              const binsInputStyle = getComputedStyle(binsInput);
+                              return {
+                                shared: toolbar.classList.contains("app-settings-strip"),
+                                height: toolbar.getBoundingClientRect().height,
+                                labelsReserved: buttons.every(
+                                  (button) => button.dataset.stableLabel === button.textContent.trim()
+                                ),
+                                borderless: styles.every((style) => style.borderTopWidth === "0px"),
+                                transparent: styles.every(
+                                  (style) => style.backgroundColor === "rgba(0, 0, 0, 0)"
+                                ),
+                                activeAccent: activeButtons.every(
+                                  (button) => getComputedStyle(button).color === accent
+                                ),
+                                activeBold: activeButtons.every(
+                                  (button) => getComputedStyle(button).fontWeight === "700"
+                                ),
+                                inactiveMuted: inactiveButtons.every(
+                                  (button) => getComputedStyle(button).color === muted
+                                ),
+                                inactiveRegular: inactiveButtons.every(
+                                  (button) => getComputedStyle(button).fontWeight === "400"
+                                ),
+                                captions: headerStyles.every(
+                                  (style) => style.color === muted
+                                    && style.fontSize === "11px"
+                                    && style.fontWeight === "600"
+                                ),
+                                binsInputHeight: binsInputStyle.height,
+                                binsInputWidth: binsInputStyle.width,
+                                binsInputBorderTop: binsInputStyle.borderTopWidth,
+                                binsInputBorderBottom: binsInputStyle.borderBottomWidth,
+                                binsInputRadius: binsInputStyle.borderRadius,
+                                binsInputBackground: binsInputStyle.backgroundColor,
+                                binsInputMuted: binsInputStyle.color === muted,
+                                binsInputFontSize: binsInputStyle.fontSize,
+                                binsInputFontWeight: binsInputStyle.fontWeight,
+                                binsInputPlaceholder: binsInput.getAttribute("placeholder"),
+                                binsHeaderInputDelta: Math.abs(
+                                  binsHeaderRect.left
+                                    - (binsInput.getBoundingClientRect().left
+                                      + parseFloat(binsInputStyle.borderLeftWidth)
+                                      + parseFloat(binsInputStyle.paddingLeft))
+                                ),
+                                positions,
+                                scrollWidth: toolbar.scrollWidth,
+                              };
+                            }
+                            """
+                        )
+
+                    def splitter_layout() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const wrap = document.querySelector("#histogramWrap").getBoundingClientRect();
+                              const stats = document.querySelector(".histogram-stats-panel").getBoundingClientRect();
+                              const statsGrid = document.querySelector("#histogramStatsGrid").getBoundingClientRect();
+                              const splitter = document.querySelector("#histogramSplitResizer");
+                              const splitterRect = splitter.getBoundingClientRect();
+                              const chartPanel = document.querySelector(".histogram-chart-panel").getBoundingClientRect();
+                              const chartNode = document.querySelector("#histogramChart");
+                              const chart = echarts.getInstanceByDom(chartNode);
+                              const plot = chart?.getModel?.().getComponent("grid")?.coordinateSystem?.getRect?.();
+                              const toolSelector = document.querySelector(".tool-selector-section");
+                              const toolSelectorRect = toolSelector.getBoundingClientRect();
+                              const toolSelectorStyle = getComputedStyle(toolSelector);
+                              const finalHeader = document.querySelector(
+                                '#histogramStatsGrid .tabulator-col[tabulator-field="value"]'
+                              );
+                              const finalCell = document.querySelector(
+                                '#histogramStatsGrid .tabulator-cell[tabulator-field="value"]'
+                              );
+                              const firstHeader = document.querySelector(
+                                '#histogramStatsGrid .tabulator-col[tabulator-field="statistic"]'
+                              );
+                              const firstCell = document.querySelector(
+                                '#histogramStatsGrid .tabulator-cell[tabulator-field="statistic"]'
+                              );
+                              return {
+                                wrap: { left: wrap.left, right: wrap.right, width: wrap.width },
+                                stats: {
+                                  left: stats.left,
+                                  right: stats.right,
+                                  top: stats.top,
+                                  bottom: stats.bottom,
+                                  width: stats.width,
+                                  height: stats.height,
+                                },
+                                statsGrid: {
+                                  left: statsGrid.left,
+                                  right: statsGrid.right,
+                                  top: statsGrid.top,
+                                  bottom: statsGrid.bottom,
+                                  width: statsGrid.width,
+                                },
+                                splitter: {
+                                  left: splitterRect.left,
+                                  right: splitterRect.right,
+                                  top: splitterRect.top,
+                                  bottom: splitterRect.bottom,
+                                  width: splitterRect.width,
+                                  lineCenter: splitterRect.left + splitterRect.width / 2,
+                                  ruleWidth: parseFloat(getComputedStyle(splitter, "::before").width),
+                                },
+                                chart: {
+                                  left: chartPanel.left,
+                                  right: chartPanel.right,
+                                  top: chartPanel.top,
+                                  bottom: chartPanel.bottom,
+                                  width: chartPanel.width,
+                                  height: chartPanel.height,
+                                },
+                                chartRenderedWidth: chart?.getWidth?.() || 0,
+                                chartRenderedHeight: chart?.getHeight?.() || 0,
+                                chartPlot: plot ? { top: plot.y, height: plot.height } : null,
+                                sidebarDividerLeft:
+                                  toolSelectorRect.right - parseFloat(toolSelectorStyle.borderRightWidth),
+                                logicalStatsWidth: wrap.right - chartPanel.right,
+                                firstHeaderBorderLeft: parseFloat(getComputedStyle(firstHeader).borderLeftWidth),
+                                firstCellBorderLeft: parseFloat(getComputedStyle(firstCell).borderLeftWidth),
+                                finalHeaderBorderRight: parseFloat(getComputedStyle(finalHeader).borderRightWidth),
+                                finalCellBorderRight: parseFloat(getComputedStyle(finalCell).borderRightWidth),
+                                display: getComputedStyle(splitter).display,
+                                ariaMin: Number(splitter.getAttribute("aria-valuemin")),
+                                ariaMax: Number(splitter.getAttribute("aria-valuemax")),
+                                ariaNow: Number(splitter.getAttribute("aria-valuenow")),
+                              };
+                            }
+                            """
+                        )
+
+                    def assert_toggle_trace(trace: dict[str, Any], *, expanded: bool) -> None:
+                        expected_expanded = "true" if expanded else "false"
+                        first_frame = trace["firstFrame"]
+                        settled_frame = trace["settledFrame"]
+                        self.assertEqual(first_frame["expanded"], expected_expanded)
+                        self.assertEqual(settled_frame["expanded"], expected_expanded)
+                        for frame in (first_frame, settled_frame):
+                            self.assertAlmostEqual(frame["panel"][0], frame["chart"][0], delta=1)
+                            self.assertAlmostEqual(frame["panel"][1], frame["chart"][1], delta=1)
+                            self.assertAlmostEqual(frame["panel"][0], frame["canvas"][0], delta=1)
+                            self.assertAlmostEqual(frame["panel"][1], frame["canvas"][1], delta=1)
+                            self.assertGreater(frame["plotPixels"], 0)
+                            self.assertGreater(frame["sliderPixels"], 0)
+                        self.assertEqual(first_frame["plotPixels"], settled_frame["plotPixels"])
+                        self.assertEqual(first_frame["sliderPixels"], settled_frame["sliderPixels"])
+                        self.assertEqual(trace["chartResizeCalls"], 1)
+                        self.assertEqual(trace["chartRenderedEvents"], 1)
+                        self.assertLessEqual(len(trace["tableRedrawCalls"]), 1)
+                        self.assertFalse(any(call["forced"] for call in trace["tableRedrawCalls"]))
+
+                    page.goto(f"{base_url}/?tool=histogram", wait_until="domcontentloaded")
+                    page.locator("#histogramWrap:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#histogramChart canvas").wait_for(timeout=10_000)
+                    page.locator("#histogramStatsGrid .tabulator-row").first.wait_for(timeout=10_000)
+                    page.wait_for_timeout(50)
+                    page.evaluate(
+                        """
+                        () => {
+                          const chartNode = document.querySelector("#histogramChart");
+                          const chart = echarts.getInstanceByDom(chartNode);
+                          const trace = {
+                            chartResizeCalls: 0,
+                            chartRenderedEvents: 0,
+                            tableRedrawCalls: [],
+                          };
+                          chart.on("rendered", () => {
+                            trace.chartRenderedEvents += 1;
+                          });
+                          const originalChartResize = chart.resize.bind(chart);
+                          chart.resize = (...args) => {
+                            trace.chartResizeCalls += 1;
+                            return originalChartResize(...args);
+                          };
+                          const originalTableRedraw = Tabulator.prototype.redraw;
+                          Tabulator.prototype.redraw = function (...args) {
+                            trace.tableRedrawCalls.push({ forced: args[0] === true });
+                            return originalTableRedraw.apply(this, args);
+                          };
+                          const visiblePixelCount = (canvas, y, height) => {
+                            const context = canvas.getContext("2d");
+                            const startY = Math.max(0, Math.min(canvas.height - 1, Math.round(y)));
+                            const bandHeight = Math.max(
+                              1,
+                              Math.min(canvas.height - startY, Math.round(height)),
+                            );
+                            const pixels = context.getImageData(
+                              0,
+                              startY,
+                              canvas.width,
+                              bandHeight,
+                            ).data;
+                            let visible = 0;
+                            for (let index = 3; index < pixels.length; index += 4) {
+                              if (pixels[index] > 0) visible += 1;
+                            }
+                            return visible;
+                          };
+                          const sample = () => {
+                            const panel = document.querySelector(".histogram-chart-panel").getBoundingClientRect();
+                            const canvasElement = chartNode.querySelector("canvas");
+                            const canvas = canvasElement.getBoundingClientRect();
+                            const pixelRatio = canvas.width > 0 ? canvasElement.width / canvas.width : 1;
+                            return {
+                              expanded: document.querySelector("#histogramToolbarToggleBtn")
+                                .getAttribute("aria-expanded"),
+                              panel: [panel.width, panel.height],
+                              chart: [chart.getWidth(), chart.getHeight()],
+                              canvas: [canvas.width, canvas.height],
+                              plotPixels: visiblePixelCount(
+                                canvasElement,
+                                40 * pixelRatio,
+                                80 * pixelRatio,
+                              ),
+                              sliderPixels: visiblePixelCount(
+                                canvasElement,
+                                (panel.height - 36) * pixelRatio,
+                                28 * pixelRatio,
+                              ),
+                            };
+                          };
+                          window.__armHistogramToggleTrace = () => {
+                            const resizeStart = trace.chartResizeCalls;
+                            const renderStart = trace.chartRenderedEvents;
+                            const redrawStart = trace.tableRedrawCalls.length;
+                            window.__histogramToggleTracePromise = new Promise((resolve) => {
+                              document.querySelector("#histogramToolbarToggleBtn").addEventListener("click", () => {
+                                requestAnimationFrame(() => {
+                                  const firstFrame = sample();
+                                  let remainingFrames = 3;
+                                  const settle = () => requestAnimationFrame(() => {
+                                    remainingFrames -= 1;
+                                    if (remainingFrames > 0) {
+                                      settle();
+                                      return;
+                                    }
+                                    resolve({
+                                      firstFrame,
+                                      settledFrame: sample(),
+                                      chartResizeCalls: trace.chartResizeCalls - resizeStart,
+                                      chartRenderedEvents: trace.chartRenderedEvents - renderStart,
+                                      tableRedrawCalls: trace.tableRedrawCalls.slice(redrawStart),
+                                    });
+                                  });
+                                  settle();
+                                });
+                              }, { once: true });
+                            });
+                          };
+                        }
+                        """
+                    )
+
+                    initial_layout = page.evaluate(
+                        """
+                        () => {
+                          const main = document.querySelector("main");
+                          const workspace = document.querySelector("#visualArea.histogram-mode .workspace");
+                          const toolbar = document.querySelector("#histogramToolbar");
+                          const toggle = document.querySelector("#histogramToolbarToggleBtn");
+                          const controls = document.querySelector("#histogramWorkspaceControls");
+                          const mainStyle = getComputedStyle(main);
+                          const workspaceStyle = getComputedStyle(workspace);
+                          return {
+                            toolbarDisplay: getComputedStyle(toolbar).display,
+                            toolbarInert: toolbar.hasAttribute("inert"),
+                            toggleDisplay: getComputedStyle(toggle).display,
+                            toggleExpanded: toggle.getAttribute("aria-expanded"),
+                            toggleLabel: toggle.getAttribute("aria-label"),
+                            controlsDisplay: getComputedStyle(controls).display,
+                            mainPadding: [mainStyle.paddingTop, mainStyle.paddingRight, mainStyle.paddingBottom, mainStyle.paddingLeft],
+                            workspaceBorder: workspaceStyle.borderTopWidth,
+                            workspaceRadius: workspaceStyle.borderTopLeftRadius,
+                            workspaceShadow: workspaceStyle.boxShadow,
+                            workspacePadding: [
+                              workspaceStyle.paddingTop,
+                              workspaceStyle.paddingRight,
+                              workspaceStyle.paddingBottom,
+                              workspaceStyle.paddingLeft,
+                            ],
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(initial_layout["toolbarDisplay"], "none")
+                    self.assertTrue(initial_layout["toolbarInert"])
+                    self.assertNotEqual(initial_layout["toggleDisplay"], "none")
+                    self.assertEqual(initial_layout["toggleExpanded"], "false")
+                    self.assertEqual(initial_layout["toggleLabel"], "Show histogram control row")
+                    self.assertNotEqual(initial_layout["controlsDisplay"], "none")
+                    self.assertEqual(initial_layout["mainPadding"], ["0px", "0px", "0px", "0px"])
+                    self.assertEqual(initial_layout["workspaceBorder"], "0px")
+                    self.assertEqual(initial_layout["workspaceRadius"], "0px")
+                    self.assertEqual(initial_layout["workspaceShadow"], "none")
+                    self.assertEqual(initial_layout["workspacePadding"], ["0px", "0px", "0px", "0px"])
+
+                    requests_before_toggle = histogram_requests
+                    page.evaluate("window.__armHistogramToggleTrace()")
+                    page.locator("#histogramToolbarToggleBtn").click()
+                    expand_trace = page.evaluate("window.__histogramToggleTracePromise")
+                    assert_toggle_trace(expand_trace, expanded=True)
+                    self.assertEqual(histogram_requests, requests_before_toggle)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#histogramToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#histogramToolbar")).display !== "none"
+                          && !document.querySelector("#histogramToolbar").hasAttribute("inert")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.mouse.move(0, 0)
+                    before = settings_layout()
+                    self.assertTrue(before["shared"])
+                    self.assertEqual(before["height"], 50)
+                    self.assertTrue(before["labelsReserved"])
+                    self.assertTrue(before["borderless"])
+                    self.assertTrue(before["transparent"])
+                    self.assertTrue(before["activeAccent"])
+                    self.assertTrue(before["activeBold"])
+                    self.assertTrue(before["inactiveMuted"])
+                    self.assertTrue(before["inactiveRegular"])
+                    self.assertTrue(before["captions"])
+                    self.assertEqual(before["binsInputHeight"], "22px")
+                    self.assertEqual(before["binsInputWidth"], "72px")
+                    self.assertEqual(before["binsInputBorderTop"], "0px")
+                    self.assertEqual(before["binsInputBorderBottom"], "0px")
+                    self.assertEqual(before["binsInputRadius"], "0px")
+                    self.assertEqual(before["binsInputBackground"], "rgba(0, 0, 0, 0)")
+                    self.assertTrue(before["binsInputMuted"])
+                    self.assertEqual(before["binsInputFontSize"], "12px")
+                    self.assertEqual(before["binsInputFontWeight"], "400")
+                    self.assertEqual(before["binsInputPlaceholder"], "Auto")
+                    self.assertLessEqual(before["binsHeaderInputDelta"], 1.0)
+                    self.assertTrue(
+                        all(position["labelCenterDelta"] <= 0.5 for position in before["positions"].values())
+                    )
+
+                    bins_focus = page.locator("#histogramBins").evaluate(
+                        """
+                        node => {
+                          node.focus();
+                          const style = getComputedStyle(node);
+                          const accent = getComputedStyle(
+                            document.querySelector('#histogramToolbar .segmented button.active')
+                          ).color;
+                          return {
+                            textAccent: style.color === accent,
+                            borderBottomWidth: style.borderBottomWidth,
+                            outlineWidth: style.outlineWidth,
+                            outlineOffset: style.outlineOffset,
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(bins_focus["textAccent"])
+                    self.assertEqual(bins_focus["borderBottomWidth"], "0px")
+                    self.assertEqual(bins_focus["outlineWidth"], "2px")
+                    self.assertEqual(bins_focus["outlineOffset"], "2px")
+
+                    bins_value_style = page.locator("#histogramBins").evaluate(
+                        """
+                        node => {
+                          const probe = node.cloneNode();
+                          probe.removeAttribute("id");
+                          probe.value = "12";
+                          probe.style.position = "fixed";
+                          probe.style.visibility = "hidden";
+                          document.body.append(probe);
+                          const style = getComputedStyle(probe);
+                          const accent = getComputedStyle(
+                            document.querySelector('#histogramToolbar .segmented button.active')
+                          ).color;
+                          const result = {
+                            textAccent: style.color === accent,
+                            fontWeight: style.fontWeight,
+                          };
+                          probe.remove();
+                          return result;
+                        }
+                        """
+                    )
+                    self.assertTrue(bins_value_style["textAccent"])
+                    self.assertEqual(bins_value_style["fontWeight"], "700")
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '.segmented[data-control="histogramDistribution"] button[data-value="cumulative"]'
+                        ).click()
+                    page.mouse.move(0, 0)
+                    after = settings_layout()
+                    self.assertTrue(after["activeAccent"])
+                    self.assertTrue(after["activeBold"])
+                    self.assertTrue(after["inactiveMuted"])
+                    self.assertTrue(after["inactiveRegular"])
+                    self.assertEqual(after["scrollWidth"], before["scrollWidth"])
+                    self.assertEqual(set(after["positions"]), set(before["positions"]))
+                    for key, before_position in before["positions"].items():
+                        after_position = after["positions"][key]
+                        for dimension in ("left", "top", "width", "height"):
+                            self.assertAlmostEqual(
+                                after_position[dimension],
+                                before_position[dimension],
+                                delta=0.5,
+                            )
+                        self.assertLessEqual(after_position["labelCenterDelta"], 0.5)
+
+                    page.locator("#histogramToolbar").evaluate("node => { node.style.maxWidth = '500px'; }")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#histogramToolbar");
+                          return toolbar.scrollWidth > toolbar.clientWidth
+                            && !toolbar.classList.contains("app-settings-overflow-left")
+                            && toolbar.classList.contains("app-settings-overflow-right");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#histogramToolbar").evaluate(
+                        "node => { node.scrollLeft = (node.scrollWidth - node.clientWidth) / 2; }"
+                    )
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#histogramToolbar");
+                          return toolbar.classList.contains("app-settings-overflow-left")
+                            && toolbar.classList.contains("app-settings-overflow-right");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    fade_state = page.evaluate(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#histogramToolbar");
+                          const style = getComputedStyle(toolbar);
+                          return {
+                            border: style.borderBottomWidth,
+                            maskImage: style.maskImage || style.webkitMaskImage,
+                            maskSize: style.maskSize || style.webkitMaskSize,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(fade_state["border"], "1px")
+                    self.assertEqual(fade_state["maskImage"].count("linear-gradient"), 2)
+                    self.assertIn("100% 1px", fade_state["maskSize"])
+                    page.locator("#histogramToolbar").evaluate(
+                        "node => { node.style.maxWidth = ''; node.scrollLeft = 0; }"
+                    )
+
+                    requests_before_toggle = histogram_requests
+                    page.evaluate("window.__armHistogramToggleTrace()")
+                    page.locator("#histogramToolbarToggleBtn").click()
+                    collapse_trace = page.evaluate("window.__histogramToggleTracePromise")
+                    assert_toggle_trace(collapse_trace, expanded=False)
+                    self.assertEqual(histogram_requests, requests_before_toggle)
+                    self.assertEqual(page.locator("#histogramToolbar").get_attribute("inert"), "")
+
+                    page.evaluate("window.__armHistogramToggleTrace()")
+                    page.locator("#histogramToolbarToggleBtn").click()
+                    reexpand_trace = page.evaluate("window.__histogramToggleTracePromise")
+                    assert_toggle_trace(reexpand_trace, expanded=True)
+                    self.assertEqual(histogram_requests, requests_before_toggle)
+                    self.assertIsNone(page.locator("#histogramToolbar").get_attribute("inert"))
+
+                    page.evaluate(
+                        """
+                        () => {
+                          window.__armHistogramToggleTrace();
+                          const button = document.querySelector("#histogramToolbarToggleBtn");
+                          button.click();
+                          button.click();
+                        }
+                        """
+                    )
+                    rapid_toggle_trace = page.evaluate("window.__histogramToggleTracePromise")
+                    assert_toggle_trace(rapid_toggle_trace, expanded=True)
+                    self.assertEqual(histogram_requests, requests_before_toggle)
+
+                    page.locator("#sidebarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.body.classList.contains("sidebar-collapsed")
+                          && document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_timeout(100)
+                    split_before = splitter_layout()
+                    self.assertEqual(split_before["display"], "block")
+                    self.assertAlmostEqual(split_before["logicalStatsWidth"], 310, delta=0.5)
+                    self.assertAlmostEqual(split_before["stats"]["width"], 310, delta=0.5)
+                    self.assertAlmostEqual(split_before["splitter"]["width"], 12, delta=0.5)
+                    self.assertEqual(split_before["splitter"]["ruleWidth"], 1)
+                    self.assertEqual(split_before["firstHeaderBorderLeft"], 0)
+                    self.assertEqual(split_before["firstCellBorderLeft"], 0)
+                    self.assertEqual(split_before["finalHeaderBorderRight"], 0)
+                    self.assertEqual(split_before["finalCellBorderRight"], 0)
+                    self.assertAlmostEqual(
+                        split_before["chart"]["left"],
+                        split_before["wrap"]["left"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_before["chart"]["right"],
+                        split_before["statsGrid"]["left"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_before["statsGrid"]["right"],
+                        split_before["wrap"]["right"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_before["splitter"]["lineCenter"],
+                        split_before["chart"]["right"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_before["chart"]["right"] - split_before["splitter"]["left"],
+                        6,
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_before["splitter"]["right"] - split_before["chart"]["right"],
+                        6,
+                        delta=0.5,
+                    )
+                    self.assertIsNotNone(split_before["chartPlot"])
+                    self.assertAlmostEqual(split_before["chartPlot"]["top"], 34, delta=0.5)
+                    self.assertAlmostEqual(
+                        split_before["chart"]["top"] + split_before["chartPlot"]["top"],
+                        split_before["statsGrid"]["top"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_before["chart"]["height"],
+                        split_before["stats"]["height"] + 34,
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_before["chart"]["bottom"],
+                        split_before["stats"]["bottom"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_before["chartPlot"]["height"],
+                        split_before["chartRenderedHeight"] - 34 - 92,
+                        delta=0.5,
+                    )
+                    requests_before_drag = histogram_requests
+                    splitter_box = page.locator("#histogramSplitResizer").bounding_box()
+                    self.assertIsNotNone(splitter_box)
+                    assert splitter_box is not None
+                    splitter_x = splitter_box["x"] + splitter_box["width"] / 2
+                    splitter_y = splitter_box["y"] + splitter_box["height"] / 2
+                    page.mouse.move(splitter_x, splitter_y)
+                    page.mouse.down()
+                    page.mouse.move(splitter_x - 60, splitter_y, steps=3)
+                    page.mouse.up()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector(".histogram-stats-panel").getBoundingClientRect().width >= 369
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_timeout(100)
+                    split_after_drag = splitter_layout()
+                    self.assertAlmostEqual(split_after_drag["logicalStatsWidth"], 370, delta=2)
+                    self.assertAlmostEqual(split_after_drag["stats"]["width"], 370, delta=2)
+                    self.assertAlmostEqual(
+                        split_after_drag["chart"]["right"],
+                        split_after_drag["statsGrid"]["left"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_after_drag["splitter"]["lineCenter"],
+                        split_after_drag["chart"]["right"],
+                        delta=0.5,
+                    )
+                    self.assertAlmostEqual(
+                        split_after_drag["chartRenderedWidth"],
+                        split_after_drag["chart"]["width"],
+                        delta=2,
+                    )
+                    self.assertEqual(histogram_requests, requests_before_drag)
+
+                    splitter = page.locator("#histogramSplitResizer")
+                    splitter.focus()
+                    aria_before_key = int(splitter.get_attribute("aria-valuenow") or "0")
+                    page.keyboard.press("ArrowLeft")
+                    page.wait_for_function(
+                        """
+                        (before) => Number(document.querySelector("#histogramSplitResizer")?.getAttribute("aria-valuenow")) === before + 10
+                        """,
+                        arg=aria_before_key,
+                        timeout=10_000,
+                    )
+                    page.keyboard.press("Home")
+                    self.assertEqual(splitter.get_attribute("aria-valuenow"), "240")
+                    page.keyboard.press("End")
+                    retained_width = int(splitter.get_attribute("aria-valuenow") or "0")
+                    self.assertEqual(retained_width, int(splitter.get_attribute("aria-valuemax") or "0"))
+
+                    page.locator("#lineBarTool").click()
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#histogramTool").click()
+                    page.locator("#histogramWrap:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        (width) => Number(document.querySelector("#histogramSplitResizer")?.getAttribute("aria-valuenow")) === width
+                          && document.querySelector("#histogramToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#histogramToolbar")).display !== "none"
+                        """,
+                        arg=retained_width,
+                        timeout=10_000,
+                    )
+
+                    page.set_viewport_size({"width": 420, "height": 800})
+                    page.wait_for_function(
+                        """
+                        () => window.matchMedia("(max-width: 900px)").matches
+                          && getComputedStyle(document.querySelector("#histogramSplitResizer")).display === "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    mobile_layout = splitter_layout()
+                    mobile_status = page.evaluate(
+                        """
+                        () => {
+                          const controls = document.querySelector("#histogramWorkspaceControls").getBoundingClientRect();
+                          const stats = document.querySelector(".histogram-stats-panel").getBoundingClientRect();
+                          return { controlsBottom: controls.bottom, statsTop: stats.top };
+                        }
+                        """
+                    )
+                    self.assertEqual(mobile_layout["display"], "none")
+                    self.assertLessEqual(mobile_layout["stats"]["bottom"], mobile_layout["chart"]["top"] + 0.5)
+                    self.assertGreaterEqual(mobile_status["statsTop"], mobile_status["controlsBottom"] + 4)
+
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_uk_map_overlays_start_collapsed_without_expanded_frame(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
@@ -3213,8 +3945,8 @@ class BrowserSmokeTests(unittest.TestCase):
                                 clientWidth: toolbar.clientWidth,
                                 scrollWidth: toolbar.scrollWidth,
                                 scrollLeft: toolbar.scrollLeft,
-                                left: toolbar.classList.contains("line-bar-settings-overflow-left"),
-                                right: toolbar.classList.contains("line-bar-settings-overflow-right"),
+                                left: toolbar.classList.contains("app-settings-overflow-left"),
+                                right: toolbar.classList.contains("app-settings-overflow-right"),
                                 maskImage: style.maskImage || style.webkitMaskImage,
                                 maskSize: style.maskSize || style.webkitMaskSize,
                                 borderBottomColor: style.borderBottomColor,
@@ -3312,8 +4044,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         () => {
                           const toolbar = document.querySelector("#lineBarToolbar");
                           return toolbar.scrollWidth > toolbar.clientWidth
-                            && !toolbar.classList.contains("line-bar-settings-overflow-left")
-                            && toolbar.classList.contains("line-bar-settings-overflow-right");
+                            && !toolbar.classList.contains("app-settings-overflow-left")
+                            && toolbar.classList.contains("app-settings-overflow-right");
                         }
                         """,
                         timeout=10_000,
@@ -3380,8 +4112,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         """
                         () => {
                           const toolbar = document.querySelector("#lineBarToolbar");
-                          return toolbar.classList.contains("line-bar-settings-overflow-left")
-                            && toolbar.classList.contains("line-bar-settings-overflow-right");
+                          return toolbar.classList.contains("app-settings-overflow-left")
+                            && toolbar.classList.contains("app-settings-overflow-right");
                         }
                         """,
                         timeout=10_000,
@@ -3400,8 +4132,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         """
                         () => {
                           const toolbar = document.querySelector("#lineBarToolbar");
-                          return toolbar.classList.contains("line-bar-settings-overflow-left")
-                            && !toolbar.classList.contains("line-bar-settings-overflow-right");
+                          return toolbar.classList.contains("app-settings-overflow-left")
+                            && !toolbar.classList.contains("app-settings-overflow-right");
                         }
                         """,
                         timeout=10_000,
@@ -6414,6 +7146,14 @@ COPY (
                     page.wait_for_function(
                         """() => document.querySelector("#histogramTool")?.classList.contains("active")
                           && (document.querySelector("#histogramGroupMeta")?.textContent || "").includes("bins")""",
+                        timeout=10_000,
+                    )
+                    page.locator("#histogramToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#histogramToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#histogramToolbar")).display !== "none"
+                        """,
                         timeout=10_000,
                     )
 
@@ -14131,6 +14871,14 @@ COPY (
                 page.locator("#histogramWrap:not(.hidden)").wait_for(timeout=10_000)
                 page.locator("#histogramChart canvas").wait_for(timeout=10_000)
                 page.locator("#histogramStatsGrid .tabulator-row").first.wait_for(timeout=10_000)
+                if page.locator("#histogramToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                    page.locator("#histogramToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """() => document.querySelector("#histogramToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#histogramToolbar")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
                 histogram_grid_border = page.evaluate(
                     """
                     () => {
@@ -14155,8 +14903,8 @@ COPY (
                     """
                 )
                 self.assertEqual(histogram_grid_border["grid"], ["1px", "0px", "0px", "0px"])
-                self.assertEqual(histogram_grid_border["headerLeft"], "1px")
-                self.assertEqual(histogram_grid_border["firstCellLeft"], "1px")
+                self.assertEqual(histogram_grid_border["headerLeft"], "0px")
+                self.assertEqual(histogram_grid_border["firstCellLeft"], "0px")
                 histogram_reference_colors = page.evaluate(
                     """
                     () => {
@@ -14297,26 +15045,37 @@ COPY (
                       const filter = document.querySelector("#histogramFilter").getBoundingClientRect();
                       const header = document.querySelector("#histogramStatsGrid .tabulator-header").getBoundingClientRect();
                       const statsPanel = document.querySelector(".histogram-stats-panel").getBoundingClientRect();
+                      const chartPanel = document.querySelector(".histogram-chart-panel").getBoundingClientRect();
+                      const splitter = document.querySelector("#histogramSplitResizer");
                       return {
                         filterBottom: filter.bottom,
                         groupBottom: group.bottom,
                         headerTop: header.top,
                         statsPanelTop: statsPanel.top,
+                        statsPanelBottom: statsPanel.bottom,
+                        chartPanelTop: chartPanel.top,
+                        splitterDisplay: getComputedStyle(splitter).display,
                       };
                     }
                     """
                 )
                 self.assertGreaterEqual(
-                    histogram_mobile_filter_layout["headerTop"],
+                    histogram_mobile_filter_layout["statsPanelTop"],
                     max(
                         histogram_mobile_filter_layout["filterBottom"],
                         histogram_mobile_filter_layout["groupBottom"],
                     ) + 4,
                     histogram_mobile_filter_layout,
                 )
-                self.assertGreater(
+                self.assertAlmostEqual(
                     histogram_mobile_filter_layout["headerTop"],
-                    histogram_mobile_filter_layout["statsPanelTop"] + 18,
+                    histogram_mobile_filter_layout["statsPanelTop"],
+                    delta=1,
+                )
+                self.assertEqual(histogram_mobile_filter_layout["splitterDisplay"], "none")
+                self.assertLessEqual(
+                    histogram_mobile_filter_layout["statsPanelBottom"],
+                    histogram_mobile_filter_layout["chartPanelTop"] + 0.5,
                     histogram_mobile_filter_layout,
                 )
                 page.set_viewport_size({"width": 1280, "height": 800})

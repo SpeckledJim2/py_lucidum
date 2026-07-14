@@ -225,7 +225,7 @@
         <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 
         <main>
-          <div id="lineBarToolbar" class="toolbar line-bar-settings-strip app-control-strip hidden">
+          <div id="lineBarToolbar" class="toolbar line-bar-settings-strip app-control-strip app-settings-strip hidden">
             <div class="control">
               <h3>Group low weights</h3>
               <div class="segmented" data-control="lowGroup">
@@ -315,39 +315,39 @@
               </div>
             </div>
           </div>
-          <div id="histogramToolbar" class="toolbar hidden">
+          <div id="histogramToolbar" class="toolbar histogram-settings-strip app-control-strip app-settings-strip hidden">
             <div class="control histogram-bin-control">
               <h3>Histogram bins</h3>
-              <input id="histogramBins" class="histogram-bin-input" type="text" inputmode="numeric" placeholder="auto" aria-label="Histogram bins" />
+              <input id="histogramBins" class="histogram-bin-input" type="text" inputmode="numeric" placeholder="Auto" aria-label="Histogram bins" />
             </div>
             <div class="control">
               <h3>Distribution</h3>
               <div class="segmented" data-control="histogramDistribution">
-                <button data-value="incremental" class="active" type="button">Incremental</button>
-                <button data-value="cumulative" type="button">Cumulative</button>
+                <button data-value="incremental" data-stable-label="Incremental" class="active" type="button">Incremental</button>
+                <button data-value="cumulative" data-stable-label="Cumulative" type="button">Cumulative</button>
               </div>
             </div>
             <div class="control">
               <h3>y-axis type</h3>
               <div class="segmented" data-control="histogramYAxis">
-                <button data-value="sum" class="active" type="button">Sum</button>
-                <button data-value="probability" type="button">Probability</button>
+                <button data-value="sum" data-stable-label="Sum" class="active" type="button">Sum</button>
+                <button data-value="probability" data-stable-label="Probability" type="button">Probability</button>
               </div>
             </div>
             <div class="control">
               <h3>log scale</h3>
               <div class="segmented" data-control="histogramLogScale">
-                <button data-value="none" class="active" type="button">-</button>
-                <button data-value="x" type="button">X axis</button>
-                <button data-value="y" type="button">Y axis</button>
-                <button data-value="both" type="button">Both</button>
+                <button data-value="none" data-stable-label="-" class="active" type="button">-</button>
+                <button data-value="x" data-stable-label="X axis" type="button">X axis</button>
+                <button data-value="y" data-stable-label="Y axis" type="button">Y axis</button>
+                <button data-value="both" data-stable-label="Both" type="button">Both</button>
               </div>
             </div>
             <div class="control">
               <h3>Sample data for chart</h3>
               <div class="segmented" data-control="histogramSampleMode">
-                <button data-value="100k" class="active" type="button">Use 100k</button>
-                <button data-value="all" type="button">Use all</button>
+                <button data-value="100k" data-stable-label="Use 100k" class="active" type="button">Use 100k</button>
+                <button data-value="all" data-stable-label="Use all" type="button">Use all</button>
               </div>
             </div>
           </div>
@@ -398,6 +398,17 @@
             <div id="chartControlsResizer" class="chart-controls-resizer app-resizer app-resizer--vertical hidden" role="separator" aria-orientation="vertical" aria-label="Resize chart controls"></div>
 
             <section class="workspace">
+              <div id="histogramWorkspaceControls" class="histogram-workspace-controls hidden">
+                <button id="histogramToolbarToggleBtn" class="histogram-overlay-icon-button app-control-button" type="button" aria-controls="histogramToolbar" aria-expanded="false" aria-label="Show histogram control row" title="Show histogram control row">
+                  <svg class="histogram-tab-icon histogram-chevron-vertical" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="m18 15-6-6-6 6"></path>
+                  </svg>
+                </button>
+                <div class="histogram-workspace-status">
+                  <div id="histogramGroupMeta" class="workspace-meta hidden"></div>
+                  <div id="histogramFilter" class="hidden"><button id="histogramFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="histogramFilterText" class="filter-badge-text">no filter</span></div>
+                </div>
+              </div>
               <div id="lineBarWorkspaceControls" class="line-bar-workspace-controls hidden">
                 <div id="lineBarTabs" class="tabs hidden">
                   <button id="lineBarSideControlsToggleBtn" class="tab line-bar-icon-tab line-bar-overlay-icon-button line-bar-side-controls-toggle app-control-button" type="button" aria-controls="chartSideControls" aria-expanded="true" aria-label="Hide x-axis and Expected controls" title="Hide x-axis and Expected controls">
@@ -432,8 +443,6 @@
                 <div id="datasetViewerFilter" class="hidden"><button id="datasetViewerFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="datasetViewerFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="profileGroupMeta" class="workspace-meta"></div>
                 <div id="profileFilter" class="hidden"><button id="profileFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="profileFilterText" class="filter-badge-text">no filter</span></div>
-                <div id="histogramGroupMeta" class="workspace-meta hidden"></div>
-                <div id="histogramFilter" class="hidden"><button id="histogramFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="histogramFilterText" class="filter-badge-text">no filter</span></div>
                 <div id="modelToolGroupMeta" class="workspace-meta hidden"></div>
                 <div id="modelToolFilter" class="hidden">no filter</div>
               </div>
@@ -443,6 +452,7 @@
                 <section class="histogram-stats-panel" aria-label="Histogram metrics">
                   <div id="histogramStatsGrid" class="histogram-grid"></div>
                 </section>
+                <div id="histogramSplitResizer" class="histogram-split-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize histogram metrics table and chart" aria-controls="histogramStatsGrid histogramChart" aria-valuemin="240" aria-valuemax="560" aria-valuenow="310" tabindex="0"></div>
                 <section class="histogram-chart-panel" aria-label="Histogram chart">
                   <div id="histogramChart"></div>
                 </section>

@@ -109,6 +109,7 @@
         sidebarVisible: initialSidebarVisible(),
         lineBarSideControlsCollapsed: true,
         lineBarToolbarCollapsed: true,
+        histogramToolbarCollapsed: true,
         bandWidth: "0",
         quantileMode: "off",
         previousBandWidthsByFeature: {},
@@ -1674,7 +1675,6 @@
         gbmTool.syncSidebarFromSchema();
         syncSidebarAccordion();
         syncFavouriteActionButtons();
-        el("histogramToolbar").classList.toggle("hidden", tool !== "histogram");
         el("visualArea").classList.toggle("line-bar-mode", tool === "line_bar");
         el("visualArea").classList.toggle("map-mode", tool === "uk_map");
         el("visualArea").classList.toggle("dataset-viewer-mode", tool === "dataset_viewer");
@@ -1685,6 +1685,7 @@
         el("lineBarWorkspaceControls").classList.toggle("hidden", tool !== "line_bar");
         el("lineBarTabs").classList.toggle("hidden", tool !== "line_bar");
         syncLineBarLayoutVisibility();
+        syncHistogramLayoutVisibility();
         el("datasetViewerGroupMeta").classList.toggle("hidden", tool !== "dataset_viewer");
         el("datasetViewerFilter").classList.toggle("hidden", tool !== "dataset_viewer");
         el("profileGroupMeta").classList.toggle("hidden", tool !== "column_profile");
@@ -1886,6 +1887,68 @@
         el("lineBarSideControlsToggleBtn")?.addEventListener("click", toggleLineBarSideControls);
         el("lineBarToolbarToggleBtn")?.addEventListener("click", toggleLineBarToolbar);
         syncLineBarLayoutVisibility();
+      }
+
+      function toggleHistogramToolbar() {
+        setHistogramToolbarCollapsed(!state.histogramToolbarCollapsed);
+      }
+
+      function setHistogramToolbarCollapsed(collapsed) {
+        const nextCollapsed = Boolean(collapsed);
+        if (state.histogramToolbarCollapsed === nextCollapsed) {
+          syncHistogramLayoutVisibility();
+          scheduleHistogramLayoutResize();
+          return;
+        }
+        state.histogramToolbarCollapsed = nextCollapsed;
+        syncHistogramLayoutVisibility();
+        scheduleHistogramLayoutResize();
+      }
+
+      function setupHistogramLayoutToggle() {
+        el("histogramToolbarToggleBtn")?.addEventListener("click", toggleHistogramToolbar);
+        syncHistogramLayoutVisibility();
+      }
+
+      function syncHistogramLayoutVisibility() {
+        const histogramActive = state.tool === "histogram";
+        const toolbarCollapsed = histogramActive && state.histogramToolbarCollapsed;
+        const toolbar = el("histogramToolbar");
+        const workspaceControls = el("histogramWorkspaceControls");
+
+        toolbar.classList.toggle("hidden", !histogramActive || toolbarCollapsed);
+        toolbar.toggleAttribute("inert", !histogramActive || toolbarCollapsed);
+        if (toolbarCollapsed && toolbar.contains(document.activeElement)) {
+          document.activeElement?.blur?.();
+        }
+        workspaceControls.classList.toggle("hidden", !histogramActive);
+        workspaceControls.toggleAttribute("inert", !histogramActive);
+        if (histogramActive) {
+          workspaceControls.removeAttribute("aria-hidden");
+        } else {
+          workspaceControls.setAttribute("aria-hidden", "true");
+        }
+        syncHistogramToolbarToggle();
+      }
+
+      function syncHistogramToolbarToggle() {
+        const button = el("histogramToolbarToggleBtn");
+        if (!button) return;
+        const collapsed = state.histogramToolbarCollapsed;
+        const label = collapsed ? "Show histogram control row" : "Hide histogram control row";
+        button.setAttribute("aria-expanded", String(!collapsed));
+        button.setAttribute("aria-label", label);
+        button.title = label;
+      }
+
+      let histogramLayoutResizeFrame = null;
+
+      function scheduleHistogramLayoutResize() {
+        if (histogramLayoutResizeFrame !== null) return;
+        histogramLayoutResizeFrame = requestAnimationFrame(() => {
+          histogramLayoutResizeFrame = null;
+          histogramTool.resize();
+        });
       }
 
       function syncLineBarLayoutVisibility() {
@@ -4383,6 +4446,7 @@
         setupChartControlsResize();
         setupChartControlHeightsResize();
         setupLineBarLayoutToggles();
+        setupHistogramLayoutToggle();
         ukMapTool.bindControls();
         histogramTool.bindControls();
         syncSidebarToggleButton();

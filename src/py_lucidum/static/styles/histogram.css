@@ -3,33 +3,159 @@
         --histogram-median-color: #1f7a8c;
       }
 
+      main:has(> #visualArea.histogram-mode) {
+        background: var(--panel);
+        padding: 0;
+      }
+
       .visual-area.histogram-mode {
         grid-template-columns: minmax(0, 1fr);
       }
 
+      .visual-area.histogram-mode .workspace {
+        background: var(--panel);
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+        min-width: 0;
+        padding: 0;
+      }
+
       .histogram-bin-control {
-        min-width: 150px;
+        min-width: 112px;
       }
 
       .histogram-bin-input {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        caret-color: var(--accent);
+        color: var(--muted);
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: 22px;
+        line-height: 22px;
+        margin-left: var(--app-control-button-padding-inline);
+        padding: 0;
+        width: 72px;
+      }
+
+      .histogram-bin-input::placeholder {
+        color: var(--muted);
+        opacity: 1;
+      }
+
+      .histogram-bin-input:not(:placeholder-shown) {
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .app input.histogram-bin-input:focus {
+        color: var(--accent);
+      }
+
+      .app input.histogram-bin-input:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white) !important;
+        outline-offset: 2px;
+      }
+
+      .histogram-workspace-controls {
+        align-items: center;
+        display: flex;
+        gap: var(--app-control-strip-gap);
+        height: 28px;
+        left: 8px;
+        overflow: hidden;
+        position: absolute;
+        right: 8px;
+        top: 6px;
+        z-index: 5;
+      }
+
+      .histogram-overlay-icon-button {
+        align-items: center;
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        display: inline-grid;
+        flex: 0 0 auto;
         height: 24px;
-        max-width: 132px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: var(--panel);
-        color: var(--text);
-        font-size: 12px;
-        padding: 0 8px;
+        justify-content: center;
+        min-height: 24px;
+        min-width: 28px;
+        padding: 0;
+        width: 28px;
+      }
+
+      .histogram-overlay-icon-button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .histogram-overlay-icon-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .histogram-tab-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
+      }
+
+      #histogramToolbarToggleBtn[aria-expanded="false"] .histogram-chevron-vertical {
+        transform: rotate(180deg);
+      }
+
+      .histogram-workspace-status {
+        align-content: center;
+        display: grid;
+        flex: 1 1 auto;
+        gap: 2px;
+        grid-template-rows: 13px 13px;
+        justify-items: end;
+        margin-left: auto;
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+      }
+
+      .histogram-workspace-status .workspace-meta,
+      .histogram-workspace-status #histogramFilter {
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .histogram-workspace-status #histogramFilter {
+        box-sizing: border-box;
+        height: 13px;
+        padding-block: 0;
       }
 
       .histogram-wrap {
         display: grid;
-        grid-template-columns: minmax(240px, 310px) minmax(0, 1fr);
-        gap: 10px;
-        height: 100%;
+        flex: 1 1 auto;
+        grid-template-columns: minmax(0, 1fr) minmax(240px, var(--histogram-stats-width, 310px));
+        height: auto;
         min-height: 0;
         min-width: 0;
-        padding-top: 22px;
+        padding-top: 40px;
+        position: relative;
       }
 
       .histogram-stats-panel,
@@ -41,11 +167,36 @@
       .histogram-stats-panel {
         display: flex;
         flex-direction: column;
+        grid-column: 2;
+        grid-row: 1;
       }
 
       .histogram-chart-panel {
         background: var(--panel);
         border: 0;
+        grid-column: 1;
+        grid-row: 1;
+        margin-top: -34px;
+      }
+
+      .histogram-split-resizer {
+        bottom: 0;
+        cursor: col-resize;
+        left: calc(100% - var(--histogram-stats-width, 310px));
+        min-width: 12px;
+        position: absolute;
+        top: 40px;
+        transform: translateX(-50%);
+        width: 12px;
+        z-index: 4;
+      }
+
+      .histogram-split-resizer::before {
+        background: var(--line);
+        border-radius: 0;
+        bottom: 0;
+        top: 0;
+        width: 1px;
       }
 
       #histogramChart {
@@ -121,7 +272,7 @@
       }
 
       .histogram-grid.tabulator .tabulator-header .tabulator-col[tabulator-field="statistic"] {
-        border-left: 1px solid var(--line) !important;
+        border-left: 0 !important;
       }
 
       .histogram-grid.tabulator .tabulator-header .tabulator-col .tabulator-col-content {
@@ -134,6 +285,10 @@
       .histogram-grid.tabulator .tabulator-header .tabulator-col[tabulator-field="value"] .tabulator-col-content {
         justify-content: flex-end;
         text-align: right;
+      }
+
+      .histogram-grid.tabulator .tabulator-header .tabulator-col[tabulator-field="value"] {
+        border-right: 0 !important;
       }
 
       .histogram-grid .tabulator-row,
@@ -157,10 +312,11 @@
       }
 
       .histogram-grid .tabulator-row .tabulator-cell[tabulator-field="statistic"] {
-        border-left: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+        border-left: 0;
       }
 
       .histogram-grid .tabulator-row .tabulator-cell[tabulator-field="value"] {
+        border-right: 0 !important;
         justify-content: flex-end;
         text-align: right;
       }
@@ -180,6 +336,17 @@
         }
 
         .histogram-stats-panel {
-          padding-top: 22px;
+          grid-column: 1;
+          grid-row: 1;
+        }
+
+        .histogram-chart-panel {
+          grid-column: 1;
+          grid-row: 2;
+          margin-top: 0;
+        }
+
+        .histogram-split-resizer {
+          display: none;
         }
       }

@@ -1,4 +1,5 @@
 import { loadTabulator } from "./shared/tabulator.js";
+import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
 
 const HISTOGRAM_BINS_REFRESH_DELAY_MS = 250;
 const DEFAULT_HISTOGRAM_MEAN_COLOR = "#d13f3f";
@@ -8,6 +9,12 @@ const HISTOGRAM_MEDIAN_ROW_CLASS = "histogram-stat-median-row";
 const HISTOGRAM_X_AXIS_MIN_LABELS = 8;
 const HISTOGRAM_X_AXIS_MAX_LABELS = 20;
 const HISTOGRAM_X_AXIS_LABEL_PX = 48;
+const HISTOGRAM_STATS_DEFAULT_WIDTH = 310;
+const HISTOGRAM_STATS_MIN_WIDTH = 240;
+const HISTOGRAM_STATS_MAX_WIDTH = 560;
+const HISTOGRAM_CHART_MIN_WIDTH = 420;
+const HISTOGRAM_SPLITTER_KEY_STEP = 10;
+const HISTOGRAM_STACKED_MEDIA = "(max-width: 900px)";
 
 export function createHistogramTool({
   api,
@@ -38,6 +45,8 @@ export function createHistogramTool({
   let statsTable = null;
   let statsRenderToken = 0;
   let histogramBinsRefreshTimer = null;
+  let histogramStatsWidth = HISTOGRAM_STATS_DEFAULT_WIDTH;
+  let histogramChartResizeFrame = null;
 
   function syncSegmented(control, value) {
     const group = document.querySelector(`.segmented[data-control="${control}"]`);
@@ -266,7 +275,7 @@ export function createHistogramTool({
           trigger: "item",
           formatter: histogramTooltip,
         },
-        grid: { left: 72, right: 30, top: 42, bottom: 92, containLabel: false },
+        grid: { left: 72, right: 30, top: 34, bottom: 92, containLabel: false },
         xAxis: {
           type: xLog ? "log" : "value",
           name: data.response?.label || data.actual || "Actual",
@@ -511,6 +520,8 @@ export function createHistogramTool({
   }
 
   function bindControls() {
+    bindSettingsStripOverflowCue(el("histogramToolbar"));
+    bindHistogramSplitResize();
     ["histogramDistribution", "histogramYAxis", "histogramLogScale", "histogramSampleMode"].forEach((control) => {
       const group = document.querySelector(`.segmented[data-control="${control}"]`);
       if (!group) return;
@@ -532,6 +543,102 @@ export function createHistogramTool({
       scheduleHistogramBinsRefresh({ immediate: true });
     });
     el("histogramBins").addEventListener("blur", () => scheduleHistogramBinsRefresh({ immediate: true }));
+  }
+
+  function bindHistogramSplitResize() {
+    const resizer = el("histogramSplitResizer");
+    if (!resizer) return;
+    let dragging = false;
+    let startX = 0;
+    let startWidth = histogramStatsWidth;
+
+    resizer.addEventListener("pointerdown", (event) => {
+      if (window.matchMedia(HISTOGRAM_STACKED_MEDIA).matches) return;
+      event.preventDefault();
+      dragging = true;
+      startX = event.clientX;
+      startWidth = histogramStatsWidth;
+      resizer.classList.add("dragging");
+      document.body.classList.add("resizing-chart-controls");
+      resizer.setPointerCapture(event.pointerId);
+      window.getSelection()?.removeAllRanges();
+    });
+    resizer.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      event.preventDefault();
+      setHistogramStatsWidth(startWidth - (event.clientX - startX));
+    });
+    const finishDrag = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove("dragging");
+      document.body.classList.remove("resizing-chart-controls");
+      window.getSelection()?.removeAllRanges();
+      if (event.pointerId !== undefined) {
+        try {
+          resizer.releasePointerCapture(event.pointerId);
+        } catch (_) {
+        }
+      }
+      scheduleHistogramChartResize();
+    };
+    resizer.addEventListener("pointerup", finishDrag);
+    resizer.addEventListener("pointercancel", finishDrag);
+    resizer.addEventListener("keydown", (event) => {
+      if (window.matchMedia(HISTOGRAM_STACKED_MEDIA).matches) return;
+      const bounds = histogramStatsWidthBounds();
+      let nextWidth = null;
+      if (event.key === "ArrowLeft") nextWidth = histogramStatsWidth + HISTOGRAM_SPLITTER_KEY_STEP;
+      if (event.key === "ArrowRight") nextWidth = histogramStatsWidth - HISTOGRAM_SPLITTER_KEY_STEP;
+      if (event.key === "Home") nextWidth = bounds.min;
+      if (event.key === "End") nextWidth = bounds.max;
+      if (nextWidth === null) return;
+      event.preventDefault();
+      setHistogramStatsWidth(nextWidth);
+    });
+    setHistogramStatsWidth(histogramStatsWidth, { resize: false });
+  }
+
+  function histogramStatsWidthBounds() {
+    const availableWidth = el("histogramWrap")?.getBoundingClientRect().width || window.innerWidth;
+    const max = Math.max(
+      HISTOGRAM_STATS_MIN_WIDTH,
+      Math.min(
+        HISTOGRAM_STATS_MAX_WIDTH,
+        availableWidth - HISTOGRAM_CHART_MIN_WIDTH,
+      ),
+    );
+    return { min: HISTOGRAM_STATS_MIN_WIDTH, max };
+  }
+
+  function setHistogramStatsWidth(rawWidth, { resize = true } = {}) {
+    const bounds = histogramStatsWidthBounds();
+    histogramStatsWidth = Math.min(Math.max(Number(rawWidth) || HISTOGRAM_STATS_DEFAULT_WIDTH, bounds.min), bounds.max);
+    document.documentElement.style.setProperty("--histogram-stats-width", `${Math.round(histogramStatsWidth)}px`);
+    const resizer = el("histogramSplitResizer");
+    resizer?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+    resizer?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+    resizer?.setAttribute("aria-valuenow", String(Math.round(histogramStatsWidth)));
+    if (resize) scheduleHistogramChartResize();
+    return histogramStatsWidth;
+  }
+
+  function redrawStatsLayoutFallback() {
+    if (typeof ResizeObserver !== "function") statsTable?.redraw?.(true);
+  }
+
+  function resizeHistogramChart({ flush = false } = {}) {
+    chart.resize();
+    if (flush) chart.getZr?.().flush?.();
+    redrawStatsLayoutFallback();
+  }
+
+  function scheduleHistogramChartResize() {
+    if (histogramChartResizeFrame !== null) return;
+    histogramChartResizeFrame = requestAnimationFrame(() => {
+      histogramChartResizeFrame = null;
+      resizeHistogramChart();
+    });
   }
 
   function refreshHistogram(options = {}) {
@@ -562,8 +669,10 @@ export function createHistogramTool({
   }
 
   function resize() {
-    chart.resize();
-    statsTable?.redraw?.(true);
+    if (!window.matchMedia(HISTOGRAM_STACKED_MEDIA).matches) {
+      setHistogramStatsWidth(histogramStatsWidth, { resize: false });
+    }
+    resizeHistogramChart({ flush: true });
   }
 
   function refreshTheme() {

@@ -1019,6 +1019,170 @@
         right: 0;
       }
 
+      .app-settings-strip.toolbar {
+        --app-settings-edge-fade: 24px;
+        align-items: stretch;
+        background: var(--panel);
+        border-bottom: var(--app-control-strip-divider-width) solid var(--line);
+        gap: 0;
+        height: var(--app-control-strip-height);
+        margin: 0;
+        min-height: var(--app-control-strip-height);
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding: 0 var(--app-control-strip-padding-inline);
+      }
+
+      .app-settings-strip.app-control-strip::after {
+        content: none;
+      }
+
+      .app-settings-strip.app-settings-overflow-right {
+        -webkit-mask-image:
+          linear-gradient(
+            to right,
+            #000 0,
+            #000 calc(100% - var(--app-settings-edge-fade)),
+            transparent 100%
+          ),
+          linear-gradient(#000, #000);
+        mask-image:
+          linear-gradient(
+            to right,
+            #000 0,
+            #000 calc(100% - var(--app-settings-edge-fade)),
+            transparent 100%
+          ),
+          linear-gradient(#000, #000);
+      }
+
+      .app-settings-strip.app-settings-overflow-left {
+        -webkit-mask-image:
+          linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--app-settings-edge-fade),
+            #000 100%
+          ),
+          linear-gradient(#000, #000);
+        mask-image:
+          linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--app-settings-edge-fade),
+            #000 100%
+          ),
+          linear-gradient(#000, #000);
+      }
+
+      .app-settings-strip.app-settings-overflow-left.app-settings-overflow-right {
+        -webkit-mask-image:
+          linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--app-settings-edge-fade),
+            #000 calc(100% - var(--app-settings-edge-fade)),
+            transparent 100%
+          ),
+          linear-gradient(#000, #000);
+        mask-image:
+          linear-gradient(
+            to right,
+            transparent 0,
+            #000 var(--app-settings-edge-fade),
+            #000 calc(100% - var(--app-settings-edge-fade)),
+            transparent 100%
+          ),
+          linear-gradient(#000, #000);
+      }
+
+      .app-settings-strip.app-settings-overflow-left,
+      .app-settings-strip.app-settings-overflow-right {
+        -webkit-mask-position: 0 0, 0 100%;
+        mask-position: 0 0, 0 100%;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-size:
+          100% calc(100% - var(--app-control-strip-divider-width)),
+          100% var(--app-control-strip-divider-width);
+        mask-size:
+          100% calc(100% - var(--app-control-strip-divider-width)),
+          100% var(--app-control-strip-divider-width);
+      }
+
+      .app-settings-strip > .control {
+        align-items: flex-start;
+        background: transparent;
+        border: 0;
+        border-left: 1px solid var(--line);
+        border-radius: 0;
+        box-shadow: none;
+        display: flex;
+        flex-direction: column;
+        height: var(--app-control-strip-height);
+        justify-content: center;
+        padding: 7px 8px 1px;
+      }
+
+      .app-settings-strip > .control:first-child {
+        border-left: 0;
+        padding-left: 0;
+      }
+
+      .app-settings-strip > .control h3 {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1;
+        margin: 0 0 5px;
+        padding-inline-start: var(--app-control-button-padding-inline);
+      }
+
+      .app-settings-strip .segmented button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        color: var(--muted);
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: 24px;
+        line-height: 1.2;
+        min-height: 24px;
+        padding: 2px var(--app-control-button-padding-inline);
+        text-align: center;
+      }
+
+      .app-settings-strip .segmented button::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .app-settings-strip .segmented button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .app-settings-strip .segmented button:focus-visible {
+        background: transparent;
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .app-settings-strip .segmented button.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
       .app-control-strip-row {
         align-items: center;
         display: flex;
