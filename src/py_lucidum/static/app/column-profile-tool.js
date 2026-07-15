@@ -158,10 +158,10 @@ export function createColumnProfileTool({
       : "";
     el("profileWrap").innerHTML = `
       <div class="profile-toolbar app-control-strip app-control-strip-row">
-        ${profileSummaryActionsHtml(data)}
         <div class="profile-column-search-row">
           <input id="profileColumnSearch" class="search profile-column-search app-control-input" type="search" placeholder="Search columns" aria-label="Search profile columns" autocomplete="off" value="${escapeHtml(state.profileColumnSearch || "")}" />
         </div>
+        ${profileSummaryActionsHtml()}
         <div id="profileMeta" class="profile-meta"></div>
       </div>
       <div class="profile-content"${splitStyle}>
@@ -352,14 +352,14 @@ export function createColumnProfileTool({
   function bindProfileSummaryModeControl() {
     const group = el("profileSummaryMode");
     if (!group) return;
-    group.querySelectorAll('input[name="profileSummaryMode"]').forEach((input) => {
-      input.addEventListener("change", handleProfileSummaryModeChange);
+    group.querySelectorAll("[data-profile-summary-mode]").forEach((button) => {
+      button.addEventListener("click", handleProfileSummaryModeChange);
     });
     syncProfileSummaryModeControl(false);
   }
 
   async function handleProfileSummaryModeChange(event) {
-    const nextMode = normaliseProfileSummaryMode(event.target?.value);
+    const nextMode = normaliseProfileSummaryMode(event.currentTarget?.dataset.profileSummaryMode);
     if (nextMode === profileSummaryMode()) {
       syncProfileSummaryModeControl(false);
       return;
@@ -388,11 +388,11 @@ export function createColumnProfileTool({
     if (!group) return;
     const selected = profileSummaryMode();
     group.setAttribute("aria-disabled", String(Boolean(disabled)));
-    group.querySelectorAll('input[name="profileSummaryMode"]').forEach((input) => {
-      const active = normaliseProfileSummaryMode(input.value) === selected;
-      input.checked = active;
-      input.disabled = Boolean(disabled);
-      input.closest(".profile-summary-mode-option")?.classList.toggle("active", active);
+    group.querySelectorAll("[data-profile-summary-mode]").forEach((button) => {
+      const active = normaliseProfileSummaryMode(button.dataset.profileSummaryMode) === selected;
+      button.disabled = Boolean(disabled);
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
     });
   }
 
@@ -482,19 +482,13 @@ export function createColumnProfileTool({
     window.removeEventListener("keydown", closeProfileSkippedPopoverOnEscape, true);
   }
 
-  function profileSummaryActionsHtml(data) {
+  function profileSummaryActionsHtml() {
     const selected = profileSummaryMode();
     return `
       <div class="profile-summary-actions">
-        <div id="profileSummaryMode" class="profile-summary-mode" role="radiogroup" aria-label="Profile calculation rows">
-          <label class="profile-summary-mode-option app-control-button ${selected === "auto" ? "active" : ""}">
-            <input type="radio" name="profileSummaryMode" value="auto" ${selected === "auto" ? "checked" : ""} />
-            <span>Use 100k</span>
-          </label>
-          <label class="profile-summary-mode-option app-control-button ${selected === "full" ? "active" : ""}">
-            <input type="radio" name="profileSummaryMode" value="full" ${selected === "full" ? "checked" : ""} />
-            <span>Use all rows</span>
-          </label>
+        <div id="profileSummaryMode" class="profile-summary-mode" role="group" aria-label="Profile calculation rows">
+          <button type="button" class="profile-summary-mode-option app-control-button ${selected === "auto" ? "active" : ""}" data-profile-summary-mode="auto" data-stable-label="Use 100k" aria-pressed="${String(selected === "auto")}">Use 100k</button>
+          <button type="button" class="profile-summary-mode-option app-control-button ${selected === "full" ? "active" : ""}" data-profile-summary-mode="full" data-stable-label="Use all rows" aria-pressed="${String(selected === "full")}">Use all rows</button>
         </div>
       </div>
     `;

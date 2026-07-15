@@ -122,6 +122,7 @@
       }
 
       .profile-summary-actions {
+        display: flex;
         flex: 0 0 auto;
       }
 
@@ -137,42 +138,58 @@
       .profile-summary-mode {
         display: flex;
         flex-wrap: nowrap;
-        gap: 3px;
+        gap: 0;
       }
 
       .profile-summary-mode-option {
-        align-items: center;
-        background: var(--panel-2);
-        border: 1px solid var(--line);
-        border-radius: 5px;
-        color: var(--text);
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        color: var(--muted);
         cursor: pointer;
-        display: inline-flex;
-        justify-content: center;
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: 24px;
+        line-height: 1.2;
+        min-height: 24px;
+        padding: 2px 3px;
         position: relative;
+        text-align: center;
+      }
+
+      .profile-summary-mode-option::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .profile-summary-mode-option:not(:disabled):hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .profile-summary-mode-option:focus-visible {
+        background: transparent;
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
       }
 
       .profile-summary-mode-option.active {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: white;
-      }
-
-      .profile-summary-mode-option:focus-within {
-        outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
-        outline-offset: 2px;
-      }
-
-      .profile-summary-mode-option input {
-        height: 1px;
-        opacity: 0;
-        pointer-events: none;
-        position: absolute;
-        width: 1px;
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
       }
 
       .profile-summary-mode[aria-disabled="true"] .profile-summary-mode-option {
-        cursor: wait;
+        cursor: pointer;
         opacity: 0.7;
       }
 

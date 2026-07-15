@@ -1470,7 +1470,7 @@ class BrowserSmokeTests(unittest.TestCase):
                                 self.assertEqual(profile_mobile_layout["detailLeftBorder"], "0px")
                                 self.assertEqual(profile_mobile_layout["detailBottomBorder"], "1px")
                                 self.assertEqual(profile_mobile_layout["resizerDisplay"], "none")
-                                self.assertEqual(profile_mobile_layout["controlHeights"], [28, 28, 28])
+                                self.assertEqual(profile_mobile_layout["controlHeights"], [24, 24, 28])
                                 self.assertTrue(profile_mobile_layout["tableIsScrollable"])
                                 self.assertEqual(profile_mobile_layout["tableRowHeights"], [22, 22])
                                 self.assertTrue(profile_mobile_layout["toolbarHasNoOverflow"])
@@ -2096,7 +2096,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         ):
                             self.assertAlmostEqual(profile_geometry[edge_gap], 0, delta=0.5)
                         self.assertTrue(profile_geometry["buttonsShared"])
-                        self.assertEqual(profile_geometry["buttonHeights"], [28, 28])
+                        self.assertEqual(profile_geometry["buttonHeights"], [24, 24])
                         self.assertTrue(all(delta <= 0.1 for delta in profile_geometry["buttonCenterDeltas"]))
                         self.assertTrue(profile_geometry["searchShared"])
                         self.assertEqual(profile_geometry["searchHeight"], 28)
@@ -14495,13 +14495,131 @@ COPY (
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")
-                self.assertTrue(page.locator('input[name="profileSummaryMode"][value="auto"]').is_checked())
+                profile_mode_geometry = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector(".profile-toolbar");
+                      const search = document.querySelector("#profileColumnSearch");
+                      const meta = document.querySelector("#profileMeta");
+                      const buttons = [...document.querySelectorAll(".profile-summary-mode-option")];
+                      const tokenColor = (token) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = `var(${token})`;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
+                      const geometry = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                      };
+                      return {
+                        accent: tokenColor("--accent"),
+                        muted: tokenColor("--muted"),
+                        buttons: buttons.map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          const range = document.createRange();
+                          range.selectNodeContents(button.firstChild);
+                          const labelRect = range.getBoundingClientRect();
+                          const style = getComputedStyle(button);
+                          return {
+                            background: style.backgroundColor,
+                            borderWidths: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+                            color: style.color,
+                            fontSize: style.fontSize,
+                            fontWeight: style.fontWeight,
+                            geometry: geometry(button),
+                            label: button.textContent.trim(),
+                            labelCenterDelta: Math.abs((labelRect.left + labelRect.width / 2) - (rect.left + rect.width / 2)),
+                            paddingLeft: style.paddingLeft,
+                            paddingRight: style.paddingRight,
+                            pressed: button.getAttribute("aria-pressed"),
+                            stableLabel: button.dataset.stableLabel,
+                          };
+                        }),
+                        meta: geometry(meta),
+                        search: geometry(search),
+                        searchBeforeButtons: search.getBoundingClientRect().right <= buttons[0].getBoundingClientRect().left,
+                        toolbarScrollWidth: toolbar.scrollWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(profile_mode_geometry["searchBeforeButtons"])
+                self.assertEqual([button["label"] for button in profile_mode_geometry["buttons"]], ["Use 100k", "Use all rows"])
+                self.assertEqual([button["stableLabel"] for button in profile_mode_geometry["buttons"]], ["Use 100k", "Use all rows"])
+                self.assertEqual([button["pressed"] for button in profile_mode_geometry["buttons"]], ["true", "false"])
+                self.assertEqual([button["fontSize"] for button in profile_mode_geometry["buttons"]], ["12px", "12px"])
+                self.assertEqual([button["fontWeight"] for button in profile_mode_geometry["buttons"]], ["700", "400"])
+                self.assertEqual([button["paddingLeft"] for button in profile_mode_geometry["buttons"]], ["3px", "3px"])
+                self.assertEqual([button["paddingRight"] for button in profile_mode_geometry["buttons"]], ["3px", "3px"])
+                first_mode_button = profile_mode_geometry["buttons"][0]["geometry"]
+                second_mode_button = profile_mode_geometry["buttons"][1]["geometry"]
+                self.assertAlmostEqual(
+                    second_mode_button["x"],
+                    first_mode_button["x"] + first_mode_button["width"],
+                    delta=0.5,
+                )
+                self.assertEqual(
+                    [button["color"] for button in profile_mode_geometry["buttons"]],
+                    [profile_mode_geometry["accent"], profile_mode_geometry["muted"]],
+                )
+                self.assertTrue(all(button["background"] == "rgba(0, 0, 0, 0)" for button in profile_mode_geometry["buttons"]))
+                self.assertTrue(all(button["borderWidths"] == ["0px"] * 4 for button in profile_mode_geometry["buttons"]))
+                self.assertTrue(all(button["labelCenterDelta"] <= 0.5 for button in profile_mode_geometry["buttons"]))
+                disabled_mode_cursor = page.locator('[data-profile-summary-mode="full"]').evaluate(
+                    """
+                    button => {
+                      const group = button.closest("#profileSummaryMode");
+                      button.disabled = true;
+                      group.setAttribute("aria-disabled", "true");
+                      const cursor = getComputedStyle(button).cursor;
+                      button.disabled = false;
+                      group.setAttribute("aria-disabled", "false");
+                      return cursor;
+                    }
+                    """
+                )
+                self.assertEqual(disabled_mode_cursor, "pointer")
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_full_request_info:
                     page.locator(".profile-summary-mode-option", has_text="Use all rows").click()
                 profile_full_payload = json.loads(profile_full_request_info.value.post_data or "{}")
                 self.assertEqual(profile_full_payload["mode"], "full")
-                page.locator('input[name="profileSummaryMode"][value="full"]').wait_for(state="attached", timeout=10_000)
-                self.assertTrue(page.locator('input[name="profileSummaryMode"][value="full"]').is_checked())
+                page.locator('[data-profile-summary-mode="full"][aria-pressed="true"]').wait_for(state="attached", timeout=10_000)
+                profile_mode_geometry_after = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector(".profile-toolbar");
+                      const search = document.querySelector("#profileColumnSearch");
+                      const meta = document.querySelector("#profileMeta");
+                      const buttons = [...document.querySelectorAll(".profile-summary-mode-option")];
+                      const geometry = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                      };
+                      return {
+                        buttons: buttons.map((button) => ({
+                          fontWeight: getComputedStyle(button).fontWeight,
+                          geometry: geometry(button),
+                          pressed: button.getAttribute("aria-pressed"),
+                        })),
+                        meta: geometry(meta),
+                        search: geometry(search),
+                        toolbarScrollWidth: toolbar.scrollWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual([button["pressed"] for button in profile_mode_geometry_after["buttons"]], ["false", "true"])
+                self.assertEqual([button["fontWeight"] for button in profile_mode_geometry_after["buttons"]], ["400", "700"])
+                self.assertEqual(
+                    [button["geometry"] for button in profile_mode_geometry_after["buttons"]],
+                    [button["geometry"] for button in profile_mode_geometry["buttons"]],
+                )
+                self.assertEqual(profile_mode_geometry_after["search"], profile_mode_geometry["search"])
+                self.assertEqual(profile_mode_geometry_after["meta"], profile_mode_geometry["meta"])
+                self.assertEqual(profile_mode_geometry_after["toolbarScrollWidth"], profile_mode_geometry["toolbarScrollWidth"])
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_filter_request_info:
                     page.evaluate(
@@ -14531,15 +14649,13 @@ COPY (
                     timeout=10_000,
                 )
                 assert_filter_badge_clear("#profileFilterClearBtn", "#profileFilterText", True)
-                page.locator('input[name="profileSummaryMode"][value="full"]').wait_for(state="attached", timeout=10_000)
-                self.assertTrue(page.locator('input[name="profileSummaryMode"][value="full"]').is_checked())
+                page.locator('[data-profile-summary-mode="full"][aria-pressed="true"]').wait_for(state="attached", timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_auto_request_info:
                     page.locator(".profile-summary-mode-option", has_text="Use 100k").click()
                 profile_auto_payload = json.loads(profile_auto_request_info.value.post_data or "{}")
                 self.assertEqual(profile_auto_payload["mode"], "auto")
-                page.locator('input[name="profileSummaryMode"][value="auto"]').wait_for(state="attached", timeout=10_000)
-                self.assertTrue(page.locator('input[name="profileSummaryMode"][value="auto"]').is_checked())
+                page.locator('[data-profile-summary-mode="auto"][aria-pressed="true"]').wait_for(state="attached", timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_clear_filter_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/column-profile/summary") and response.status == 200, timeout=10_000):
