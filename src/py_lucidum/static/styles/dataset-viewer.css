@@ -29,23 +29,60 @@
         border-top-left-radius: 0;
       }
 
-      .dataset-viewer-checkbox {
-        align-items: center;
-        color: var(--muted);
-        display: inline-flex;
+      .dataset-viewer-view-toggles {
         flex: 0 0 auto;
-        font-size: 11px;
-        font-weight: 700;
-        gap: 5px;
-        height: var(--app-control-button-height);
-        line-height: 1;
-        white-space: nowrap;
       }
 
-      .dataset-viewer-checkbox input {
-        height: 14px;
-        margin: 0;
-        width: 14px;
+      .dataset-viewer-view-toggles button.dataset-viewer-view-toggle {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: 24px;
+        line-height: 1.2;
+        min-height: 24px;
+        padding: 2px 6px;
+        text-align: center;
+      }
+
+      .dataset-viewer-view-toggles .dataset-viewer-view-toggle::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .dataset-viewer-view-toggles .dataset-viewer-view-toggle:not(:disabled):hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .dataset-viewer-view-toggles .dataset-viewer-view-toggle:focus-visible {
+        background: transparent;
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .dataset-viewer-view-toggles .dataset-viewer-view-toggle.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .dataset-viewer-view-toggles .dataset-viewer-view-toggle:disabled {
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.55;
       }
 
       .dataset-viewer-count {

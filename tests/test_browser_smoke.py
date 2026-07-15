@@ -1322,13 +1322,13 @@ class BrowserSmokeTests(unittest.TestCase):
                                         return { bottom: rect.bottom, left: rect.left, top: rect.top, width: rect.width };
                                       };
                                       return {
-                                        alphabetical: rectFor('label:has(#datasetViewerAlphabeticalColumns)'),
+                                        alphabetical: rectFor('#datasetViewerAlphabeticalColumns'),
                                         clear: rectFor("#datasetViewerSearchClear"),
                                         grid: rectFor("#datasetViewerGrid"),
                                         search: rectFor(".dataset-viewer-search-row"),
                                         searchInput: rectFor("#datasetViewerSearch"),
                                         toolbar: rectFor(".dataset-viewer-toolbar"),
-                                        transpose: rectFor('label:has(#datasetViewerTranspose)'),
+                                        transpose: rectFor('#datasetViewerTranspose'),
                                         geometry: (() => {
                                           const toolbar = document.querySelector(".dataset-viewer-toolbar");
                                           const divider = getComputedStyle(toolbar, "::after");
@@ -6920,7 +6920,7 @@ COPY (
                     page.locator('.saved-filter-option[data-filter-theme="AGE"]').click()
                     page.wait_for_function("""() => document.querySelector("#filterInput")?.value === "vehicle_age >= 3" """, timeout=10_000)
 
-                    page.locator("#datasetViewerAlphabeticalColumns").check()
+                    page.locator("#datasetViewerAlphabeticalColumns").click()
                     page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c4"]').click(button="right")
                     page.locator("#datasetViewerCellContextMenu:not([hidden])").get_by_role("menuitem", name="Pin column").click()
                     page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"]').click(button="right")
@@ -6953,7 +6953,7 @@ COPY (
                         timeout=10_000,
                     )
                     normal_width = resize_tabulator_column(page, '#datasetViewerGrid .tabulator-col[tabulator-field="c2"]', 52)
-                    page.locator("#datasetViewerTranspose").check()
+                    page.locator("#datasetViewerTranspose").click()
                     page.wait_for_function(
                         """
                         () => {
@@ -7025,7 +7025,7 @@ COPY (
                         """,
                         timeout=10_000,
                     )
-                    page.locator("#datasetViewerTranspose").uncheck()
+                    page.locator("#datasetViewerTranspose").click()
                     page.wait_for_function(
                         """
                         () => Boolean(document.querySelector('#datasetViewerGrid:not(.dataset-viewer-grid-transposed) .tabulator-row .tabulator-cell[tabulator-field="c2"]'))
@@ -7040,7 +7040,7 @@ COPY (
                         timeout=10_000,
                     )
                     page.locator("#datasetViewerSearchClear").click()
-                    page.locator("#datasetViewerAlphabeticalColumns").uncheck()
+                    page.locator("#datasetViewerAlphabeticalColumns").click()
                     page.locator("#filterRowClearBtn").click()
                     page.locator("#lineBarTool").click()
                     page.locator("#lineBarTool.active").wait_for(timeout=10_000)
@@ -7057,8 +7057,8 @@ COPY (
                           return document.querySelector("#datasetViewerTool")?.classList.contains("active")
                             && document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
                             && document.querySelector("#datasetViewerSearch")?.value === "price, post"
-                            && document.querySelector("#datasetViewerTranspose")?.checked
-                            && document.querySelector("#datasetViewerAlphabeticalColumns")?.checked
+                            && document.querySelector("#datasetViewerTranspose")?.getAttribute("aria-pressed") === "true"
+                            && document.querySelector("#datasetViewerAlphabeticalColumns")?.getAttribute("aria-pressed") === "true"
                             && document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === "asc"
                             && names.slice(0, 3).join(",") === "postcode,vehicle_age,price";
                         }
@@ -7100,7 +7100,7 @@ COPY (
                         arg=[dataset_favourite_id],
                         timeout=10_000,
                     )
-                    page.locator("#datasetViewerTranspose").uncheck()
+                    page.locator("#datasetViewerTranspose").click()
                     page.wait_for_function(
                         """
                         () => !document.querySelector(".saved-favourite-option.active")
@@ -7154,7 +7154,7 @@ COPY (
                     startup_page.wait_for_function(
                         """
                         () => document.querySelector("#datasetViewerTool")?.classList.contains("active")
-                          && document.querySelector("#datasetViewerTranspose")?.checked
+                          && document.querySelector("#datasetViewerTranspose")?.getAttribute("aria-pressed") === "true"
                           && document.querySelector("#datasetViewerSearch")?.value === "price, post"
                           && document.querySelector("#filterInput")?.value === "vehicle_age >= 3"
                           && document.querySelector(".saved-favourite-option.active .saved-filter-name")?.textContent.trim() === "Dataset favourite"
@@ -12547,7 +12547,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#datasetViewerTranspose").check(timeout=5_000)
+                page.locator("#datasetViewerTranspose").click(timeout=5_000)
                 page.wait_for_function(
                     """
                     () => {
@@ -13046,6 +13046,14 @@ COPY (
                 dataset_viewer_geometry = page.evaluate(
                     """
                     () => {
+                      const normalizeColor = (value) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = value;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
                       const toolbar = document.querySelector(".dataset-viewer-toolbar");
                       const grid = document.querySelector("#datasetViewerGrid");
                       const header = grid.querySelector(".tabulator-header");
@@ -13057,7 +13065,8 @@ COPY (
                       const search = document.querySelector("#datasetViewerSearch");
                       const clear = document.querySelector("#datasetViewerSearchClear");
                       const meta = document.querySelector("#datasetViewerMeta");
-                      const checkboxes = [...toolbar.querySelectorAll(".dataset-viewer-checkbox")];
+                      const viewToggleGroup = toolbar.querySelector(".dataset-viewer-view-toggles");
+                      const viewToggles = [...toolbar.querySelectorAll(".dataset-viewer-view-toggle")];
                       const toolbarRect = toolbar.getBoundingClientRect();
                       const gridRect = grid.getBoundingClientRect();
                       const headerRect = header.getBoundingClientRect();
@@ -13117,11 +13126,31 @@ COPY (
                         clearCenterDelta: Math.abs(
                           (clearRect.top + clearRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)
                         ),
-                        checkboxHeights: checkboxes.map((checkbox) => checkbox.getBoundingClientRect().height),
-                        checkboxCenterDeltas: checkboxes.map((checkbox) => {
-                          const rect = checkbox.getBoundingClientRect();
+                        viewToggleHeights: viewToggles.map((toggle) => toggle.getBoundingClientRect().height),
+                        viewToggleCenterDeltas: viewToggles.map((toggle) => {
+                          const rect = toggle.getBoundingClientRect();
                           return Math.abs((rect.top + rect.height / 2) - (toolbarRect.top + toolbarRect.height / 2));
                         }),
+                        viewToggleGroupRole: viewToggleGroup.getAttribute("role"),
+                        viewToggleGroupLabel: viewToggleGroup.getAttribute("aria-label"),
+                        viewToggleGroupGap: getComputedStyle(viewToggleGroup).gap,
+                        viewToggleStyles: viewToggles.map((toggle) => {
+                          const style = getComputedStyle(toggle);
+                          return {
+                            label: toggle.textContent.trim(),
+                            stableLabel: toggle.getAttribute("data-stable-label"),
+                            pressed: toggle.getAttribute("aria-pressed"),
+                            active: toggle.classList.contains("active"),
+                            background: style.backgroundColor,
+                            border: style.borderTopWidth,
+                            color: style.color,
+                            cursor: style.cursor,
+                            fontSize: style.fontSize,
+                            fontWeight: style.fontWeight,
+                          };
+                        }),
+                        muted: normalizeColor(getComputedStyle(document.body).getPropertyValue("--muted").trim()),
+                        accent: normalizeColor(getComputedStyle(document.body).getPropertyValue("--accent").trim()),
                         metaInToolbar: toolbar.contains(meta),
                         metaCenterDelta: Math.abs(
                           (metaRect.top + metaRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)
@@ -13155,10 +13184,131 @@ COPY (
                 self.assertEqual(dataset_viewer_geometry["clearHeight"], 28)
                 self.assertLessEqual(dataset_viewer_geometry["searchCenterDelta"], 0.5)
                 self.assertLessEqual(dataset_viewer_geometry["clearCenterDelta"], 0.5)
-                self.assertEqual(set(dataset_viewer_geometry["checkboxHeights"]), {28})
-                self.assertTrue(all(delta <= 0.5 for delta in dataset_viewer_geometry["checkboxCenterDeltas"]))
+                self.assertEqual(set(dataset_viewer_geometry["viewToggleHeights"]), {24})
+                self.assertTrue(all(delta <= 0.5 for delta in dataset_viewer_geometry["viewToggleCenterDeltas"]))
+                self.assertEqual(dataset_viewer_geometry["viewToggleGroupRole"], "group")
+                self.assertEqual(dataset_viewer_geometry["viewToggleGroupLabel"], "Dataset view options")
+                self.assertEqual(dataset_viewer_geometry["viewToggleGroupGap"], "3px")
+                self.assertEqual(
+                    [toggle["label"] for toggle in dataset_viewer_geometry["viewToggleStyles"]],
+                    ["Transpose", "Alphabetical columns"],
+                )
+                self.assertEqual(
+                    [toggle["stableLabel"] for toggle in dataset_viewer_geometry["viewToggleStyles"]],
+                    ["Transpose", "Alphabetical columns"],
+                )
+                self.assertTrue(all(toggle["pressed"] == "false" for toggle in dataset_viewer_geometry["viewToggleStyles"]))
+                self.assertTrue(all(not toggle["active"] for toggle in dataset_viewer_geometry["viewToggleStyles"]))
+                self.assertTrue(all(toggle["background"] == "rgba(0, 0, 0, 0)" for toggle in dataset_viewer_geometry["viewToggleStyles"]))
+                self.assertTrue(all(toggle["border"] == "0px" for toggle in dataset_viewer_geometry["viewToggleStyles"]))
+                self.assertTrue(all(toggle["cursor"] == "pointer" for toggle in dataset_viewer_geometry["viewToggleStyles"]))
+                self.assertTrue(all(toggle["fontSize"] == "12px" for toggle in dataset_viewer_geometry["viewToggleStyles"]))
+                self.assertTrue(all(toggle["fontWeight"] == "400" for toggle in dataset_viewer_geometry["viewToggleStyles"]))
+                self.assertTrue(
+                    all(toggle["color"] == dataset_viewer_geometry["muted"] for toggle in dataset_viewer_geometry["viewToggleStyles"])
+                )
                 self.assertTrue(dataset_viewer_geometry["metaInToolbar"])
                 self.assertLessEqual(dataset_viewer_geometry["metaCenterDelta"], 0.5)
+
+                def dataset_viewer_toggle_layout() -> dict[str, object]:
+                    return page.evaluate(
+                        """
+                        () => {
+                          const toolbar = document.querySelector(".dataset-viewer-toolbar");
+                          const selectors = {
+                            toolbar: ".dataset-viewer-toolbar",
+                            search: "#datasetViewerSearch",
+                            clear: "#datasetViewerSearchClear",
+                            transpose: "#datasetViewerTranspose",
+                            alphabetical: "#datasetViewerAlphabeticalColumns",
+                            meta: "#datasetViewerMeta",
+                          };
+                          const rects = Object.fromEntries(Object.entries(selectors).map(([key, selector]) => {
+                            const rect = document.querySelector(selector).getBoundingClientRect();
+                            return [key, { left: rect.left, top: rect.top, width: rect.width, height: rect.height }];
+                          }));
+                          const buttons = [
+                            document.querySelector("#datasetViewerTranspose"),
+                            document.querySelector("#datasetViewerAlphabeticalColumns"),
+                          ];
+                          return {
+                            rects,
+                            scrollWidth: toolbar.scrollWidth,
+                            clientWidth: toolbar.clientWidth,
+                            buttons: buttons.map((button) => {
+                              const style = getComputedStyle(button);
+                              const range = document.createRange();
+                              range.selectNodeContents(button.firstChild);
+                              const textRect = range.getBoundingClientRect();
+                              const buttonRect = button.getBoundingClientRect();
+                              return {
+                                pressed: button.getAttribute("aria-pressed"),
+                                active: button.classList.contains("active"),
+                                color: style.color,
+                                fontWeight: style.fontWeight,
+                                textCenterDelta: Math.abs(
+                                  (textRect.left + textRect.width / 2) - (buttonRect.left + buttonRect.width / 2)
+                                ),
+                              };
+                            }),
+                          };
+                        }
+                        """
+                    )
+
+                dataset_toggle_requests_before = dataset_viewer_requests
+                dataset_toggle_layout_before = dataset_viewer_toggle_layout()
+                page.locator("#datasetViewerAlphabeticalColumns").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#datasetViewerAlphabeticalColumns")?.getAttribute("aria-pressed") === "true"',
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerTranspose")?.getAttribute("aria-pressed") === "true"
+                      && document.querySelector("#datasetViewerGrid")?.classList.contains("dataset-viewer-grid-transposed")
+                    """,
+                    timeout=10_000,
+                )
+                dataset_toggle_layout_active = dataset_viewer_toggle_layout()
+                for node_name, before_rect in dataset_toggle_layout_before["rects"].items():
+                    for coordinate in ("left", "top", "width", "height"):
+                        self.assertAlmostEqual(
+                            dataset_toggle_layout_active["rects"][node_name][coordinate],
+                            before_rect[coordinate],
+                            delta=0.5,
+                        )
+                self.assertEqual(dataset_toggle_layout_active["scrollWidth"], dataset_toggle_layout_before["scrollWidth"])
+                self.assertEqual(dataset_toggle_layout_active["clientWidth"], dataset_toggle_layout_before["clientWidth"])
+                self.assertTrue(all(button["pressed"] == "true" for button in dataset_toggle_layout_active["buttons"]))
+                self.assertTrue(all(button["active"] for button in dataset_toggle_layout_active["buttons"]))
+                self.assertTrue(all(button["fontWeight"] == "700" for button in dataset_toggle_layout_active["buttons"]))
+                self.assertTrue(
+                    all(button["color"] == dataset_viewer_geometry["accent"] for button in dataset_toggle_layout_active["buttons"])
+                )
+                self.assertTrue(all(button["textCenterDelta"] <= 0.5 for button in dataset_toggle_layout_active["buttons"]))
+
+                page.locator("#datasetViewerTranspose").focus()
+                page.keyboard.press("Enter")
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerTranspose")?.getAttribute("aria-pressed") === "false"
+                      && !document.querySelector("#datasetViewerGrid")?.classList.contains("dataset-viewer-grid-transposed")
+                    """,
+                    timeout=10_000,
+                )
+                transpose_focus_style = page.locator("#datasetViewerTranspose").evaluate(
+                    "button => ({ width: getComputedStyle(button).outlineWidth, style: getComputedStyle(button).outlineStyle })"
+                )
+                self.assertEqual(transpose_focus_style, {"width": "2px", "style": "solid"})
+                page.locator("#datasetViewerAlphabeticalColumns").focus()
+                page.keyboard.press("Enter")
+                page.wait_for_function(
+                    '() => document.querySelector("#datasetViewerAlphabeticalColumns")?.getAttribute("aria-pressed") === "false"',
+                    timeout=10_000,
+                )
+                self.assertEqual(dataset_viewer_requests, dataset_toggle_requests_before)
                 page.evaluate('() => document.documentElement.style.setProperty("--app-tool-row-height", "58px")')
                 page.wait_for_function(
                     """
@@ -13769,7 +13919,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#datasetViewerTranspose").check()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -13845,7 +13995,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#datasetViewerTranspose").uncheck()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -13924,7 +14074,7 @@ COPY (
                     timeout=10_000,
                 )
                 requests_before_orientation_search_toggle = dataset_viewer_requests
-                page.locator("#datasetViewerTranspose").check()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -13937,7 +14087,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#datasetViewerTranspose").uncheck()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -13994,8 +14144,8 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                self.assertFalse(page.locator("#datasetViewerAlphabeticalColumns").is_checked())
-                page.locator("#datasetViewerAlphabeticalColumns").check()
+                self.assertEqual(page.locator("#datasetViewerAlphabeticalColumns").get_attribute("aria-pressed"), "false")
+                page.locator("#datasetViewerAlphabeticalColumns").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -14011,7 +14161,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#datasetViewerTranspose").check()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -14127,7 +14277,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#datasetViewerAlphabeticalColumns").uncheck()
+                page.locator("#datasetViewerAlphabeticalColumns").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed .tabulator-row .tabulator-cell[tabulator-field="__field"]')?.textContent.trim() === 'PostcodeArea'
@@ -14224,7 +14374,7 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertEqual(dataset_viewer_requests, transposed_requests_before_search)
-                page.locator("#datasetViewerTranspose").uncheck()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -14241,7 +14391,7 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertEqual(dataset_viewer_requests, transposed_requests_before_search)
-                page.locator("#datasetViewerTranspose").check()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -14266,7 +14416,7 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertEqual(dataset_viewer_requests, transposed_requests_before_search)
-                page.locator("#datasetViewerTranspose").uncheck()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'
@@ -14284,7 +14434,7 @@ COPY (
                     normal_resize["after"],
                     delta=4,
                 )
-                page.locator("#datasetViewerTranspose").check()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -14300,7 +14450,7 @@ COPY (
                     transposed_resize["after"],
                     delta=4,
                 )
-                page.locator("#datasetViewerTranspose").uncheck()
+                page.locator("#datasetViewerTranspose").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]')?.textContent.trim() === 'AB'

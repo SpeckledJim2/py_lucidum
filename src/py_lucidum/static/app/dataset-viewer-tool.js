@@ -129,14 +129,10 @@ export function createDatasetViewerTool({
             <input id="datasetViewerSearch" class="search dataset-viewer-search app-control-input" placeholder="Select columns, separate with commas" />
             <button id="datasetViewerSearchClear" class="filter-action app-control-button" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
           </div>
-          <label class="dataset-viewer-checkbox">
-            <input id="datasetViewerTranspose" type="checkbox" />
-            <span>Transpose</span>
-          </label>
-          <label class="dataset-viewer-checkbox">
-            <input id="datasetViewerAlphabeticalColumns" type="checkbox" />
-            <span>Alphabetical columns</span>
-          </label>
+          <div class="segmented dataset-viewer-view-toggles" role="group" aria-label="Dataset view options">
+            <button id="datasetViewerTranspose" class="dataset-viewer-view-toggle app-control-button" type="button" aria-pressed="false" data-stable-label="Transpose">Transpose</button>
+            <button id="datasetViewerAlphabeticalColumns" class="dataset-viewer-view-toggle app-control-button" type="button" aria-pressed="false" data-stable-label="Alphabetical columns">Alphabetical columns</button>
+          </div>
           <div id="datasetViewerMeta" class="dataset-viewer-meta">
             <div id="datasetViewerSummaryMeta" class="dataset-viewer-summary-meta">
               <div id="datasetViewerCount" class="dataset-viewer-count"></div>
@@ -158,13 +154,15 @@ export function createDatasetViewerTool({
         markDatasetViewChanged();
         el("datasetViewerSearch").focus();
       });
-      el("datasetViewerTranspose").addEventListener("change", () => {
-        state.datasetViewerTranspose = el("datasetViewerTranspose").checked;
+      el("datasetViewerTranspose").addEventListener("click", () => {
+        state.datasetViewerTranspose = !state.datasetViewerTranspose;
+        syncDatasetViewerViewToggles();
         rerenderCachedData();
         markDatasetViewChanged();
       });
-      el("datasetViewerAlphabeticalColumns").addEventListener("change", () => {
-        state.datasetViewerAlphabeticalColumns = el("datasetViewerAlphabeticalColumns").checked;
+      el("datasetViewerAlphabeticalColumns").addEventListener("click", () => {
+        state.datasetViewerAlphabeticalColumns = !state.datasetViewerAlphabeticalColumns;
+        syncDatasetViewerViewToggles();
         rerenderCachedData();
         markDatasetViewChanged();
       });
@@ -177,9 +175,20 @@ export function createDatasetViewerTool({
     if (document.activeElement !== search && search.value !== (state.datasetViewerSearch || "")) {
       search.value = state.datasetViewerSearch || "";
     }
-    el("datasetViewerTranspose").checked = Boolean(state.datasetViewerTranspose);
-    el("datasetViewerAlphabeticalColumns").checked = Boolean(state.datasetViewerAlphabeticalColumns);
+    syncDatasetViewerViewToggles();
     return wrap;
+  }
+
+  function syncDatasetViewerViewToggles() {
+    syncDatasetViewerViewToggle(el("datasetViewerTranspose"), state.datasetViewerTranspose);
+    syncDatasetViewerViewToggle(el("datasetViewerAlphabeticalColumns"), state.datasetViewerAlphabeticalColumns);
+  }
+
+  function syncDatasetViewerViewToggle(button, pressed) {
+    if (!button) return;
+    const active = Boolean(pressed);
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
   }
 
   function attachDatasetViewerMeta() {
@@ -199,14 +208,14 @@ export function createDatasetViewerTool({
   function syncTransposeControl(data) {
     const loadedRows = Array.isArray(data?.rows) ? data.rows.length : 0;
     const disabled = loadedRows > MAX_ROWS;
-    const input = el("datasetViewerTranspose");
-    if (!input) return;
-    input.disabled = disabled;
-    input.title = disabled ? `Transpose is available for ${MAX_ROWS.toLocaleString()} loaded rows or fewer` : "";
+    const button = el("datasetViewerTranspose");
+    if (!button) return;
+    button.disabled = disabled;
+    button.title = disabled ? `Transpose is available for ${MAX_ROWS.toLocaleString()} loaded rows or fewer` : "";
     if (disabled && state.datasetViewerTranspose) {
       state.datasetViewerTranspose = false;
-      input.checked = false;
     }
+    syncDatasetViewerViewToggle(button, state.datasetViewerTranspose);
   }
 
   function clearTable({ resetSelection = false } = {}) {
@@ -1982,10 +1991,7 @@ export function createDatasetViewerTool({
     suppressNextWidthSnapshot = true;
     const search = document.getElementById("datasetViewerSearch");
     if (search) search.value = state.datasetViewerSearch || "";
-    const transpose = document.getElementById("datasetViewerTranspose");
-    if (transpose) transpose.checked = Boolean(state.datasetViewerTranspose);
-    const alphabetical = document.getElementById("datasetViewerAlphabeticalColumns");
-    if (alphabetical) alphabetical.checked = Boolean(state.datasetViewerAlphabeticalColumns);
+    syncDatasetViewerViewToggles();
     if (toolCache(TOOL_ID).data) rerenderCachedData();
   }
 
