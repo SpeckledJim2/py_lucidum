@@ -166,7 +166,10 @@
         margin: 0 8px 8px;
       }
 
-      .chart-side-section .segmented[data-control="featureSort"] button {
+      .chart-side-section .segmented:is(
+        [data-control="featureSort"],
+        [data-control="expectedSort"]
+      ) button {
         appearance: none;
         background: transparent;
         border: 0;
@@ -182,7 +185,10 @@
         text-align: center;
       }
 
-      .chart-side-section .segmented[data-control="featureSort"] button::after {
+      .chart-side-section .segmented:is(
+        [data-control="featureSort"],
+        [data-control="expectedSort"]
+      ) button::after {
         content: attr(data-stable-label);
         display: block;
         font-weight: 700;
@@ -192,19 +198,28 @@
         visibility: hidden;
       }
 
-      .chart-side-section .segmented[data-control="featureSort"] button:hover {
+      .chart-side-section .segmented:is(
+        [data-control="featureSort"],
+        [data-control="expectedSort"]
+      ) button:hover {
         background: transparent;
         color: var(--accent);
       }
 
-      .chart-side-section .segmented[data-control="featureSort"] button:focus-visible {
+      .chart-side-section .segmented:is(
+        [data-control="featureSort"],
+        [data-control="expectedSort"]
+      ) button:focus-visible {
         background: transparent;
         color: var(--accent);
         outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
         outline-offset: 1px;
       }
 
-      .chart-side-section .segmented[data-control="featureSort"] button.active {
+      .chart-side-section .segmented:is(
+        [data-control="featureSort"],
+        [data-control="expectedSort"]
+      ) button.active {
         background: transparent;
         border: 0;
         color: var(--accent);

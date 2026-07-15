@@ -3957,10 +3957,10 @@ class BrowserSmokeTests(unittest.TestCase):
                             """
                         )
 
-                    def feature_sort_layout() -> dict[str, Any]:
+                    def side_sort_layout(control: str) -> dict[str, Any]:
                         return page.evaluate(
                             """
-                            () => {
+                            control => {
                               const normalizeColor = (value) => {
                                 const probe = document.createElement("span");
                                 probe.style.color = value;
@@ -3969,7 +3969,9 @@ class BrowserSmokeTests(unittest.TestCase):
                                 probe.remove();
                                 return color;
                               };
-                              const group = document.querySelector('.segmented[data-control="featureSort"]');
+                              const group = document.querySelector(`.segmented[data-control="${control}"]`);
+                              const header = group.closest(".section-title-row");
+                              const title = header.querySelector("h2");
                               const toolbarButton = document.querySelector("#lineBarToolbar .segmented button");
                               const root = getComputedStyle(document.documentElement);
                               const muted = normalizeColor(root.getPropertyValue("--muted").trim());
@@ -3995,6 +3997,17 @@ class BrowserSmokeTests(unittest.TestCase):
                               const activeButtons = buttons.filter((button) => button.classList.contains("active"));
                               const inactiveButtons = buttons.filter((button) => !button.classList.contains("active"));
                               const toolbarButtonStyle = getComputedStyle(toolbarButton);
+                              const geometry = (node) => {
+                                const rect = node.getBoundingClientRect();
+                                return {
+                                  left: rect.left,
+                                  top: rect.top,
+                                  right: rect.right,
+                                  bottom: rect.bottom,
+                                  width: rect.width,
+                                  height: rect.height,
+                                };
+                              };
                               return {
                                 labelsReserved: buttons.every(
                                   (button) => button.dataset.stableLabel === button.textContent.trim()
@@ -4023,9 +4036,17 @@ class BrowserSmokeTests(unittest.TestCase):
                                 ),
                                 positions,
                                 width: group.getBoundingClientRect().width,
+                                group: geometry(group),
+                                header: geometry(header),
+                                title: geometry(title),
+                                metricValues: [...title.querySelectorAll(".metric-value")].map((value) => ({
+                                  text: value.textContent.trim(),
+                                  ...geometry(value),
+                                })),
                               };
                             }
-                            """
+                            """,
+                            arg=control,
                         )
 
                     page.goto(base_url, wait_until="domcontentloaded")
@@ -4179,7 +4200,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         '.segmented[data-control="featureSort"] button[data-value="importance"]'
                     ).evaluate("button => button.classList.remove('hidden')")
                     page.mouse.move(0, 0)
-                    feature_sort_before = feature_sort_layout()
+                    feature_sort_before = side_sort_layout("featureSort")
                     self.assertTrue(feature_sort_before["labelsReserved"])
                     self.assertTrue(feature_sort_before["borderless"])
                     self.assertTrue(feature_sort_before["transparent"])
@@ -4212,7 +4233,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    feature_sort_after = feature_sort_layout()
+                    feature_sort_after = side_sort_layout("featureSort")
                     self.assertTrue(feature_sort_after["activeAccent"])
                     self.assertTrue(feature_sort_after["activeBold"])
                     self.assertTrue(feature_sort_after["inactiveMuted"])
@@ -4228,6 +4249,97 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     for key, before_position in feature_sort_before["positions"].items():
                         after_position = feature_sort_after["positions"][key]
+                        for dimension in ("left", "top", "width", "height"):
+                            self.assertAlmostEqual(
+                                after_position[dimension],
+                                before_position[dimension],
+                                delta=0.5,
+                            )
+                        self.assertLessEqual(after_position["labelCenterDelta"], 0.5)
+
+                    expected_toggle = page.locator("#chartExpectedToggle")
+                    if expected_toggle.get_attribute("aria-expanded") == "false":
+                        expected_toggle.click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#chartExpectedToggle")?.getAttribute("aria-expanded") === "true"
+                          && !document.querySelector("#expectedSideSection")?.hasAttribute("inert")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#expectedList .feature[data-value="group"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#expectedMetricTitle .metric-value").length === 1
+                          && document.querySelector('#expectedList .feature[data-value="group"]')
+                            ?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.mouse.move(0, 0)
+                    expected_sort_before = side_sort_layout("expectedSort")
+                    self.assertTrue(expected_sort_before["labelsReserved"])
+                    self.assertTrue(expected_sort_before["borderless"])
+                    self.assertTrue(expected_sort_before["transparent"])
+                    self.assertTrue(expected_sort_before["sameFontSize"])
+                    self.assertTrue(expected_sort_before["compactPadding"])
+                    self.assertTrue(expected_sort_before["activeAccent"])
+                    self.assertTrue(expected_sort_before["activeBold"])
+                    self.assertTrue(expected_sort_before["inactiveMuted"])
+                    self.assertTrue(expected_sort_before["inactiveRegular"])
+                    self.assertEqual(set(expected_sort_before["positions"]), {"original", "alpha"})
+                    self.assertEqual(len(expected_sort_before["metricValues"]), 1)
+                    self.assertTrue(expected_sort_before["metricValues"][0]["text"])
+                    self.assertAlmostEqual(
+                        expected_sort_before["group"]["right"],
+                        expected_sort_before["header"]["right"],
+                        delta=0.5,
+                    )
+                    self.assertLessEqual(
+                        expected_sort_before["title"]["right"],
+                        expected_sort_before["group"]["left"],
+                    )
+                    self.assertTrue(
+                        all(
+                            position["labelCenterDelta"] <= 0.5
+                            for position in expected_sort_before["positions"].values()
+                        )
+                    )
+
+                    page.locator(
+                        '.segmented[data-control="expectedSort"] button[data-value="original"]'
+                    ).click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector(
+                          '.segmented[data-control="expectedSort"] button[data-value="original"]'
+                        )?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.mouse.move(0, 0)
+                    expected_sort_after = side_sort_layout("expectedSort")
+                    self.assertTrue(expected_sort_after["activeAccent"])
+                    self.assertTrue(expected_sort_after["activeBold"])
+                    self.assertTrue(expected_sort_after["inactiveMuted"])
+                    self.assertTrue(expected_sort_after["inactiveRegular"])
+                    self.assertEqual(
+                        expected_sort_after["metricValues"],
+                        expected_sort_before["metricValues"],
+                    )
+                    for geometry_key in ("group", "header", "title"):
+                        for dimension in ("left", "top", "right", "bottom", "width", "height"):
+                            self.assertAlmostEqual(
+                                expected_sort_after[geometry_key][dimension],
+                                expected_sort_before[geometry_key][dimension],
+                                delta=0.5,
+                            )
+                    self.assertEqual(
+                        set(expected_sort_after["positions"]),
+                        set(expected_sort_before["positions"]),
+                    )
+                    for key, before_position in expected_sort_before["positions"].items():
+                        after_position = expected_sort_after["positions"][key]
                         for dimension in ("left", "top", "width", "height"):
                             self.assertAlmostEqual(
                                 after_position[dimension],
