@@ -25,7 +25,7 @@ const STACKED_SHAP_CHART_MIN_WIDTH = 420;
 const STACKED_SHAP_SPLITTER_KEY_STEP = 10;
 const STACKED_SHAP_STACKED_MEDIA = "(max-width: 900px)";
 
-export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
+export function createGbmStackedShapTool({ api, escapeHtml, setNotice, showClipboardToast = () => {} }) {
   let modelId = "";
   let lastModelId = "";
   let config = null;
@@ -85,6 +85,12 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
               <button id="gbmStackedShapToolbarToggle" class="gbm-stacked-shap-overlay-button app-control-button" type="button" aria-controls="gbmStackedShapControls" aria-expanded="${String(!controlsCollapsed)}">
                 <svg class="gbm-stacked-shap-toggle-icon gbm-stacked-shap-chevron-vertical" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path d="m18 15-6-6-6 6"></path>
+                </svg>
+              </button>
+              <button id="gbmStackedShapCopyButton" class="gbm-stacked-shap-overlay-button app-control-button" type="button" aria-label="Copy Stacked SHAP chart" title="Copy Stacked SHAP chart">
+                <svg class="gbm-stacked-shap-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="8" y="8" width="10" height="10" rx="1.5"></rect>
+                  <path d="M6 14H5.5A1.5 1.5 0 0 1 4 12.5v-7A1.5 1.5 0 0 1 5.5 4h7A1.5 1.5 0 0 1 14 5.5V6"></path>
                 </svg>
               </button>
             </div>
@@ -152,6 +158,10 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     if (button.id === "gbmStackedShapSideToggle") {
       sidePanelCollapsed = !sidePanelCollapsed;
       syncLayoutVisibility(rootNode());
+      return;
+    }
+    if (button.id === "gbmStackedShapCopyButton") {
+      copyChartToClipboard();
       return;
     }
     if (button.dataset.gbmStackedShapFeatureValue !== undefined) {
@@ -580,6 +590,25 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
       grid: body.classList.contains("dark") ? "#243044" : "#e5e7eb",
       zero: body.classList.contains("dark") ? "#cbd5e1" : "#334155",
     };
+  }
+
+  async function copyChartToClipboard() {
+    if (!chart || !navigator.clipboard?.write || typeof window.ClipboardItem !== "function") {
+      showClipboardToast("Could not copy Stacked SHAP chart image", true);
+      return;
+    }
+    try {
+      const dataUrl = chart.getDataURL({
+        type: "png",
+        pixelRatio: 2,
+        backgroundColor: chartTheme().panel || "#fff",
+      });
+      const blob = await fetch(dataUrl).then((response) => response.blob());
+      await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blob })]);
+      showClipboardToast("Stacked SHAP chart image copied");
+    } catch (_) {
+      showClipboardToast("Could not copy Stacked SHAP chart image", true);
+    }
   }
 
   function rootNode() {

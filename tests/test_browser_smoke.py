@@ -15457,17 +15457,53 @@ COPY (
             page_errors: list[str] = []
             gbm_layout_api_requests: list[str] = []
             stacked_shap_requests = 0
+            shap_plot_requests = 0
+            shap_plot_payloads: list[dict[str, object]] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
             def track_gbm_request(request: object) -> None:
-                nonlocal stacked_shap_requests
+                nonlocal shap_plot_requests, stacked_shap_requests
                 url = request.url
                 if "/api/gbm/" in url:
                     gbm_layout_api_requests.append(url)
                 if "/api/gbm/models/" in url and url.endswith("/shap/stacked"):
                     stacked_shap_requests += 1
+                if "/api/gbm/models/" in url and url.endswith("/shap/plot"):
+                    shap_plot_requests += 1
+                    shap_plot_payloads.append(request.post_data_json or {})
 
             page.on("request", track_gbm_request)
+            page.add_init_script(
+                """
+                window.__lucidumCopiedShapImage = null;
+                if (typeof window.ClipboardItem !== "function") {
+                  window.ClipboardItem = class ClipboardItem {
+                    constructor(items) {
+                      this.items = items;
+                      this.types = Object.keys(items);
+                    }
+                    getType(type) {
+                      return Promise.resolve(this.items[type]);
+                    }
+                  };
+                }
+                Object.defineProperty(navigator, "clipboard", {
+                  configurable: true,
+                  value: {
+                    write: async (items) => {
+                      const item = items?.[0];
+                      const blob = item ? await item.getType("image/png") : null;
+                      window.__lucidumCopiedShapImage = {
+                        types: item ? Array.from(item.types || []) : [],
+                        type: blob?.type || "",
+                        size: blob?.size || 0,
+                      };
+                    },
+                    writeText: async () => {},
+                  },
+                });
+                """
+            )
 
             def assert_feature_heading_matches_checked(expected_count: int | None = None) -> None:
                 page.wait_for_function(
@@ -15943,6 +15979,340 @@ COPY (
                 default_shap_feature_label = page.locator("#gbmShapFeatureList1 .feature.active .kind").text_content()
                 self.assertEqual(default_shap_feature_label, "Rank 1 · 0.2330")
                 self.assertNotIn("numeric", default_shap_feature_label)
+                shap_initial_layout = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmShapControls");
+                      const feature2 = document.querySelector("#gbmShapFeatureSection2");
+                      const side = document.querySelector("#gbmShapSide");
+                      const root = document.querySelector("#gbmShapRoot");
+                      const panel = document.querySelector("#gbm-screen-panel-shap");
+                      const chart = document.querySelector("#gbmShapChart");
+                      const chartStyle = getComputedStyle(chart);
+                      const rootRect = root.getBoundingClientRect();
+                      const panelRect = panel.getBoundingClientRect();
+                      const workspaceControls = document.querySelector(".gbm-shap-workspace-controls");
+                      const sideToggle = document.querySelector("#gbmShapSideToggle");
+                      const toolbarToggle = document.querySelector("#gbmShapToolbarToggle");
+                      const copyButton = document.querySelector("#gbmShapCopyButton");
+                      const sideToggleRect = sideToggle.getBoundingClientRect();
+                      const toolbarToggleRect = toolbarToggle.getBoundingClientRect();
+                      const copyButtonRect = copyButton.getBoundingClientRect();
+                      return {
+                        toolbarHidden: toolbar.hidden && toolbar.classList.contains("hidden") && toolbar.inert,
+                        toolbarAriaHidden: toolbar.getAttribute("aria-hidden"),
+                        toolbarExpanded: document.querySelector("#gbmShapToolbarToggle")?.getAttribute("aria-expanded"),
+                        toolbarToggleCursor: getComputedStyle(document.querySelector("#gbmShapToolbarToggle")).cursor,
+                        feature2Hidden: feature2.hidden && feature2.classList.contains("hidden") && feature2.inert,
+                        feature2Expanded: document.querySelector("#gbmShapFeature2Toggle")?.getAttribute("aria-expanded"),
+                        sideHidden: side.hidden || side.classList.contains("hidden"),
+                        sideExpanded: document.querySelector("#gbmShapSideToggle")?.getAttribute("aria-expanded"),
+                        sideToggleCursor: getComputedStyle(document.querySelector("#gbmShapSideToggle")).cursor,
+                        overlayGap: getComputedStyle(workspaceControls).gap,
+                        stackedOverlayGap: getComputedStyle(document.querySelector(".gbm-stacked-shap-workspace-controls")).gap,
+                        overlayWidths: [sideToggleRect.width, toolbarToggleRect.width, copyButtonRect.width],
+                        sideToolbarGap: toolbarToggleRect.left - sideToggleRect.right,
+                        toolbarCopyGap: copyButtonRect.left - toolbarToggleRect.right,
+                        copyCursor: getComputedStyle(copyButton).cursor,
+                        copyLabel: copyButton.getAttribute("aria-label"),
+                        copyTitle: copyButton.title,
+                        rootLeft: rootRect.left,
+                        rootRight: rootRect.right,
+                        panelLeft: panelRect.left,
+                        panelRight: panelRect.right,
+                        chartBorderTop: chartStyle.borderTopWidth,
+                        chartRadius: chartStyle.borderRadius,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(shap_initial_layout["toolbarHidden"])
+                self.assertEqual(shap_initial_layout["toolbarAriaHidden"], "true")
+                self.assertEqual(shap_initial_layout["toolbarExpanded"], "false")
+                self.assertEqual(shap_initial_layout["toolbarToggleCursor"], "pointer")
+                self.assertTrue(shap_initial_layout["feature2Hidden"])
+                self.assertEqual(shap_initial_layout["feature2Expanded"], "false")
+                self.assertFalse(shap_initial_layout["sideHidden"])
+                self.assertEqual(shap_initial_layout["sideExpanded"], "true")
+                self.assertEqual(shap_initial_layout["sideToggleCursor"], "pointer")
+                self.assertEqual(shap_initial_layout["overlayGap"], shap_initial_layout["stackedOverlayGap"])
+                shap_overlay_gap = float(shap_initial_layout["overlayGap"].removesuffix("px"))
+                self.assertTrue(all(abs(width - 28) <= 0.5 for width in shap_initial_layout["overlayWidths"]))
+                self.assertAlmostEqual(shap_initial_layout["sideToolbarGap"], shap_overlay_gap, delta=0.5)
+                self.assertAlmostEqual(shap_initial_layout["toolbarCopyGap"], shap_overlay_gap, delta=0.5)
+                self.assertEqual(shap_initial_layout["copyCursor"], "pointer")
+                self.assertEqual(shap_initial_layout["copyLabel"], "Copy SHAP chart")
+                self.assertEqual(shap_initial_layout["copyTitle"], "Copy SHAP chart")
+                self.assertAlmostEqual(shap_initial_layout["rootLeft"], shap_initial_layout["panelLeft"], delta=0.5)
+                self.assertAlmostEqual(shap_initial_layout["rootRight"], shap_initial_layout["panelRight"], delta=0.5)
+                self.assertEqual(shap_initial_layout["chartBorderTop"], "0px")
+                self.assertEqual(shap_initial_layout["chartRadius"], "0px")
+                page.locator("#gbmShapCopyButton").click()
+                page.wait_for_function(
+                    """
+                    () => window.__lucidumCopiedShapImage
+                      && window.__lucidumCopiedShapImage.types.includes("image/png")
+                      && window.__lucidumCopiedShapImage.type === "image/png"
+                      && window.__lucidumCopiedShapImage.size > 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#clipboardToast").get_by_text("SHAP chart image copied").wait_for(timeout=10_000)
+                shap_layout_requests_before = len(gbm_layout_api_requests)
+                shap_plot_requests_before = shap_plot_requests
+                page.locator("#gbmShapToolbarToggle").click()
+                page.locator("#gbmShapControls:not(.hidden)").wait_for(timeout=10_000)
+                self.assertEqual(len(gbm_layout_api_requests), shap_layout_requests_before)
+                self.assertEqual(shap_plot_requests, shap_plot_requests_before)
+                shap_control_style = page.evaluate(
+                    """
+                    () => {
+                      const normalizeColor = (value) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = value;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
+                      const toolbar = document.querySelector("#gbmShapControls");
+                      const header = toolbar.querySelector("h3");
+                      const active = toolbar.querySelector("button.active:not(:disabled)");
+                      const inactive = toolbar.querySelector("button:not(.active):not(:disabled)");
+                      const factor1 = toolbar.querySelector('[data-gbm-shap-factor="1"]');
+                      const factor2 = toolbar.querySelector('[data-gbm-shap-factor="2"]');
+                      const toolbarStyle = getComputedStyle(toolbar);
+                      const headerStyle = getComputedStyle(header);
+                      const activeStyle = getComputedStyle(active);
+                      const inactiveStyle = getComputedStyle(inactive);
+                      const factorStyle = getComputedStyle(factor1);
+                      const muted = normalizeColor(getComputedStyle(document.body).getPropertyValue("--muted").trim());
+                      const accent = normalizeColor(getComputedStyle(document.body).getPropertyValue("--accent").trim());
+                      const range = document.createRange();
+                      range.selectNodeContents(active.firstChild);
+                      const textRect = range.getBoundingClientRect();
+                      const activeRect = active.getBoundingClientRect();
+                      return {
+                        height: toolbar.getBoundingClientRect().height,
+                        scrollWidth: toolbar.scrollWidth,
+                        headerFontSize: headerStyle.fontSize,
+                        headerWeight: headerStyle.fontWeight,
+                        headerColor: headerStyle.color,
+                        activeFontSize: activeStyle.fontSize,
+                        activeWeight: activeStyle.fontWeight,
+                        activeColor: activeStyle.color,
+                        inactiveWeight: inactiveStyle.fontWeight,
+                        inactiveColor: inactiveStyle.color,
+                        buttonBorder: activeStyle.borderTopWidth,
+                        buttonBackground: activeStyle.backgroundColor,
+                        factorWeight: factorStyle.fontWeight,
+                        factorColor: factorStyle.color,
+                        factorPressed: factor1.getAttribute("aria-pressed"),
+                        factor2Disabled: factor2.disabled,
+                        factor2Pressed: factor2.getAttribute("aria-pressed"),
+                        activeCenter: activeRect.left + activeRect.width / 2,
+                        textCenter: textRect.left + textRect.width / 2,
+                        muted,
+                        accent,
+                        toolbarBorderBottom: toolbarStyle.borderBottomWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(shap_control_style["height"], 50, delta=0.5)
+                self.assertEqual(shap_control_style["headerFontSize"], "11px")
+                self.assertEqual(shap_control_style["headerWeight"], "600")
+                self.assertEqual(shap_control_style["activeFontSize"], "12px")
+                self.assertEqual(shap_control_style["activeWeight"], "700")
+                self.assertEqual(shap_control_style["inactiveWeight"], "400")
+                self.assertEqual(shap_control_style["headerColor"], shap_control_style["muted"])
+                self.assertEqual(shap_control_style["activeColor"], shap_control_style["accent"])
+                self.assertEqual(shap_control_style["inactiveColor"], shap_control_style["muted"])
+                self.assertEqual(shap_control_style["buttonBorder"], "0px")
+                self.assertEqual(shap_control_style["buttonBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(shap_control_style["factorWeight"], "400")
+                self.assertEqual(shap_control_style["factorColor"], shap_control_style["muted"])
+                self.assertEqual(shap_control_style["factorPressed"], "false")
+                self.assertTrue(shap_control_style["factor2Disabled"])
+                self.assertEqual(shap_control_style["factor2Pressed"], "false")
+                self.assertAlmostEqual(shap_control_style["activeCenter"], shap_control_style["textCenter"], delta=0.75)
+                self.assertEqual(shap_control_style["toolbarBorderBottom"], "1px")
+                shap_button_geometry_before = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmShapControls");
+                      return {
+                        buttons: [...toolbar.querySelectorAll("button")].map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+                        }),
+                        scrollWidth: toolbar.scrollWidth,
+                      };
+                    }
+                    """
+                )
+                with page.expect_response(lambda response: response.url.endswith("/shap/plot") and response.request.method == "POST"):
+                    page.locator('[data-gbm-shap-tail="2"]').click()
+                page.wait_for_function(
+                    '() => document.querySelector(\'[data-gbm-shap-tail="2"]\')?.classList.contains("active")',
+                    timeout=10_000,
+                )
+                shap_button_geometry_after = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmShapControls");
+                      return {
+                        buttons: [...toolbar.querySelectorAll("button")].map((button) => {
+                          const rect = button.getBoundingClientRect();
+                          return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+                        }),
+                        scrollWidth: toolbar.scrollWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(shap_button_geometry_before["scrollWidth"], shap_button_geometry_after["scrollWidth"])
+                self.assertEqual(len(shap_button_geometry_before["buttons"]), len(shap_button_geometry_after["buttons"]))
+                for before, after in zip(shap_button_geometry_before["buttons"], shap_button_geometry_after["buttons"], strict=True):
+                    for key in ("left", "top", "width", "height"):
+                        self.assertAlmostEqual(before[key], after[key], delta=0.5)
+                with page.expect_response(lambda response: response.url.endswith("/shap/plot") and response.request.method == "POST"):
+                    page.locator('[data-gbm-shap-tail="1"]').click()
+                page.wait_for_function(
+                    '() => document.querySelector(\'[data-gbm-shap-tail="1"]\')?.classList.contains("active")',
+                    timeout=10_000,
+                )
+                page.locator("#gbmShapControls").evaluate(
+                    """
+                    (toolbar) => {
+                      toolbar.style.width = "360px";
+                      toolbar.style.alignSelf = "flex-start";
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmShapControls")?.classList.contains("app-settings-overflow-right")',
+                    timeout=10_000,
+                )
+                page.locator("#gbmShapControls").evaluate(
+                    """
+                    (toolbar) => {
+                      toolbar.scrollLeft = Math.max(1, (toolbar.scrollWidth - toolbar.clientWidth) / 2);
+                      toolbar.dispatchEvent(new Event("scroll"));
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmShapControls");
+                      return toolbar?.classList.contains("app-settings-overflow-left")
+                        && toolbar.classList.contains("app-settings-overflow-right")
+                        && getComputedStyle(toolbar).borderBottomWidth === "1px";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmShapControls").evaluate(
+                    """
+                    (toolbar) => {
+                      toolbar.style.width = "";
+                      toolbar.style.alignSelf = "";
+                      toolbar.scrollLeft = 0;
+                      toolbar.dispatchEvent(new Event("scroll"));
+                    }
+                    """
+                )
+                atomic_requests_before = len(gbm_layout_api_requests)
+                page.locator("#gbmShapToolbarToggle").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmShapControls")?.hidden',
+                    timeout=10_000,
+                )
+                shap_atomic_expand = page.evaluate(
+                    """
+                    async () => {
+                      const target = document.querySelector("#gbmShapChart");
+                      const chart = window.echarts.getInstanceByDom(target);
+                      const zr = chart.getZr();
+                      const originalResize = chart.resize;
+                      const originalFlush = zr.flush;
+                      const beforeHeight = target.clientHeight;
+                      let resizeCount = 0;
+                      let flushCount = 0;
+                      chart.resize = function(...args) {
+                        resizeCount += 1;
+                        return originalResize.apply(this, args);
+                      };
+                      zr.flush = function(...args) {
+                        flushCount += 1;
+                        return originalFlush.apply(this, args);
+                      };
+                      document.querySelector("#gbmShapToolbarToggle").click();
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      const canvas = target.querySelector("canvas");
+                      const firstFrame = {
+                        beforeHeight,
+                        targetWidth: target.clientWidth,
+                        targetHeight: target.clientHeight,
+                        chartWidth: chart.getWidth(),
+                        chartHeight: chart.getHeight(),
+                        canvasWidth: canvas?.getBoundingClientRect().width || 0,
+                        canvasHeight: canvas?.getBoundingClientRect().height || 0,
+                      };
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      const result = { ...firstFrame, resizeCount, flushCount };
+                      chart.resize = originalResize;
+                      zr.flush = originalFlush;
+                      return result;
+                    }
+                    """
+                )
+                self.assertEqual(shap_atomic_expand["resizeCount"], 1)
+                self.assertEqual(shap_atomic_expand["flushCount"], 1)
+                self.assertAlmostEqual(shap_atomic_expand["targetHeight"], shap_atomic_expand["beforeHeight"] - 50, delta=1)
+                self.assertAlmostEqual(shap_atomic_expand["targetWidth"], shap_atomic_expand["chartWidth"], delta=1)
+                self.assertAlmostEqual(shap_atomic_expand["targetHeight"], shap_atomic_expand["chartHeight"], delta=1)
+                self.assertAlmostEqual(shap_atomic_expand["targetWidth"], shap_atomic_expand["canvasWidth"], delta=1)
+                self.assertAlmostEqual(shap_atomic_expand["targetHeight"], shap_atomic_expand["canvasHeight"], delta=1)
+                self.assertEqual(len(gbm_layout_api_requests), atomic_requests_before)
+                shap_sort_before = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll('[data-gbm-shap-feature="1"][data-gbm-shap-sort]')].map((button) => {
+                      const rect = button.getBoundingClientRect();
+                      const style = getComputedStyle(button);
+                      return {
+                        left: rect.left,
+                        width: rect.width,
+                        weight: style.fontWeight,
+                        border: style.borderTopWidth,
+                        background: style.backgroundColor,
+                        stableLabel: button.getAttribute("data-stable-label"),
+                      };
+                    })
+                    """
+                )
+                self.assertEqual([item["stableLabel"] for item in shap_sort_before], ["Importance", "A-Z"])
+                self.assertEqual([item["weight"] for item in shap_sort_before], ["700", "400"])
+                self.assertTrue(all(item["border"] == "0px" for item in shap_sort_before))
+                self.assertTrue(all(item["background"] == "rgba(0, 0, 0, 0)" for item in shap_sort_before))
+                sort_requests_before = len(gbm_layout_api_requests)
+                page.locator('[data-gbm-shap-feature="1"][data-gbm-shap-sort="alpha"]').click()
+                shap_sort_after = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll('[data-gbm-shap-feature="1"][data-gbm-shap-sort]')].map((button) => {
+                      const rect = button.getBoundingClientRect();
+                      return { left: rect.left, width: rect.width, weight: getComputedStyle(button).fontWeight };
+                    })
+                    """
+                )
+                self.assertEqual([item["weight"] for item in shap_sort_after], ["400", "700"])
+                for before, after in zip(shap_sort_before, shap_sort_after, strict=True):
+                    self.assertAlmostEqual(before["left"], after["left"], delta=0.5)
+                    self.assertAlmostEqual(before["width"], after["width"], delta=0.5)
+                self.assertEqual(len(gbm_layout_api_requests), sort_requests_before)
+                page.locator('[data-gbm-shap-feature="1"][data-gbm-shap-sort="importance"]').click()
                 shap_banding_buttons = page.evaluate(
                     """
                     () => ({
@@ -15955,6 +16325,10 @@ COPY (
                 )
                 self.assertEqual(shap_banding_buttons["feature1"], ["0.01", "0.1", "1", "5", "10"])
                 self.assertEqual(shap_banding_buttons["feature2"], ["0.01", "0.1", "1", "5", "10"])
+                feature2_requests_before = len(gbm_layout_api_requests)
+                page.locator("#gbmShapFeature2Toggle").click()
+                page.locator("#gbmShapFeatureSection2:not(.hidden)").wait_for(timeout=10_000)
+                self.assertEqual(len(gbm_layout_api_requests), feature2_requests_before)
                 divider_height_before = page.evaluate(
                     """() => document.querySelector("#gbmShapFeatureList1")?.closest(".gbm-shap-feature-section")?.getBoundingClientRect().height || 0"""
                 )
@@ -15974,6 +16348,170 @@ COPY (
                     }
                     """,
                     arg=divider_height_before,
+                    timeout=10_000,
+                )
+                page.locator("#gbmShapChooserDivider").press("Home")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const divider = document.querySelector("#gbmShapChooserDivider");
+                      return divider?.getAttribute("aria-valuenow") === divider?.getAttribute("aria-valuemin");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmShapChooserDivider").press("ArrowDown")
+                chooser_keyboard_state = page.evaluate(
+                    """
+                    () => {
+                      const divider = document.querySelector("#gbmShapChooserDivider");
+                      return {
+                        min: Number(divider.getAttribute("aria-valuemin")),
+                        now: Number(divider.getAttribute("aria-valuenow")),
+                        max: Number(divider.getAttribute("aria-valuemax")),
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(chooser_keyboard_state["now"], chooser_keyboard_state["min"] + 10, delta=0.5)
+                self.assertLessEqual(chooser_keyboard_state["now"], chooser_keyboard_state["max"])
+                shap_main_resizer = page.locator("#gbmShapMainResizer")
+                main_resizer_box = shap_main_resizer.bounding_box()
+                self.assertIsNotNone(main_resizer_box)
+                assert main_resizer_box is not None
+                shap_main_geometry_before = page.evaluate(
+                    """
+                    () => {
+                      const side = document.querySelector("#gbmShapSide").getBoundingClientRect();
+                      const main = document.querySelector(".gbm-shap-main").getBoundingClientRect();
+                      const resizer = document.querySelector("#gbmShapMainResizer").getBoundingClientRect();
+                      return {
+                        sideWidth: side.width,
+                        sideRight: side.right,
+                        mainLeft: main.left,
+                        resizerCenter: resizer.left + resizer.width / 2,
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(shap_main_geometry_before["sideRight"], shap_main_geometry_before["mainLeft"], delta=0.5)
+                self.assertAlmostEqual(shap_main_geometry_before["sideRight"], shap_main_geometry_before["resizerCenter"], delta=0.5)
+                main_resize_requests_before = len(gbm_layout_api_requests)
+                page.mouse.move(
+                    main_resizer_box["x"] + main_resizer_box["width"] / 2,
+                    main_resizer_box["y"] + main_resizer_box["height"] / 2,
+                )
+                page.mouse.down()
+                page.mouse.move(
+                    main_resizer_box["x"] + main_resizer_box["width"] / 2 + 36,
+                    main_resizer_box["y"] + main_resizer_box["height"] / 2,
+                    steps=4,
+                )
+                page.mouse.up()
+                page.wait_for_function(
+                    """
+                    (width) => Math.abs(document.querySelector("#gbmShapSide")?.getBoundingClientRect().width - width) > 8
+                    """,
+                    arg=shap_main_geometry_before["sideWidth"],
+                    timeout=10_000,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), main_resize_requests_before)
+                shap_main_resizer.press("End")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const divider = document.querySelector("#gbmShapMainResizer");
+                      return divider?.getAttribute("aria-valuenow") === divider?.getAttribute("aria-valuemax");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                shap_resized_side_width = page.locator("#gbmShapSide").evaluate("(side) => side.getBoundingClientRect().width")
+                side_toggle_requests_before = len(gbm_layout_api_requests)
+                page.locator("#gbmShapSideToggle").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmShapSide")?.hidden
+                      && document.querySelector("#gbmShapSideToggle")?.getAttribute("aria-expanded") === "false"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), side_toggle_requests_before)
+                page.locator("#gbmShapSideToggle").click()
+                page.wait_for_function(
+                    """
+                    (width) => {
+                      const side = document.querySelector("#gbmShapSide");
+                      return !side?.hidden
+                        && document.querySelector("#gbmShapSideToggle")?.getAttribute("aria-expanded") === "true"
+                        && Math.abs(side.getBoundingClientRect().width - width) < 1;
+                    }
+                    """,
+                    arg=shap_resized_side_width,
+                    timeout=10_000,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), side_toggle_requests_before)
+                mobile_layout_requests_before = len(gbm_layout_api_requests)
+                page.set_viewport_size({"width": 800, "height": 800})
+                page.wait_for_function(
+                    """
+                    () => {
+                      const side = document.querySelector("#gbmShapSide")?.getBoundingClientRect();
+                      const main = document.querySelector(".gbm-shap-main")?.getBoundingClientRect();
+                      const resizer = document.querySelector("#gbmShapMainResizer");
+                      return side && main
+                        && main.top >= side.bottom - 0.5
+                        && getComputedStyle(resizer).display === "none";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                shap_mobile_layout = page.evaluate(
+                    """
+                    () => ({
+                      clientWidth: document.documentElement.clientWidth,
+                      scrollWidth: document.documentElement.scrollWidth,
+                      sideHeight: document.querySelector("#gbmShapSide")?.getBoundingClientRect().height || 0,
+                      resizerHidden: document.querySelector("#gbmShapMainResizer")?.hidden,
+                    })
+                    """
+                )
+                self.assertLessEqual(shap_mobile_layout["scrollWidth"], shap_mobile_layout["clientWidth"] + 1)
+                self.assertGreaterEqual(shap_mobile_layout["sideHeight"], 159)
+                self.assertTrue(shap_mobile_layout["resizerHidden"])
+                self.assertEqual(len(gbm_layout_api_requests), mobile_layout_requests_before)
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.wait_for_function(
+                    """
+                    (width) => {
+                      const side = document.querySelector("#gbmShapSide");
+                      const main = document.querySelector(".gbm-shap-main");
+                      const resizer = document.querySelector("#gbmShapMainResizer");
+                      return !resizer?.hidden
+                        && Math.abs(side.getBoundingClientRect().width - width) < 1
+                        && Math.abs(side.getBoundingClientRect().right - main.getBoundingClientRect().left) < 1;
+                    }
+                    """,
+                    arg=shap_resized_side_width,
+                    timeout=10_000,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), mobile_layout_requests_before)
+                page.get_by_role("tab", name="Model navigator").click()
+                page.locator(".gbm-model-navigator").wait_for(timeout=10_000)
+                with page.expect_response(lambda response: response.url.endswith("/shap/plot") and response.request.method == "POST"):
+                    page.get_by_role("tab", name="SHAP", exact=True).click()
+                page.wait_for_function(
+                    """
+                    (width) => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                      const side = document.querySelector("#gbmShapSide");
+                      return chart?.getOption()?.title?.[0]?.text?.includes("SHAP flame plot: lat")
+                        && !document.querySelector("#gbmShapControls")?.hidden
+                        && !document.querySelector("#gbmShapFeatureSection2")?.hidden
+                        && Math.abs(side.getBoundingClientRect().width - width) < 1;
+                    }
+                    """,
+                    arg=shap_resized_side_width,
                     timeout=10_000,
                 )
                 page.locator("#gbmShapFeatureList1 .feature", has_text="Age").click()
@@ -16113,6 +16651,25 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                feature2_collapse_requests_before = len(gbm_layout_api_requests)
+                page.locator("#gbmShapFeature2Toggle").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmShapFeatureSection2")?.hidden
+                      && document.querySelector("#gbmShapFeature2Toggle")?.getAttribute("aria-expanded") === "false"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), feature2_collapse_requests_before)
+                page.locator("#gbmShapFeature2Toggle").click()
+                page.wait_for_function(
+                    """
+                    () => !document.querySelector("#gbmShapFeatureSection2")?.hidden
+                      && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("lat")
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), feature2_collapse_requests_before)
                 surface_state = page.evaluate(
                     """
                     () => {
@@ -16148,8 +16705,20 @@ COPY (
                 self.assertEqual(surface_state["axisNameFontSize"], 11)
                 self.assertTrue(surface_state["noticeHidden"])
                 self.assertNotIn("undefined is not an object", surface_state["noticeText"])
-                page.locator('[data-gbm-shap-factor="1"]').check()
-                page.locator('[data-gbm-shap-factor="2"]').check()
+                factor_geometry_before = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmShapControls");
+                      return [...document.querySelectorAll("[data-gbm-shap-factor]")].map((button) => {
+                        const rect = button.getBoundingClientRect();
+                        const left = rect.left + toolbar.scrollLeft;
+                        return { left, width: rect.width, center: left + rect.width / 2 };
+                      });
+                    }
+                    """
+                )
+                page.locator('[data-gbm-shap-factor="1"]').click()
+                page.locator('[data-gbm-shap-factor="2"]').click()
                 page.wait_for_function(
                     """
                     () => {
@@ -16161,6 +16730,35 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                factor_state = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmShapControls");
+                      return [...document.querySelectorAll("[data-gbm-shap-factor]")].map((button) => {
+                        const rect = button.getBoundingClientRect();
+                        const style = getComputedStyle(button);
+                        const left = rect.left + toolbar.scrollLeft;
+                        return {
+                          left,
+                          width: rect.width,
+                          center: left + rect.width / 2,
+                          pressed: button.getAttribute("aria-pressed"),
+                          weight: style.fontWeight,
+                          color: style.color,
+                        };
+                      });
+                    }
+                    """
+                )
+                self.assertTrue(all(item["pressed"] == "true" for item in factor_state))
+                self.assertTrue(all(item["weight"] == "700" for item in factor_state))
+                self.assertTrue(all(item["color"] == shap_control_style["accent"] for item in factor_state))
+                for before, after in zip(factor_geometry_before, factor_state, strict=True):
+                    self.assertAlmostEqual(before["left"], after["left"], delta=0.5)
+                    self.assertAlmostEqual(before["width"], after["width"], delta=0.5)
+                    self.assertAlmostEqual(before["center"], after["center"], delta=0.5)
+                self.assertTrue(shap_plot_payloads[-1]["factor_1"])
+                self.assertTrue(shap_plot_payloads[-1]["factor_2"])
                 shap_axis_formatting = page.evaluate(
                     """
                     () => {
@@ -16225,7 +16823,7 @@ COPY (
                       const option = chart?.getOption();
                       return option?.title?.[0]?.text?.includes("SHAP box plot: lat")
                         && option?.legend?.[0]?.show === false
-                        && document.querySelector('[data-gbm-shap-factor="1"]')?.checked;
+                        && document.querySelector('[data-gbm-shap-factor="1"]')?.getAttribute("aria-pressed") === "true";
                     }
                     """,
                     timeout=10_000,
@@ -16241,6 +16839,7 @@ COPY (
                       const toolbarToggle = document.querySelector("#gbmStackedShapToolbarToggle");
                       const side = document.querySelector("#gbmStackedShapSide");
                       const sideToggle = document.querySelector("#gbmStackedShapSideToggle");
+                      const copyButton = document.querySelector("#gbmStackedShapCopyButton");
                       const chart = document.querySelector("#gbmStackedShapChart");
                       const panelBox = panel.getBoundingClientRect();
                       const rootBox = root.getBoundingClientRect();
@@ -16264,6 +16863,9 @@ COPY (
                         sideInert: side.inert,
                         sideExpanded: sideToggle.getAttribute("aria-expanded"),
                         sideLabel: sideToggle.getAttribute("aria-label"),
+                        copyLabel: copyButton.getAttribute("aria-label"),
+                        copyTitle: copyButton.title,
+                        copyCursor: getComputedStyle(copyButton).cursor,
                         sideWidth: side.getBoundingClientRect().width,
                         chartHeight: chart.getBoundingClientRect().height,
                         chartBorder: [
@@ -16294,6 +16896,9 @@ COPY (
                 self.assertFalse(stacked_initial_layout["sideInert"])
                 self.assertEqual(stacked_initial_layout["sideExpanded"], "true")
                 self.assertEqual(stacked_initial_layout["sideLabel"], "Hide Stacked SHAP feature chooser")
+                self.assertEqual(stacked_initial_layout["copyLabel"], "Copy Stacked SHAP chart")
+                self.assertEqual(stacked_initial_layout["copyTitle"], "Copy Stacked SHAP chart")
+                self.assertEqual(stacked_initial_layout["copyCursor"], "pointer")
                 self.assertAlmostEqual(stacked_initial_layout["sideWidth"], 320, delta=1)
                 self.assertEqual(stacked_initial_layout["chartBorder"], ["0px", "0px", "0px", "0px"])
                 self.assertEqual(stacked_initial_layout["chartRadius"], "0px")
@@ -16334,6 +16939,18 @@ COPY (
                 )
                 stacked_feature_label = page.locator("#gbmStackedShapFeatureList .feature.active .kind").text_content()
                 self.assertEqual(stacked_feature_label, "Rank 1 · 0.2330")
+                page.evaluate("window.__lucidumCopiedShapImage = null")
+                page.locator("#gbmStackedShapCopyButton").click()
+                page.wait_for_function(
+                    """
+                    () => window.__lucidumCopiedShapImage
+                      && window.__lucidumCopiedShapImage.types.includes("image/png")
+                      && window.__lucidumCopiedShapImage.type === "image/png"
+                      && window.__lucidumCopiedShapImage.size > 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#clipboardToast").get_by_text("Stacked SHAP chart image copied").wait_for(timeout=10_000)
                 layout_request_count = stacked_shap_requests
                 stacked_expand_frame = page.evaluate(
                     """
@@ -17321,6 +17938,9 @@ COPY (
                     """
                     () => document.querySelector("#gbmShapFeatureList1 .feature.active")?.textContent.includes("Age")
                       && document.querySelector("#gbmShapFeatureList2 .feature.active")?.textContent.includes("Segment")
+                      && !document.querySelector("#gbmShapSide")?.hidden
+                      && !document.querySelector("#gbmShapFeatureSection2")?.hidden
+                      && document.querySelector("#gbmShapFeature2Toggle")?.getAttribute("aria-expanded") === "true"
                     """,
                     timeout=10_000,
                 )

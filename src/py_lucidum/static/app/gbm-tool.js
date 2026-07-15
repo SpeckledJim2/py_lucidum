@@ -111,6 +111,7 @@ export function createGbmTool({
   setStatus,
   setAppReadyStatus = () => {},
   setToolTimingFailed,
+  showClipboardToast = () => {},
   setDatasetGbmCount = () => {},
   startToolTiming,
   state,
@@ -167,8 +168,8 @@ export function createGbmTool({
   let featureDraftState = null;
   let featureInteractionPairEditModelId = "";
   const treeViewer = createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNotice });
-  const shapTool = createGbmShapTool({ api, escapeHtml, setNotice: setGbmNotice });
-  const stackedShapTool = createGbmStackedShapTool({ api, escapeHtml, setNotice: setGbmNotice });
+  const shapTool = createGbmShapTool({ api, escapeHtml, setNotice: setGbmNotice, showClipboardToast });
+  const stackedShapTool = createGbmStackedShapTool({ api, escapeHtml, setNotice: setGbmNotice, showClipboardToast });
 
   function buildRequest() {
     if (!state.schema) return null;
@@ -3295,6 +3296,7 @@ export function createGbmTool({
       stackedShapTool.refreshTheme();
     },
     resize() {
+      if (activeTab === "shap") shapTool.resize();
       if (activeTab === "stacked-shap") stackedShapTool.resize();
     },
     syncSidebarFromSchema,

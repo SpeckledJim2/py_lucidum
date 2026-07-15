@@ -1,4 +1,5 @@
 import { emptyOption, ensureShapChartLibraries, shapChartOption } from "./gbm-shap-chart.js";
+import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
 
 const BAND_STEPS = makeBandSteps();
 const BAND_BUTTONS = [0.01, 0.1, 1, 5, 10];
@@ -10,8 +11,16 @@ const TAIL_OPTIONS = [
   { value: 2, label: "2%" },
   { value: 5, label: "5%" },
 ];
+const SHAP_SIDE_DEFAULT_WIDTH = 320;
+const SHAP_SIDE_MIN_WIDTH = 240;
+const SHAP_SIDE_MAX_WIDTH = 560;
+const SHAP_CHART_MIN_WIDTH = 420;
+const SHAP_SPLITTER_KEY_STEP = 10;
+const SHAP_CHOOSER_MIN_HEIGHT = 96;
+const SHAP_CHOOSER_DIVIDER_HEIGHT = 18;
+const SHAP_STACKED_MEDIA = "(max-width: 900px)";
 
-export function createGbmShapTool({ api, escapeHtml, setNotice }) {
+export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToast = () => {} }) {
   let modelId = "";
   let lastModelId = "";
   let config = null;
@@ -22,7 +31,16 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
   let plotSeq = 0;
   let pendingLegendState = null;
   let chooserFeatureHeight = null;
-  let sidePanelWidth = null;
+  let sidePanelWidth = SHAP_SIDE_DEFAULT_WIDTH;
+  let controlsCollapsed = true;
+  let sidePanelCollapsed = false;
+  let feature2Collapsed = true;
+  let chartResizeFrame = null;
+  let chartResizeFlush = false;
+  let settledObserverSize = null;
+  let layoutMediaQuery = null;
+  let layoutMediaListener = null;
+  let settingsOverflowCleanup = null;
   const state = {
     feature1: "",
     feature2: "",
@@ -45,21 +63,49 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
   };
 
   function shellHtml() {
+    const toolbarHidden = controlsCollapsed ? " hidden inert aria-hidden=\"true\"" : "";
+    const sideHidden = sidePanelCollapsed ? " hidden inert aria-hidden=\"true\"" : "";
+    const feature2Hidden = feature2Collapsed ? " hidden inert aria-hidden=\"true\"" : "";
     return `
       <div id="gbmShapRoot" class="gbm-shap-view">
-        <aside class="gbm-shap-side">
-          ${featureChooserHtml(1, "Feature 1")}
-          <div id="gbmShapChooserDivider" class="gbm-shap-chooser-divider app-resizer app-resizer--horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize SHAP feature choosers" tabindex="0"></div>
-          ${featureChooserHtml(2, "Feature 2")}
-        </aside>
-        <div id="gbmShapMainResizer" class="gbm-shap-main-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize SHAP controls and chart" tabindex="0"></div>
-        <section class="gbm-shap-main">
-          <div id="gbmShapControls" class="gbm-shap-controls"></div>
-          <div class="gbm-shap-chart-shell">
-            <div id="gbmShapMessage" class="gbm-shap-message hidden"></div>
-            <div id="gbmShapChart" class="gbm-shap-chart" aria-label="GBM SHAP plot"></div>
-          </div>
-        </section>
+        <div id="gbmShapControls" class="gbm-shap-controls toolbar app-control-strip app-settings-strip${controlsCollapsed ? " hidden" : ""}"${toolbarHidden}></div>
+        <div class="gbm-shap-workspace${sidePanelCollapsed ? " gbm-shap-side-collapsed" : ""}${feature2Collapsed ? " gbm-shap-feature2-collapsed" : ""}">
+          <aside id="gbmShapSide" class="gbm-shap-side${sidePanelCollapsed ? " hidden" : ""}"${sideHidden}>
+            ${featureChooserHtml(1, "Feature 1")}
+            <div class="gbm-shap-chooser-divider-row">
+              <div id="gbmShapChooserDivider" class="gbm-shap-chooser-divider app-resizer app-resizer--horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize SHAP feature choosers" tabindex="0"></div>
+              <button id="gbmShapFeature2Toggle" class="gbm-shap-feature2-toggle" type="button" aria-controls="gbmShapFeatureSection2" aria-expanded="${String(!feature2Collapsed)}">
+                <span class="gbm-shap-feature2-toggle-icon" aria-hidden="true"></span>
+              </button>
+            </div>
+            ${featureChooserHtml(2, "Feature 2", feature2Hidden)}
+          </aside>
+          <div id="gbmShapMainResizer" class="gbm-shap-main-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize SHAP feature chooser" tabindex="0"></div>
+          <section class="gbm-shap-main">
+            <div class="gbm-shap-workspace-controls">
+              <button id="gbmShapSideToggle" class="gbm-shap-overlay-button app-control-button" type="button" aria-controls="gbmShapSide" aria-expanded="${String(!sidePanelCollapsed)}">
+                <svg class="gbm-shap-toggle-icon gbm-shap-chevron-horizontal" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="m15 18-6-6 6-6"></path>
+                </svg>
+              </button>
+              <button id="gbmShapToolbarToggle" class="gbm-shap-overlay-button app-control-button" type="button" aria-controls="gbmShapControls" aria-expanded="${String(!controlsCollapsed)}">
+                <svg class="gbm-shap-toggle-icon gbm-shap-chevron-vertical" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="m18 15-6-6-6 6"></path>
+                </svg>
+              </button>
+              <button id="gbmShapCopyButton" class="gbm-shap-overlay-button app-control-button" type="button" aria-label="Copy SHAP chart" title="Copy SHAP chart">
+                <svg class="gbm-shap-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="8" y="8" width="10" height="10" rx="1.5"></rect>
+                  <path d="M6 14H5.5A1.5 1.5 0 0 1 4 12.5v-7A1.5 1.5 0 0 1 5.5 4h7A1.5 1.5 0 0 1 14 5.5V6"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="gbm-shap-chart-shell">
+              <div id="gbmShapMessage" class="gbm-shap-message hidden"></div>
+              <div id="gbmShapChart" class="gbm-shap-chart" aria-label="GBM SHAP plot"></div>
+            </div>
+          </section>
+        </div>
       </div>
     `;
   }
@@ -69,6 +115,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const root = rootNode();
     if (!root) return;
     bindStaticEvents(root);
+    syncLayoutVisibility(root, { resize: false });
     if (!modelId) {
       config = null;
       clearPendingLegendState();
@@ -104,14 +151,36 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     root.dataset.gbmShapBound = "1";
     root.addEventListener("click", handleClick);
     root.addEventListener("input", handleInput);
-    root.addEventListener("change", handleChange);
+    settingsOverflowCleanup = bindSettingsStripOverflowCue(root.querySelector("#gbmShapControls"));
     setupChooserDividerResize(root);
     setupMainDividerResize(root);
+    layoutMediaQuery = window.matchMedia(SHAP_STACKED_MEDIA);
+    layoutMediaListener = () => syncLayoutVisibility(root);
+    layoutMediaQuery.addEventListener?.("change", layoutMediaListener);
   }
 
   function handleClick(event) {
     const button = event.target.closest("button");
     if (!button || !rootNode()?.contains(button)) return;
+    if (button.id === "gbmShapToolbarToggle") {
+      controlsCollapsed = !controlsCollapsed;
+      syncLayoutVisibility(rootNode());
+      return;
+    }
+    if (button.id === "gbmShapSideToggle") {
+      sidePanelCollapsed = !sidePanelCollapsed;
+      syncLayoutVisibility(rootNode());
+      return;
+    }
+    if (button.id === "gbmShapCopyButton") {
+      copyChartToClipboard();
+      return;
+    }
+    if (button.id === "gbmShapFeature2Toggle") {
+      feature2Collapsed = !feature2Collapsed;
+      syncLayoutVisibility(rootNode());
+      return;
+    }
     if (button.dataset.gbmShapSort) {
       state[`sort${button.dataset.gbmShapFeature}`] = button.dataset.gbmShapSort;
       renderFeatureLists();
@@ -148,6 +217,14 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       state.rescale = normaliseRescale(button.dataset.gbmShapRescale);
       renderControls();
       refreshPlot();
+      return;
+    }
+    if (button.dataset.gbmShapFactor) {
+      const index = button.dataset.gbmShapFactor;
+      state[`factor${index}`] = !state[`factor${index}`];
+      clearPendingLegendState();
+      renderControls();
+      refreshPlot();
     }
   }
 
@@ -156,16 +233,6 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     if (input?.dataset?.gbmShapSearch) {
       state[`search${input.dataset.gbmShapSearch}`] = input.value;
       renderFeatureLists();
-    }
-  }
-
-  function handleChange(event) {
-    const input = event.target;
-    if (input?.dataset?.gbmShapFactor) {
-      state[`factor${input.dataset.gbmShapFactor}`] = Boolean(input.checked);
-      clearPendingLegendState();
-      renderControls();
-      refreshPlot();
     }
   }
 
@@ -191,6 +258,8 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const changed = state.feature1 !== nextFeature1 || state.feature2 !== nextFeature2;
     state.feature1 = nextFeature1;
     state.feature2 = nextFeature2;
+    sidePanelCollapsed = false;
+    if (nextFeature2) feature2Collapsed = false;
     state.search1 = "";
     state.search2 = "";
     if (changed) {
@@ -292,13 +361,24 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       chart.setOption(option, true);
     }
     lastPayload = payload;
+    scheduleChartResize({ flush: true });
   }
 
   function ensureChart(target) {
     if (chart) return;
     chart = window.echarts.init(target);
-    resizeObserver = new ResizeObserver(() => chart?.resize());
-    resizeObserver.observe(target);
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver((entries) => {
+        const nextSize = resizeObserverEntrySize(entries?.[0]);
+        if (sameChartSize(nextSize, settledObserverSize)) {
+          settledObserverSize = null;
+          return;
+        }
+        settledObserverSize = null;
+        scheduleChartResize();
+      });
+      resizeObserver.observe(target);
+    }
   }
 
   function renderControlsAndLists() {
@@ -316,8 +396,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       ${bandingControlHtml(2, feature2)}
       ${tailControlHtml()}
       ${rescaleControlHtml()}
-      ${factorControlHtml(1, feature1)}
-      ${factorControlHtml(2, feature2)}
+      ${factorControlHtml(feature1, feature2)}
     `;
   }
 
@@ -407,10 +486,9 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     const target = document.getElementById("gbmShapChart");
     if (!target) return;
     target.innerHTML = "";
-    chart = window.echarts.init(target);
-    resizeObserver = new ResizeObserver(() => chart?.resize());
-    resizeObserver.observe(target);
+    ensureChart(target);
     chart.setOption(emptyOption(message, chartTheme()), true);
+    scheduleChartResize({ flush: true });
     setMessage(config?.warnings?.join(" ") || "");
   }
 
@@ -426,11 +504,22 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     configSeq += 1;
     plotSeq += 1;
     snapshotLegendState();
+    if (layoutMediaQuery && layoutMediaListener) {
+      layoutMediaQuery.removeEventListener?.("change", layoutMediaListener);
+    }
+    layoutMediaQuery = null;
+    layoutMediaListener = null;
+    settingsOverflowCleanup?.();
+    settingsOverflowCleanup = null;
     disposeChart();
     config = null;
   }
 
   function disposeChart() {
+    if (chartResizeFrame !== null) cancelAnimationFrame(chartResizeFrame);
+    chartResizeFrame = null;
+    chartResizeFlush = false;
+    settledObserverSize = null;
     resizeObserver?.disconnect();
     resizeObserver = null;
     lastPayload = null;
@@ -450,18 +539,18 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
         applyLegendSelection(option, legendSelection(previousOption, previousLegendEntries), nextLegendEntries);
       }
       chart.setOption(option, true);
-      chart.resize();
+      resizeChart({ flush: true });
     }
   }
 
-  function featureChooserHtml(index, title) {
+  function featureChooserHtml(index, title, attributes = "") {
     return `
-      <section class="gbm-shap-feature-section chart-side-section">
+      <section id="gbmShapFeatureSection${index}" class="gbm-shap-feature-section chart-side-section${index === 2 && feature2Collapsed ? " hidden" : ""}"${attributes}>
         <div class="section-title-row">
           <h2>${escapeHtml(title)}</h2>
           <div class="segmented gbm-shap-sort" role="group" aria-label="${escapeHtml(title)} sort">
-            <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-sort="importance">Importance</button>
-            <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-sort="alpha">A-Z</button>
+            <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-sort="importance" data-stable-label="Importance">Importance</button>
+            <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-sort="alpha" data-stable-label="A-Z">A-Z</button>
           </div>
         </div>
         <div class="chart-search-row">
@@ -483,18 +572,17 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
 
   function bandingControlHtml(index, feature) {
     const numeric = feature && isNumericKind(feature.kind);
-    const label = numeric ? `Feature ${index}` : (feature ? "Factor" : `Feature ${index}`);
     const disabled = numeric ? "" : " disabled";
     const current = formatBanding(state[`banding${index}`]);
     return `
       <div class="control gbm-shap-banding-control gbm-shap-feature${index}-control ${numeric ? "" : "disabled"}">
-        <h3>${escapeHtml(label)} ${numeric ? `<span>(${escapeHtml(current)})</span>` : ""}</h3>
+        <h3>Feature ${index} banding ${numeric ? `<span>(${escapeHtml(current)})</span>` : ""}</h3>
         <div class="segmented" role="group" aria-label="Feature ${index} banding">
-          <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-band-action="down"${disabled}>&lt;</button>
+          <button type="button" class="gbm-shap-band-step" data-gbm-shap-feature="${index}" data-gbm-shap-band-action="down" data-stable-label="&lt;"${disabled}>&lt;</button>
           ${BAND_BUTTONS.map((value) => `
-            <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-band-value="${value}" class="${Number(state[`banding${index}`]) === value ? "active" : ""}"${disabled}>${value}</button>
+            <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-band-value="${value}" data-stable-label="${value}" class="${Number(state[`banding${index}`]) === value ? "active" : ""}"${disabled}>${value}</button>
           `).join("")}
-          <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-band-action="up"${disabled}>&gt;</button>
+          <button type="button" class="gbm-shap-band-step" data-gbm-shap-feature="${index}" data-gbm-shap-band-action="up" data-stable-label="&gt;"${disabled}>&gt;</button>
         </div>
       </div>
     `;
@@ -503,23 +591,34 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
   function tailControlHtml() {
     return `
       <div class="control gbm-shap-tail-control">
-        <h3>Tail % to group</h3>
+        <h3>Tail grouping</h3>
         <div class="segmented" role="group" aria-label="Tail percent to group">
           ${TAIL_OPTIONS.map((option) => `
-            <button type="button" data-gbm-shap-tail="${option.value}" class="${Number(state.tailPercent) === option.value ? "active" : ""}">${escapeHtml(option.label)}</button>
+            <button type="button" data-gbm-shap-tail="${option.value}" data-stable-label="${escapeHtml(option.label)}" class="${Number(state.tailPercent) === option.value ? "active" : ""}">${escapeHtml(option.label)}</button>
           `).join("")}
         </div>
       </div>
     `;
   }
 
-  function factorControlHtml(index, feature) {
-    const disabled = feature && isNumericKind(feature.kind) ? "" : " disabled";
+  function factorControlHtml(feature1, feature2) {
     return `
-      <label class="gbm-shap-factor-control gbm-shap-feature${index}-factor ${disabled ? "disabled" : ""}">
-        <input type="checkbox" data-gbm-shap-factor="${index}" ${state[`factor${index}`] ? "checked" : ""}${disabled} />
-        <span>Treat Feature ${index} as factor</span>
-      </label>
+      <div class="control gbm-shap-factor-control">
+        <h3>Treat as factor</h3>
+        <div class="segmented" role="group" aria-label="Treat SHAP features as factors">
+          ${factorButtonHtml(1, feature1)}
+          ${factorButtonHtml(2, feature2)}
+        </div>
+      </div>
+    `;
+  }
+
+  function factorButtonHtml(index, feature) {
+    const enabled = Boolean(feature && isNumericKind(feature.kind));
+    const pressed = Boolean(state[`factor${index}`]);
+    const label = `Feature ${index}`;
+    return `
+      <button type="button" data-gbm-shap-factor="${index}" data-stable-label="${label}" class="${pressed ? "active" : ""}" aria-pressed="${String(pressed)}" aria-label="Treat Feature ${index} as factor"${enabled ? "" : " disabled"}>${label}</button>
     `;
   }
 
@@ -529,7 +628,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
         <h3>Rescale</h3>
         <div class="segmented" role="group" aria-label="SHAP rescale">
           ${["-", "0", "1"].map((value) => `
-            <button type="button" data-gbm-shap-rescale="${value}" class="${state.rescale === value ? "active" : ""}">${value}</button>
+            <button type="button" data-gbm-shap-rescale="${value}" data-stable-label="${value}" class="${state.rescale === value ? "active" : ""}">${value}</button>
           `).join("")}
         </div>
       </div>
@@ -697,19 +796,160 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     };
   }
 
+  async function copyChartToClipboard() {
+    if (!chart || !navigator.clipboard?.write || typeof window.ClipboardItem !== "function") {
+      showClipboardToast("Could not copy SHAP chart image", true);
+      return;
+    }
+    try {
+      const dataUrl = chart.getDataURL({
+        type: "png",
+        pixelRatio: 2,
+        backgroundColor: chartTheme().panel || "#fff",
+      });
+      const blob = await fetch(dataUrl).then((response) => response.blob());
+      await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blob })]);
+      showClipboardToast("SHAP chart image copied");
+    } catch (_) {
+      showClipboardToast("Could not copy SHAP chart image", true);
+    }
+  }
+
+  function syncLayoutVisibility(root = rootNode(), { resize = true } = {}) {
+    if (!root) return;
+    const toolbar = root.querySelector("#gbmShapControls");
+    const toolbarToggle = root.querySelector("#gbmShapToolbarToggle");
+    const side = root.querySelector("#gbmShapSide");
+    const sideToggle = root.querySelector("#gbmShapSideToggle");
+    const feature2 = root.querySelector("#gbmShapFeatureSection2");
+    const feature2Toggle = root.querySelector("#gbmShapFeature2Toggle");
+    const chooserResizer = root.querySelector("#gbmShapChooserDivider");
+    const mainResizer = root.querySelector("#gbmShapMainResizer");
+    const workspace = root.querySelector(".gbm-shap-workspace");
+    const stacked = window.matchMedia(SHAP_STACKED_MEDIA).matches;
+
+    if (controlsCollapsed && toolbar?.contains(document.activeElement)) toolbarToggle?.focus();
+    if (sidePanelCollapsed && side?.contains(document.activeElement)) sideToggle?.focus();
+    if (feature2Collapsed && feature2?.contains(document.activeElement)) feature2Toggle?.focus();
+
+    setElementCollapsed(toolbar, controlsCollapsed);
+    setElementCollapsed(side, sidePanelCollapsed);
+    setElementCollapsed(feature2, feature2Collapsed);
+    workspace?.classList.toggle("gbm-shap-side-collapsed", sidePanelCollapsed);
+    workspace?.classList.toggle("gbm-shap-feature2-collapsed", feature2Collapsed);
+
+    const mainSplitterHidden = sidePanelCollapsed || stacked;
+    syncSplitterVisibility(mainResizer, mainSplitterHidden);
+    syncSplitterVisibility(chooserResizer, sidePanelCollapsed || feature2Collapsed);
+
+    syncToggleButton(
+      toolbarToggle,
+      !controlsCollapsed,
+      controlsCollapsed ? "Show SHAP control row" : "Hide SHAP control row",
+    );
+    syncToggleButton(
+      sideToggle,
+      !sidePanelCollapsed,
+      sidePanelCollapsed ? "Show SHAP feature choosers" : "Hide SHAP feature choosers",
+    );
+    syncToggleButton(
+      feature2Toggle,
+      !feature2Collapsed,
+      feature2Collapsed ? "Show Feature 2 chooser" : "Hide Feature 2 chooser",
+    );
+
+    if (!stacked) setMainSideWidth(root, sidePanelWidth, { resize: false });
+    if (!feature2Collapsed) {
+      setChooserFeatureHeight(root, chooserFeatureHeight ?? defaultChooserFeatureHeight(root));
+    }
+    if (resize) scheduleChartResize({ flush: true });
+  }
+
+  function setElementCollapsed(element, collapsed) {
+    if (!element) return;
+    element.classList.toggle("hidden", collapsed);
+    element.hidden = collapsed;
+    element.toggleAttribute("inert", collapsed);
+    element.setAttribute("aria-hidden", String(collapsed));
+  }
+
+  function syncSplitterVisibility(resizer, hidden) {
+    if (!resizer) return;
+    resizer.hidden = hidden;
+    resizer.toggleAttribute("inert", hidden);
+    resizer.tabIndex = hidden ? -1 : 0;
+    resizer.setAttribute("aria-hidden", String(hidden));
+  }
+
+  function syncToggleButton(button, expanded, label) {
+    if (!button) return;
+    button.setAttribute("aria-expanded", String(expanded));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+
+  function resizeChart({ flush = false } = {}) {
+    if (!chart) return;
+    chart.resize();
+    if (flush) {
+      chart.getZr?.().flush?.();
+      settledObserverSize = currentChartSize();
+    }
+  }
+
+  function currentChartSize() {
+    const target = document.getElementById("gbmShapChart");
+    return target ? { width: target.clientWidth, height: target.clientHeight } : null;
+  }
+
+  function resizeObserverEntrySize(entry) {
+    if (!entry) return null;
+    const box = entry.contentBoxSize;
+    const size = Array.isArray(box) ? box[0] : box;
+    if (size) return { width: size.inlineSize, height: size.blockSize };
+    return { width: entry.contentRect?.width, height: entry.contentRect?.height };
+  }
+
+  function sameChartSize(left, right) {
+    if (!left || !right) return false;
+    return Math.abs(Number(left.width) - Number(right.width)) < 0.5
+      && Math.abs(Number(left.height) - Number(right.height)) < 0.5;
+  }
+
+  function scheduleChartResize({ flush = false } = {}) {
+    chartResizeFlush ||= Boolean(flush);
+    if (chartResizeFrame !== null) return;
+    chartResizeFrame = requestAnimationFrame(() => {
+      chartResizeFrame = null;
+      const shouldFlush = chartResizeFlush;
+      chartResizeFlush = false;
+      resizeChart({ flush: shouldFlush });
+    });
+  }
+
+  function resize() {
+    const root = rootNode();
+    if (root && !window.matchMedia(SHAP_STACKED_MEDIA).matches) {
+      setMainSideWidth(root, sidePanelWidth, { resize: false });
+    }
+    if (root && !feature2Collapsed) {
+      setChooserFeatureHeight(root, chooserFeatureHeight ?? defaultChooserFeatureHeight(root));
+    }
+    resizeChart({ flush: true });
+  }
+
   function setupChooserDividerResize(root) {
     const side = root.querySelector(".gbm-shap-side");
     const firstPanel = side?.querySelector(".gbm-shap-feature-section");
     const resizer = root.querySelector("#gbmShapChooserDivider");
     if (!side || !firstPanel || !resizer) return;
-    if (Number.isFinite(chooserFeatureHeight) && chooserFeatureHeight > 0) {
-      setChooserFeatureHeight(root, chooserFeatureHeight);
-    }
+    if (Number.isFinite(chooserFeatureHeight) && chooserFeatureHeight > 0) setChooserFeatureHeight(root, chooserFeatureHeight);
 
     let dragging = false;
     let startY = 0;
     let startHeight = 0;
     resizer.addEventListener("pointerdown", (event) => {
+      if (feature2Collapsed || sidePanelCollapsed) return;
       event.preventDefault();
       dragging = true;
       startY = event.clientY;
@@ -730,10 +970,6 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
       resizer.classList.remove("dragging");
       document.body.classList.remove("resizing-chart-control-heights");
       window.getSelection()?.removeAllRanges();
-      const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--gbm-shap-feature1-height"));
-      if (Number.isFinite(height)) {
-        chooserFeatureHeight = height;
-      }
       if (event.pointerId !== undefined) {
         try {
           resizer.releasePointerCapture(event.pointerId);
@@ -743,72 +979,127 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     }
     resizer.addEventListener("pointerup", finishDrag);
     resizer.addEventListener("pointercancel", finishDrag);
+    resizer.addEventListener("keydown", (event) => {
+      if (feature2Collapsed || sidePanelCollapsed) return;
+      const bounds = chooserHeightBounds(root);
+      let nextHeight = null;
+      if (event.key === "ArrowUp") nextHeight = (chooserFeatureHeight ?? firstPanel.getBoundingClientRect().height) - SHAP_SPLITTER_KEY_STEP;
+      if (event.key === "ArrowDown") nextHeight = (chooserFeatureHeight ?? firstPanel.getBoundingClientRect().height) + SHAP_SPLITTER_KEY_STEP;
+      if (event.key === "Home") nextHeight = bounds.min;
+      if (event.key === "End") nextHeight = bounds.max;
+      if (nextHeight === null) return;
+      event.preventDefault();
+      setChooserFeatureHeight(root, nextHeight);
+    });
+  }
+
+  function defaultChooserFeatureHeight(root = rootNode()) {
+    const bounds = chooserHeightBounds(root);
+    return Math.round((bounds.min + bounds.max) / 2);
+  }
+
+  function chooserHeightBounds(root = rootNode()) {
+    const side = root?.querySelector(".gbm-shap-side");
+    const availableHeight = side?.getBoundingClientRect().height || window.innerHeight;
+    const max = Math.max(
+      SHAP_CHOOSER_MIN_HEIGHT,
+      availableHeight - SHAP_CHOOSER_DIVIDER_HEIGHT - SHAP_CHOOSER_MIN_HEIGHT,
+    );
+    return { min: SHAP_CHOOSER_MIN_HEIGHT, max };
   }
 
   function setChooserFeatureHeight(root, rawHeight) {
-    const side = root?.querySelector(".gbm-shap-side");
     const resizer = root?.querySelector("#gbmShapChooserDivider");
-    const availableHeight = side?.getBoundingClientRect().height || window.innerHeight;
-    const splitterSpace = 22;
-    const minPanelHeight = 96;
-    const maxHeight = Math.max(minPanelHeight, availableHeight - splitterSpace - minPanelHeight);
-    const height = Math.min(Math.max(rawHeight, minPanelHeight), maxHeight);
+    const bounds = chooserHeightBounds(root);
+    const height = Math.min(Math.max(Number(rawHeight) || bounds.min, bounds.min), bounds.max);
+    chooserFeatureHeight = height;
+    root?.style.setProperty("--gbm-shap-feature1-height", `${Math.round(height)}px`);
     document.documentElement.style.setProperty("--gbm-shap-feature1-height", `${Math.round(height)}px`);
-    resizer?.setAttribute("aria-valuemin", String(minPanelHeight));
-    resizer?.setAttribute("aria-valuemax", String(Math.round(maxHeight)));
+    resizer?.setAttribute("aria-valuemin", String(bounds.min));
+    resizer?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
     resizer?.setAttribute("aria-valuenow", String(Math.round(height)));
+    return height;
   }
 
   function setupMainDividerResize(root) {
     const side = root.querySelector(".gbm-shap-side");
     const resizer = root.querySelector("#gbmShapMainResizer");
     if (!side || !resizer) return;
-    if (Number.isFinite(sidePanelWidth) && sidePanelWidth > 0) {
-      setMainSideWidth(root, sidePanelWidth);
-    }
-
+    let dragging = false;
+    let startX = 0;
+    let startWidth = sidePanelWidth;
     resizer.addEventListener("pointerdown", (event) => {
+      if (window.matchMedia(SHAP_STACKED_MEDIA).matches || sidePanelCollapsed) return;
       event.preventDefault();
-      const startX = event.clientX;
-      const startWidth = side.getBoundingClientRect().width || 0;
+      dragging = true;
+      startX = event.clientX;
+      startWidth = side.getBoundingClientRect().width || sidePanelWidth;
       resizer.classList.add("dragging");
       document.body.classList.add("resizing-chart-controls");
-      resizer.setPointerCapture?.(event.pointerId);
+      resizer.setPointerCapture(event.pointerId);
       window.getSelection()?.removeAllRanges();
-      const onMove = (moveEvent) => setMainSideWidth(root, startWidth + moveEvent.clientX - startX);
-      const onUp = () => {
-        resizer.classList.remove("dragging");
-        document.body.classList.remove("resizing-chart-controls");
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        window.getSelection()?.removeAllRanges();
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp, { once: true });
     });
+    resizer.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      event.preventDefault();
+      setMainSideWidth(root, startWidth + event.clientX - startX);
+    });
+    const finishDrag = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove("dragging");
+      document.body.classList.remove("resizing-chart-controls");
+      window.getSelection()?.removeAllRanges();
+      if (event.pointerId !== undefined) {
+        try {
+          resizer.releasePointerCapture(event.pointerId);
+        } catch (_) {
+        }
+      }
+      scheduleChartResize({ flush: true });
+    };
+    resizer.addEventListener("pointerup", finishDrag);
+    resizer.addEventListener("pointercancel", finishDrag);
 
     resizer.addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      if (window.matchMedia(SHAP_STACKED_MEDIA).matches || sidePanelCollapsed) return;
+      const bounds = mainSideWidthBounds(root);
+      let nextWidth = null;
+      if (event.key === "ArrowLeft") nextWidth = sidePanelWidth - SHAP_SPLITTER_KEY_STEP;
+      if (event.key === "ArrowRight") nextWidth = sidePanelWidth + SHAP_SPLITTER_KEY_STEP;
+      if (event.key === "Home") nextWidth = bounds.min;
+      if (event.key === "End") nextWidth = bounds.max;
+      if (nextWidth === null) return;
       event.preventDefault();
-      const current = side.getBoundingClientRect().width || 0;
-      setMainSideWidth(root, current + (event.key === "ArrowRight" ? 24 : -24));
+      setMainSideWidth(root, nextWidth, { flush: true });
     });
+    setMainSideWidth(root, sidePanelWidth, { resize: false });
   }
 
-  function setMainSideWidth(root, rawWidth) {
+  function mainSideWidthBounds(root = rootNode()) {
+    const workspace = root?.querySelector(".gbm-shap-workspace");
+    const availableWidth = workspace?.getBoundingClientRect().width || window.innerWidth;
+    const max = Math.max(
+      SHAP_SIDE_MIN_WIDTH,
+      Math.min(SHAP_SIDE_MAX_WIDTH, availableWidth - SHAP_CHART_MIN_WIDTH),
+    );
+    return { min: SHAP_SIDE_MIN_WIDTH, max };
+  }
+
+  function setMainSideWidth(root, rawWidth, { resize = true, flush = false } = {}) {
     const resizer = root?.querySelector("#gbmShapMainResizer");
-    const availableWidth = root?.getBoundingClientRect().width || window.innerWidth;
-    const resizerWidth = resizer?.getBoundingClientRect().width || 12;
-    const minSideWidth = 240;
-    const minChartWidth = 360;
-    const maxWidth = Math.max(minSideWidth, availableWidth - resizerWidth - minChartWidth);
-    const width = Math.min(Math.max(rawWidth, minSideWidth), maxWidth);
+    const bounds = mainSideWidthBounds(root);
+    const width = Math.min(
+      Math.max(Number(rawWidth) || SHAP_SIDE_DEFAULT_WIDTH, bounds.min),
+      bounds.max,
+    );
     sidePanelWidth = width;
     root.style.setProperty("--gbm-shap-side-width", `${Math.round(width)}px`);
-    resizer?.setAttribute("aria-valuemin", String(minSideWidth));
-    resizer?.setAttribute("aria-valuemax", String(Math.round(maxWidth)));
+    resizer?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+    resizer?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
     resizer?.setAttribute("aria-valuenow", String(Math.round(width)));
-    requestAnimationFrame(() => chart?.resize());
+    if (resize) scheduleChartResize({ flush });
+    return width;
   }
 
   function legendEntryNames(option) {
@@ -869,6 +1160,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice }) {
     preselectFeatures,
     refreshTheme,
     render,
+    resize,
     shellHtml,
   };
 }

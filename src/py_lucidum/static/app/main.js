@@ -482,6 +482,7 @@
         setStatus,
         setAppReadyStatus: setReadyBadge,
         setToolTimingFailed,
+        showClipboardToast,
         startToolTiming,
         state,
         canNavigateToLineBarFeature: (featureName) => lineBarTool.canNavigateToFeature(featureName),

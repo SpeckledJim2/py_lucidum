@@ -198,6 +198,10 @@
         margin: -8px -8px -8px;
       }
 
+      #gbm-screen-panel-shap {
+        margin: -8px -8px -8px;
+      }
+
       .gbm-tab-panel[data-gbm-panel="trees"] {
         height: 100%;
       }
@@ -211,34 +215,165 @@
       }
 
       .gbm-shap-view {
-        display: grid;
-        grid-template-columns: minmax(240px, var(--gbm-shap-side-width, 320px)) 12px minmax(0, 1fr);
-        gap: 0;
+        background: var(--panel);
+        display: flex;
+        flex-direction: column;
         height: 100%;
         min-height: 0;
         min-width: 0;
+        overflow: hidden;
+      }
+
+      .gbm-shap-controls {
+        flex: 0 0 var(--app-control-strip-height);
+        width: 100%;
+      }
+
+      .gbm-shap-controls > .control {
+        flex: 0 0 auto;
+        width: max-content;
+      }
+
+      .gbm-shap-controls .segmented {
+        flex-wrap: nowrap;
+      }
+
+      .gbm-shap-controls .gbm-shap-band-step {
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      .gbm-shap-controls button:disabled,
+      .gbm-shap-controls button:disabled:hover,
+      .gbm-shap-controls button:disabled:focus-visible {
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.55;
+        outline: none;
+      }
+
+      .gbm-shap-banding-control.disabled {
+        opacity: 0.68;
+      }
+
+      .gbm-shap-workspace {
+        display: grid;
+        flex: 1 1 auto;
+        grid-template-columns: minmax(240px, var(--gbm-shap-side-width, 320px)) minmax(0, 1fr);
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .gbm-shap-workspace.gbm-shap-side-collapsed {
+        grid-template-columns: minmax(0, 1fr);
       }
 
       .gbm-shap-side {
         display: grid;
-        grid-template-rows: var(--gbm-shap-feature1-height, minmax(0, 1fr)) 6px minmax(0, 1fr);
-        gap: 8px;
+        grid-template-rows: var(--gbm-shap-feature1-height, minmax(0, 1fr)) 18px minmax(0, 1fr);
+        gap: 0;
         min-height: 0;
         min-width: 0;
       }
 
+      .gbm-shap-feature2-collapsed .gbm-shap-side {
+        grid-template-rows: minmax(0, 1fr) 18px;
+      }
+
+      .gbm-shap-chooser-divider-row {
+        height: 18px;
+        min-height: 18px;
+        position: relative;
+      }
+
+      .gbm-shap-chooser-divider-row::before {
+        background: var(--line);
+        content: "";
+        height: 1px;
+        left: 0;
+        pointer-events: none;
+        position: absolute;
+        right: 0;
+        top: 50%;
+        transform: translateY(-50%);
+      }
+
       .gbm-shap-chooser-divider {
+        bottom: 0;
         cursor: row-resize;
-        min-height: 6px;
+        left: 0;
+        position: absolute;
+        right: 22px;
+        top: 0;
+        z-index: 1;
+      }
+
+      .gbm-shap-chooser-divider::before {
+        content: none;
+      }
+
+      .gbm-shap-feature2-toggle {
+        align-items: center;
+        background: var(--panel);
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        display: inline-grid;
+        height: 18px;
+        justify-content: center;
+        padding: 0;
+        position: absolute;
+        right: 0;
+        top: 0;
+        width: 22px;
+        z-index: 2;
+      }
+
+      .gbm-shap-feature2-toggle:hover,
+      .gbm-shap-feature2-toggle:focus-visible {
+        background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+        color: var(--accent);
+        outline: none;
+      }
+
+      .gbm-shap-feature2-toggle-icon {
+        border-bottom: 2px solid currentColor;
+        border-right: 2px solid currentColor;
+        height: 7px;
+        transform: translateY(-1px) rotate(45deg);
+        width: 7px;
+      }
+
+      .gbm-shap-feature2-collapsed .gbm-shap-feature2-toggle-icon {
+        transform: translateY(2px) rotate(225deg);
       }
 
       .gbm-shap-main-resizer {
+        bottom: 0;
         cursor: col-resize;
+        left: calc(var(--gbm-shap-side-width, 320px) - 6px);
         min-height: 0;
+        position: absolute;
+        top: 0;
+        width: 12px;
+        z-index: 7;
+      }
+
+      .gbm-shap-main-resizer.app-resizer--vertical::before,
+      .gbm-shap-main-resizer.app-resizer--vertical:hover::before,
+      .gbm-shap-main-resizer.app-resizer--vertical.dragging::before {
+        border-radius: 0;
+        bottom: 0;
+        top: 0;
+        width: 1px;
       }
 
       .gbm-shap-feature-section {
         min-height: 0;
+        min-width: 0;
       }
 
       .gbm-shap-feature-list {
@@ -246,115 +381,111 @@
       }
 
       .gbm-shap-sort button {
-        font-size: 11px;
-        min-height: 22px;
-        padding: 1px 6px;
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        color: var(--muted);
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: 24px;
+        line-height: 1.2;
+        min-height: 24px;
+        padding: 2px var(--app-control-button-padding-inline);
+        text-align: center;
+      }
+
+      .gbm-shap-sort button::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .gbm-shap-sort button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-shap-sort button:focus-visible {
+        background: transparent;
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .gbm-shap-sort button.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
       }
 
       .gbm-shap-main {
         display: flex;
         flex-direction: column;
-        gap: 8px;
         min-height: 0;
         min-width: 0;
+        position: relative;
       }
 
-      .gbm-shap-controls {
-        display: grid;
-        grid-template-columns: repeat(4, max-content);
-        gap: 6px 12px;
-        justify-content: flex-start;
-        min-width: 0;
-        overflow-x: auto;
+      .gbm-shap-workspace-controls {
+        display: flex;
+        gap: var(--app-control-strip-gap);
+        height: 28px;
+        left: 8px;
+        overflow: hidden;
+        position: absolute;
+        top: 6px;
+        z-index: 5;
       }
 
-      .gbm-shap-controls .control {
-        align-items: flex-start;
-        justify-self: start;
-        min-width: 0;
-      }
-
-      .gbm-shap-controls .gbm-shap-feature2-control {
-        align-items: flex-start;
-        grid-column: 2;
-        grid-row: 1;
-        text-align: left;
-      }
-
-      .gbm-shap-controls .gbm-shap-tail-control {
-        align-items: flex-start;
-        grid-column: 3;
-        grid-row: 1;
-        text-align: left;
-      }
-
-      .gbm-shap-controls .gbm-shap-rescale-control {
-        align-items: flex-start;
-        grid-column: 4;
-        grid-row: 1;
-        text-align: left;
-      }
-
-      .gbm-shap-controls .control h3 {
-        font-size: 12px;
-        line-height: 1.2;
-        margin-bottom: 4px;
-      }
-
-      .gbm-shap-controls .segmented {
-        flex-wrap: wrap;
-      }
-
-      .gbm-shap-feature2-control .segmented {
-        justify-content: flex-start;
-      }
-
-      .gbm-shap-tail-control .segmented {
-        justify-content: flex-start;
-      }
-
-      .gbm-shap-rescale-control .segmented {
-        justify-content: flex-start;
-      }
-
-      .gbm-shap-banding-control.disabled {
-        opacity: 0.68;
-      }
-
-      .gbm-shap-factor-control {
+      .gbm-shap-overlay-button {
         align-items: center;
-        color: var(--text);
-        display: inline-flex;
-        font-size: 12px;
-        font-weight: 700;
-        gap: 6px;
-        line-height: 1.2;
-        min-height: 24px;
-        white-space: nowrap;
-      }
-
-      .gbm-shap-feature1-factor {
-        grid-column: 1;
-        grid-row: 2;
-        justify-self: start;
-      }
-
-      .gbm-shap-feature2-factor {
-        grid-column: 2;
-        grid-row: 2;
-        justify-self: start;
-        text-align: left;
-      }
-
-      .gbm-shap-factor-control.disabled {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
         color: var(--muted);
+        cursor: pointer;
+        display: inline-grid;
+        flex: 0 0 auto;
+        height: 24px;
+        justify-content: center;
+        min-height: 24px;
+        min-width: 28px;
+        padding: 0;
+        width: 28px;
       }
 
-      .gbm-shap-factor-control input {
-        accent-color: var(--accent);
-        height: 13px;
-        margin: 0;
-        width: 13px;
+      .gbm-shap-overlay-button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-shap-overlay-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .gbm-shap-toggle-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
+      }
+
+      #gbmShapSideToggle[aria-expanded="false"] .gbm-shap-chevron-horizontal,
+      #gbmShapToolbarToggle[aria-expanded="false"] .gbm-shap-chevron-vertical {
+        transform: rotate(180deg);
       }
 
       .gbm-shap-chart-shell {
@@ -384,8 +515,8 @@
 
       .gbm-shap-chart {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
+        border: 0;
+        border-radius: 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
@@ -549,6 +680,7 @@
         border: 0;
         border-radius: 0;
         color: var(--muted);
+        cursor: pointer;
         display: inline-grid;
         flex: 0 0 auto;
         height: 24px;
@@ -2298,6 +2430,35 @@
       }
 
       @media (max-width: 900px) {
+        .gbm-shap-workspace {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: minmax(160px, min(34dvh, 280px)) minmax(0, 1fr);
+        }
+
+        .gbm-shap-workspace.gbm-shap-side-collapsed {
+          grid-template-rows: minmax(0, 1fr);
+        }
+
+        .gbm-shap-side {
+          grid-column: 1;
+          grid-row: 1;
+          max-height: min(34dvh, 280px);
+          min-height: 160px;
+        }
+
+        .gbm-shap-main {
+          grid-column: 1;
+          grid-row: 2;
+        }
+
+        .gbm-shap-side-collapsed .gbm-shap-main {
+          grid-row: 1;
+        }
+
+        .gbm-shap-main-resizer {
+          display: none !important;
+        }
+
         .gbm-stacked-shap-workspace {
           grid-template-columns: minmax(0, 1fr);
           grid-template-rows: minmax(160px, 34%) minmax(0, 1fr);
