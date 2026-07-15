@@ -194,6 +194,10 @@
         margin: -8px -8px -8px;
       }
 
+      #gbm-screen-panel-stacked-shap {
+        margin: -8px -8px -8px;
+      }
+
       .gbm-tab-panel[data-gbm-panel="trees"] {
         height: 100%;
       }
@@ -389,17 +393,79 @@
       }
 
       .gbm-stacked-shap-view {
-        display: grid;
-        grid-template-columns: minmax(240px, var(--gbm-stacked-shap-side-width, 320px)) 12px minmax(0, 1fr);
-        gap: 0;
+        background: var(--panel);
+        display: flex;
+        flex-direction: column;
         height: 100%;
         min-height: 0;
         min-width: 0;
+        overflow: hidden;
+      }
+
+      .gbm-stacked-shap-controls {
+        flex: 0 0 var(--app-control-strip-height);
+        width: 100%;
+      }
+
+      .gbm-stacked-shap-controls > .control {
+        flex: 0 0 auto;
+        width: max-content;
+      }
+
+      .gbm-stacked-shap-controls .segmented {
+        flex-wrap: nowrap;
+      }
+
+      .gbm-stacked-shap-controls .gbm-stacked-shap-band-step {
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      .gbm-stacked-shap-controls button:disabled,
+      .gbm-stacked-shap-controls button:disabled:hover,
+      .gbm-stacked-shap-controls button:disabled:focus-visible {
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.55;
+        outline: none;
+      }
+
+      .gbm-stacked-shap-banding-control.disabled {
+        opacity: 0.68;
+      }
+
+      .gbm-stacked-shap-workspace {
+        display: grid;
+        flex: 1 1 auto;
+        grid-template-columns: minmax(240px, var(--gbm-stacked-shap-side-width, 320px)) minmax(0, 1fr);
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .gbm-stacked-shap-workspace.gbm-stacked-shap-side-collapsed {
+        grid-template-columns: minmax(0, 1fr);
       }
 
       .gbm-stacked-shap-main-resizer {
+        bottom: 0;
         cursor: col-resize;
+        left: calc(var(--gbm-stacked-shap-side-width, 320px) - 6px);
         min-height: 0;
+        position: absolute;
+        top: 0;
+        width: 12px;
+        z-index: 7;
+      }
+
+      .gbm-stacked-shap-main-resizer.app-resizer--vertical::before,
+      .gbm-stacked-shap-main-resizer.app-resizer--vertical:hover::before,
+      .gbm-stacked-shap-main-resizer.app-resizer--vertical.dragging::before {
+        border-radius: 0;
+        bottom: 0;
+        top: 0;
+        width: 1px;
       }
 
       .gbm-stacked-shap-side,
@@ -412,46 +478,111 @@
         min-height: 0;
       }
 
+      .gbm-stacked-shap-feature-sort button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        color: var(--muted);
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: 24px;
+        line-height: 1.2;
+        min-height: 24px;
+        padding: 2px var(--app-control-button-padding-inline);
+        text-align: center;
+      }
+
+      .gbm-stacked-shap-feature-sort button::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .gbm-stacked-shap-feature-sort button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-stacked-shap-feature-sort button:focus-visible {
+        background: transparent;
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .gbm-stacked-shap-feature-sort button.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
       .gbm-stacked-shap-main {
         display: flex;
         flex-direction: column;
-        gap: 8px;
         min-height: 0;
         min-width: 0;
+        position: relative;
       }
 
-      .gbm-stacked-shap-controls {
-        align-items: flex-start;
+      .gbm-stacked-shap-workspace-controls {
         display: flex;
-        flex-wrap: wrap;
-        gap: 6px 12px;
-        min-width: 0;
+        gap: var(--app-control-strip-gap);
+        height: 28px;
+        left: 8px;
+        overflow: hidden;
+        position: absolute;
+        top: 6px;
+        z-index: 5;
       }
 
-      .gbm-stacked-shap-controls .control {
-        align-items: flex-start;
-        max-width: 100%;
-        min-width: 0;
-        width: max-content;
+      .gbm-stacked-shap-overlay-button {
+        align-items: center;
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        display: inline-grid;
+        flex: 0 0 auto;
+        height: 24px;
+        justify-content: center;
+        min-height: 24px;
+        min-width: 28px;
+        padding: 0;
+        width: 28px;
       }
 
-      .gbm-stacked-shap-controls .control h3 {
-        font-size: 12px;
-        line-height: 1.2;
-        margin-bottom: 4px;
+      .gbm-stacked-shap-overlay-button:hover {
+        background: transparent;
+        color: var(--accent);
       }
 
-      .gbm-stacked-shap-controls .segmented {
-        flex-wrap: wrap;
+      .gbm-stacked-shap-overlay-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
       }
 
-      .gbm-stacked-shap-banding-control {
-        align-items: flex-start;
-        text-align: left;
+      .gbm-stacked-shap-toggle-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
       }
 
-      .gbm-stacked-shap-banding-control.disabled {
-        opacity: 0.68;
+      #gbmStackedShapSideToggle[aria-expanded="false"] .gbm-stacked-shap-chevron-horizontal,
+      #gbmStackedShapToolbarToggle[aria-expanded="false"] .gbm-stacked-shap-chevron-vertical {
+        transform: rotate(180deg);
       }
 
       .gbm-stacked-shap-chart-shell {
@@ -463,8 +594,8 @@
 
       .gbm-stacked-shap-chart {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
+        border: 0;
+        border-radius: 0;
         height: 100%;
         min-height: 0;
         min-width: 0;
@@ -2164,6 +2295,35 @@
         font-size: 12px;
         line-height: 1.35;
         padding: 16px 0;
+      }
+
+      @media (max-width: 900px) {
+        .gbm-stacked-shap-workspace {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: minmax(160px, 34%) minmax(0, 1fr);
+        }
+
+        .gbm-stacked-shap-workspace.gbm-stacked-shap-side-collapsed {
+          grid-template-rows: minmax(0, 1fr);
+        }
+
+        .gbm-stacked-shap-side {
+          grid-column: 1;
+          grid-row: 1;
+        }
+
+        .gbm-stacked-shap-main {
+          grid-column: 1;
+          grid-row: 2;
+        }
+
+        .gbm-stacked-shap-side-collapsed .gbm-stacked-shap-main {
+          grid-row: 1;
+        }
+
+        .gbm-stacked-shap-main-resizer {
+          display: none !important;
+        }
       }
 
       @media (max-width: 1180px) {

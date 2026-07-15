@@ -15456,13 +15456,18 @@ COPY (
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
             gbm_layout_api_requests: list[str] = []
+            stacked_shap_requests = 0
             page.on("pageerror", lambda error: page_errors.append(str(error)))
-            page.on(
-                "request",
-                lambda request: gbm_layout_api_requests.append(request.url)
-                if "/api/gbm/" in request.url
-                else None,
-            )
+
+            def track_gbm_request(request: object) -> None:
+                nonlocal stacked_shap_requests
+                url = request.url
+                if "/api/gbm/" in url:
+                    gbm_layout_api_requests.append(url)
+                if "/api/gbm/models/" in url and url.endswith("/shap/stacked"):
+                    stacked_shap_requests += 1
+
+            page.on("request", track_gbm_request)
 
             def assert_feature_heading_matches_checked(expected_count: int | None = None) -> None:
                 page.wait_for_function(
@@ -16227,6 +16232,88 @@ COPY (
                 )
                 page.get_by_role("tab", name="Stacked SHAP").click()
                 page.locator("#gbmStackedShapChart").wait_for(timeout=10_000)
+                stacked_initial_layout = page.evaluate(
+                    """
+                    () => {
+                      const panel = document.querySelector("#gbm-screen-panel-stacked-shap");
+                      const root = document.querySelector("#gbmStackedShapRoot");
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      const toolbarToggle = document.querySelector("#gbmStackedShapToolbarToggle");
+                      const side = document.querySelector("#gbmStackedShapSide");
+                      const sideToggle = document.querySelector("#gbmStackedShapSideToggle");
+                      const chart = document.querySelector("#gbmStackedShapChart");
+                      const panelBox = panel.getBoundingClientRect();
+                      const rootBox = root.getBoundingClientRect();
+                      const toolbarToggleBox = toolbarToggle.getBoundingClientRect();
+                      const toolbarToggleHit = document.elementFromPoint(
+                        toolbarToggleBox.left + toolbarToggleBox.width / 2,
+                        toolbarToggleBox.top + toolbarToggleBox.height / 2,
+                      );
+                      const chartStyle = getComputedStyle(chart);
+                      return {
+                        toolbarHidden: toolbar.hidden,
+                        toolbarHiddenClass: toolbar.classList.contains("hidden"),
+                        toolbarInert: toolbar.inert,
+                        toolbarAriaHidden: toolbar.getAttribute("aria-hidden"),
+                        toolbarDisplay: getComputedStyle(toolbar).display,
+                        toolbarHeight: toolbar.getBoundingClientRect().height,
+                        toolbarExpanded: toolbarToggle.getAttribute("aria-expanded"),
+                        toolbarLabel: toolbarToggle.getAttribute("aria-label"),
+                        toolbarHitTarget: toolbarToggleHit?.closest?.("button")?.id || toolbarToggleHit?.id || toolbarToggleHit?.tagName || "",
+                        sideHidden: side.hidden,
+                        sideInert: side.inert,
+                        sideExpanded: sideToggle.getAttribute("aria-expanded"),
+                        sideLabel: sideToggle.getAttribute("aria-label"),
+                        sideWidth: side.getBoundingClientRect().width,
+                        chartHeight: chart.getBoundingClientRect().height,
+                        chartBorder: [
+                          chartStyle.borderTopWidth,
+                          chartStyle.borderRightWidth,
+                          chartStyle.borderBottomWidth,
+                          chartStyle.borderLeftWidth,
+                        ],
+                        chartRadius: chartStyle.borderRadius,
+                        fullBleed: Math.abs(panelBox.left - rootBox.left) <= 0.5
+                          && Math.abs(panelBox.right - rootBox.right) <= 0.5
+                          && Math.abs(panelBox.top - rootBox.top) <= 0.5
+                          && Math.abs(panelBox.bottom - rootBox.bottom) <= 0.5,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(stacked_initial_layout["toolbarHidden"])
+                self.assertTrue(stacked_initial_layout["toolbarHiddenClass"])
+                self.assertTrue(stacked_initial_layout["toolbarInert"])
+                self.assertEqual(stacked_initial_layout["toolbarAriaHidden"], "true")
+                self.assertEqual(stacked_initial_layout["toolbarDisplay"], "none")
+                self.assertAlmostEqual(stacked_initial_layout["toolbarHeight"], 0, delta=0.5)
+                self.assertEqual(stacked_initial_layout["toolbarExpanded"], "false")
+                self.assertEqual(stacked_initial_layout["toolbarLabel"], "Show Stacked SHAP control row")
+                self.assertEqual(stacked_initial_layout["toolbarHitTarget"], "gbmStackedShapToolbarToggle")
+                self.assertFalse(stacked_initial_layout["sideHidden"])
+                self.assertFalse(stacked_initial_layout["sideInert"])
+                self.assertEqual(stacked_initial_layout["sideExpanded"], "true")
+                self.assertEqual(stacked_initial_layout["sideLabel"], "Hide Stacked SHAP feature chooser")
+                self.assertAlmostEqual(stacked_initial_layout["sideWidth"], 320, delta=1)
+                self.assertEqual(stacked_initial_layout["chartBorder"], ["0px", "0px", "0px", "0px"])
+                self.assertEqual(stacked_initial_layout["chartRadius"], "0px")
+                self.assertTrue(stacked_initial_layout["fullBleed"])
+                stacked_toolbar_toggle = page.locator("#gbmStackedShapToolbarToggle")
+                stacked_toolbar_toggle.click()
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmStackedShapToolbarToggle")?.getAttribute("aria-expanded") === "true"',
+                    timeout=10_000,
+                )
+                self.assertIsNone(page.locator("#gbmStackedShapControls").get_attribute("hidden"))
+                self.assertFalse(page.locator("#gbmStackedShapControls").evaluate("node => node.classList.contains('hidden')"))
+                stacked_toolbar_toggle.click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmStackedShapToolbarToggle")?.getAttribute("aria-expanded") === "false"
+                      && getComputedStyle(document.querySelector("#gbmStackedShapControls")).display === "none"
+                    """,
+                    timeout=10_000,
+                )
                 page.wait_for_function(
                     """
                     () => {
@@ -16247,6 +16334,174 @@ COPY (
                 )
                 stacked_feature_label = page.locator("#gbmStackedShapFeatureList .feature.active .kind").text_content()
                 self.assertEqual(stacked_feature_label, "Rank 1 · 0.2330")
+                layout_request_count = stacked_shap_requests
+                stacked_expand_frame = page.evaluate(
+                    """
+                    async () => {
+                      const target = document.querySelector("#gbmStackedShapChart");
+                      const chart = window.echarts.getInstanceByDom(target);
+                      const zr = chart.getZr();
+                      const originalResize = chart.resize;
+                      const originalFlush = zr.flush;
+                      let resizeCount = 0;
+                      let flushCount = 0;
+                      chart.resize = function(...args) {
+                        resizeCount += 1;
+                        return originalResize.apply(this, args);
+                      };
+                      zr.flush = function(...args) {
+                        flushCount += 1;
+                        return originalFlush.apply(this, args);
+                      };
+                      document.querySelector("#gbmStackedShapToolbarToggle").click();
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      const canvas = target.querySelector("canvas");
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      const firstFrame = {
+                        expanded: document.querySelector("#gbmStackedShapToolbarToggle").getAttribute("aria-expanded"),
+                        toolbarHidden: toolbar.hidden,
+                        toolbarInert: toolbar.inert,
+                        toolbarHeight: toolbar.getBoundingClientRect().height,
+                        targetWidth: target.clientWidth,
+                        targetHeight: target.clientHeight,
+                        chartWidth: chart.getWidth(),
+                        chartHeight: chart.getHeight(),
+                        canvasWidth: canvas?.getBoundingClientRect().width || 0,
+                        canvasHeight: canvas?.getBoundingClientRect().height || 0,
+                      };
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      const result = { ...firstFrame, resizeCount, flushCount };
+                      chart.resize = originalResize;
+                      zr.flush = originalFlush;
+                      return result;
+                    }
+                    """
+                )
+                self.assertEqual(stacked_expand_frame["resizeCount"], 1)
+                self.assertEqual(stacked_expand_frame["flushCount"], 1)
+                self.assertEqual(stacked_expand_frame["expanded"], "true")
+                self.assertFalse(stacked_expand_frame["toolbarHidden"])
+                self.assertFalse(stacked_expand_frame["toolbarInert"])
+                self.assertAlmostEqual(stacked_expand_frame["toolbarHeight"], 50, delta=0.5)
+                self.assertAlmostEqual(
+                    stacked_expand_frame["targetHeight"],
+                    stacked_initial_layout["chartHeight"] - 50,
+                    delta=1,
+                )
+                self.assertAlmostEqual(stacked_expand_frame["targetWidth"], stacked_expand_frame["chartWidth"], delta=1)
+                self.assertAlmostEqual(stacked_expand_frame["targetHeight"], stacked_expand_frame["chartHeight"], delta=1)
+                self.assertAlmostEqual(stacked_expand_frame["targetWidth"], stacked_expand_frame["canvasWidth"], delta=1)
+                self.assertAlmostEqual(stacked_expand_frame["targetHeight"], stacked_expand_frame["canvasHeight"], delta=1)
+                self.assertEqual(stacked_shap_requests, layout_request_count)
+                stacked_control_style = page.evaluate(
+                    """
+                    () => {
+                      const normalizeColor = (value) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = value;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      const buttons = [...toolbar.querySelectorAll("button")];
+                      const captions = [...toolbar.querySelectorAll(":scope > .control > h3")];
+                      const active = toolbar.querySelector("button.active");
+                      const inactive = buttons.find((button) => !button.classList.contains("active") && !button.disabled);
+                      const activeStyle = getComputedStyle(active);
+                      const inactiveStyle = getComputedStyle(inactive);
+                      const captionStyle = getComputedStyle(captions[0]);
+                      return {
+                        buttonCount: buttons.length,
+                        stableLabels: buttons.every((button) => button.hasAttribute("data-stable-label")),
+                        borderless: buttons.every((button) => {
+                          const style = getComputedStyle(button);
+                          return style.borderTopWidth === "0px"
+                            && style.borderRightWidth === "0px"
+                            && style.borderBottomWidth === "0px"
+                            && style.borderLeftWidth === "0px";
+                        }),
+                        transparent: buttons.every((button) => getComputedStyle(button).backgroundColor === "rgba(0, 0, 0, 0)"),
+                        activeFontSize: activeStyle.fontSize,
+                        activeWeight: activeStyle.fontWeight,
+                        activeColor: activeStyle.color,
+                        inactiveFontSize: inactiveStyle.fontSize,
+                        inactiveWeight: inactiveStyle.fontWeight,
+                        inactiveColor: inactiveStyle.color,
+                        accent: normalizeColor(getComputedStyle(document.body).getPropertyValue("--accent").trim()),
+                        muted: normalizeColor(getComputedStyle(document.body).getPropertyValue("--muted").trim()),
+                        captionFontSize: captionStyle.fontSize,
+                        captionWeight: captionStyle.fontWeight,
+                        captionColor: captionStyle.color,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(stacked_control_style["buttonCount"], 21)
+                self.assertTrue(stacked_control_style["stableLabels"])
+                self.assertTrue(stacked_control_style["borderless"])
+                self.assertTrue(stacked_control_style["transparent"])
+                self.assertEqual(stacked_control_style["activeFontSize"], "12px")
+                self.assertEqual(stacked_control_style["activeWeight"], "700")
+                self.assertEqual(stacked_control_style["activeColor"], stacked_control_style["accent"])
+                self.assertEqual(stacked_control_style["inactiveFontSize"], "12px")
+                self.assertEqual(stacked_control_style["inactiveWeight"], "400")
+                self.assertEqual(stacked_control_style["inactiveColor"], stacked_control_style["muted"])
+                self.assertEqual(stacked_control_style["captionFontSize"], "11px")
+                self.assertEqual(stacked_control_style["captionWeight"], "600")
+                self.assertEqual(stacked_control_style["captionColor"], stacked_control_style["muted"])
+                stacked_control_geometry_before = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      return {
+                        scrollWidth: toolbar.scrollWidth,
+                        buttons: [...toolbar.querySelectorAll("button")].map((button) => {
+                          const box = button.getBoundingClientRect();
+                          return { left: box.left, top: box.top, width: box.width, height: box.height };
+                        }),
+                      };
+                    }
+                    """
+                )
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST"):
+                    page.locator('[data-gbm-stacked-shap-sort="descending"]').click()
+                stacked_control_geometry_after = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      const selected = toolbar.querySelector('[data-gbm-stacked-shap-sort="descending"]');
+                      const selectedBox = selected.getBoundingClientRect();
+                      const range = document.createRange();
+                      range.selectNodeContents(selected);
+                      const textBox = range.getBoundingClientRect();
+                      return {
+                        scrollWidth: toolbar.scrollWidth,
+                        selectedWeight: getComputedStyle(selected).fontWeight,
+                        selectedColor: getComputedStyle(selected).color,
+                        selectedCentreDelta: Math.abs(
+                          (selectedBox.left + selectedBox.width / 2) - (textBox.left + textBox.width / 2)
+                        ),
+                        buttons: [...toolbar.querySelectorAll("button")].map((button) => {
+                          const box = button.getBoundingClientRect();
+                          return { left: box.left, top: box.top, width: box.width, height: box.height };
+                        }),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(stacked_control_geometry_after["scrollWidth"], stacked_control_geometry_before["scrollWidth"])
+                self.assertEqual(stacked_control_geometry_after["selectedWeight"], "700")
+                self.assertEqual(stacked_control_geometry_after["selectedColor"], stacked_control_style["accent"])
+                self.assertLessEqual(stacked_control_geometry_after["selectedCentreDelta"], 0.5)
+                self.assertEqual(len(stacked_control_geometry_after["buttons"]), len(stacked_control_geometry_before["buttons"]))
+                for before, after in zip(stacked_control_geometry_before["buttons"], stacked_control_geometry_after["buttons"]):
+                    self.assertAlmostEqual(after["left"], before["left"], delta=0.05)
+                    self.assertAlmostEqual(after["top"], before["top"], delta=0.05)
+                    self.assertAlmostEqual(after["width"], before["width"], delta=0.05)
+                    self.assertAlmostEqual(after["height"], before["height"], delta=0.05)
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST"):
                     page.locator('[data-gbm-stacked-shap-feature-count="1"]').click()
                 stacked_state = page.evaluate(
@@ -16272,6 +16527,270 @@ COPY (
                 self.assertIn("SHAP Values by lat", stacked_state["title"])
                 self.assertTrue(stacked_state["hasOther"])
                 self.assertTrue(stacked_state["reconciles"])
+                feature_sort_requests = stacked_shap_requests
+                feature_sort_before = page.evaluate(
+                    """
+                    () => [...document.querySelectorAll(".gbm-stacked-shap-feature-section .section-title-row > *")]
+                      .flatMap((node) => node.matches(".segmented") ? [...node.querySelectorAll("button")] : [node])
+                      .map((node) => {
+                        const box = node.getBoundingClientRect();
+                        return { left: box.left, top: box.top, width: box.width, height: box.height };
+                      })
+                    """
+                )
+                page.locator('[data-gbm-stacked-shap-feature-sort="alpha"]').click()
+                page.wait_for_timeout(50)
+                feature_sort_after = page.evaluate(
+                    """
+                    () => {
+                      const importance = document.querySelector('[data-gbm-stacked-shap-feature-sort="importance"]');
+                      const alpha = document.querySelector('[data-gbm-stacked-shap-feature-sort="alpha"]');
+                      const alphaStyle = getComputedStyle(alpha);
+                      return {
+                        borderless: [importance, alpha].every((button) => {
+                          const style = getComputedStyle(button);
+                          return style.borderTopWidth === "0px" && style.backgroundColor === "rgba(0, 0, 0, 0)";
+                        }),
+                        alphaWeight: alphaStyle.fontWeight,
+                        alphaColor: alphaStyle.color,
+                        boxes: [...document.querySelectorAll(".gbm-stacked-shap-feature-section .section-title-row > *")]
+                          .flatMap((node) => node.matches(".segmented") ? [...node.querySelectorAll("button")] : [node])
+                          .map((node) => {
+                            const box = node.getBoundingClientRect();
+                            return { left: box.left, top: box.top, width: box.width, height: box.height };
+                          }),
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(feature_sort_after["borderless"])
+                self.assertEqual(feature_sort_after["alphaWeight"], "700")
+                self.assertEqual(feature_sort_after["alphaColor"], stacked_control_style["accent"])
+                self.assertEqual(stacked_shap_requests, feature_sort_requests)
+                for before, after in zip(feature_sort_before, feature_sort_after["boxes"]):
+                    self.assertAlmostEqual(after["left"], before["left"], delta=0.05)
+                    self.assertAlmostEqual(after["top"], before["top"], delta=0.05)
+                    self.assertAlmostEqual(after["width"], before["width"], delta=0.05)
+                    self.assertAlmostEqual(after["height"], before["height"], delta=0.05)
+                page.locator('[data-gbm-stacked-shap-feature-sort="importance"]').click()
+                page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      toolbar.style.width = "360px";
+                      toolbar.style.alignSelf = "flex-start";
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmStackedShapControls")?.classList.contains("app-settings-overflow-right")',
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      toolbar.scrollLeft = toolbar.scrollWidth;
+                      toolbar.dispatchEvent(new Event("scroll"));
+                    }
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      return toolbar?.classList.contains("app-settings-overflow-left")
+                        && !toolbar.classList.contains("app-settings-overflow-right");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#gbmStackedShapControls");
+                      toolbar.style.width = "";
+                      toolbar.style.alignSelf = "";
+                      toolbar.scrollLeft = 0;
+                      toolbar.dispatchEvent(new Event("scroll"));
+                    }
+                    """
+                )
+                layout_request_count = stacked_shap_requests
+                stacked_side_collapse_frame = page.evaluate(
+                    """
+                    async () => {
+                      const target = document.querySelector("#gbmStackedShapChart");
+                      const chart = window.echarts.getInstanceByDom(target);
+                      const zr = chart.getZr();
+                      const originalResize = chart.resize;
+                      const originalFlush = zr.flush;
+                      let resizeCount = 0;
+                      let flushCount = 0;
+                      chart.resize = function(...args) {
+                        resizeCount += 1;
+                        return originalResize.apply(this, args);
+                      };
+                      zr.flush = function(...args) {
+                        flushCount += 1;
+                        return originalFlush.apply(this, args);
+                      };
+                      document.querySelector("#gbmStackedShapSideToggle").click();
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      const firstFrame = {
+                        sideHidden: document.querySelector("#gbmStackedShapSide").hidden,
+                        sideExpanded: document.querySelector("#gbmStackedShapSideToggle").getAttribute("aria-expanded"),
+                        resizerHidden: document.querySelector("#gbmStackedShapMainResizer").hidden,
+                        targetWidth: target.clientWidth,
+                        targetHeight: target.clientHeight,
+                        chartWidth: chart.getWidth(),
+                        chartHeight: chart.getHeight(),
+                      };
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      await new Promise((resolve) => requestAnimationFrame(resolve));
+                      const result = { ...firstFrame, resizeCount, flushCount };
+                      chart.resize = originalResize;
+                      zr.flush = originalFlush;
+                      return result;
+                    }
+                    """
+                )
+                self.assertEqual(stacked_side_collapse_frame["resizeCount"], 1)
+                self.assertEqual(stacked_side_collapse_frame["flushCount"], 1)
+                self.assertTrue(stacked_side_collapse_frame["sideHidden"])
+                self.assertEqual(stacked_side_collapse_frame["sideExpanded"], "false")
+                self.assertTrue(stacked_side_collapse_frame["resizerHidden"])
+                self.assertAlmostEqual(stacked_side_collapse_frame["targetWidth"], stacked_side_collapse_frame["chartWidth"], delta=1)
+                self.assertAlmostEqual(stacked_side_collapse_frame["targetHeight"], stacked_side_collapse_frame["chartHeight"], delta=1)
+                page.locator("#gbmStackedShapSideToggle").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmStackedShapSideToggle")?.getAttribute("aria-expanded") === "true"',
+                    timeout=10_000,
+                )
+                page.wait_for_timeout(50)
+                stacked_split_geometry = page.evaluate(
+                    """
+                    () => {
+                      const side = document.querySelector("#gbmStackedShapSide").getBoundingClientRect();
+                      const main = document.querySelector(".gbm-stacked-shap-main").getBoundingClientRect();
+                      const splitter = document.querySelector("#gbmStackedShapMainResizer").getBoundingClientRect();
+                      return {
+                        sideRight: side.right,
+                        mainLeft: main.left,
+                        splitterLeft: splitter.left,
+                        splitterWidth: splitter.width,
+                        splitterCentre: splitter.left + splitter.width / 2,
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(stacked_split_geometry["sideRight"], stacked_split_geometry["mainLeft"], delta=0.5)
+                self.assertAlmostEqual(stacked_split_geometry["splitterCentre"], stacked_split_geometry["sideRight"], delta=0.5)
+                self.assertAlmostEqual(stacked_split_geometry["splitterWidth"], 12, delta=0.5)
+                splitter = page.locator("#gbmStackedShapMainResizer")
+                splitter.focus()
+                page.keyboard.press("End")
+                splitter_end = float(splitter.get_attribute("aria-valuenow"))
+                splitter_max = float(splitter.get_attribute("aria-valuemax"))
+                self.assertAlmostEqual(splitter_end, splitter_max, delta=1)
+                page.keyboard.press("Home")
+                splitter_home = float(splitter.get_attribute("aria-valuenow"))
+                splitter_min = float(splitter.get_attribute("aria-valuemin"))
+                self.assertAlmostEqual(splitter_home, splitter_min, delta=1)
+                splitter_box = splitter.bounding_box()
+                assert splitter_box is not None
+                page.mouse.move(splitter_box["x"] + splitter_box["width"] / 2, splitter_box["y"] + 30)
+                page.mouse.down()
+                page.mouse.move(splitter_box["x"] + splitter_box["width"] / 2 + 82, splitter_box["y"] + 30)
+                page.mouse.up()
+                resized_side_width = page.locator("#gbmStackedShapSide").bounding_box()["width"]
+                self.assertAlmostEqual(resized_side_width, splitter_min + 82, delta=2)
+                self.assertEqual(stacked_shap_requests, layout_request_count)
+                retained_side_width = resized_side_width
+                page.get_by_role("tab", name="SHAP", exact=True).click()
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST", timeout=10_000):
+                    page.get_by_role("tab", name="Stacked SHAP", exact=True).click()
+                page.locator("#gbmStackedShapChart").wait_for(timeout=10_000)
+                retained_tab_layout = page.evaluate(
+                    """
+                    () => ({
+                      toolbarExpanded: document.querySelector("#gbmStackedShapToolbarToggle").getAttribute("aria-expanded"),
+                      sideExpanded: document.querySelector("#gbmStackedShapSideToggle").getAttribute("aria-expanded"),
+                      sideWidth: document.querySelector("#gbmStackedShapSide").getBoundingClientRect().width,
+                    })
+                    """
+                )
+                self.assertEqual(retained_tab_layout["toolbarExpanded"], "true")
+                self.assertEqual(retained_tab_layout["sideExpanded"], "true")
+                self.assertAlmostEqual(retained_tab_layout["sideWidth"], retained_side_width, delta=1)
+                page.locator("#lineBarTool").click()
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST", timeout=10_000):
+                    page.locator("#gbmTool").click()
+                page.locator("#gbmStackedShapChart").wait_for(timeout=10_000)
+                retained_tool_layout = page.evaluate(
+                    """
+                    () => ({
+                      toolbarExpanded: document.querySelector("#gbmStackedShapToolbarToggle").getAttribute("aria-expanded"),
+                      sideExpanded: document.querySelector("#gbmStackedShapSideToggle").getAttribute("aria-expanded"),
+                      sideWidth: document.querySelector("#gbmStackedShapSide").getBoundingClientRect().width,
+                    })
+                    """
+                )
+                self.assertEqual(retained_tool_layout["toolbarExpanded"], "true")
+                self.assertEqual(retained_tool_layout["sideExpanded"], "true")
+                self.assertAlmostEqual(retained_tool_layout["sideWidth"], retained_side_width, delta=1)
+                mobile_request_count = stacked_shap_requests
+                page.set_viewport_size({"width": 800, "height": 800})
+                page.wait_for_timeout(100)
+                stacked_mobile_layout = page.evaluate(
+                    """
+                    () => {
+                      const workspace = document.querySelector(".gbm-stacked-shap-workspace").getBoundingClientRect();
+                      const side = document.querySelector("#gbmStackedShapSide").getBoundingClientRect();
+                      const main = document.querySelector(".gbm-stacked-shap-main").getBoundingClientRect();
+                      const splitter = document.querySelector("#gbmStackedShapMainResizer");
+                      return {
+                        sideAboveChart: side.bottom <= main.top + 0.5,
+                        sideFraction: side.height / workspace.height,
+                        splitterHidden: splitter.hidden && getComputedStyle(splitter).display === "none",
+                        splitterInert: splitter.inert,
+                        noPageOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(stacked_mobile_layout["sideAboveChart"])
+                self.assertGreater(stacked_mobile_layout["sideFraction"], 0.28)
+                self.assertLess(stacked_mobile_layout["sideFraction"], 0.4)
+                self.assertTrue(stacked_mobile_layout["splitterHidden"])
+                self.assertTrue(stacked_mobile_layout["splitterInert"])
+                self.assertTrue(stacked_mobile_layout["noPageOverflow"])
+                self.assertEqual(stacked_shap_requests, mobile_request_count)
+                page.locator("#gbmStackedShapToolbarToggle").click()
+                page.wait_for_function(
+                    '() => getComputedStyle(document.querySelector("#gbmStackedShapControls")).display === "none"',
+                    timeout=10_000,
+                )
+                page.locator("#gbmStackedShapToolbarToggle").click()
+                page.wait_for_function(
+                    '() => getComputedStyle(document.querySelector("#gbmStackedShapControls")).display !== "none"',
+                    timeout=10_000,
+                )
+                page.set_viewport_size({"width": 1280, "height": 800})
+                page.wait_for_timeout(100)
+                restored_desktop_layout = page.evaluate(
+                    """
+                    () => ({
+                      sideWidth: document.querySelector("#gbmStackedShapSide").getBoundingClientRect().width,
+                      splitterHidden: document.querySelector("#gbmStackedShapMainResizer").hidden,
+                      splitterInert: document.querySelector("#gbmStackedShapMainResizer").inert,
+                    })
+                    """
+                )
+                self.assertAlmostEqual(restored_desktop_layout["sideWidth"], retained_side_width, delta=1)
+                self.assertFalse(restored_desktop_layout["splitterHidden"])
+                self.assertFalse(restored_desktop_layout["splitterInert"])
                 page.get_by_role("tab", name="Features and parameters").click()
                 page.locator("#gbmModelSelect").wait_for(state="attached", timeout=10_000)
                 page.locator("#gbmModelCollapseBtn").wait_for(timeout=10_000)

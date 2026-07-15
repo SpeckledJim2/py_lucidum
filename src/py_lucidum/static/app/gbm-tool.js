@@ -3294,6 +3294,9 @@ export function createGbmTool({
       shapTool.refreshTheme();
       stackedShapTool.refreshTheme();
     },
+    resize() {
+      if (activeTab === "stacked-shap") stackedShapTool.resize();
+    },
     syncSidebarFromSchema,
     useCached,
   };

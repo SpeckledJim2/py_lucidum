@@ -1,4 +1,5 @@
 import { stackedShapChartOption } from "./gbm-stacked-shap-chart.js";
+import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
 
 const BAND_STEPS = makeBandSteps();
 const BAND_BUTTONS = [0.01, 0.1, 1, 5, 10, 100];
@@ -17,6 +18,12 @@ const FEATURE_COUNT_OPTIONS = [
   { value: "10", label: "10" },
   { value: "all", label: "All" },
 ];
+const STACKED_SHAP_SIDE_DEFAULT_WIDTH = 320;
+const STACKED_SHAP_SIDE_MIN_WIDTH = 240;
+const STACKED_SHAP_SIDE_MAX_WIDTH = 560;
+const STACKED_SHAP_CHART_MIN_WIDTH = 420;
+const STACKED_SHAP_SPLITTER_KEY_STEP = 10;
+const STACKED_SHAP_STACKED_MEDIA = "(max-width: 900px)";
 
 export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
   let modelId = "";
@@ -27,7 +34,15 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
   let lastPayload = null;
   let configSeq = 0;
   let plotSeq = 0;
-  let sidePanelWidth = null;
+  let sidePanelWidth = STACKED_SHAP_SIDE_DEFAULT_WIDTH;
+  let controlsCollapsed = true;
+  let sidePanelCollapsed = false;
+  let chartResizeFrame = null;
+  let chartResizeFlush = false;
+  let settledObserverSize = null;
+  let layoutMediaQuery = null;
+  let layoutMediaListener = null;
+  let settingsOverflowCleanup = null;
   const state = {
     modelFeature: "",
     featureSort: "importance",
@@ -41,28 +56,44 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
   };
 
   function shellHtml() {
+    const toolbarHidden = controlsCollapsed ? " hidden inert aria-hidden=\"true\"" : "";
+    const sideHidden = sidePanelCollapsed ? " hidden inert aria-hidden=\"true\"" : "";
     return `
       <div id="gbmStackedShapRoot" class="gbm-stacked-shap-view">
-        <aside class="gbm-stacked-shap-side">
-          <section class="gbm-stacked-shap-feature-section chart-side-section">
-            <div class="section-title-row">
-              <h2>Model feature</h2>
-              <div class="segmented gbm-shap-sort" role="group" aria-label="Stacked SHAP model feature sort">
-                <button type="button" data-gbm-stacked-shap-feature-sort="importance">Importance</button>
-                <button type="button" data-gbm-stacked-shap-feature-sort="alpha">A-Z</button>
+        <div id="gbmStackedShapControls" class="gbm-stacked-shap-controls toolbar app-control-strip app-settings-strip${controlsCollapsed ? " hidden" : ""}"${toolbarHidden}></div>
+        <div class="gbm-stacked-shap-workspace">
+          <aside id="gbmStackedShapSide" class="gbm-stacked-shap-side${sidePanelCollapsed ? " hidden" : ""}"${sideHidden}>
+            <section class="gbm-stacked-shap-feature-section chart-side-section">
+              <div class="section-title-row">
+                <h2>Model feature</h2>
+                <div class="segmented gbm-stacked-shap-feature-sort" role="group" aria-label="Stacked SHAP model feature sort">
+                  <button type="button" data-gbm-stacked-shap-feature-sort="importance" data-stable-label="Importance">Importance</button>
+                  <button type="button" data-gbm-stacked-shap-feature-sort="alpha" data-stable-label="A-Z">A-Z</button>
+                </div>
               </div>
+              <div id="gbmStackedShapFeatureList" class="feature-list gbm-stacked-shap-feature-list" role="listbox" aria-label="Stacked SHAP model feature"></div>
+            </section>
+          </aside>
+          <div id="gbmStackedShapMainResizer" class="gbm-stacked-shap-main-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize Stacked SHAP feature chooser" tabindex="0"></div>
+          <section class="gbm-stacked-shap-main">
+            <div class="gbm-stacked-shap-workspace-controls">
+              <button id="gbmStackedShapSideToggle" class="gbm-stacked-shap-overlay-button app-control-button" type="button" aria-controls="gbmStackedShapSide" aria-expanded="${String(!sidePanelCollapsed)}">
+                <svg class="gbm-stacked-shap-toggle-icon gbm-stacked-shap-chevron-horizontal" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="m15 18-6-6 6-6"></path>
+                </svg>
+              </button>
+              <button id="gbmStackedShapToolbarToggle" class="gbm-stacked-shap-overlay-button app-control-button" type="button" aria-controls="gbmStackedShapControls" aria-expanded="${String(!controlsCollapsed)}">
+                <svg class="gbm-stacked-shap-toggle-icon gbm-stacked-shap-chevron-vertical" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="m18 15-6-6-6 6"></path>
+                </svg>
+              </button>
             </div>
-            <div id="gbmStackedShapFeatureList" class="feature-list gbm-stacked-shap-feature-list" role="listbox" aria-label="Stacked SHAP model feature"></div>
+            <div class="gbm-stacked-shap-chart-shell">
+              <div id="gbmStackedShapMessage" class="gbm-shap-message hidden"></div>
+              <div id="gbmStackedShapChart" class="gbm-stacked-shap-chart" aria-label="GBM Stacked SHAP plot"></div>
+            </div>
           </section>
-        </aside>
-        <div id="gbmStackedShapMainResizer" class="gbm-stacked-shap-main-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize Stacked SHAP controls and chart" tabindex="0"></div>
-        <section class="gbm-stacked-shap-main">
-          <div id="gbmStackedShapControls" class="gbm-stacked-shap-controls"></div>
-          <div class="gbm-stacked-shap-chart-shell">
-            <div id="gbmStackedShapMessage" class="gbm-shap-message hidden"></div>
-            <div id="gbmStackedShapChart" class="gbm-stacked-shap-chart" aria-label="GBM Stacked SHAP plot"></div>
-          </div>
-        </section>
+        </div>
       </div>
     `;
   }
@@ -72,6 +103,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     const root = rootNode();
     if (!root) return;
     bindStaticEvents(root);
+    syncLayoutVisibility(root, { resize: false });
     if (!modelId) {
       config = null;
       renderEmpty("No active GBM selected");
@@ -102,12 +134,26 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     if (root.dataset.gbmStackedShapBound === "1") return;
     root.dataset.gbmStackedShapBound = "1";
     root.addEventListener("click", handleClick);
+    settingsOverflowCleanup = bindSettingsStripOverflowCue(root.querySelector("#gbmStackedShapControls"));
     setupMainDividerResize(root);
+    layoutMediaQuery = window.matchMedia(STACKED_SHAP_STACKED_MEDIA);
+    layoutMediaListener = () => syncLayoutVisibility(root);
+    layoutMediaQuery.addEventListener?.("change", layoutMediaListener);
   }
 
   function handleClick(event) {
     const button = event.target.closest("button");
     if (!button || !rootNode()?.contains(button)) return;
+    if (button.id === "gbmStackedShapToolbarToggle") {
+      controlsCollapsed = !controlsCollapsed;
+      syncLayoutVisibility(rootNode());
+      return;
+    }
+    if (button.id === "gbmStackedShapSideToggle") {
+      sidePanelCollapsed = !sidePanelCollapsed;
+      syncLayoutVisibility(rootNode());
+      return;
+    }
     if (button.dataset.gbmStackedShapFeatureValue !== undefined) {
       selectFeature(button.dataset.gbmStackedShapFeatureValue);
       return;
@@ -216,13 +262,24 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     const option = stackedShapChartOption(payload, chartTheme());
     chart.setOption(option, true);
     lastPayload = payload;
+    scheduleChartResize({ flush: true });
   }
 
   function ensureChart(target) {
     if (chart) return;
     chart = window.echarts.init(target);
-    resizeObserver = new ResizeObserver(() => chart?.resize());
-    resizeObserver.observe(target);
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver((entries) => {
+        const nextSize = resizeObserverEntrySize(entries?.[0]);
+        if (sameChartSize(nextSize, settledObserverSize)) {
+          settledObserverSize = null;
+          return;
+        }
+        settledObserverSize = null;
+        scheduleChartResize();
+      });
+      resizeObserver.observe(target);
+    }
   }
 
   function renderControlsAndLists() {
@@ -295,11 +352,22 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
   function dispose() {
     configSeq += 1;
     plotSeq += 1;
+    if (layoutMediaQuery && layoutMediaListener) {
+      layoutMediaQuery.removeEventListener?.("change", layoutMediaListener);
+    }
+    layoutMediaQuery = null;
+    layoutMediaListener = null;
+    settingsOverflowCleanup?.();
+    settingsOverflowCleanup = null;
     disposeChart();
     config = null;
   }
 
   function disposeChart() {
+    if (chartResizeFrame !== null) cancelAnimationFrame(chartResizeFrame);
+    chartResizeFrame = null;
+    chartResizeFlush = false;
+    settledObserverSize = null;
     resizeObserver?.disconnect();
     resizeObserver = null;
     lastPayload = null;
@@ -312,7 +380,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
   function refreshTheme() {
     if (!chart || !lastPayload) return;
     chart.setOption(stackedShapChartOption(lastPayload, chartTheme()), true);
-    chart.resize();
+    resizeChart({ flush: true });
   }
 
   function xSortControlHtml() {
@@ -320,8 +388,8 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
       <div class="control gbm-stacked-shap-sort-control">
         <h3>x-axis sort order</h3>
         <div class="segmented" role="group" aria-label="Stacked SHAP x-axis sort order">
-          <button type="button" data-gbm-stacked-shap-sort="alpha" class="${state.xSort === "alpha" ? "active" : ""}">A-Z</button>
-          <button type="button" data-gbm-stacked-shap-sort="descending" class="${state.xSort === "descending" ? "active" : ""}">Descending</button>
+          <button type="button" data-gbm-stacked-shap-sort="alpha" data-stable-label="A-Z" class="${state.xSort === "alpha" ? "active" : ""}">A-Z</button>
+          <button type="button" data-gbm-stacked-shap-sort="descending" data-stable-label="Descending" class="${state.xSort === "descending" ? "active" : ""}">Descending</button>
         </div>
       </div>
     `;
@@ -333,7 +401,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
         <h3>Tail grouping</h3>
         <div class="segmented" role="group" aria-label="Stacked SHAP tail grouping">
           ${TAIL_OPTIONS.map((option) => `
-            <button type="button" data-gbm-stacked-shap-tail="${option.value}" class="${Number(state.tailPercent) === option.value ? "active" : ""}">${escapeHtml(option.label)}</button>
+            <button type="button" data-gbm-stacked-shap-tail="${option.value}" data-stable-label="${escapeHtml(option.label)}" class="${Number(state.tailPercent) === option.value ? "active" : ""}">${escapeHtml(option.label)}</button>
           `).join("")}
         </div>
       </div>
@@ -346,7 +414,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
         <h3>Num features to display</h3>
         <div class="segmented" role="group" aria-label="Stacked SHAP number of features to display">
           ${FEATURE_COUNT_OPTIONS.map((option) => `
-            <button type="button" data-gbm-stacked-shap-feature-count="${option.value}" class="${state.numFeatures === option.value ? "active" : ""}">${escapeHtml(option.label)}</button>
+            <button type="button" data-gbm-stacked-shap-feature-count="${option.value}" data-stable-label="${escapeHtml(option.label)}" class="${state.numFeatures === option.value ? "active" : ""}">${escapeHtml(option.label)}</button>
           `).join("")}
         </div>
       </div>
@@ -361,11 +429,11 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
       <div class="control gbm-stacked-shap-banding-control ${numeric ? "" : "disabled"}">
         <h3>Banding ${numeric ? `<span>(${escapeHtml(current)})</span>` : ""}</h3>
         <div class="segmented" role="group" aria-label="Stacked SHAP numeric banding">
-          <button type="button" data-gbm-stacked-shap-band-action="down"${disabled}>&lt;</button>
+          <button type="button" class="gbm-stacked-shap-band-step" data-gbm-stacked-shap-band-action="down" data-stable-label="&lt;"${disabled}>&lt;</button>
           ${BAND_BUTTONS.map((value) => `
-            <button type="button" data-gbm-stacked-shap-band-value="${value}" class="${Number(state.banding) === value ? "active" : ""}"${disabled}>${value}</button>
+            <button type="button" data-gbm-stacked-shap-band-value="${value}" data-stable-label="${value}" class="${Number(state.banding) === value ? "active" : ""}"${disabled}>${value}</button>
           `).join("")}
-          <button type="button" data-gbm-stacked-shap-band-action="up"${disabled}>&gt;</button>
+          <button type="button" class="gbm-stacked-shap-band-step" data-gbm-stacked-shap-band-action="up" data-stable-label="&gt;"${disabled}>&gt;</button>
         </div>
       </div>
     `;
@@ -518,56 +586,187 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     return document.getElementById("gbmStackedShapRoot");
   }
 
+  function syncLayoutVisibility(root = rootNode(), { resize = true } = {}) {
+    if (!root) return;
+    const toolbar = root.querySelector("#gbmStackedShapControls");
+    const toolbarToggle = root.querySelector("#gbmStackedShapToolbarToggle");
+    const side = root.querySelector("#gbmStackedShapSide");
+    const sideToggle = root.querySelector("#gbmStackedShapSideToggle");
+    const workspace = root.querySelector(".gbm-stacked-shap-workspace");
+    const resizer = root.querySelector("#gbmStackedShapMainResizer");
+    const stacked = window.matchMedia(STACKED_SHAP_STACKED_MEDIA).matches;
+
+    if (controlsCollapsed && toolbar?.contains(document.activeElement)) toolbarToggle?.focus();
+    if (sidePanelCollapsed && side?.contains(document.activeElement)) sideToggle?.focus();
+
+    setElementCollapsed(toolbar, controlsCollapsed);
+    setElementCollapsed(side, sidePanelCollapsed);
+    workspace?.classList.toggle("gbm-stacked-shap-side-collapsed", sidePanelCollapsed);
+
+    const splitterHidden = sidePanelCollapsed || stacked;
+    if (resizer) {
+      resizer.hidden = splitterHidden;
+      resizer.toggleAttribute("inert", splitterHidden);
+      resizer.tabIndex = splitterHidden ? -1 : 0;
+      resizer.setAttribute("aria-hidden", String(splitterHidden));
+    }
+
+    syncToggleButton(
+      toolbarToggle,
+      !controlsCollapsed,
+      controlsCollapsed ? "Show Stacked SHAP control row" : "Hide Stacked SHAP control row",
+    );
+    syncToggleButton(
+      sideToggle,
+      !sidePanelCollapsed,
+      sidePanelCollapsed ? "Show Stacked SHAP feature chooser" : "Hide Stacked SHAP feature chooser",
+    );
+    if (!stacked) setMainSideWidth(root, sidePanelWidth, { resize: false });
+    if (resize) scheduleChartResize({ flush: true });
+  }
+
+  function setElementCollapsed(element, collapsed) {
+    if (!element) return;
+    element.classList.toggle("hidden", collapsed);
+    element.hidden = collapsed;
+    element.toggleAttribute("inert", collapsed);
+    element.setAttribute("aria-hidden", String(collapsed));
+  }
+
+  function syncToggleButton(button, expanded, label) {
+    if (!button) return;
+    button.setAttribute("aria-expanded", String(expanded));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+
+  function resizeChart({ flush = false } = {}) {
+    if (!chart) return;
+    chart.resize();
+    if (flush) {
+      chart.getZr?.().flush?.();
+      settledObserverSize = currentChartSize();
+    }
+  }
+
+  function currentChartSize() {
+    const target = document.getElementById("gbmStackedShapChart");
+    return target ? { width: target.clientWidth, height: target.clientHeight } : null;
+  }
+
+  function resizeObserverEntrySize(entry) {
+    if (!entry) return null;
+    const box = entry.contentBoxSize;
+    const size = Array.isArray(box) ? box[0] : box;
+    if (size) return { width: size.inlineSize, height: size.blockSize };
+    return { width: entry.contentRect?.width, height: entry.contentRect?.height };
+  }
+
+  function sameChartSize(left, right) {
+    if (!left || !right) return false;
+    return Math.abs(Number(left.width) - Number(right.width)) < 0.5
+      && Math.abs(Number(left.height) - Number(right.height)) < 0.5;
+  }
+
+  function scheduleChartResize({ flush = false } = {}) {
+    chartResizeFlush ||= Boolean(flush);
+    if (chartResizeFrame !== null) return;
+    chartResizeFrame = requestAnimationFrame(() => {
+      chartResizeFrame = null;
+      const shouldFlush = chartResizeFlush;
+      chartResizeFlush = false;
+      resizeChart({ flush: shouldFlush });
+    });
+  }
+
+  function resize() {
+    const root = rootNode();
+    if (root && !window.matchMedia(STACKED_SHAP_STACKED_MEDIA).matches) {
+      setMainSideWidth(root, sidePanelWidth, { resize: false });
+    }
+    resizeChart({ flush: true });
+  }
+
   function setupMainDividerResize(root) {
     const side = root.querySelector(".gbm-stacked-shap-side");
     const resizer = root.querySelector("#gbmStackedShapMainResizer");
     if (!side || !resizer) return;
-    if (Number.isFinite(sidePanelWidth) && sidePanelWidth > 0) {
-      setMainSideWidth(root, sidePanelWidth);
-    }
+    let dragging = false;
+    let startX = 0;
+    let startWidth = sidePanelWidth;
 
     resizer.addEventListener("pointerdown", (event) => {
+      if (window.matchMedia(STACKED_SHAP_STACKED_MEDIA).matches || sidePanelCollapsed) return;
       event.preventDefault();
-      const startX = event.clientX;
-      const startWidth = side.getBoundingClientRect().width || 0;
+      dragging = true;
+      startX = event.clientX;
+      startWidth = side.getBoundingClientRect().width || sidePanelWidth;
       resizer.classList.add("dragging");
       document.body.classList.add("resizing-chart-controls");
-      resizer.setPointerCapture?.(event.pointerId);
+      resizer.setPointerCapture(event.pointerId);
       window.getSelection()?.removeAllRanges();
-      const onMove = (moveEvent) => setMainSideWidth(root, startWidth + moveEvent.clientX - startX);
-      const onUp = () => {
-        resizer.classList.remove("dragging");
-        document.body.classList.remove("resizing-chart-controls");
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        window.getSelection()?.removeAllRanges();
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp, { once: true });
     });
+    resizer.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      event.preventDefault();
+      setMainSideWidth(root, startWidth + event.clientX - startX);
+    });
+    const finishDrag = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove("dragging");
+      document.body.classList.remove("resizing-chart-controls");
+      window.getSelection()?.removeAllRanges();
+      if (event.pointerId !== undefined) {
+        try {
+          resizer.releasePointerCapture(event.pointerId);
+        } catch (_) {
+        }
+      }
+      scheduleChartResize({ flush: true });
+    };
+    resizer.addEventListener("pointerup", finishDrag);
+    resizer.addEventListener("pointercancel", finishDrag);
 
     resizer.addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      if (window.matchMedia(STACKED_SHAP_STACKED_MEDIA).matches || sidePanelCollapsed) return;
+      const bounds = mainSideWidthBounds(root);
+      let nextWidth = null;
+      if (event.key === "ArrowLeft") nextWidth = sidePanelWidth - STACKED_SHAP_SPLITTER_KEY_STEP;
+      if (event.key === "ArrowRight") nextWidth = sidePanelWidth + STACKED_SHAP_SPLITTER_KEY_STEP;
+      if (event.key === "Home") nextWidth = bounds.min;
+      if (event.key === "End") nextWidth = bounds.max;
+      if (nextWidth === null) return;
       event.preventDefault();
-      const current = side.getBoundingClientRect().width || 0;
-      setMainSideWidth(root, current + (event.key === "ArrowRight" ? 24 : -24));
+      setMainSideWidth(root, nextWidth, { flush: true });
     });
+    setMainSideWidth(root, sidePanelWidth, { resize: false });
   }
 
-  function setMainSideWidth(root, rawWidth) {
+  function mainSideWidthBounds(root = rootNode()) {
+    const workspace = root?.querySelector(".gbm-stacked-shap-workspace");
+    const availableWidth = workspace?.getBoundingClientRect().width || window.innerWidth;
+    const max = Math.max(
+      STACKED_SHAP_SIDE_MIN_WIDTH,
+      Math.min(STACKED_SHAP_SIDE_MAX_WIDTH, availableWidth - STACKED_SHAP_CHART_MIN_WIDTH),
+    );
+    return { min: STACKED_SHAP_SIDE_MIN_WIDTH, max };
+  }
+
+  function setMainSideWidth(root, rawWidth, { resize = true, flush = false } = {}) {
     const resizer = root?.querySelector("#gbmStackedShapMainResizer");
-    const availableWidth = root?.getBoundingClientRect().width || window.innerWidth;
-    const resizerWidth = resizer?.getBoundingClientRect().width || 12;
-    const minSideWidth = 240;
-    const minChartWidth = 360;
-    const maxWidth = Math.max(minSideWidth, availableWidth - resizerWidth - minChartWidth);
-    const width = Math.min(Math.max(rawWidth, minSideWidth), maxWidth);
+    const bounds = mainSideWidthBounds(root);
+    const width = Math.min(
+      Math.max(Number(rawWidth) || STACKED_SHAP_SIDE_DEFAULT_WIDTH, bounds.min),
+      bounds.max,
+    );
     sidePanelWidth = width;
     root.style.setProperty("--gbm-stacked-shap-side-width", `${Math.round(width)}px`);
-    resizer?.setAttribute("aria-valuemin", String(minSideWidth));
-    resizer?.setAttribute("aria-valuemax", String(Math.round(maxWidth)));
+    resizer?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+    resizer?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
     resizer?.setAttribute("aria-valuenow", String(Math.round(width)));
-    requestAnimationFrame(() => chart?.resize());
+    if (resize) scheduleChartResize({ flush });
+    return width;
   }
 
   return {
@@ -575,6 +774,7 @@ export function createGbmStackedShapTool({ api, escapeHtml, setNotice }) {
     preselectFeature,
     refreshTheme,
     render,
+    resize,
     shellHtml,
   };
 }
