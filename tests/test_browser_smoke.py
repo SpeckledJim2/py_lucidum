@@ -10248,6 +10248,33 @@ COPY (
                 page.locator("#profileDetailTitle").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelect").wait_for(state="attached", timeout=10_000)
                 page.locator("#glmModelSelect").wait_for(state="attached", timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmModelCountBadge:not([hidden])")?.textContent.trim() === "4"
+                      && document.querySelector("#gbmModelCountBadge:not([hidden])")?.textContent.trim() === "2"
+                    """,
+                    timeout=10_000,
+                )
+                model_badge_state = page.evaluate(
+                    """
+                    () => ({
+                      glmAria: document.querySelector("#glmTool")?.getAttribute("aria-label") || "",
+                      gbmAria: document.querySelector("#gbmTool")?.getAttribute("aria-label") || "",
+                      glmPointerEvents: getComputedStyle(document.querySelector("#glmModelCountBadge")).pointerEvents,
+                      gbmPointerEvents: getComputedStyle(document.querySelector("#gbmModelCountBadge")).pointerEvents,
+                      headerButtons: document.querySelectorAll("#datasetMeta button").length,
+                      headerModelLinks: document.querySelectorAll(
+                        "#datasetMeta .dataset-meta-glm-link, #datasetMeta .dataset-meta-gbm-link"
+                      ).length,
+                    })
+                    """
+                )
+                self.assertEqual(model_badge_state["glmAria"], "GLM, 4 models built")
+                self.assertEqual(model_badge_state["gbmAria"], "GBM, 2 models built")
+                self.assertEqual(model_badge_state["glmPointerEvents"], "none")
+                self.assertEqual(model_badge_state["gbmPointerEvents"], "none")
+                self.assertEqual(model_badge_state["headerButtons"], 0)
+                self.assertEqual(model_badge_state["headerModelLinks"], 0)
                 if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "true":
                     page.locator("#favouritesCollapseBtn").click()
                     page.wait_for_function(
@@ -12140,7 +12167,8 @@ COPY (
                       && !document.body.textContent.includes("Disposable smoke GLM A")
                       && !document.body.textContent.includes("Disposable smoke GLM B")
                       && document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Browser smoke GLM")
-                      && document.querySelector(".dataset-meta-glm-link")?.textContent.trim() === "GLMs (2)"
+                      && document.querySelector("#glmModelCountBadge:not([hidden])")?.textContent.trim() === "2"
+                      && document.querySelector("#glmTool")?.getAttribute("aria-label") === "GLM, 2 models built"
                     """,
                     timeout=10_000,
                 )
@@ -16413,6 +16441,51 @@ COPY (
                 page.locator("#gbmFeatureScenarioButton").click()
                 page.locator(f'[data-gbm-feature-scenario="{name}"]').click()
 
+            def gbm_model_badge_state() -> dict[str, object]:
+                return page.evaluate(
+                    """
+                    () => {
+                      const badge = document.querySelector("#gbmModelCountBadge");
+                      const button = document.querySelector("#gbmTool");
+                      const rail = document.querySelector("#toolSelectorSection");
+                      const badgeRect = badge?.getBoundingClientRect();
+                      const railRect = rail?.getBoundingClientRect();
+                      const style = badge ? getComputedStyle(badge) : null;
+                      const normalizeColor = (value) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = value;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
+                      return {
+                        text: badge?.textContent.trim() || "",
+                        hidden: badge?.hidden ?? true,
+                        ariaLabel: button?.getAttribute("aria-label") || "",
+                        tooltip: button?.dataset.tooltip || "",
+                        pointerEvents: style?.pointerEvents || "",
+                        background: style?.backgroundColor || "",
+                        color: style?.color || "",
+                        accent: normalizeColor("var(--accent)"),
+                        railBackground: rail ? getComputedStyle(rail).backgroundColor : "",
+                        insideRail: Boolean(
+                          badgeRect
+                          && railRect
+                          && badgeRect.left >= railRect.left
+                          && badgeRect.right <= railRect.right
+                          && badgeRect.top >= railRect.top
+                          && badgeRect.bottom <= railRect.bottom
+                        ),
+                        headerButtons: document.querySelectorAll("#datasetMeta button").length,
+                        headerModelLinks: document.querySelectorAll(
+                          "#datasetMeta .dataset-meta-glm-link, #datasetMeta .dataset-meta-gbm-link"
+                        ).length,
+                      };
+                    }
+                    """
+                )
+
             try:
                 page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
                 page.get_by_text("Features and parameters").wait_for(timeout=10_000)
@@ -16422,6 +16495,28 @@ COPY (
                 page.get_by_text("Grouping").first.wait_for(timeout=10_000)
                 page.get_by_text("SHAP rows").wait_for(timeout=10_000)
                 page.get_by_text("Training mode").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    '() => document.querySelector("#gbmModelCountBadge:not([hidden])")?.textContent.trim() === "4"',
+                    timeout=10_000,
+                )
+                light_badge_state = gbm_model_badge_state()
+                self.assertEqual(light_badge_state["text"], "4")
+                self.assertFalse(light_badge_state["hidden"])
+                self.assertEqual(light_badge_state["ariaLabel"], "GBM, 4 models built")
+                self.assertEqual(light_badge_state["tooltip"], "GBM · 4 models built")
+                self.assertEqual(light_badge_state["pointerEvents"], "none")
+                self.assertEqual(light_badge_state["background"], light_badge_state["accent"])
+                self.assertEqual(light_badge_state["color"], "rgb(255, 255, 255)")
+                self.assertTrue(light_badge_state["insideRail"])
+                self.assertEqual(light_badge_state["headerButtons"], 0)
+                self.assertEqual(light_badge_state["headerModelLinks"], 0)
+                page.locator("#themeBtn").click()
+                dark_badge_state = gbm_model_badge_state()
+                self.assertEqual(dark_badge_state["text"], "4")
+                self.assertEqual(dark_badge_state["background"], dark_badge_state["accent"])
+                self.assertEqual(dark_badge_state["color"], dark_badge_state["railBackground"])
+                self.assertTrue(dark_badge_state["insideRail"])
+                page.locator("#themeBtn").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#gbmFeatureGrid .tabulator-cell[tabulator-field='mean_abs_shap']")
@@ -18554,7 +18649,8 @@ COPY (
                       && !document.body.textContent.includes("Disposable smoke model A")
                       && !document.body.textContent.includes("Disposable smoke model B")
                       && document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
-                      && document.querySelector(".dataset-meta-gbm-link")?.textContent.trim() === "GBMs (2)"
+                      && document.querySelector("#gbmModelCountBadge:not([hidden])")?.textContent.trim() === "2"
+                      && document.querySelector("#gbmTool")?.getAttribute("aria-label") === "GBM, 2 models built"
                     """,
                     timeout=10_000,
                 )
@@ -20900,22 +20996,23 @@ COPY (
                 self.assertEqual(navigator_state["activeTab"], "Model navigator")
                 self.assertEqual(navigator_state["fallbackRows"], 0)
                 self.assertFalse(navigator_state["hasDeletedModel"])
-                page.locator(".dataset-meta-gbm-link").click()
-                page.wait_for_function(
-                    """
-                    () => document.querySelector("[data-gbm-tab].active")?.textContent.trim() === "Model navigator"
-                      && document.querySelectorAll("#gbmModelGrid .tabulator-row").length === 1
-                      && document.querySelectorAll("#gbmModelFallback [data-gbm-model-row]").length === 0
-                    """,
-                    timeout=10_000,
-                )
+                self.assertEqual(page.locator("#datasetMeta button").count(), 0)
+                page.get_by_role("tab", name="Features and parameters").click()
+                page.locator('[data-gbm-tab="features"].active').wait_for(timeout=10_000)
                 page.locator("#lineBarTool").click()
                 page.locator("#lineBarTool.active").wait_for(timeout=10_000)
-                page.locator(".dataset-meta-gbm-link").click()
+                page.locator("#gbmTool").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#gbmTool.active")
-                      && document.querySelector("[data-gbm-tab].active")?.textContent.trim() === "Model navigator"
+                      && document.querySelector("[data-gbm-tab].active")?.textContent.trim() === "Features and parameters"
+                    """,
+                    timeout=10_000,
+                )
+                page.get_by_role("tab", name="Model navigator").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("[data-gbm-tab].active")?.textContent.trim() === "Model navigator"
                       && document.querySelectorAll("#gbmModelGrid .tabulator-row").length === 1
                       && document.querySelectorAll("#gbmModelFallback [data-gbm-model-row]").length === 0
                     """,
@@ -21476,6 +21573,7 @@ COPY (
                 self.assertEqual(page.locator("#gbmParameterControlDivider").get_attribute("aria-hidden"), "true")
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function("() => document.body.classList.contains('sidebar-collapsed')", timeout=10_000)
+                self.assertTrue(gbm_model_badge_state()["insideRail"])
                 collapsed_sidebar_panes = gbm_pane_sizes()
                 self.assertGreater(collapsed_sidebar_panes["feature"], feature_key_panes["feature"])
                 self.assertAlmostEqual(collapsed_sidebar_panes["parameter"], feature_key_panes["parameter"], delta=2)
@@ -21542,7 +21640,9 @@ COPY (
                 page.wait_for_function(
                     """
                     () => document.querySelectorAll("#gbmModelGrid .tabulator-row").length === 0
-                      && document.querySelector(".dataset-meta-gbm-link")?.textContent.trim() === "GBMs (0)"
+                      && document.querySelector("#gbmModelCountBadge:not([hidden])")?.textContent.trim() === "0"
+                      && document.querySelector("#gbmTool")?.getAttribute("aria-label") === "GBM, 0 models built"
+                      && document.querySelectorAll("#datasetMeta button").length === 0
                     """,
                     timeout=10_000,
                 )

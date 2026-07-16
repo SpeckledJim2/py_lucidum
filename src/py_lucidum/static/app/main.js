@@ -233,8 +233,6 @@
       let stoppedOverlayShown = false;
       let faviconDataUrl = "";
       let datasetMetaBase = "";
-      let datasetGlmCount = null;
-      let datasetGbmCount = null;
       let datasetMetaCompactFrame = null;
       const el = (id) => document.getElementById(id);
       const api = createApiClient({ token });
@@ -446,7 +444,7 @@
         saveToolPresentation,
         setChartMessage,
         setClientTiming,
-        setDatasetGlmCount,
+        setGlmModelCount,
         setDuckDbTiming,
         setGroupMeta,
         setRenderTiming,
@@ -494,7 +492,7 @@
         toolCache,
         updateAxisControls: () => lineBarTool.updateAxisControls(),
         refreshActiveTool,
-        setDatasetGbmCount,
+        setGbmModelCount,
         reloadSchema: reloadSchemaAfterModelMutation,
         onExternalModelActivation: (modelKind) => glmTool.handleExternalModelActivation(modelKind),
       });
@@ -1547,12 +1545,8 @@
         target.classList.toggle("dataset-meta-title-only", overflows);
       }
 
-      function renderDatasetMeta(fileMeta = datasetMetaBase, gbmCount = datasetGbmCount, glmCount = datasetGlmCount) {
+      function renderDatasetMeta(fileMeta = datasetMetaBase) {
         datasetMetaBase = String(fileMeta || "");
-        const numericCount = Number(gbmCount);
-        datasetGbmCount = Number.isFinite(numericCount) && numericCount >= 0 ? Math.trunc(numericCount) : null;
-        const numericGlmCount = Number(glmCount);
-        datasetGlmCount = Number.isFinite(numericGlmCount) && numericGlmCount >= 0 ? Math.trunc(numericGlmCount) : null;
         const target = el("datasetMeta");
         const rows = Number(state.schema?.row_count || 0).toLocaleString();
         const columns = Number(state.schema?.columns?.length || 0).toLocaleString();
@@ -1575,79 +1569,75 @@
         columnCount.className = "dataset-meta-column-count";
         columnCount.textContent = `${columns} columns`;
         details.append(columnCount);
-        if (datasetGlmCount !== null && toolEnabled("glm")) {
-          details.append(document.createTextNode(" · "));
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "dataset-meta-glm-link";
-          button.textContent = `GLMs (${datasetGlmCount.toLocaleString()})`;
-          button.title = "Open GLM Model navigator";
-          button.setAttribute("aria-label", `Open saved GLMs, ${datasetGlmCount.toLocaleString()} models`);
-          button.addEventListener("click", openGlmModelNavigator);
-          details.append(button);
-        }
-        if (datasetGbmCount !== null && toolEnabled("gbm")) {
-          details.append(document.createTextNode(" · "));
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "dataset-meta-gbm-link";
-          button.textContent = `GBMs (${datasetGbmCount.toLocaleString()})`;
-          button.title = "Open GBM Model navigator";
-          button.setAttribute("aria-label", `Open saved GBMs, ${datasetGbmCount.toLocaleString()} models`);
-          button.addEventListener("click", openGbmModelNavigator);
-          details.append(button);
-        }
         scheduleDatasetMetaCompactCheck();
       }
 
-      async function refreshDatasetGlmCount() {
+      function setModelCountBadge(tool, count) {
+        const button = el(TOOL_BUTTON_IDS[tool]);
+        const badge = el(tool === "glm" ? "glmModelCountBadge" : "gbmModelCountBadge");
+        if (!button || !badge) return;
+        const label = tool === "glm" ? "GLM" : "GBM";
+        const numericCount = Number(count);
+        const known = toolEnabled(tool)
+          && count !== null
+          && count !== undefined
+          && count !== ""
+          && Number.isFinite(numericCount)
+          && numericCount >= 0;
+        if (!known) {
+          badge.textContent = "";
+          badge.hidden = true;
+          button.setAttribute("aria-label", label);
+          button.dataset.tooltip = label;
+        } else {
+          const modelCount = Math.trunc(numericCount);
+          const countText = modelCount.toLocaleString();
+          const noun = modelCount === 1 ? "model" : "models";
+          badge.textContent = countText;
+          badge.hidden = false;
+          button.setAttribute("aria-label", `${label}, ${countText} ${noun} built`);
+          button.dataset.tooltip = `${label} · ${countText} ${noun} built`;
+        }
+        if (toolButtonTooltipTarget === button && toolButtonTooltip && !toolButtonTooltip.hidden) {
+          toolButtonTooltip.textContent = toolButtonTooltipText(button);
+          positionToolButtonTooltip(button);
+        }
+      }
+
+      async function refreshGlmModelCount() {
         if (!toolEnabled("glm")) {
-          renderDatasetMeta(datasetMetaBase, datasetGbmCount, null);
+          setGlmModelCount(null);
           return;
         }
         try {
           const payload = await api("/api/glm/models", { method: "GET" });
           const models = Array.isArray(payload?.models) ? payload.models : [];
-          renderDatasetMeta(datasetMetaBase, datasetGbmCount, models.length);
+          setGlmModelCount(models.length);
         } catch (_) {
-          renderDatasetMeta(datasetMetaBase, datasetGbmCount, null);
+          setGlmModelCount(null);
         }
       }
 
-      async function refreshDatasetGbmCount() {
+      async function refreshGbmModelCount() {
         if (!toolEnabled("gbm")) {
-          renderDatasetMeta(datasetMetaBase, null, datasetGlmCount);
+          setGbmModelCount(null);
           return;
         }
         try {
           const payload = await api("/api/gbm/models", { method: "GET" });
           const models = Array.isArray(payload?.models) ? payload.models : [];
-          renderDatasetMeta(datasetMetaBase, models.length, datasetGlmCount);
+          setGbmModelCount(models.length);
         } catch (_) {
-          renderDatasetMeta(datasetMetaBase, null, datasetGlmCount);
+          setGbmModelCount(null);
         }
       }
 
-      function setDatasetGbmCount(count) {
-        if (!toolEnabled("gbm")) return;
-        renderDatasetMeta(datasetMetaBase, count, datasetGlmCount);
+      function setGbmModelCount(count) {
+        setModelCountBadge("gbm", count);
       }
 
-      function setDatasetGlmCount(count) {
-        if (!toolEnabled("glm")) return;
-        renderDatasetMeta(datasetMetaBase, datasetGbmCount, count);
-      }
-
-      function openGlmModelNavigator() {
-        if (!toolEnabled("glm")) return;
-        glmTool.openModelNavigator();
-        setTool("glm");
-      }
-
-      function openGbmModelNavigator() {
-        if (!toolEnabled("gbm")) return;
-        gbmTool.openModelNavigator();
-        setTool("gbm");
+      function setGlmModelCount(count) {
+        setModelCountBadge("glm", count);
       }
 
       function setTool(tool, refresh = true) {
@@ -2566,7 +2556,7 @@
         renderSidebarVersion();
         const filtersUnchanged = previousFilterSignature === savedFilterSpecSignature(state.schema.filters || []);
         clearToolCaches({ preserve: ["specs"] });
-        renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
+        renderDatasetMeta(schemaFileMeta());
         await refreshFilterRowCountMeta();
         state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
         state.savedFilterThemesInitialised = previousSavedFilterThemesInitialised;
@@ -4552,9 +4542,9 @@
           state.bandSuggestionRequestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
           invalidateLineBarDateBucketSuggestion();
           clearToolCaches();
-          renderDatasetMeta(schemaFileMeta(), datasetGbmCount, datasetGlmCount);
-          refreshDatasetGlmCount();
-          refreshDatasetGbmCount();
+          renderDatasetMeta(schemaFileMeta());
+          refreshGlmModelCount();
+          refreshGbmModelCount();
           await refreshFilterRowCountMeta();
           if (filtersUnchanged) {
             state.collapsedSavedFilterThemes = previousCollapsedSavedFilterThemes;
@@ -4635,8 +4625,8 @@
           renderFavourites();
           renderToolSelector();
           renderDatasetMeta(fileMeta);
-          refreshDatasetGlmCount();
-          refreshDatasetGbmCount();
+          refreshGlmModelCount();
+          refreshGbmModelCount();
           renderSavedFilters();
           lineBarTool.renderExpectedNumerators();
           lineBarTool.renderFeatures();

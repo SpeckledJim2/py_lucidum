@@ -96,7 +96,7 @@ export function createGlmTool({
   saveToolPresentation,
   setChartMessage,
   setClientTiming,
-  setDatasetGlmCount = () => {},
+  setGlmModelCount = () => {},
   setDuckDbTiming,
   setGroupMeta,
   setRenderTiming,
@@ -216,7 +216,7 @@ export function createGlmTool({
       const cache = toolCache(tool);
       cache.requestKey = requestKey;
       cache.data = data;
-      setDatasetGlmCount(Array.isArray(data?.models) ? data.models.length : null);
+      setGlmModelCount(Array.isArray(data?.models) ? data.models.length : null);
       syncDuckDbTimingFromData(tool, data);
       syncClientTimingFromData(tool, data);
       measureToolRender(tool, () => render(data));
@@ -1646,7 +1646,7 @@ export function createGlmTool({
           const latest = await api("/api/glm/config", { method: "GET", clientTiming: true });
           config = latest;
           modelRows = normaliseModels(latest.models || []);
-          setDatasetGlmCount(modelRows.length);
+          setGlmModelCount(modelRows.length);
           await refreshTabulationConfig({ force: true });
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
@@ -2671,7 +2671,7 @@ export function createGlmTool({
       if (seq !== modelListRefreshSeq) return;
       config = data;
       modelRows = normaliseModels(data.models || []);
-      setDatasetGlmCount(modelRows.length);
+      setGlmModelCount(modelRows.length);
       renderModelTable(modelRows, data.active_model_id);
       syncSidebarModelChooser(modelRows, data.active_model_id);
     } catch (error) {
@@ -2792,7 +2792,7 @@ export function createGlmTool({
     if (!currentActiveModelId(nextConfig)) builderDraftSourceModelId = "";
     activeDetail = null;
     coefficientRows = [];
-    setDatasetGlmCount(Array.isArray(nextConfig?.models) ? nextConfig.models.length : null);
+    setGlmModelCount(Array.isArray(nextConfig?.models) ? nextConfig.models.length : null);
     setGlmNotice("");
     if (options?.activationOnly && await applyActivationOnlyTabulationUpdate(nextConfig)) {
       // The visible GLM Tabulations selection did not change, so keep the mounted table UI intact.

@@ -112,7 +112,7 @@ export function createGbmTool({
   setAppReadyStatus = () => {},
   setToolTimingFailed,
   showClipboardToast = () => {},
-  setDatasetGbmCount = () => {},
+  setGbmModelCount = () => {},
   startToolTiming,
   state,
   canNavigateToLineBarFeature,
@@ -192,7 +192,7 @@ export function createGbmTool({
       const cache = toolCache(tool);
       cache.requestKey = requestKey;
       cache.data = data;
-      syncDatasetGbmCountFromConfig(data);
+      syncGbmModelCountFromConfig(data);
       syncDuckDbTimingFromData(tool, data);
       syncClientTimingFromData(tool, data);
       measureToolRender(tool, () => render(data));
@@ -207,8 +207,8 @@ export function createGbmTool({
     }
   }
 
-  function syncDatasetGbmCountFromConfig(data = {}) {
-    setDatasetGbmCount(Array.isArray(data?.models) ? data.models.length : null);
+  function syncGbmModelCountFromConfig(data = {}) {
+    setGbmModelCount(Array.isArray(data?.models) ? data.models.length : null);
   }
 
   function useCached(cache) {
@@ -2872,7 +2872,7 @@ export function createGbmTool({
     config = config || {};
     config.models = models;
     config.active_model_id = activeModelId;
-    syncDatasetGbmCountFromConfig({ models });
+    syncGbmModelCountFromConfig({ models });
     const cache = toolCache(tool);
     if (cache?.data) {
       cache.data = { ...cache.data, models, active_model_id: activeModelId };
@@ -3051,7 +3051,7 @@ export function createGbmTool({
         const cache = toolCache(tool);
         cache.requestKey = stableConfigKey();
         cache.data = data;
-        syncDatasetGbmCountFromConfig(data);
+        syncGbmModelCountFromConfig(data);
         setTrainingState(false);
         setAppReadyStatus("Ready");
         setTrainingStatus("");
@@ -3186,7 +3186,7 @@ export function createGbmTool({
     const nextConfig = result.config || config || {};
     await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "gbm" });
     const preserveProfile = clearCachesAfterGbmModelSourceChange();
-    syncDatasetGbmCountFromConfig(nextConfig);
+    syncGbmModelCountFromConfig(nextConfig);
     const currentModelId = featureDraftModelId(config);
     const nextModelId = featureDraftModelId(nextConfig);
     if (currentModelId !== nextModelId) {

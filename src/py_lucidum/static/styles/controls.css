@@ -690,6 +690,32 @@
         place-items: center;
       }
 
+      .tool-model-count-badge {
+        align-items: center;
+        background: var(--model-count-badge-bg);
+        border: 2px solid var(--sidebar-rail-bg);
+        border-radius: 999px;
+        color: var(--model-count-badge-text);
+        display: inline-flex;
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+        height: 18px;
+        justify-content: center;
+        line-height: 1;
+        min-width: 18px;
+        padding: 0 3px;
+        pointer-events: none;
+        position: absolute;
+        right: -2px;
+        top: -2px;
+        z-index: 1;
+      }
+
+      .tool-model-count-badge[hidden] {
+        display: none;
+      }
+
       .tool-icon svg {
         width: 28px;
         height: 28px;
