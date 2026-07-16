@@ -284,6 +284,7 @@
       }
 
       .sidebar-control-pane {
+        --muted: var(--sidebar-muted);
         display: flex;
         flex-direction: column;
         grid-column: 2;
@@ -315,7 +316,7 @@
       .collapsed-sidebar-version {
         display: none;
         margin-top: auto;
-        color: var(--muted);
+        color: var(--sidebar-rail-text);
         font-size: 10px;
         line-height: 1.1;
         text-align: center;

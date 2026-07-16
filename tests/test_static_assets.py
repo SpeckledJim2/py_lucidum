@@ -880,7 +880,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
         self.assertIn(".tool-screen-nav-item {", controls)
         self.assertIn("height: var(--app-tool-row-height);", controls)
-        self.assertIn("background: var(--sidebar-bg);", controls)
+        self.assertIn("background: var(--tool-screen-nav-bg);", controls)
         self.assertIn(".tool-screen-nav-item:first-child", controls)
         self.assertIn(".tool-screen-nav-item:last-child", controls)
         self.assertIn(".tool-screen-nav-item.active::after", controls)
@@ -898,6 +898,29 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('id="lineBarWorkspaceControls" class="line-bar-workspace-controls hidden"', index)
         self.assertIn('id="lineBarTabs" class="tabs hidden"', index)
         self.assertNotIn('id="lineBarTabs" class="tool-screen-nav', index)
+
+    def test_sidebar_rail_and_control_pane_use_distinct_theme_tokens(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
+        shell = (static_root / "styles/shell.css").read_text(encoding="utf-8")
+        controls = (static_root / "styles/controls.css").read_text(encoding="utf-8")
+
+        self.assertIn("--sidebar-bg: #dde7f1;", foundations)
+        self.assertIn("--sidebar-muted: #526174;", foundations)
+        self.assertIn("--sidebar-rail-bg: #24364b;", foundations)
+        self.assertIn("--sidebar-rail-text: #b8c4d3;", foundations)
+        self.assertIn("--sidebar-rail-active: #72b7ff;", foundations)
+        self.assertIn("--sidebar-bg: #1e2c42;", foundations)
+        self.assertIn("--sidebar-rail-bg: #0b1220;", foundations)
+        self.assertIn("--tool-screen-nav-bg: var(--panel-2);", foundations)
+        self.assertIn("background: var(--sidebar-bg);", shell)
+        self.assertIn("--muted: var(--sidebar-muted);", shell)
+        self.assertIn("color: var(--sidebar-rail-text);", shell)
+        self.assertIn("background: var(--sidebar-rail-bg);", controls)
+        self.assertIn("color: var(--sidebar-rail-active);", controls)
+        self.assertIn("color: var(--sidebar-rail-hover);", controls)
+        self.assertIn(".sidebar-control-pane .feature-list {", controls)
+        self.assertIn("background: var(--tool-screen-nav-bg);", controls)
 
     def test_app_control_strips_use_shared_height_tokens(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"

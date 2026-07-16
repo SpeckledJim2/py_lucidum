@@ -32,7 +32,7 @@
       }
 
       .gbm-toolbar {
-        background: var(--sidebar-bg);
+        background: var(--tool-screen-nav-bg);
         border-bottom: 1px solid var(--line);
         display: flex;
         align-items: stretch;

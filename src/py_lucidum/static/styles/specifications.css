@@ -53,7 +53,7 @@
 
       .spec-control-row {
         align-items: stretch;
-        background: var(--sidebar-bg);
+        background: var(--tool-screen-nav-bg);
         border-bottom: 1px solid var(--line);
         display: flex;
         flex: 0 0 auto;

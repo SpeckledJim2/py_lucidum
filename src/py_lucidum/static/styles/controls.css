@@ -115,6 +115,10 @@
         background: var(--panel);
       }
 
+      .sidebar-control-pane .feature-list {
+        background: var(--sidebar-bg);
+      }
+
       .feature {
         width: 100%;
         border: 0;
@@ -589,6 +593,7 @@
 
       .tool-selector-section {
         align-items: center;
+        background: var(--sidebar-rail-bg);
         border-right: 1px solid var(--line);
         display: flex;
         flex-direction: column;
@@ -611,7 +616,7 @@
         min-width: 0;
         width: 100%;
         border-radius: 4px;
-        background: var(--sidebar-bg);
+        background: var(--sidebar-rail-bg);
         overflow: visible;
       }
 
@@ -623,7 +628,7 @@
         border: 0;
         border-radius: 0;
         background: transparent;
-        color: var(--muted);
+        color: var(--sidebar-rail-text);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -651,13 +656,13 @@
 
       .tool-option.active {
         background: transparent;
-        color: var(--accent);
+        color: var(--sidebar-rail-active);
         opacity: 1;
       }
 
       .tool-option:not(.active):hover,
       .tool-option:not(.active):focus-visible {
-        color: var(--accent);
+        color: var(--sidebar-rail-hover);
       }
 
       .tool-option.active::before {
@@ -667,17 +672,17 @@
         top: -6px;
         bottom: -6px;
         width: 3px;
-        background: var(--accent);
+        background: var(--sidebar-rail-active);
         border-radius: 0 2px 2px 0;
       }
 
       .tool-option:focus-visible {
-        outline: 2px solid color-mix(in srgb, var(--text) 50%, transparent);
+        outline: 2px solid color-mix(in srgb, var(--sidebar-rail-active) 72%, white);
         outline-offset: -4px;
       }
 
       .tool-option:disabled {
-        color: var(--muted);
+        color: var(--sidebar-rail-text);
         cursor: default;
         opacity: 0.38;
       }
@@ -706,19 +711,19 @@
         height: 30px;
         display: block;
         object-fit: contain;
-        filter: grayscale(1) opacity(0.62);
+        filter: brightness(0) saturate(100%) invert(85%) sepia(11%) saturate(358%) hue-rotate(176deg) brightness(94%) contrast(83%);
       }
 
       .tool-option.active .tool-icon img {
-        filter: brightness(0) saturate(100%) invert(39%) sepia(70%) saturate(1097%) hue-rotate(185deg) brightness(91%) contrast(92%);
+        filter: brightness(0) saturate(100%) invert(72%) sepia(62%) saturate(1550%) hue-rotate(180deg) brightness(103%) contrast(104%);
       }
 
       body.dark .tool-option {
-        color: var(--muted);
+        color: var(--sidebar-rail-text);
       }
 
       body.dark .tool-option.active {
-        color: var(--accent);
+        color: var(--sidebar-rail-active);
       }
 
       body.dark .tool-icon img {
@@ -1396,7 +1401,7 @@
 
       .tool-screen-nav {
         align-items: stretch;
-        background: var(--sidebar-bg);
+        background: var(--tool-screen-nav-bg);
         border: 0;
         border-radius: 0;
         display: flex;
@@ -1417,7 +1422,7 @@
       .tool-screen-nav-item {
         align-items: center;
         appearance: none;
-        background: var(--sidebar-bg);
+        background: var(--tool-screen-nav-bg);
         border: 0;
         border-bottom: 1px solid var(--line);
         border-left: 1px solid var(--line);
@@ -1449,12 +1454,12 @@
       }
 
       .tool-screen-nav-item:hover {
-        background: var(--sidebar-bg);
+        background: var(--tool-screen-nav-bg);
         color: var(--text);
       }
 
       .tool-screen-nav-item.active {
-        background: var(--sidebar-bg);
+        background: var(--tool-screen-nav-bg);
         color: var(--accent);
       }
 

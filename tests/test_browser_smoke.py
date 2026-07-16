@@ -1569,11 +1569,79 @@ class BrowserSmokeTests(unittest.TestCase):
                 with sync_playwright() as playwright:
                     browser = playwright.chromium.launch()
                     page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page.emulate_media(color_scheme="light")
                     page_errors: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
                         page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
+
+                        def sidebar_palette_state() -> dict[str, str]:
+                            return page.evaluate(
+                                """
+                                () => {
+                                  const active = document.querySelector(".tool-option.active");
+                                  const inactive = document.querySelector(".tool-option:not(.active):not(.hidden)");
+                                  return {
+                                    header: getComputedStyle(document.querySelector("header")).backgroundColor,
+                                    sidebar: getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
+                                    rail: getComputedStyle(document.querySelector(".tool-selector-section")).backgroundColor,
+                                    active: getComputedStyle(active).color,
+                                    inactive: getComputedStyle(inactive).color,
+                                    collapsedVersion: getComputedStyle(
+                                      document.querySelector("#collapsedSidebarVersion")
+                                    ).color,
+                                    featureList: getComputedStyle(
+                                      document.querySelector(".sidebar-control-pane .feature-list")
+                                    ).backgroundColor,
+                                    input: getComputedStyle(document.querySelector("#actualNumerator")).backgroundColor,
+                                  };
+                                }
+                                """
+                            )
+
+                        light_palette = sidebar_palette_state()
+                        self.assertEqual(light_palette["header"], "rgb(255, 255, 255)")
+                        self.assertEqual(light_palette["sidebar"], "rgb(221, 231, 241)")
+                        self.assertEqual(light_palette["rail"], "rgb(36, 54, 75)")
+                        self.assertEqual(light_palette["active"], "rgb(114, 183, 255)")
+                        self.assertEqual(light_palette["inactive"], "rgb(184, 196, 211)")
+                        self.assertEqual(light_palette["collapsedVersion"], light_palette["inactive"])
+                        self.assertEqual(light_palette["featureList"], light_palette["sidebar"])
+                        self.assertEqual(light_palette["input"], "rgb(255, 255, 255)")
+
+                        inactive_tool = page.locator(".tool-option:not(.active):not(.hidden)").first
+                        inactive_tool.hover()
+                        self.assertEqual(
+                            inactive_tool.evaluate("node => getComputedStyle(node).color"),
+                            "rgb(248, 250, 252)",
+                        )
+
+                        page.locator("#themeBtn").click()
+                        page.wait_for_function('() => document.body.classList.contains("dark")')
+                        dark_palette = sidebar_palette_state()
+                        self.assertEqual(dark_palette["sidebar"], "rgb(30, 44, 66)")
+                        self.assertEqual(dark_palette["rail"], "rgb(11, 18, 32)")
+                        self.assertEqual(dark_palette["active"], "rgb(114, 183, 255)")
+                        self.assertEqual(dark_palette["inactive"], "rgb(168, 179, 199)")
+                        self.assertEqual(dark_palette["collapsedVersion"], dark_palette["inactive"])
+                        self.assertEqual(dark_palette["featureList"], dark_palette["sidebar"])
+                        page.locator("#themeBtn").click()
+                        page.wait_for_function('() => !document.body.classList.contains("dark")')
+
+                        page.locator("#sidebarToggleBtn").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"'
+                        )
+                        collapsed_sidebar_box = page.locator("#appSidebar").bounding_box()
+                        self.assertIsNotNone(collapsed_sidebar_box)
+                        assert collapsed_sidebar_box is not None
+                        self.assertAlmostEqual(collapsed_sidebar_box["width"], 50, delta=0.1)
+                        self.assertEqual(sidebar_palette_state()["rail"], light_palette["rail"])
+                        page.locator("#sidebarToggleBtn").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"'
+                        )
 
                         def ensure_sidebar_expanded() -> None:
                             if page.locator("#sidebarToggleBtn").get_attribute("aria-expanded") == "false":
@@ -1587,6 +1655,11 @@ class BrowserSmokeTests(unittest.TestCase):
                             page.set_viewport_size({"width": width, "height": 800})
                             if width > 640:
                                 ensure_sidebar_expanded()
+                            else:
+                                page.wait_for_function(
+                                    '() => document.body.classList.contains("sidebar-collapsed")',
+                                    timeout=10_000,
+                                )
                             page.mouse.move(width - 12, 80)
                             page.locator("#sidebarResizer").dispatch_event("pointerleave")
                             return page.evaluate(
@@ -1611,6 +1684,7 @@ class BrowserSmokeTests(unittest.TestCase):
                                     resizerShadow: resizerStyle.boxShadow,
                                     resizerWidth: resizerRect.width,
                                     sidebarRight: sidebarRect.right,
+                                    sidebarWidth: sidebarRect.width,
                                     sidebarShadow: sidebarStyle.boxShadow,
                                   };
                                 }
@@ -1640,13 +1714,20 @@ class BrowserSmokeTests(unittest.TestCase):
                         )
                         hover_state = resizer.evaluate(
                             """
-                            node => ({
-                              accent: getComputedStyle(document.querySelector(".tool-option.active")).color,
-                              background: getComputedStyle(node).backgroundColor,
-                              boxShadow: getComputedStyle(node).boxShadow,
-                              hovering: node.classList.contains("hovering"),
-                              width: node.getBoundingClientRect().width,
-                            })
+                            node => {
+                              const probe = document.createElement("span");
+                              probe.style.color = "var(--accent)";
+                              document.body.append(probe);
+                              const accent = getComputedStyle(probe).color;
+                              probe.remove();
+                              return {
+                                accent,
+                                background: getComputedStyle(node).backgroundColor,
+                                boxShadow: getComputedStyle(node).boxShadow,
+                                hovering: node.classList.contains("hovering"),
+                                width: node.getBoundingClientRect().width,
+                              };
+                            }
                             """
                         )
                         self.assertTrue(hover_state["hovering"])
@@ -1675,6 +1756,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         mobile_state = divider_state(640)
                         self.assertEqual(mobile_state["resizerDisplay"], "none")
                         self.assertEqual(mobile_state["sidebarShadow"], "none")
+                        self.assertAlmostEqual(mobile_state["sidebarWidth"], 50, delta=0.1)
+                        self.assertEqual(sidebar_palette_state()["rail"], light_palette["rail"])
                         self.assertEqual(page_errors, [])
                     finally:
                         page.close()
@@ -2430,10 +2513,22 @@ class BrowserSmokeTests(unittest.TestCase):
                         resizer = page.locator("#profilePaneResizer")
                         resizer.hover()
                         self.assertEqual(resizer.evaluate('node => getComputedStyle(node, "::before").width'), "3px")
-                        self.assertEqual(
-                            resizer.evaluate('node => getComputedStyle(node, "::before").backgroundColor'),
-                            page.locator("#profileTool.active").evaluate("node => getComputedStyle(node).color"),
+                        profile_resizer_colors = resizer.evaluate(
+                            """
+                            node => {
+                              const probe = document.createElement("span");
+                              probe.style.color = "var(--accent)";
+                              document.body.append(probe);
+                              const accent = getComputedStyle(probe).color;
+                              probe.remove();
+                              return {
+                                accent,
+                                resizer: getComputedStyle(node, "::before").backgroundColor,
+                              };
+                            }
+                            """
                         )
+                        self.assertEqual(profile_resizer_colors["resizer"], profile_resizer_colors["accent"])
                         resizer_box = resizer.bounding_box()
                         self.assertIsNotNone(resizer_box)
                         assert resizer_box is not None
@@ -9631,17 +9726,28 @@ COPY (
                       const selector = document.querySelector("#toolSelectorSection .tool-selector");
                       const selectorStyle = getComputedStyle(selector);
                       const sidebarRect = document.querySelector("#appSidebar").getBoundingClientRect();
-                      const railRect = document.querySelector("#toolSelectorSection").getBoundingClientRect();
+                      const rail = document.querySelector("#toolSelectorSection");
+                      const railRect = rail.getBoundingClientRect();
                       const paneRect = document.querySelector("#sidebarControlPane").getBoundingClientRect();
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
                       const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
+                      const normalizeColor = (value) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = value;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
+                      const activeColor = normalizeColor("var(--sidebar-rail-active)");
+                      const inactiveColor = normalizeColor("var(--sidebar-rail-text)");
                       return {
                         count: buttons.length,
                         selectorDisplay: selectorStyle.display,
                         gap: selectorStyle.gap,
                         overflowX: selectorStyle.overflowX,
                         overflowY: selectorStyle.overflowY,
-                        selectorMatchesSidebar: selectorStyle.backgroundColor === getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
+                        selectorMatchesRail: selectorStyle.backgroundColor === getComputedStyle(rail).backgroundColor,
                         vertical: new Set(lefts).size === 1 && new Set(tops).size === buttons.length,
                         railWidth: Math.round(railRect.width),
                         railAtSidebarLeft: Math.round(railRect.left) === Math.round(sidebarRect.left),
@@ -9657,7 +9763,7 @@ COPY (
                         allButtonsBorderless: buttons.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
                         allButtonsTransparentWithActiveAccent: buttons.every((button) => {
                           const style = getComputedStyle(button);
-                          const expectedColor = button.classList.contains("active") ? "rgb(34, 118, 210)" : "rgb(102, 112, 133)";
+                          const expectedColor = button.classList.contains("active") ? activeColor : inactiveColor;
                           return style.backgroundColor === "rgba(0, 0, 0, 0)" && style.color === expectedColor;
                         }),
                         allButtonsFullOpacity: buttons.every((button) => getComputedStyle(button).opacity === "1"),
@@ -9689,7 +9795,7 @@ COPY (
                         "gap": "12px",
                         "overflowX": "visible",
                         "overflowY": "visible",
-                        "selectorMatchesSidebar": True,
+                        "selectorMatchesRail": True,
                         "vertical": True,
                         "railWidth": 50,
                         "railAtSidebarLeft": True,
@@ -10356,14 +10462,23 @@ COPY (
                     timeout=10_000,
                 )
 
-                siderail_accent_color = page.locator(".tool-option.active").first.evaluate(
-                    "(button) => getComputedStyle(button).color"
+                app_accent_color = page.evaluate(
+                    """
+                    () => {
+                      const probe = document.createElement("span");
+                      probe.style.color = "var(--accent)";
+                      document.body.append(probe);
+                      const color = getComputedStyle(probe).color;
+                      probe.remove();
+                      return color;
+                    }
+                    """
                 )
                 for glm_editor_button in ("#glmFontSmallerBtn", "#glmFontLargerBtn", "#glmClearFormulaBtn"):
                     page.locator(glm_editor_button).hover()
                     self.assertEqual(
                         page.locator(glm_editor_button).evaluate("(button) => getComputedStyle(button).color"),
-                        siderail_accent_color,
+                        app_accent_color,
                     )
 
                 page.locator("#glmFontSmallerBtn").focus()
@@ -13593,7 +13708,7 @@ COPY (
                       const marker = document.querySelector("#collapsedSidebarVersion");
                       if (!marker || marker.hidden || marker.textContent.trim() !== expectedText || marker.offsetParent === null) return false;
                       const probe = document.createElement("span");
-                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--muted").trim();
+                      probe.style.color = getComputedStyle(document.body).getPropertyValue("--sidebar-rail-text").trim();
                       document.body.append(probe);
                       const muted = getComputedStyle(probe).color;
                       probe.remove();
@@ -15001,13 +15116,12 @@ COPY (
                       const railStyle = getComputedStyle(rail);
                       const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
-                      const sidebarBackground = getComputedStyle(sidebar).backgroundColor;
                       const sidebarResizerCenterX = sidebarResizerRect.left + sidebarResizerRect.width / 2;
                       const sidebarResizerHitY = sidebarResizerRect.top + Math.min(100, sidebarResizerRect.height / 2);
                       return {
                         count: buttons.length,
                         selectorDisplay: getComputedStyle(selector).display,
-                        selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === sidebarBackground,
+                        selectorMatchesRail: getComputedStyle(selector).backgroundColor === railStyle.backgroundColor,
                         lineBarSidePanelMatchesWorkspace: getComputedStyle(lineBarWorkspace).backgroundColor === getComputedStyle(lineBarSidePanel).backgroundColor,
                         gap: getComputedStyle(selector).gap,
                         overflowX: getComputedStyle(selector).overflowX,
@@ -15042,7 +15156,7 @@ COPY (
                     {
                         "count": 6,
                         "selectorDisplay": "grid",
-                        "selectorMatchesSidebar": True,
+                        "selectorMatchesRail": True,
                         "lineBarSidePanelMatchesWorkspace": True,
                         "gap": "12px",
                         "overflowX": "visible",
@@ -15078,16 +15192,26 @@ COPY (
                     () => {
                       const buttons = [...document.querySelectorAll("#toolSelectorSection .tool-option:not(.hidden)")];
                       const selector = document.querySelector("#toolSelectorSection .tool-selector");
+                      const rail = document.querySelector("#toolSelectorSection");
                       const sidebar = document.querySelector("#appSidebar");
                       const lineBarSidePanel = document.querySelector(".chart-side-section");
                       const lineBarWorkspace = document.querySelector(".workspace");
                       const lefts = buttons.map((button) => Math.round(button.getBoundingClientRect().left));
                       const tops = buttons.map((button) => Math.round(button.getBoundingClientRect().top));
-                      const sidebarBackground = getComputedStyle(sidebar).backgroundColor;
+                      const normalizeColor = (value) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = value;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
+                      const activeColor = normalizeColor("var(--sidebar-rail-active)");
+                      const inactiveColor = normalizeColor("var(--sidebar-rail-text)");
                       return {
                         count: buttons.length,
                         selectorDisplay: getComputedStyle(selector).display,
-                        selectorMatchesSidebar: getComputedStyle(selector).backgroundColor === sidebarBackground,
+                        selectorMatchesRail: getComputedStyle(selector).backgroundColor === getComputedStyle(rail).backgroundColor,
                         lineBarSidePanelMatchesWorkspace: getComputedStyle(lineBarWorkspace).backgroundColor === getComputedStyle(lineBarSidePanel).backgroundColor,
                         gap: getComputedStyle(selector).gap,
                         overflowX: getComputedStyle(selector).overflowX,
@@ -15100,7 +15224,7 @@ COPY (
                         allButtonsBorderless: buttons.every((button) => getComputedStyle(button).borderTopWidth === "0px"),
                         allButtonsTransparentWithActiveAccent: buttons.every((button) => {
                           const style = getComputedStyle(button);
-                          const expectedColor = button.classList.contains("active") ? "rgb(34, 118, 210)" : "rgb(102, 112, 133)";
+                          const expectedColor = button.classList.contains("active") ? activeColor : inactiveColor;
                           return style.backgroundColor === "rgba(0, 0, 0, 0)" && style.color === expectedColor;
                         }),
                         allButtonsFullOpacity: buttons.every((button) => getComputedStyle(button).opacity === "1"),
@@ -15123,7 +15247,7 @@ COPY (
                     {
                         "count": 6,
                         "selectorDisplay": "grid",
-                        "selectorMatchesSidebar": True,
+                        "selectorMatchesRail": True,
                         "lineBarSidePanelMatchesWorkspace": True,
                         "gap": "12px",
                         "overflowX": "visible",
@@ -15287,11 +15411,18 @@ COPY (
                 page.locator("#sidebarResizer").dispatch_event("pointerenter")
                 sidebar_resizer_hover_state = page.locator("#sidebarResizer").evaluate(
                     """
-                    (resizer) => ({
-                      boxShadow: getComputedStyle(resizer).boxShadow,
-                      color: getComputedStyle(resizer).backgroundColor,
-                      accent: getComputedStyle(document.querySelector(".tool-option.active")).color,
-                    })
+                    (resizer) => {
+                      const probe = document.createElement("span");
+                      probe.style.color = "var(--accent)";
+                      document.body.append(probe);
+                      const accent = getComputedStyle(probe).color;
+                      probe.remove();
+                      return {
+                        boxShadow: getComputedStyle(resizer).boxShadow,
+                        color: getComputedStyle(resizer).backgroundColor,
+                        accent,
+                      };
+                    }
                     """
                 )
                 self.assertEqual(sidebar_resizer_hover_state["color"], sidebar_resizer_hover_state["accent"])
@@ -16029,6 +16160,14 @@ COPY (
                 nav_state = page.locator(".gbm-tabs").evaluate(
                     """
                     (nav) => {
+                      const normalizeColor = (value) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = value;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
                       const active = nav.querySelector('[data-gbm-tab="features"]');
                       const inactive = nav.querySelector('[data-gbm-tab="models"]');
                       const last = nav.querySelector('[data-gbm-tab="trees"]');
@@ -16072,8 +16211,8 @@ COPY (
                         fontWeight: style.fontWeight,
                         activeColor: style.color,
                         inactiveColor: inactiveStyle.color,
-                        accentColor: getComputedStyle(document.querySelector(".tool-option.active")).color,
-                        mutedColor: getComputedStyle(document.querySelector(".tool-option:not(.active)")).color,
+                        accentColor: normalizeColor("var(--accent)"),
+                        mutedColor: normalizeColor("var(--muted)"),
                         indicatorLeft: indicator.left,
                         indicatorRight: indicator.right,
                         iconCount: nav.querySelectorAll(".tool-screen-nav-icon").length,
