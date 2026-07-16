@@ -23,6 +23,7 @@ GBM_PREDICTION_COLUMNS = {"gbm_prediction", "gbm_prediction_rate", "gbm_tabulate
 GLM_SOURCE_RE = re.compile(r"^glm:[A-Za-z0-9_.-]+:predictions$")
 GBM_SOURCE_RE = re.compile(r"^gbm:[A-Za-z0-9_.-]+:predictions$")
 RATIO_SOURCE_RE = re.compile(r"^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
+EMPTY_PERIOD_VALUES = {"show", "skip"}
 
 
 class LineBarFavouriteError(ValueError):
@@ -406,6 +407,9 @@ def normalise_favourite_view(view: dict[str, Any]) -> dict[str, Any]:
     payload = json_safe(view)
     if not str(payload.get("scope") or "").strip():
         payload["scope"] = DEFAULT_FAVOURITE_SCOPE
+    if payload.get("scope") == "line_bar_view":
+        mode = str(payload.get("emptyPeriods") or "show").strip().lower()
+        payload["emptyPeriods"] = mode if mode in EMPTY_PERIOD_VALUES else "show"
     return payload
 
 

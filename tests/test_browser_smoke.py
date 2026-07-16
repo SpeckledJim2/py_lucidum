@@ -5487,6 +5487,209 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_empty_periods_control_chart_and_favourite_restore(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "empty_periods.csv"
+            data_path.write_text(
+                "EventDate,Actual\n"
+                "2024-01-01,10\n"
+                "2024-01-03,20\n",
+                encoding="utf-8",
+            )
+            favourite_view = {
+                "version": 1,
+                "scope": "line_bar_view",
+                "source": "dataset",
+                "x": "EventDate",
+                "xSource": "dataset",
+                "view": "chart",
+                "sort": "alpha",
+                "lowGroup": "0",
+                "labels": "none",
+                "bandWidth": "0",
+                "quantileMode": "off",
+                "dateBucket": "day",
+                "transform": "none",
+                "sigma": "0",
+                "partialDependence": "none",
+                "featureSort": "alpha",
+                "expectedSort": "alpha",
+                "actual": {"value": "Actual", "sourceId": "dataset", "metricKind": "metric"},
+                "denominator": "__none__",
+                "expectedSelections": [],
+                "filter": "",
+                "filterSelectionMode": "grouped",
+                "filterOperator": "and",
+                "savedFilterRows": [],
+            }
+            favourites_path = root / "favourites.json"
+            favourites_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "favourites": [
+                            {
+                                "id": "legacy-empty-periods",
+                                "name": "Legacy date view",
+                                "view": favourite_view,
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                line_bar_favourites_path=favourites_path,
+                defaults={"x": "EventDate", "actual": "Actual", "denominator": "__none__"},
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    chart_requests: list[dict[str, Any]] = []
+
+                    def capture_chart_request(request: Any) -> None:
+                        if request.method == "POST" and request.url.endswith("/api/chart"):
+                            chart_requests.append(json.loads(request.post_data or "{}"))
+
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", capture_chart_request)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("empty_periods.csv").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("3 groups")
+                          && document.querySelector("#favouritesSelectedMeta")?.textContent === "Legacy date view"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """() => document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#emptyPeriodsControl")).display !== "none"
+                          && document.querySelector('[data-control="emptyPeriods"] [data-value="show"]')?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+
+                    self.assertTrue(chart_requests)
+                    self.assertEqual(chart_requests[-1]["dateBucket"], "day")
+                    self.assertEqual(chart_requests[-1]["emptyPeriods"], "show")
+                    shown_chart = page.evaluate(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.() || {};
+                          const bar = (option.series || []).find((series) => series.type === "bar");
+                          const line = (option.series || []).find((series) => series.type === "line" && series.name === "Actual");
+                          return {
+                            axis: option.xAxis?.[0]?.data || [],
+                            bars: (bar?.data || []).map((item) => typeof item === "object" ? item.value : item),
+                            line: line?.data || [],
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(
+                        shown_chart,
+                        {
+                            "axis": [
+                                "2024-01-01 00:00:00",
+                                "2024-01-02 00:00:00",
+                                "2024-01-03 00:00:00",
+                            ],
+                            "bars": [1, 0, 1],
+                            "line": [10, None, 20],
+                        },
+                    )
+
+                    with page.expect_request(
+                        lambda request: request.method == "POST" and request.url.endswith("/api/chart"),
+                        timeout=10_000,
+                    ) as skip_request_info:
+                        page.locator('[data-control="emptyPeriods"] [data-value="skip"]').click()
+                    skip_request = json.loads(skip_request_info.value.post_data or "{}")
+                    self.assertEqual(skip_request["emptyPeriods"], "skip")
+                    page.wait_for_function(
+                        """() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("2 groups")
+                          && document.querySelector('[data-control="emptyPeriods"] [data-value="skip"]')?.classList.contains("active")
+                          && !document.querySelector(".saved-favourite-option.active")
+                        """,
+                        timeout=10_000,
+                    )
+
+                    if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#favouritesCollapseBtn").click()
+                    self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                    page.locator("#sidebarFavouriteNameInput").fill("Skip empty periods")
+                    page.locator('[data-favourite-action="save-add"]').click()
+                    page.wait_for_function(
+                        """() => [...document.querySelectorAll(".saved-favourite-option")]
+                          .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Skip empty periods"
+                            && button.classList.contains("active"))""",
+                        timeout=10_000,
+                    )
+                    saved_payload = json.loads(favourites_path.read_text(encoding="utf-8"))
+                    saved_skip_view = next(
+                        item["view"]
+                        for item in saved_payload["favourites"]
+                        if item["name"] == "Skip empty periods"
+                    )
+                    self.assertEqual(saved_skip_view["emptyPeriods"], "skip")
+
+                    page.locator('[data-control="emptyPeriods"] [data-value="show"]').click()
+                    page.wait_for_function(
+                        """() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("3 groups")
+                          && document.querySelector('[data-control="emptyPeriods"] [data-value="show"]')?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+                    with page.expect_request(
+                        lambda request: request.method == "POST"
+                        and request.url.endswith("/api/chart")
+                        and json.loads(request.post_data or "{}").get("emptyPeriods") == "skip",
+                        timeout=10_000,
+                    ):
+                        page.locator(".saved-favourite-option").filter(has_text="Skip empty periods").click()
+                    page.wait_for_function(
+                        """() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("2 groups")
+                          && document.querySelector('[data-control="emptyPeriods"] [data-value="skip"]')?.classList.contains("active")
+                          && document.querySelector(".saved-favourite-option.active .saved-filter-name")?.textContent.trim() === "Skip empty periods"
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator('#dateControl [data-value="none"]').click()
+                    page.wait_for_function(
+                        """() => getComputedStyle(document.querySelector("#emptyPeriodsControl")).display === "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """() => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#featureList .feature[data-value="Actual"]').click()
+                    page.wait_for_function(
+                        """() => getComputedStyle(document.querySelector("#dateControl")).display === "none"
+                          && getComputedStyle(document.querySelector("#emptyPeriodsControl")).display === "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_quantile_ranges_and_band_restore(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "line_bar_quantiles.csv"

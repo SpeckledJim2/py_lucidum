@@ -682,6 +682,19 @@ COPY (
 
         legacy = store.create_favourite("Legacy", self.favourite_view())
         self.assertEqual(legacy["view"]["scope"], "line_bar_view")
+        self.assertEqual(legacy["view"]["emptyPeriods"], "show")
+
+        skip_empty = store.create_favourite(
+            "Skip empty periods",
+            self.favourite_view(emptyPeriods="skip"),
+        )
+        self.assertEqual(skip_empty["view"]["emptyPeriods"], "skip")
+
+        invalid_empty = store.create_favourite(
+            "Invalid empty periods",
+            self.favourite_view(emptyPeriods="unexpected"),
+        )
+        self.assertEqual(invalid_empty["view"]["emptyPeriods"], "show")
 
         with self.assertRaises(ValueError) as context:
             store.create_favourite("Broken full view", self.favourite_view(x=""))
@@ -3158,7 +3171,9 @@ COPY (
         month_table = table(dataset, {**month_request, "tablePage": 1, "tablePageSize": 10})
 
         self.assertEqual(raw_result["date_bucket"], "none")
+        self.assertEqual(raw_result["empty_periods"], "show")
         self.assertEqual(month_result["date_bucket"], "month")
+        self.assertEqual(month_result["empty_periods"], "show")
         self.assertEqual(month_table["date_bucket"], "month")
         self.assertEqual(
             [row["x"] for row in raw_result["rows"]],
@@ -3187,9 +3202,193 @@ COPY (
         month_result = chart(dataset, month_request)
 
         self.assertEqual(week_result["date_bucket"], "week")
-        self.assertEqual([row["x"] for row in week_result["rows"]], ["2024-01-01 00:00:00", "2024-01-08 00:00:00", "2024-02-19 00:00:00"])
+        self.assertEqual(
+            [row["x"] for row in week_result["rows"]],
+            [
+                "2024-01-01 00:00:00",
+                "2024-01-08 00:00:00",
+                "2024-01-15 00:00:00",
+                "2024-01-22 00:00:00",
+                "2024-01-29 00:00:00",
+                "2024-02-05 00:00:00",
+                "2024-02-12 00:00:00",
+                "2024-02-19 00:00:00",
+            ],
+        )
+        self.assertEqual([row["volume"] for row in week_result["rows"]], [2, 1, 0, 0, 0, 0, 0, 1])
         self.assertEqual(month_result["date_bucket"], "month")
         self.assertEqual([row["x"] for row in month_result["rows"]], ["2024-01-01 00:00:00", "2024-02-01 00:00:00"])
+
+    def test_chart_empty_periods_show_and_skip_use_filtered_extent_and_preserve_missing(self) -> None:
+        path = self.write_date_bucket_dataset(
+            "empty_date_periods.parquet",
+            [
+                ("2024-01-01 10:00:00", "kept"),
+                ("2024-01-03 10:00:00", "kept"),
+                ("2024-01-10 10:00:00", "outside"),
+                (None, "kept"),
+            ],
+        )
+        dataset = Dataset(path)
+        request = self.request("Segment = 'kept'")
+        request.update(
+            {
+                "x": "EventTime",
+                "dateBucket": "day",
+                "responses": [{"label": "Actual", "numerator": "Actual"}],
+            }
+        )
+
+        shown = chart(dataset, request)
+        skipped = chart(dataset, {**request, "emptyPeriods": "skip"})
+        shown_table = table(dataset, {**request, "tablePage": 1, "tablePageSize": 2})
+        searched_table = table(
+            dataset,
+            {
+                **request,
+                "tableSearch": "2024-01-02",
+                "tablePage": 1,
+                "tablePageSize": 2,
+            },
+        )
+
+        self.assertEqual(shown["empty_periods"], "show")
+        self.assertEqual(
+            [row["x"] for row in shown["rows"]],
+            [
+                "2024-01-01 00:00:00",
+                "2024-01-02 00:00:00",
+                "2024-01-03 00:00:00",
+                "(missing)",
+            ],
+        )
+        empty_row = shown["rows"][1]
+        self.assertEqual(empty_row["volume"], 0)
+        self.assertEqual(empty_row["row_count"], 0)
+        self.assertEqual(empty_row["resp0_num"], 0)
+        self.assertEqual(empty_row["resp0_den"], 0)
+        self.assertIsNone(empty_row["resp0"])
+        self.assertIsNone(empty_row["valid_folds"])
+        self.assertNotIn("resp1_low", empty_row)
+        self.assertNotIn("resp1_high", empty_row)
+        self.assertFalse(empty_row["is_tail"])
+        self.assertEqual(shown["filtered_row_count"], 3)
+        self.assertAlmostEqual(shown["response_summaries"][0]["value"], 7 / 3)
+
+        self.assertEqual(skipped["empty_periods"], "skip")
+        self.assertEqual(
+            [row["x"] for row in skipped["rows"]],
+            ["2024-01-01 00:00:00", "2024-01-03 00:00:00", "(missing)"],
+        )
+        self.assertEqual(shown_table["table"]["group_count"], 4)
+        self.assertEqual(shown_table["table"]["page_count"], 2)
+        self.assertEqual(shown_table["summary"]["row_count"], 3)
+        self.assertAlmostEqual(shown_table["summary"]["responses"][0], 7 / 3)
+        self.assertEqual(searched_table["table"]["match_count"], 1)
+        self.assertEqual(searched_table["rows"][0]["x"], "2024-01-02 00:00:00")
+        self.assertEqual(searched_table["summary"]["row_count"], 0)
+        self.assertIsNone(searched_table["summary"]["responses"][0])
+
+        truncated = chart(dataset, {**request, "maxGroups": 3})
+        self.assertEqual(truncated["group_count"], 4)
+        self.assertTrue(truncated["groups_truncated"])
+        self.assertEqual(truncated["rows"], [])
+
+    def test_chart_empty_periods_supports_each_calendar_bucket(self) -> None:
+        cases = [
+            ("hour", "2024-01-01 00:15:00", "2024-01-01 02:15:00", "2024-01-01 01:00:00"),
+            ("day", "2024-01-01 10:00:00", "2024-01-03 10:00:00", "2024-01-02 00:00:00"),
+            ("week", "2024-01-02 10:00:00", "2024-01-16 10:00:00", "2024-01-08 00:00:00"),
+            ("month", "2024-01-15 10:00:00", "2024-03-15 10:00:00", "2024-02-01 00:00:00"),
+            ("year", "2024-06-15 10:00:00", "2026-06-15 10:00:00", "2025-01-01 00:00:00"),
+        ]
+        for bucket, first, last, middle in cases:
+            with self.subTest(bucket=bucket):
+                path = self.write_date_bucket_dataset(
+                    f"empty_{bucket}_periods.parquet",
+                    [(first, "all"), (last, "all")],
+                )
+                request = self.request()
+                request.update(
+                    {
+                        "x": "EventTime",
+                        "dateBucket": bucket,
+                        "responses": [{"label": "Actual", "numerator": "Actual"}],
+                    }
+                )
+
+                result = chart(Dataset(path), request)
+
+                self.assertEqual(len(result["rows"]), 3)
+                self.assertEqual(result["rows"][1]["x"], middle)
+                self.assertEqual(result["rows"][1]["volume"], 0)
+                self.assertIsNone(result["rows"][1]["resp0"])
+
+    def test_chart_empty_periods_preserve_weighted_summaries_transforms_and_observed_tail_grouping(self) -> None:
+        path = self.root / "weighted_empty_periods.csv"
+        path.write_text(
+            "EventTime,Actual,Expected,Weight\n"
+            "2024-01-01,200,180,1\n"
+            "2024-01-03,400,360,1\n"
+            "2024-01-05,30000,28000,100\n",
+            encoding="utf-8",
+        )
+        request = self.request()
+        request.update(
+            {
+                "x": "EventTime",
+                "dateBucket": "day",
+                "denominator": "Weight",
+                "lowGroup": "2",
+                "transform": "log",
+            }
+        )
+
+        result = chart(Dataset(path), request)
+
+        self.assertEqual(
+            [row["x"] for row in result["rows"]],
+            [
+                "Low tail",
+                "2024-01-02 00:00:00",
+                "2024-01-04 00:00:00",
+                "2024-01-05 00:00:00",
+            ],
+        )
+        self.assertEqual([row["volume"] for row in result["rows"]], [2, 0, 0, 100])
+        self.assertEqual([row["row_count"] for row in result["rows"]], [2, 0, 0, 1])
+        self.assertIsNone(result["rows"][1]["resp0"])
+        self.assertIsNone(result["rows"][1]["resp1"])
+        self.assertAlmostEqual(result["response_summaries"][0]["value"], 30600 / 102)
+        self.assertAlmostEqual(result["response_summaries"][1]["value"], 28540 / 102)
+        self.assertEqual(result["denominator"]["value"], 102)
+
+    def test_chart_empty_periods_ignores_raw_dates_and_handles_no_non_null_extent(self) -> None:
+        observed_path = self.write_date_bucket_dataset(
+            "raw_empty_periods.parquet",
+            [("2024-01-01 10:00:00", "all"), ("2024-01-03 10:00:00", "all")],
+        )
+        null_path = self.write_date_bucket_dataset(
+            "null_empty_periods.parquet",
+            [(None, "all"), (None, "all")],
+        )
+        request = self.request()
+        request.update(
+            {
+                "x": "EventTime",
+                "dateBucket": "none",
+                "emptyPeriods": "show",
+                "responses": [{"label": "Actual", "numerator": "Actual"}],
+            }
+        )
+
+        raw_result = chart(Dataset(observed_path), request)
+        null_result = chart(Dataset(null_path), {**request, "dateBucket": "day"})
+        empty_result = chart(Dataset(observed_path), {**request, "dateBucket": "day", "filter": "Segment = 'missing'"})
+
+        self.assertEqual(len(raw_result["rows"]), 2)
+        self.assertEqual([row["x"] for row in null_result["rows"]], ["(missing)"])
+        self.assertEqual(empty_result["rows"], [])
 
     def test_numeric_banding_without_quantiles_still_uses_fixed_width(self) -> None:
         dataset = Dataset(self.data_path)

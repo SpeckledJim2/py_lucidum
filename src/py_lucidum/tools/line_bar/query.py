@@ -34,6 +34,14 @@ BINARY_LINK_OBJECTIVES = {"binary", *CROSS_ENTROPY_OBJECTIVES}
 DEFAULT_MAX_GROUPS = 10000
 DEFAULT_TABLE_PAGE_SIZE = 10000
 DATE_BUCKETS = {"hour", "day", "week", "month", "year"}
+DATE_BUCKET_INTERVALS = {
+    "hour": "INTERVAL '1 hour'",
+    "day": "INTERVAL '1 day'",
+    "week": "INTERVAL '1 week'",
+    "month": "INTERVAL '1 month'",
+    "year": "INTERVAL '1 year'",
+}
+EMPTY_PERIOD_VALUES = {"show", "skip"}
 
 
 def overlarge_chart_message(max_groups: int) -> str:
@@ -82,6 +90,7 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             "x_kind": result["x_kind"],
             "x_group_kind": result["x_group_kind"],
             "date_bucket": result["date_bucket"],
+            "empty_periods": result["empty_periods"],
             "source": result["source_id"],
             "row_count": result["row_count"],
             "filtered_row_count": result["filtered_row_count"],
@@ -141,6 +150,7 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             "x_kind": result["x_kind"],
             "x_group_kind": result["x_group_kind"],
             "date_bucket": result["date_bucket"],
+            "empty_periods": result["empty_periods"],
             "source": result["source_id"],
             "row_count": result["row_count"],
             "filtered_row_count": result["filtered_row_count"],
@@ -267,6 +277,7 @@ def build_grouped_result(
     denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
     x_info = columns[x_col]
     date_bucket = normalise_date_bucket(request.get("dateBucket")) if x_info.kind in {"date", "datetime"} else "none"
+    empty_periods = normalise_empty_periods(request.get("emptyPeriods"))
     quantile_count = (
         normalise_quantile_count(request.get("bandWidth"))
         if use_quantiles(request.get("quantileMode")) and is_numeric_kind(x_info.kind)
@@ -305,6 +316,8 @@ def build_grouped_result(
         include_sigma=include_sigma,
         filter_sql=filter_sql,
         x_group_kind=x_group_kind,
+        date_bucket=date_bucket,
+        empty_periods=empty_periods,
         low_group=str(request.get("lowGroup") or "0"),
         sort=str(request.get("sort") or "alpha"),
         shap_medians=partial_dependence_medians(partial_dependence),
@@ -317,6 +330,7 @@ def build_grouped_result(
         "x_kind": x_info.kind,
         "x_group_kind": x_group_kind,
         "date_bucket": date_bucket,
+        "empty_periods": empty_periods,
         "row_count": context["row_count"],
         "filtered_row_count": relation_row_count(dataset, relation, filter_sql),
         "filter_sql": filter_sql,
@@ -543,6 +557,8 @@ def build_grouped_pipeline_sql(
     include_sigma: bool,
     filter_sql: str,
     x_group_kind: str,
+    date_bucket: str,
+    empty_periods: str,
     low_group: str,
     sort: str,
     shap_medians: dict[str, float] | None,
@@ -592,8 +608,13 @@ quantiles AS (
         x_group_kind=x_group_kind,
         low_group=low_group,
     )
+    display_rows_sql = date_display_rows_ctes(
+        responses,
+        date_bucket=date_bucket,
+        empty_periods=empty_periods,
+    )
     shap_sql = shap_medians_cte(sort, shap_medians or {})
-    shap_join = "LEFT JOIN shap_medians ON final_rows.x = shap_medians.x" if sort == "shap" else ""
+    shap_join = "LEFT JOIN shap_medians ON display_rows.x = shap_medians.x" if sort == "shap" else ""
     shap_select = "shap_medians.median AS __shap_median" if sort == "shap" else "NULL AS __shap_median"
     return f"""
 WITH base AS (
@@ -635,12 +656,13 @@ initial_values AS (
 )
 {sigma_ctes}
 {final_rows_sql}
+{display_rows_sql}
 {shap_sql},
 sort_ready AS (
   SELECT
-    final_rows.*,
+    display_rows.*,
     {shap_select}
-  FROM final_rows
+  FROM display_rows
   {shap_join}
 )"""
 
@@ -793,6 +815,72 @@ def final_rows_pipeline_sql(
     if x_group_kind in {"integer", "numeric", "date", "datetime", "quantile"}:
         return ordered_group_final_rows_sql(responses, include_sigma, x_group_kind, threshold_expr)
     return categorical_group_final_rows_sql(responses, include_sigma, threshold_expr)
+
+
+def date_display_rows_ctes(
+    responses: list[dict[str, str]],
+    *,
+    date_bucket: str,
+    empty_periods: str,
+) -> str:
+    interval = DATE_BUCKET_INTERVALS.get(date_bucket) if empty_periods == "show" else None
+    if interval is None:
+        return """,
+display_rows AS (
+  SELECT * FROM final_rows
+)"""
+
+    response_selects = "".join(
+        f""",
+    CAST(0 AS DOUBLE) AS resp{index}_num,
+    CAST(0 AS DOUBLE) AS resp{index}_den,
+    CAST(NULL AS DOUBLE) AS resp{index}"""
+        for index, _ in enumerate(responses)
+    )
+    period_label = "CAST(date_periods.period AS VARCHAR)"
+    return f""",
+date_bounds AS (
+  SELECT
+    MIN(x_sort) AS min_period,
+    MAX(x_sort) AS max_period
+  FROM initial_values
+  WHERE x_sort IS NOT NULL
+),
+date_periods AS (
+  SELECT generated.period
+  FROM date_bounds
+  CROSS JOIN LATERAL generate_series(
+    date_bounds.min_period,
+    date_bounds.max_period,
+    {interval}
+  ) AS generated(period)
+),
+empty_date_periods AS (
+  SELECT
+    {group_identity_id('date_periods.period', period_label)} AS final_group_id,
+    {period_label} AS x,
+    date_periods.period AS x_sort,
+    ROW_NUMBER() OVER (ORDER BY date_periods.period) AS original_order,
+    CAST(0 AS DOUBLE) AS volume,
+    CAST(0 AS BIGINT) AS row_count,
+    CAST(NULL AS DOUBLE) AS x_start,
+    CAST(NULL AS DOUBLE) AS x_end,
+    FALSE AS is_tail{response_selects},
+    CAST(NULL AS DOUBLE) AS sigma_se,
+    CAST(NULL AS BIGINT) AS valid_folds,
+    NULL AS sigma_folds
+  FROM date_periods
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM initial_values
+    WHERE initial_values.x_sort IS NOT DISTINCT FROM date_periods.period
+  )
+),
+display_rows AS (
+  SELECT * FROM final_rows
+  UNION ALL
+  SELECT * FROM empty_date_periods
+)"""
 
 
 def no_group_final_rows_sql(responses: list[dict[str, str]], include_sigma: bool) -> str:
@@ -1553,6 +1641,11 @@ def use_quantiles(value: Any) -> bool:
 def normalise_date_bucket(value: Any) -> str:
     bucket = str(value or "none").strip().lower()
     return bucket if bucket in DATE_BUCKETS else "none"
+
+
+def normalise_empty_periods(value: Any) -> str:
+    mode = str(value or "show").strip().lower()
+    return mode if mode in EMPTY_PERIOD_VALUES else "show"
 
 
 def normalise_quantile_count(value: Any) -> int:

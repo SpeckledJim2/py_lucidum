@@ -114,6 +114,7 @@
         quantileMode: "off",
         previousBandWidthsByFeature: {},
         dateBucket: "none",
+        emptyPeriods: "show",
         dateBucketFeature: null,
         dateBucketManualKey: null,
         transform: "none",
@@ -3896,6 +3897,7 @@
           bandWidth: state.bandWidth,
           quantileMode: state.quantileMode,
           dateBucket: state.dateBucket,
+          emptyPeriods: state.emptyPeriods === "skip" ? "skip" : "show",
           transform: state.transform,
           sigma: state.sigma,
           partialDependence: state.partialDependence,
@@ -3957,6 +3959,7 @@
         state.bandWidth = String(view.bandWidth ?? "0");
         state.quantileMode = view.quantileMode === "quantile" ? "quantile" : "off";
         state.dateBucket = String(view.dateBucket || "none");
+        state.emptyPeriods = view.emptyPeriods === "skip" ? "skip" : "show";
         state.transform = String(view.transform || "none");
         state.sigma = String(view.sigma ?? "0");
         state.partialDependence = String(view.partialDependence || "none");

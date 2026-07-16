@@ -72,6 +72,7 @@ export function createLineBarTool({
   const QUANTILE_AXIS_LABEL_PADDING = 8;
   const CATEGORICAL_AXIS_LABEL_PADDING = 8;
   const DATE_BUCKET_VALUES = new Set(["none", "hour", "day", "week", "month", "year"]);
+  const EMPTY_PERIOD_VALUES = new Set(["show", "skip"]);
   const RESPONSE_AXIS_PADDING = 0.08;
   const RESPONSE_AXIS_TARGET_INTERVALS = 15;
   const LINE_BAR_MAIN_LEGEND_TOP = 52;
@@ -328,6 +329,16 @@ export function createLineBarTool({
     syncSegmented("dateBucket", normaliseDateBucket(state.dateBucket));
   }
 
+  function normaliseEmptyPeriods(value) {
+    const mode = String(value || "show").toLowerCase();
+    return EMPTY_PERIOD_VALUES.has(mode) ? mode : "show";
+  }
+
+  function syncEmptyPeriodsControl() {
+    state.emptyPeriods = normaliseEmptyPeriods(state.emptyPeriods);
+    syncSegmented("emptyPeriods", state.emptyPeriods);
+  }
+
   function currentDateBucketFeatureKey() {
     const sourceId = selectedColumn()?.source_id || state.xSource || state.source || "dataset";
     return JSON.stringify([sourceId, state.x || ""]);
@@ -479,6 +490,7 @@ export function createLineBarTool({
     const hasExpected = expectedSelections().length > 0;
     const modelControlsAvailable = toolEnabled("gbm") || toolEnabled("glm");
     const shapSortAvailable = isCategorical && shapPartialDependenceVisible() && shapOverlayAvailableForSelectedColumn();
+    const hasDateBucket = isDate && normaliseDateBucket(state.dateBucket) !== "none";
     el("partialDependenceControl").classList.toggle("hidden", !modelControlsAvailable);
     el("responseTransformControl").classList.toggle("hidden", !modelControlsAvailable);
     el("sigmaControl").classList.toggle("hidden", !hasExpected);
@@ -486,6 +498,7 @@ export function createLineBarTool({
     el("expectedSortButton").classList.toggle("hidden", !hasExpected);
     el("shapSortButton")?.classList.toggle("hidden", !shapSortAvailable);
     el("dateControl").classList.toggle("hidden", !isDate);
+    el("emptyPeriodsControl").classList.toggle("hidden", !hasDateBucket);
     el("bandControl").classList.toggle("hidden", !isNumeric);
     el("quantileControl").classList.toggle("hidden", !isNumeric);
     syncSegmented("lowGroup", state.lowGroup);
@@ -495,6 +508,7 @@ export function createLineBarTool({
     syncSegmented("partialDependence", selectedPartialDependenceMode());
     syncSegmented("featureSort", state.featureSort);
     syncSegmented("expectedSort", state.expectedSort);
+    syncEmptyPeriodsControl();
     const bandFeatureKey = currentBandFeatureKey();
     const dateBucketKey = currentDateBucketFeatureKey();
     if (isNumeric && state.quantileMode === "quantile" && state.bandFeature !== bandFeatureKey) {
@@ -1086,6 +1100,7 @@ export function createLineBarTool({
       bandWidth: isNumeric ? Number(state.bandWidth) : 0,
       quantileMode: isNumeric ? state.quantileMode : "off",
       dateBucket: isDate ? state.dateBucket : "none",
+      emptyPeriods: normaliseEmptyPeriods(state.emptyPeriods),
       transform: state.transform,
       partialDependence: { mode: selectedPartialDependenceMode() },
       base: selectedFeatureBase(),
@@ -3158,7 +3173,7 @@ export function createLineBarTool({
     chart.on("legendselectchanged", updateResponseAxisForLegendSelection);
     chart.on("datazoom", scheduleDateXAxisLabelRefresh);
     bindSettingsStripOverflowCue(el("lineBarToolbar"));
-    const lineBarControls = new Set(["sort", "lowGroup", "labels", "bandWidth", "quantileMode", "dateBucket", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
+    const lineBarControls = new Set(["sort", "lowGroup", "labels", "bandWidth", "quantileMode", "dateBucket", "emptyPeriods", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
     document.querySelectorAll(".segmented").forEach((group) => {
       if (!lineBarControls.has(group.dataset.control)) return;
       group.addEventListener("click", (event) => {
@@ -3221,6 +3236,10 @@ export function createLineBarTool({
           state.dateBucketFeature = currentDateBucketFeatureKey();
           state.dateBucketManualKey = state.dateBucketFeature;
           syncDateBucketControl();
+          updateAxisControls();
+        }
+        if (group.dataset.control === "emptyPeriods") {
+          syncEmptyPeriodsControl();
         }
         if (group.dataset.control === "partialDependence") {
           updateAxisControls();
