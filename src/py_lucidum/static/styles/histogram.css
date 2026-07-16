@@ -3,26 +3,17 @@
         --histogram-median-color: #1f7a8c;
       }
 
-      main:has(> #visualArea.histogram-mode) {
-        background: var(--panel);
-        padding: 0;
-      }
-
       .visual-area.histogram-mode {
         grid-template-columns: minmax(0, 1fr);
       }
 
       .visual-area.histogram-mode .workspace {
         background: var(--panel);
-        border: 0;
-        border-radius: 0;
-        box-shadow: none;
         display: flex;
         flex-direction: column;
         height: 100%;
         min-height: 0;
         min-width: 0;
-        padding: 0;
       }
 
       .histogram-bin-control {

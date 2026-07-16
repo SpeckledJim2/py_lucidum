@@ -993,6 +993,36 @@ class BrowserSmokeTests(unittest.TestCase):
                         window.__ukMapLegendVisibleExpanded = false;
                         window.__ukMapControlVisibleExpanded = false;
                         window.__ukMapLegendMonitorActive = true;
+                        window.__ukMapStartupFrameSeen = false;
+                        window.__ukMapStartupLegacyCardSeen = false;
+                        window.__ukMapStartupMonitorActive = true;
+                        const hasNonZeroPadding = (style) => [
+                          style.paddingTop,
+                          style.paddingRight,
+                          style.paddingBottom,
+                          style.paddingLeft,
+                        ].some((value) => value !== "0px");
+                        const sampleUkMapStartupWorkspace = () => {
+                          const visual = document.querySelector("#visualArea");
+                          const workspace = document.querySelector(".workspace");
+                          const main = document.querySelector("main");
+                          if (visual?.classList.contains("startup-mode") && workspace && main) {
+                            window.__ukMapStartupFrameSeen = true;
+                            const workspaceStyle = getComputedStyle(workspace);
+                            const mainStyle = getComputedStyle(main);
+                            if (
+                              workspaceStyle.backgroundColor !== "rgba(0, 0, 0, 0)"
+                              || workspaceStyle.borderTopWidth !== "0px"
+                              || workspaceStyle.borderTopLeftRadius !== "0px"
+                              || workspaceStyle.boxShadow !== "none"
+                              || hasNonZeroPadding(workspaceStyle)
+                              || hasNonZeroPadding(mainStyle)
+                            ) {
+                              window.__ukMapStartupLegacyCardSeen = true;
+                            }
+                          }
+                          if (window.__ukMapStartupMonitorActive) requestAnimationFrame(sampleUkMapStartupWorkspace);
+                        };
                         const sampleUkMapLegend = () => {
                           const legend = document.querySelector("#mapLegend");
                           const body = document.querySelector("#mapLegendBody");
@@ -1011,6 +1041,7 @@ class BrowserSmokeTests(unittest.TestCase):
                           }
                           if (window.__ukMapLegendMonitorActive) requestAnimationFrame(sampleUkMapLegend);
                         };
+                        requestAnimationFrame(sampleUkMapStartupWorkspace);
                         requestAnimationFrame(sampleUkMapLegend);
                         """
                     )
@@ -1019,6 +1050,61 @@ class BrowserSmokeTests(unittest.TestCase):
                         page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                         page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
                         page.locator("#mapZoomIn").wait_for(timeout=10_000)
+                        page.evaluate("() => { window.__ukMapStartupMonitorActive = false; }")
+                        self.assertTrue(page.evaluate("() => window.__ukMapStartupFrameSeen"))
+                        self.assertFalse(page.evaluate("() => window.__ukMapStartupLegacyCardSeen"))
+                        map_surface = page.evaluate(
+                            """
+                            () => {
+                              const main = document.querySelector("main");
+                              const visual = document.querySelector("#visualArea");
+                              const workspace = document.querySelector(".workspace");
+                              const map = document.querySelector("#ukMap");
+                              const mainRect = main.getBoundingClientRect();
+                              const visualRect = visual.getBoundingClientRect();
+                              const workspaceRect = workspace.getBoundingClientRect();
+                              const mapRect = map.getBoundingClientRect();
+                              const workspaceStyle = getComputedStyle(workspace);
+                              const mapStyle = getComputedStyle(map);
+                              return {
+                                mainPadding: getComputedStyle(main).padding,
+                                workspaceBackground: workspaceStyle.backgroundColor,
+                                workspaceBorder: workspaceStyle.borderTopWidth,
+                                workspaceRadius: workspaceStyle.borderTopLeftRadius,
+                                workspaceShadow: workspaceStyle.boxShadow,
+                                workspacePadding: workspaceStyle.padding,
+                                mapRadius: mapStyle.borderTopLeftRadius,
+                                visualGaps: [
+                                  visualRect.left - mainRect.left,
+                                  mainRect.right - visualRect.right,
+                                  visualRect.top - mainRect.top,
+                                  mainRect.bottom - visualRect.bottom,
+                                ],
+                                workspaceGaps: [
+                                  workspaceRect.left - visualRect.left,
+                                  visualRect.right - workspaceRect.right,
+                                  workspaceRect.top - visualRect.top,
+                                  visualRect.bottom - workspaceRect.bottom,
+                                ],
+                                mapGaps: [
+                                  mapRect.left - workspaceRect.left,
+                                  workspaceRect.right - mapRect.right,
+                                  mapRect.top - workspaceRect.top,
+                                  workspaceRect.bottom - mapRect.bottom,
+                                ],
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(map_surface["mainPadding"], "0px")
+                        self.assertEqual(map_surface["workspaceBackground"], "rgba(0, 0, 0, 0)")
+                        self.assertEqual(map_surface["workspaceBorder"], "0px")
+                        self.assertEqual(map_surface["workspaceRadius"], "0px")
+                        self.assertEqual(map_surface["workspaceShadow"], "none")
+                        self.assertEqual(map_surface["workspacePadding"], "0px")
+                        self.assertEqual(map_surface["mapRadius"], "0px")
+                        for gaps in (map_surface["visualGaps"], map_surface["workspaceGaps"], map_surface["mapGaps"]):
+                            self.assertTrue(all(abs(gap) <= 0.5 for gap in gaps))
                         self.assertEqual(
                             page.locator("#mapZoomIn").evaluate("node => getComputedStyle(node).fontWeight"),
                             "600",
@@ -1941,9 +2027,44 @@ class BrowserSmokeTests(unittest.TestCase):
                     wait_for_line_bar_text_theme()
                     self.assertGreaterEqual(chart_requests, 1)
 
+                    page.evaluate(
+                        """
+                        () => {
+                          window.__ukMapSwitchLegacyCardSeen = false;
+                          window.__ukMapSwitchMonitorActive = true;
+                          const sampleWorkspace = () => {
+                            const workspace = document.querySelector(".workspace");
+                            const main = document.querySelector("main");
+                            if (workspace && main) {
+                              const workspaceStyle = getComputedStyle(workspace);
+                              const mainStyle = getComputedStyle(main);
+                              const paddingValues = (style) => [
+                                style.paddingTop,
+                                style.paddingRight,
+                                style.paddingBottom,
+                                style.paddingLeft,
+                              ];
+                              if (
+                                workspaceStyle.borderTopWidth !== "0px"
+                                || workspaceStyle.borderTopLeftRadius !== "0px"
+                                || workspaceStyle.boxShadow !== "none"
+                                || paddingValues(workspaceStyle).some((value) => value !== "0px")
+                                || paddingValues(mainStyle).some((value) => value !== "0px")
+                              ) {
+                                window.__ukMapSwitchLegacyCardSeen = true;
+                              }
+                            }
+                            if (window.__ukMapSwitchMonitorActive) requestAnimationFrame(sampleWorkspace);
+                          };
+                          requestAnimationFrame(sampleWorkspace);
+                        }
+                        """
+                    )
                     page.locator("#ukMapTool").click()
                     page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
                     page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')", timeout=10_000)
+                    page.evaluate("() => { window.__ukMapSwitchMonitorActive = false; }")
+                    self.assertFalse(page.evaluate("() => window.__ukMapSwitchLegacyCardSeen"))
                     page.wait_for_function(
                         """
                         () => (document.querySelector("#mapGroupMeta")?.textContent || "").includes("matched")

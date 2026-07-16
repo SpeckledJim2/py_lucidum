@@ -4,11 +4,6 @@
         min-height: 0;
       }
 
-      main:has(> #visualArea.line-bar-mode) {
-        background: var(--panel);
-        padding: 0;
-      }
-
       .visual-area.line-bar-mode {
         gap: 0;
         grid-template-columns: var(--chart-controls-width, 340px) 12px minmax(0, 1fr);
@@ -497,15 +492,11 @@
 
       .visual-area.line-bar-mode .workspace {
         background: var(--panel);
-        border: 0;
-        border-radius: 0;
-        box-shadow: none;
         display: flex;
         flex-direction: column;
         height: 100%;
         min-height: 0;
         min-width: 0;
-        padding: 0;
       }
 
       .line-bar-workspace-controls {

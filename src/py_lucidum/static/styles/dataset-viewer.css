@@ -139,11 +139,6 @@
         white-space: nowrap;
       }
 
-      main:has(> #visualArea.dataset-viewer-mode) {
-        background: var(--panel);
-        padding: 0;
-      }
-
       .visual-area.dataset-viewer-mode .workspace {
         background: var(--panel);
       }

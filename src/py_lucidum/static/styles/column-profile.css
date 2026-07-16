@@ -54,11 +54,6 @@
         border-top: 1px solid var(--line);
       }
 
-      main:has(> #visualArea.profile-mode) {
-        background: var(--panel);
-        padding: 0;
-      }
-
       .visual-area.profile-mode .workspace {
         background: var(--panel);
       }
