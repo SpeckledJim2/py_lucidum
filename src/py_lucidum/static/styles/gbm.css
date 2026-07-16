@@ -1758,10 +1758,10 @@
 
       .gbm-tree-plot-controls {
         align-items: center;
-        background: rgb(255 255 255 / 84%);
+        background: var(--panel);
         border: 0;
-        border-radius: 6px;
-        box-shadow: 0 6px 20px rgb(15 23 42 / 20%);
+        border-radius: 0;
+        box-shadow: none;
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
@@ -1772,10 +1772,6 @@
         top: 4px;
         width: 84px;
         z-index: 3;
-      }
-
-      body.dark .gbm-tree-plot-controls {
-        background: rgb(17 24 39 / 84%);
       }
 
       .gbm-tree-plot-zoom {
@@ -1825,7 +1821,7 @@
       .gbm-tree-plot-palette {
         display: grid;
         gap: 6px;
-        grid-template-columns: 70px;
+        grid-template-columns: repeat(2, 32px);
       }
 
       .gbm-tree-palette-tile {
@@ -1834,9 +1830,8 @@
         border-radius: 7px;
         color: var(--text);
         cursor: pointer;
-        display: grid;
-        grid-template-rows: minmax(0, 1fr) auto;
-        height: 70px;
+        display: block;
+        height: 32px;
         min-width: 0;
         overflow: hidden;
         padding: 0;
@@ -1844,7 +1839,7 @@
           background-color 120ms ease,
           border-color 120ms ease,
           box-shadow 120ms ease;
-        width: 70px;
+        width: 32px;
       }
 
       .gbm-tree-palette-tile:hover {
@@ -1884,23 +1879,6 @@
 
       .gbm-tree-palette-viridis {
         background: linear-gradient(135deg, #fde725 0%, #21918c 52%, #440154 100%);
-      }
-
-      .gbm-tree-palette-label {
-        background: color-mix(in srgb, var(--panel) 88%, transparent);
-        border-top: 1px solid rgb(15 23 42 / 12%);
-        font-size: 11px;
-        font-weight: 650;
-        line-height: 1.1;
-        overflow: hidden;
-        padding: 4px 3px 5px;
-        text-align: center;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      body.dark .gbm-tree-palette-label {
-        border-top-color: rgb(255 255 255 / 12%);
       }
 
       .gbm-tree-summary-toggle-icon {
@@ -2068,7 +2046,7 @@
 
       @container (max-width: 379px) {
         .gbm-tree-detail-summary {
-          top: 388px;
+          top: 160px;
         }
       }
 
