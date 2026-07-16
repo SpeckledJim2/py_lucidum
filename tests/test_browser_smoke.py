@@ -7031,13 +7031,56 @@ COPY (
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_sidebar_accordion_works_across_tools(self) -> None:
         with TemporaryDirectory() as tmp_dir:
-            data_path = Path(tmp_dir) / "sample.csv"
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
             data_path.write_text(
                 "actualNumerator,denominator,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,price,value\n"
                 "10,100,30,A,AB,AB10 1,AB10 1AA,57.1,-2.1,100,10\n"
                 "20,200,40,B,AB,AB10 1,AB10 1AB,57.2,-2.2,200,20\n"
                 "30,300,50,C,AL,AL1 1,AL1 1AA,51.8,-0.3,300,30\n"
                 "40,400,60,D,AL,AL1 2,AL1 2AA,51.7,-0.2,400,40\n",
+                encoding="utf-8",
+            )
+            filters_path = root / "filter_spec.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "AGE,Older,Age >= 40\n"
+                "AGE,Younger,Age < 40\n",
+                encoding="utf-8",
+            )
+            kpis_path = root / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "METRIC,Average actual,actualNumerator,denominator,2,number\n",
+                encoding="utf-8",
+            )
+            favourites_path = root / "favourites.json"
+            favourites_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "favourites": [
+                            {
+                                "id": "sidebar-colour-favourite",
+                                "name": "Sidebar colour favourite",
+                                "created_at": "2026-07-16T00:00:00Z",
+                                "updated_at": "2026-07-16T00:00:00Z",
+                                "dataset": {},
+                                "view": {
+                                    "version": 1,
+                                    "scope": "metrics",
+                                    "source": "dataset",
+                                    "actual": {
+                                        "value": "actualNumerator",
+                                        "sourceId": "dataset",
+                                        "metricKind": "metric",
+                                    },
+                                    "denominator": "denominator",
+                                },
+                            }
+                        ],
+                    }
+                ),
                 encoding="utf-8",
             )
             store = GbmModelStore(data_path)
@@ -7049,7 +7092,25 @@ COPY (
                 [0.12, 0.23, 0.34, 0.45],
             )
             store.activate_model("sidebar-accordion-model")
-            base_url, server, thread = self.start_app(data_path, tools=["column_profile", "line_bar", "uk_map", "glm", "gbm"])
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "sidebar-accordion-glm",
+                "Sidebar accordion GLM",
+                "2026-07-16T00:00:01Z",
+                [0.13, 0.24, 0.35, 0.46],
+            )
+            glm_store.activate_model("sidebar-accordion-glm")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "denominator"},
+                filters_path=filters_path,
+                use_saved_filters=True,
+                kpis_path=kpis_path,
+                use_kpis=True,
+                line_bar_favourites_path=favourites_path,
+                tools=["column_profile", "line_bar", "uk_map", "glm", "gbm"],
+            )
             try:
                 self.exercise_sidebar_accordion(base_url)
             finally:
@@ -9828,6 +9889,54 @@ COPY (
                     timeout=10_000,
                 )
 
+            def selected_row_palette() -> dict[str, Any]:
+                selectors = {
+                    "favourite": ".favourites-list .saved-favourite-option.active",
+                    "kpi": ".kpi-list .kpi-option.active",
+                    "gbm": ".gbm-model-list .gbm-model-option.active",
+                    "glm": ".glm-model-list .glm-model-option.active",
+                    "filter": ".saved-filter-list .saved-filter-option.active",
+                }
+                page.wait_for_function(
+                    """
+                    (selectors) => Object.values(selectors).every((selector) => {
+                      const row = document.querySelector(selector);
+                      return row && row.getAttribute("aria-selected") === "true";
+                    })
+                    """,
+                    arg=selectors,
+                    timeout=10_000,
+                )
+                return page.evaluate(
+                    """
+                    (selectors) => {
+                      const probe = document.createElement("span");
+                      probe.style.background = "var(--sidebar-selected-row-bg)";
+                      document.body.append(probe);
+                      const expected = getComputedStyle(probe).backgroundColor;
+                      probe.remove();
+                      return {
+                        dark: document.body.classList.contains("dark"),
+                        expected,
+                        rows: Object.fromEntries(
+                          Object.entries(selectors).map(([name, selector]) => [
+                            name,
+                            getComputedStyle(document.querySelector(selector)).backgroundColor,
+                          ])
+                        ),
+                      };
+                    }
+                    """,
+                    arg=selectors,
+                )
+
+            def assert_selected_row_palette(expected_dark: bool) -> dict[str, Any]:
+                palette = selected_row_palette()
+                self.assertEqual(palette["dark"], expected_dark)
+                self.assertTrue(palette["expected"])
+                self.assertEqual(set(palette["rows"].values()), {palette["expected"]})
+                return palette
+
             try:
                 page.goto(f"{base_url}?tool=line_bar", wait_until="domcontentloaded")
                 page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
@@ -9932,6 +10041,48 @@ COPY (
                 )
                 self.assert_tool_button_tooltip_right_of_icon(page, "#profileTool", "Column profile")
                 assert_sidebar_headers_visible()
+                wait_accordion_state("favourites")
+
+                page.locator("#filterCollapseBtn").click()
+                wait_accordion_state("filter")
+                age_heading = page.locator('.saved-filter-theme[data-filter-theme="AGE"]')
+                if age_heading.get_attribute("aria-expanded") == "false":
+                    age_heading.click()
+                page.locator('.filter-selection-mode button[data-value="single"]').click()
+                older_filter = page.locator('.saved-filter-option[data-filter-name="Older"]')
+                younger_filter = page.locator('.saved-filter-option[data-filter-name="Younger"]')
+                older_filter.click()
+                page.wait_for_function(
+                    """() => document.querySelector('.saved-filter-option[data-filter-name="Older"]')
+                      ?.getAttribute("aria-selected") === "true"
+                    """,
+                    timeout=10_000,
+                )
+
+                page.locator("#filterCollapseBtn").hover()
+                light_inactive_background = younger_filter.evaluate("node => getComputedStyle(node).backgroundColor")
+                light_palette = assert_selected_row_palette(False)
+                younger_filter.hover()
+                light_hover_background = younger_filter.evaluate("node => getComputedStyle(node).backgroundColor")
+                self.assertNotEqual(light_inactive_background, light_palette["expected"])
+                self.assertNotEqual(light_hover_background, light_palette["expected"])
+                self.assertNotEqual(light_hover_background, light_inactive_background)
+
+                page.locator("#themeBtn").click()
+                page.wait_for_function('() => document.body.classList.contains("dark")', timeout=10_000)
+                page.locator("#filterCollapseBtn").hover()
+                dark_inactive_background = younger_filter.evaluate("node => getComputedStyle(node).backgroundColor")
+                dark_palette = assert_selected_row_palette(True)
+                younger_filter.hover()
+                dark_hover_background = younger_filter.evaluate("node => getComputedStyle(node).backgroundColor")
+                self.assertNotEqual(dark_inactive_background, dark_palette["expected"])
+                self.assertNotEqual(dark_hover_background, dark_palette["expected"])
+                self.assertNotEqual(dark_hover_background, dark_inactive_background)
+                self.assertNotEqual(dark_palette["expected"], light_palette["expected"])
+
+                page.locator("#themeBtn").click()
+                page.wait_for_function('() => !document.body.classList.contains("dark")', timeout=10_000)
+                page.locator("#favouritesCollapseBtn").click()
                 wait_accordion_state("favourites")
 
                 page.locator("#favouritesCollapseBtn").click()

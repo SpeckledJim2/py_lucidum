@@ -922,6 +922,28 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".sidebar-control-pane .feature-list {", controls)
         self.assertIn("background: var(--tool-screen-nav-bg);", controls)
 
+    def test_sidebar_accordion_selected_rows_share_theme_token(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
+        controls = (static_root / "styles/controls.css").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            foundations.count(
+                "--sidebar-selected-row-bg: color-mix(in srgb, #f59e0b 22%, var(--panel));"
+            ),
+            2,
+        )
+        self.assertIn(
+            """.favourites-list .saved-favourite-option.active,
+      .kpi-list .kpi-option.active,
+      .gbm-model-list .gbm-model-option.active,
+      .glm-model-list .glm-model-option.active,
+      .saved-filter-list .saved-filter-option.active {
+        background: var(--sidebar-selected-row-bg);
+      }""",
+            controls,
+        )
+
     def test_app_control_strips_use_shared_height_tokens(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
