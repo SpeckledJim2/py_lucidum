@@ -1362,7 +1362,68 @@
       }
 
       #glmCoefficientTable th:first-child {
+        width: 42px;
+      }
+
+      #glmCoefficientTable th:nth-child(2) {
         width: 52%;
+      }
+
+      .glm-coefficient-sort-button {
+        align-items: center;
+        background: transparent;
+        border: 0;
+        color: inherit;
+        cursor: pointer;
+        display: flex;
+        font: inherit;
+        font-weight: inherit;
+        gap: 6px;
+        justify-content: space-between;
+        padding: 0;
+        text-align: inherit;
+        width: 100%;
+      }
+
+      .glm-coefficient-sort-header.numeric .glm-coefficient-sort-button {
+        justify-content: flex-end;
+      }
+
+      .glm-coefficient-sort-indicator {
+        flex: 0 0 10px;
+        height: 14px;
+        position: relative;
+        width: 10px;
+      }
+
+      .glm-coefficient-sort-indicator::before,
+      .glm-coefficient-sort-indicator::after {
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        content: "";
+        left: 1px;
+        opacity: 0.35;
+        position: absolute;
+      }
+
+      .glm-coefficient-sort-indicator::before {
+        border-bottom: 4px solid var(--muted);
+        top: 1px;
+      }
+
+      .glm-coefficient-sort-indicator::after {
+        border-top: 4px solid var(--muted);
+        bottom: 1px;
+      }
+
+      #glmCoefficientTable th[aria-sort="ascending"] .glm-coefficient-sort-indicator::before {
+        border-bottom-color: var(--accent);
+        opacity: 1;
+      }
+
+      #glmCoefficientTable th[aria-sort="descending"] .glm-coefficient-sort-indicator::after {
+        border-top-color: var(--accent);
+        opacity: 1;
       }
 
       .glm-model-table {

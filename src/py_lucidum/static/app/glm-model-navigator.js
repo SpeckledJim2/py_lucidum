@@ -25,6 +25,9 @@ export function createGlmModelNavigator({
         deviance: modelNumberOrNull(diagnostics.deviance),
         aic: modelNumberOrNull(diagnostics.aic),
         bic: modelNumberOrNull(diagnostics.bic),
+        n_terms: modelNumberOrNull(model.n_terms ?? diagnostics.n_terms),
+        n_features: modelNumberOrNull(model.n_features ?? diagnostics.n_features),
+        n_interactions: modelNumberOrNull(model.n_interactions ?? diagnostics.n_interactions),
         training_rows: Number(model.training_rows || diagnostics.training_rows || 0),
         fit_ms: timingMilliseconds(model, "fit_ms"),
         fit_display: timingDisplay(model, "fit_ms"),
@@ -45,11 +48,15 @@ export function createGlmModelNavigator({
         <thead>
           <tr>
             <th class="glm-model-active-heading" aria-label="Active model"></th>
-            <th>model</th>
+            <th>Name</th>
             <th>created</th>
             <th>response</th>
             <th>weight</th>
             <th>family</th>
+            <th>Terms</th>
+            <th>Features</th>
+            <th>Interactions</th>
+            <th>Tabulated</th>
             <th>deviance</th>
             <th>AIC</th>
             <th>BIC</th>
@@ -81,6 +88,10 @@ export function createGlmModelNavigator({
         <td>${escapeHtml(model.response_column || "")}</td>
         <td>${escapeHtml(modelWeightLabel(model.denominator_column || model.offset_column))}</td>
         <td>${escapeHtml(model.family || "")}</td>
+        <td class="numeric">${escapeHtml(optionalCount(model.n_terms ?? diagnostics.n_terms))}</td>
+        <td class="numeric">${escapeHtml(optionalCount(model.n_features ?? diagnostics.n_features))}</td>
+        <td class="numeric">${escapeHtml(optionalCount(model.n_interactions ?? diagnostics.n_interactions))}</td>
+        <td>${model.tabulated ? "Yes" : "-"}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.deviance))}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.aic))}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.bic))}</td>
@@ -102,10 +113,17 @@ export function createGlmModelNavigator({
   return {
     activeDotFormatter,
     nameFormatter,
+    optionalCount,
     renderFallback,
     rowHtml,
     rows,
   };
+}
+
+function optionalCount(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return "";
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number).toLocaleString() : "";
 }
 
 function timingMilliseconds(model, name) {

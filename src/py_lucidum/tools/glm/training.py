@@ -1588,6 +1588,18 @@ def _train_model_impl(
         ]
     )
     timings["score_ms"] = _elapsed_ms(score_started)
+    coefficient_feature_sets = [
+        tuple(
+            sorted(
+                {
+                    str(feature).strip()
+                    for feature in (coefficient.get("features") or [])
+                    if str(feature).strip()
+                }
+            )
+        )
+        for coefficient in coefficients
+    ]
     diagnostics.update(
         {
             "training_rows": int(fit_mask.sum()),
@@ -1595,6 +1607,17 @@ def _train_model_impl(
             "scored_rows": scored_rows,
             "fitted_na_rows": fitted_na_rows,
             "coefficient_count": len(coefficients),
+            "n_terms": len(coefficients),
+            "n_features": len(
+                {
+                    feature
+                    for feature_set in coefficient_feature_sets
+                    for feature in feature_set
+                }
+            ),
+            "n_interactions": len(
+                {feature_set for feature_set in coefficient_feature_sets if len(feature_set) > 1}
+            ),
             "nonzero_coefficients": regularization.get("nonzero_coefficients"),
             "design_matrix": design_diagnostics,
             "warnings": model_warnings,

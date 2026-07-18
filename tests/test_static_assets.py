@@ -597,6 +597,59 @@ if (!resizeObserver || observedCount !== 2) throw new Error("resize observer fai
 """
         self.run_node_script(script)
 
+    def test_model_navigator_fallback_metadata_contract(self) -> None:
+        glm_module = Path("src/py_lucidum/static/app/glm-model-navigator.js").resolve().as_uri()
+        gbm_module = Path("src/py_lucidum/static/app/gbm-model-navigator.js").resolve().as_uri()
+        script = f"""
+import {{ createGlmModelNavigator }} from "{glm_module}";
+import {{ createGbmModelNavigator }} from "{gbm_module}";
+
+const target = () => ({{ innerHTML: "", querySelectorAll: () => [] }});
+const escapeHtml = (value) => String(value ?? "");
+const glmNavigator = createGlmModelNavigator({{
+  bindFallbackModelSelection: () => {{}},
+  emptyStateHtml: (message) => message,
+  escapeHtml,
+  formatModelCreated: (value) => String(value || ""),
+  formatModelMetric: (value) => value === null || value === undefined ? "--" : String(value),
+  modelCreatedSort: () => 0,
+  modelLabel: (model) => model.label || model.model_id,
+  modelNumberOrNull: (value) => value === null || value === undefined || value === "" ? null : Number(value),
+  modelWeightLabel: (value) => String(value || "N"),
+  normaliseModels: (models) => models,
+  selectedModelIds: () => new Set(),
+  onFallbackSelectionChange: () => {{}},
+}});
+const glmTarget = target();
+glmNavigator.renderFallback(glmTarget, [
+  {{ model_id: "new", label: "New GLM", n_terms: 3, n_features: 2, n_interactions: 1, tabulated: true, diagnostics: {{}} }},
+  {{ model_id: "legacy", label: "Legacy GLM", tabulated: false, diagnostics: {{}} }},
+]);
+if (!glmTarget.innerHTML.includes("<th>Name</th>")) throw new Error("GLM fallback Name heading missing");
+if (!glmTarget.innerHTML.includes("<th>Terms</th>")) throw new Error("GLM fallback Terms heading missing");
+if (!glmTarget.innerHTML.includes("<th>Features</th>")) throw new Error("GLM fallback Features heading missing");
+if (!glmTarget.innerHTML.includes("<th>Interactions</th>")) throw new Error("GLM fallback Interactions heading missing");
+if (!glmTarget.innerHTML.includes("<th>Tabulated</th>")) throw new Error("GLM fallback Tabulated heading missing");
+if (!glmTarget.innerHTML.includes('<td class="numeric">3</td>\\n        <td class="numeric">2</td>\\n        <td class="numeric">1</td>\\n        <td>Yes</td>')) throw new Error("GLM captured metadata missing");
+if (!glmTarget.innerHTML.includes('<td class="numeric"></td>\\n        <td class="numeric"></td>\\n        <td class="numeric"></td>\\n        <td>-</td>')) throw new Error("GLM legacy metadata fallback failed");
+if (glmNavigator.optionalCount(null) !== "" || glmNavigator.optionalCount(0) !== "0") throw new Error("GLM optional count formatting failed");
+
+const gbmNavigator = createGbmModelNavigator({{
+  escapeHtml,
+  formatModelMetric: (value) => String(value ?? ""),
+  modelInteractionConstraintLabel: () => "No",
+  modelLabel: (model) => model.label || model.model_id,
+  normaliseModel: (model) => model,
+  uniqueModels: (models) => models,
+  onFallbackSelectionChange: () => {{}},
+}});
+const gbmTarget = target();
+gbmNavigator.renderFallback(gbmTarget, [{{ model_id: "gbm", label: "GBM" }}]);
+if (!gbmTarget.innerHTML.includes("<th>Name</th>")) throw new Error("GBM fallback Name heading missing");
+if (gbmTarget.innerHTML.includes("<th>Model</th>")) throw new Error("GBM fallback kept Model heading");
+"""
+        self.run_node_script(script)
+
 
 
 
@@ -1017,6 +1070,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".app-settings-strip .segmented button.active {", controls)
         self.assertIn(".app-control-button,", controls)
         self.assertIn("height: var(--app-control-button-height);", controls)
+        self.assertIn(".app-command-button {", controls)
+        self.assertIn(".app-command-button--danger {", controls)
         self.assertIn(".app-control-input {", controls)
         self.assertIn('class="dataset-viewer-toolbar app-control-strip app-control-strip-row"', dataset_viewer)
         self.assertIn('class="search dataset-viewer-search app-control-input"', dataset_viewer)
@@ -1048,6 +1103,22 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--titled", glm)
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", glm)
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", gbm)
+        for tool, prefix in ((glm, "glm"), (gbm, "gbm")):
+            self.assertIn(
+                f'id="{prefix}RenameModelBtn" class="app-control-button app-command-button"',
+                tool,
+            )
+            self.assertIn(
+                f'id="{prefix}ActivateModelBtn" class="app-control-button app-command-button"',
+                tool,
+            )
+            self.assertIn(
+                f'id="{prefix}DeleteModelBtn" class="app-control-button app-command-button app-command-button--danger"',
+                tool,
+            )
+            self.assertNotIn(f'id="{prefix}RenameModelBtn" class="tab ', tool)
+            self.assertNotIn(f'id="{prefix}ActivateModelBtn" class="tab ', tool)
+            self.assertNotIn(f'id="{prefix}DeleteModelBtn" class="danger-action ', tool)
         self.assertIn('class="gbm-feature-main-control-strip app-control-strip"', gbm)
         self.assertIn('class="gbm-evaluation-control-strip app-control-strip"', gbm)
         self.assertIn('id="gbmFeatureResizer"', gbm)

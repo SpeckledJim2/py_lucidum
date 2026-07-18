@@ -49,7 +49,7 @@ export function createGbmModelNavigator({
         <thead>
           <tr>
             <th class="gbm-model-active-heading" aria-label="Active model"></th>
-            <th>Model</th>
+            <th>Name</th>
             <th>Created</th>
             <th>Response</th>
             <th>Weight</th>

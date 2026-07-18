@@ -97,6 +97,119 @@ COPY (
 
 
 class BrowserSmokeTests(unittest.TestCase):
+    def assert_model_command_button_styles(self, page: Any, prefix: str) -> None:
+        def capture() -> dict[str, Any]:
+            return page.evaluate(
+                """
+                (prefix) => {
+                  function resolvedTokenColor(token) {
+                    const probe = document.createElement("span");
+                    probe.style.color = `var(${token})`;
+                    document.body.append(probe);
+                    const color = getComputedStyle(probe).color;
+                    probe.remove();
+                    return color;
+                  }
+                  function buttonState(name) {
+                    const button = document.querySelector(`#${prefix}${name}ModelBtn`);
+                    const style = getComputedStyle(button);
+                    return {
+                      background: style.backgroundColor,
+                      borderWidth: style.borderTopWidth,
+                      color: style.color,
+                      height: button.getBoundingClientRect().height,
+                      marginInlineStart: style.marginInlineStart,
+                      outlineColor: style.outlineColor,
+                      outlineStyle: style.outlineStyle,
+                      outlineWidth: style.outlineWidth,
+                      shared: button.classList.contains("app-control-button"),
+                      command: button.classList.contains("app-command-button"),
+                      danger: button.classList.contains("app-command-button--danger"),
+                      oldTab: button.classList.contains("tab"),
+                      oldDanger: button.classList.contains("danger-action"),
+                    };
+                  }
+                  const transparentProbe = document.createElement("span");
+                  transparentProbe.style.background = "transparent";
+                  document.body.append(transparentProbe);
+                  const transparent = getComputedStyle(transparentProbe).backgroundColor;
+                  transparentProbe.remove();
+                  return {
+                    transparent,
+                    muted: resolvedTokenColor("--muted"),
+                    accent: resolvedTokenColor("--accent"),
+                    danger: resolvedTokenColor("--danger"),
+                    rename: buttonState("Rename"),
+                    activate: buttonState("Activate"),
+                    deleteButton: buttonState("Delete"),
+                  };
+                }
+                """,
+                prefix,
+            )
+
+        was_dark = page.evaluate("() => document.body.classList.contains('dark')")
+        page.evaluate("() => document.body.classList.remove('dark')")
+        page.evaluate("() => document.activeElement?.blur()")
+        page.mouse.move(0, 0)
+        light = capture()
+        for name in ("rename", "activate", "deleteButton"):
+            state = light[name]
+            self.assertTrue(state["shared"])
+            self.assertTrue(state["command"])
+            self.assertFalse(state["oldTab"])
+            self.assertFalse(state["oldDanger"])
+            self.assertEqual(state["background"], light["transparent"])
+            self.assertEqual(state["borderWidth"], "0px")
+            self.assertEqual(state["height"], 28)
+        self.assertEqual(light["rename"]["color"], light["muted"])
+        self.assertEqual(light["activate"]["color"], light["muted"])
+        self.assertFalse(light["rename"]["danger"])
+        self.assertFalse(light["activate"]["danger"])
+        self.assertTrue(light["deleteButton"]["danger"])
+        self.assertEqual(light["deleteButton"]["color"], light["danger"])
+        self.assertEqual(light["deleteButton"]["marginInlineStart"], "4px")
+
+        page.locator(f"#{prefix}RenameModelBtn").hover()
+        rename_hover = capture()
+        self.assertEqual(rename_hover["rename"]["color"], rename_hover["accent"])
+        self.assertNotEqual(rename_hover["rename"]["background"], rename_hover["transparent"])
+        page.mouse.move(0, 0)
+        page.locator(f"#{prefix}RenameModelBtn").focus()
+        page.keyboard.press("Tab")
+        rename_focus = capture()
+        self.assertEqual(rename_focus["activate"]["color"], rename_focus["accent"])
+        self.assertNotEqual(rename_focus["activate"]["background"], rename_focus["transparent"])
+        self.assertEqual(rename_focus["activate"]["outlineStyle"], "solid")
+        self.assertEqual(rename_focus["activate"]["outlineWidth"], "2px")
+
+        page.locator(f"#{prefix}DeleteModelBtn").hover()
+        delete_hover = capture()
+        self.assertEqual(delete_hover["deleteButton"]["color"], delete_hover["danger"])
+        self.assertNotEqual(delete_hover["deleteButton"]["background"], delete_hover["transparent"])
+        page.mouse.move(0, 0)
+        page.locator(f"#{prefix}ActivateModelBtn").focus()
+        page.keyboard.press("Tab")
+        delete_focus = capture()
+        self.assertEqual(delete_focus["deleteButton"]["color"], delete_focus["danger"])
+        self.assertNotEqual(delete_focus["deleteButton"]["background"], delete_focus["transparent"])
+        self.assertEqual(delete_focus["deleteButton"]["outlineStyle"], "solid")
+        self.assertEqual(delete_focus["deleteButton"]["outlineWidth"], "2px")
+
+        page.evaluate("() => { document.activeElement?.blur(); document.body.classList.add('dark'); }")
+        page.mouse.move(0, 0)
+        dark = capture()
+        self.assertEqual(dark["rename"]["background"], dark["transparent"])
+        self.assertEqual(dark["rename"]["borderWidth"], "0px")
+        self.assertEqual(dark["rename"]["color"], dark["muted"])
+        self.assertEqual(dark["deleteButton"]["background"], dark["transparent"])
+        self.assertEqual(dark["deleteButton"]["borderWidth"], "0px")
+        self.assertEqual(dark["deleteButton"]["color"], dark["danger"])
+        page.evaluate(
+            "(wasDark) => document.body.classList.toggle('dark', wasDark)",
+            was_dark,
+        )
+
     def click_sidebar_favourite_action(self, page: Any, selector: str) -> None:
         if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") != "true":
             page.locator("#favouritesCollapseBtn").click()
@@ -6906,6 +7019,9 @@ COPY (
                 family_parameter=1.5,
                 training_scope="all",
                 regularization={"mode": "none"},
+                n_terms=3,
+                n_features=2,
+                n_interactions=1,
             )
             self.write_glm_tabulation_artifacts(glm_store, "browser-smoke-glm", include_segment=True, offset=0.0)
             self.write_tabulated_prediction_sidecar(
@@ -9310,6 +9426,9 @@ COPY (
         family_parameter: float | str | None = 1.5,
         training_scope: str = "all",
         regularization: dict[str, Any] | None = None,
+        n_terms: int | None = None,
+        n_features: int | None = None,
+        n_interactions: int | None = None,
     ) -> None:
         model_dir = store.create_model_dir(model_id)
         diagnostics = {
@@ -9320,6 +9439,12 @@ COPY (
             "training_rows": 2,
             "scored_rows": len(predictions),
         }
+        if n_terms is not None:
+            diagnostics["n_terms"] = n_terms
+        if n_features is not None:
+            diagnostics["n_features"] = n_features
+        if n_interactions is not None:
+            diagnostics["n_interactions"] = n_interactions
         manifest = {
             "model_id": model_id,
             "label": label,
@@ -11274,6 +11399,47 @@ COPY (
                     }
                     """
                 )
+                coefficient_table_state = page.evaluate(
+                    """
+                    () => ({
+                      headers: [...document.querySelectorAll("#glmCoefficientTable thead th")]
+                        .map((header) => header.textContent.trim()),
+                      sortKeys: [...document.querySelectorAll("#glmCoefficientTable [data-glm-coefficient-sort]")]
+                        .map((button) => button.dataset.glmCoefficientSort),
+                      sortIndicators: document.querySelectorAll("#glmCoefficientTable .glm-coefficient-sort-indicator").length,
+                      indexes: [...document.querySelectorAll("#glmCoefficientTable tbody tr td:first-child")]
+                        .map((cell) => cell.textContent.trim()),
+                      initialAriaSort: document.querySelector('#glmCoefficientTable [data-glm-coefficient-sort="index"]')
+                        ?.closest("th")?.getAttribute("aria-sort") || "",
+                    })
+                    """
+                )
+                self.assertEqual(coefficient_table_state["headers"], ["#", "term", "estimate", "std.error", "p.value"])
+                self.assertEqual(coefficient_table_state["sortKeys"], ["index", "term", "estimate", "std_error", "p_value"])
+                self.assertEqual(coefficient_table_state["sortIndicators"], 5)
+                self.assertEqual(coefficient_table_state["indexes"], ["1", "2", "3"])
+                self.assertEqual(coefficient_table_state["initialAriaSort"], "ascending")
+                page.locator('#glmCoefficientTable [data-glm-coefficient-sort="estimate"]').click()
+                page.locator('#glmCoefficientTable [data-glm-coefficient-sort="estimate"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#glmCoefficientTable [data-glm-coefficient-sort="estimate"]')
+                      ?.closest("th")?.getAttribute("aria-sort") === "descending"
+                      && document.querySelector("#glmCoefficientTable tbody tr td:nth-child(2)")?.textContent.trim() === "Age:Segment[A]"
+                      && document.querySelector("#glmCoefficientTable tbody tr td:nth-child(3)")?.textContent.trim() === "0.3"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#glmCoefficientTable [data-glm-coefficient-sort="index"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#glmCoefficientTable [data-glm-coefficient-sort="index"]')
+                      ?.closest("th")?.getAttribute("aria-sort") === "ascending"
+                      && document.querySelector("#glmCoefficientTable tbody tr td:first-child")?.textContent.trim() === "1"
+                      && document.querySelector("#glmCoefficientTable tbody tr td:nth-child(2)")?.textContent.trim() === "(Intercept)"
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#glmCoefficientTable tbody tr", has_text="(Intercept)").click(button="right")
                 page.wait_for_timeout(150)
                 self.assertEqual(page.locator("#glmCoefficientContextMenu:not([hidden])").count(), 0)
@@ -12096,6 +12262,12 @@ COPY (
                           return Math.abs((rect.top - actionsRect.top) - (actionsRect.bottom - rect.bottom));
                         }),
                         sharedButtonClasses: buttons.every((button) => button.classList.contains("app-control-button")),
+                        commandButtonClasses: buttons.every((button) => button.classList.contains("app-command-button")),
+                        disabledButtonBackgrounds: buttons.map((button) => getComputedStyle(button).backgroundColor),
+                        disabledButtonBorders: buttons.map((button) => getComputedStyle(button).borderTopWidth),
+                        disabledButtonColors: buttons.map((button) => getComputedStyle(button).color),
+                        disabledButtonCursors: buttons.map((button) => getComputedStyle(button).cursor),
+                        disabledButtonOpacities: buttons.map((button) => getComputedStyle(button).opacity),
                         fallbackDisplay: getComputedStyle(document.querySelector("#glmModelFallback")).display,
                         rows: document.querySelectorAll("#glmModelGrid .tabulator-row").length,
                         activeDots: document.querySelectorAll("#glmModelGrid .glm-model-active-dot").length,
@@ -12103,6 +12275,26 @@ COPY (
                         activeDotCenterDelta,
                         fitTimeText: document.querySelector('#glmModelGrid .tabulator-row .tabulator-cell[tabulator-field="fit_ms"]')?.textContent.trim() || "",
                         overallTimeText: document.querySelector('#glmModelGrid .tabulator-row .tabulator-cell[tabulator-field="elapsed_ms"]')?.textContent.trim() || "",
+                        capturedModel: (() => {
+                          const row = [...document.querySelectorAll("#glmModelGrid .tabulator-row")]
+                            .find((candidate) => candidate.textContent.includes("Browser smoke GLM"));
+                          return {
+                            terms: row?.querySelector('.tabulator-cell[tabulator-field="n_terms"]')?.textContent.trim() || "",
+                            features: row?.querySelector('.tabulator-cell[tabulator-field="n_features"]')?.textContent.trim() || "",
+                            interactions: row?.querySelector('.tabulator-cell[tabulator-field="n_interactions"]')?.textContent.trim() || "",
+                            tabulated: row?.querySelector('.tabulator-cell[tabulator-field="tabulated"]')?.textContent.trim() || "",
+                          };
+                        })(),
+                        legacyModel: (() => {
+                          const row = [...document.querySelectorAll("#glmModelGrid .tabulator-row")]
+                            .find((candidate) => candidate.textContent.includes("Disposable smoke GLM A"));
+                          return {
+                            terms: row?.querySelector('.tabulator-cell[tabulator-field="n_terms"]')?.textContent.trim() || "",
+                            features: row?.querySelector('.tabulator-cell[tabulator-field="n_features"]')?.textContent.trim() || "",
+                            interactions: row?.querySelector('.tabulator-cell[tabulator-field="n_interactions"]')?.textContent.trim() || "",
+                            tabulated: row?.querySelector('.tabulator-cell[tabulator-field="tabulated"]')?.textContent.trim() || "",
+                          };
+                        })(),
                         selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
                         renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
                         activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
@@ -12113,10 +12305,12 @@ COPY (
                 )
                 self.assertEqual(
                     glm_navigator_state["headers"],
-                    ["Model", "Created", "Response", "Weight", "Family", "Deviance", "AIC", "BIC", "Rows", "Fit time", "Overall time"],
+                    ["Name", "Created", "Response", "Weight", "Family", "Terms", "Features", "Interactions", "Tabulated", "Deviance", "AIC", "BIC", "Rows", "Fit time", "Overall time"],
                 )
                 self.assertEqual(glm_navigator_state["fitTimeText"], "1.2s")
                 self.assertEqual(glm_navigator_state["overallTimeText"], "1m 03s")
+                self.assertEqual(glm_navigator_state["capturedModel"], {"terms": "3", "features": "2", "interactions": "1", "tabulated": "Yes"})
+                self.assertEqual(glm_navigator_state["legacyModel"], {"terms": "", "features": "", "interactions": "", "tabulated": "-"})
                 self.assertEqual(glm_navigator_state["borderWidth"], "0px")
                 self.assertEqual(glm_navigator_state["borderRadius"], "0px")
                 self.assertEqual(glm_navigator_state["gridBorderLeftWidth"], "0px")
@@ -12144,6 +12338,12 @@ COPY (
                 self.assertTrue(all(delta <= 0.1 for delta in glm_navigator_state["buttonCenterDeltas"]))
                 self.assertTrue(all(delta <= 0.1 for delta in glm_navigator_state["buttonEdgeDeltas"]))
                 self.assertTrue(glm_navigator_state["sharedButtonClasses"])
+                self.assertTrue(glm_navigator_state["commandButtonClasses"])
+                self.assertEqual(glm_navigator_state["disabledButtonBackgrounds"], ["rgba(0, 0, 0, 0)"] * 3)
+                self.assertEqual(glm_navigator_state["disabledButtonBorders"], ["0px"] * 3)
+                self.assertEqual(len(set(glm_navigator_state["disabledButtonColors"])), 1)
+                self.assertEqual(glm_navigator_state["disabledButtonCursors"], ["not-allowed"] * 3)
+                self.assertEqual(glm_navigator_state["disabledButtonOpacities"], ["0.5"] * 3)
                 self.assertEqual(glm_navigator_state["fallbackDisplay"], "none")
                 self.assertEqual(glm_navigator_state["rows"], 4)
                 self.assertEqual(glm_navigator_state["activeDots"], 1)
@@ -12174,6 +12374,7 @@ COPY (
                 self.assertFalse(plain_glm_selection["renameDisabled"])
                 self.assertFalse(plain_glm_selection["activateDisabled"])
                 self.assertFalse(plain_glm_selection["deleteDisabled"])
+                self.assert_model_command_button_styles(page, "glm")
                 page.locator("#glmModelGrid .tabulator-row", has_text="Disposable smoke GLM A").click(modifiers=["Shift"])
                 shift_glm_selection = page.evaluate(
                     """
@@ -18560,7 +18761,7 @@ COPY (
                 self.assertEqual(
                     navigator_state["headers"],
                     [
-                        "Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Constraints", "Train", "Best iter.",
+                        "Name", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Constraints", "Train", "Best iter.",
                         "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
                     ],
                 )
@@ -21124,7 +21325,7 @@ COPY (
                 self.assertEqual(
                     navigator_state["headers"],
                     [
-                        "Model", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Constraints", "Train", "Best iter.",
+                        "Name", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Constraints", "Train", "Best iter.",
                         "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
                     ],
                 )
@@ -21204,6 +21405,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                self.assert_model_command_button_styles(page, "gbm")
                 page.get_by_role("tab", name="Features and parameters").click()
                 page.wait_for_function(
                     """

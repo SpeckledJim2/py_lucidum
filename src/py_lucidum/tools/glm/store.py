@@ -342,6 +342,13 @@ class GlmModelStore:
             item["fitted_na_rows"] = diagnostics.get("fitted_na_rows")
         if diagnostics.get("coefficient_count") is not None:
             item["coefficient_count"] = diagnostics.get("coefficient_count")
+        if diagnostics.get("n_terms") is not None:
+            item["n_terms"] = diagnostics.get("n_terms")
+        if diagnostics.get("n_features") is not None:
+            item["n_features"] = diagnostics.get("n_features")
+        if diagnostics.get("n_interactions") is not None:
+            item["n_interactions"] = diagnostics.get("n_interactions")
+        item["tabulated"] = self.artifact_path(model_id, "tabulation_manifest").exists()
         item["active"] = model_id == active_model_id
         return item
 

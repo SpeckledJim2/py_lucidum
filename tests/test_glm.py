@@ -1151,6 +1151,9 @@ COPY (
         self.assertTrue(manifest["formula"]["fit_intercept"])
         diagnostics = store.read_json(store.artifact_path(model_id, "diagnostics"))
         self.assertEqual(diagnostics["training_rows"], 4)
+        self.assertEqual(diagnostics["n_terms"], len(result["coefficients"]))
+        self.assertEqual(diagnostics["n_features"], 2)
+        self.assertEqual(diagnostics["n_interactions"], 0)
         self.assertIn("deviance", diagnostics)
         self.assertNotIn("diagnostics", manifest)
         self.assertNotIn("feature_importance", manifest)
@@ -1200,6 +1203,11 @@ COPY (
         self.assertEqual(detail["coefficients"][0]["term"], "(Intercept)")
         self.assertEqual(detail["coefficients"][0]["features"], [])
         self.assertTrue(any(row["features"] for row in detail["coefficients"] if row["term"] != "(Intercept)"))
+        listed_model = next(model for model in store.list_models() if model["model_id"] == model_id)
+        self.assertEqual(listed_model["n_terms"], len(result["coefficients"]))
+        self.assertEqual(listed_model["n_features"], 2)
+        self.assertEqual(listed_model["n_interactions"], 0)
+        self.assertFalse(listed_model["tabulated"])
 
         dataset.register_data_source_provider(GlmSourceProvider(store))
         source_id = store.source_id(model_id)
@@ -1282,6 +1290,7 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertTrue(
             any(set(row["features"]) == {"OVERNIGHT_LOCATION", "VEHICLE_USAGE"} for row in result["coefficients"])
         )
+        self.assertEqual(result["diagnostics"]["n_interactions"], 1)
 
     def test_unpenalized_rich_categorical_formula_writes_all_glm_artifacts(self) -> None:
         self.require_glm_dependencies()
@@ -3633,6 +3642,34 @@ COPY (
         self.assertEqual(store.active_model_id(), second["model_id"])
         store.delete_model(second["model_id"])
         self.assertIsNone(store.active_model_id())
+
+    def test_glm_model_list_leaves_legacy_sizes_missing_and_reports_tabulation(self) -> None:
+        store = GlmModelStore(self.data_path)
+        model_id = "legacy-navigator-glm"
+        model_dir = store.create_model_dir(model_id)
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": model_id,
+                "label": "Legacy navigator GLM",
+                "created_at": "2026-07-18T00:00:00Z",
+                "family": "normal",
+                "response_column": "actualNumerator",
+            },
+        )
+        store.write_json(store.artifact_path(model_id, "diagnostics"), {"coefficient_count": 3})
+
+        listed = store.list_models()[0]
+        self.assertNotIn("n_terms", listed)
+        self.assertNotIn("n_features", listed)
+        self.assertNotIn("n_interactions", listed)
+        self.assertFalse(listed["tabulated"])
+
+        store.write_json(
+            store.artifact_path(model_id, "tabulation_manifest"),
+            {"model_id": model_id, "status": "tabulated", "tables": []},
+        )
+        self.assertTrue(store.list_models()[0]["tabulated"])
 
     def test_glm_workspaces_are_isolated_by_dataset_file(self) -> None:
         other_path = self.root / "other.csv"

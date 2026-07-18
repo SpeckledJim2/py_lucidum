@@ -362,9 +362,9 @@ export function createGbmTool({
         <div id="gbm-screen-panel-models" class="${gbmPanelClass(activeTab, "models")}" data-gbm-panel="models" role="tabpanel" aria-labelledby="gbm-screen-tab-models">
           <div class="gbm-model-navigator">
             <div class="gbm-model-actions app-control-strip app-control-strip-row app-control-strip--actions" role="group" aria-label="GBM model actions">
-              <button id="gbmRenameModelBtn" class="tab app-control-button" type="button">Rename</button>
-              <button id="gbmActivateModelBtn" class="tab app-control-button" type="button">Activate</button>
-              <button id="gbmDeleteModelBtn" class="danger-action app-control-button" type="button">Delete</button>
+              <button id="gbmRenameModelBtn" class="app-control-button app-command-button" type="button">Rename</button>
+              <button id="gbmActivateModelBtn" class="app-control-button app-command-button" type="button">Activate</button>
+              <button id="gbmDeleteModelBtn" class="app-control-button app-command-button app-command-button--danger" type="button">Delete</button>
             </div>
             <div id="gbmModelGrid" class="gbm-grid gbm-model-grid"></div>
             <div id="gbmModelFallback" class="gbm-fallback-table"></div>
@@ -2016,7 +2016,7 @@ export function createGbmTool({
         selectableRowsRangeMode: "click",
         columns: [
           { title: "", field: "active", formatter: activeModelDotFormatter, hozAlign: "center", headerHozAlign: "center", width: 28, minWidth: 28, headerSort: false, resizable: false },
-          { title: "Model", field: "model_label", sorter: "string", formatter: modelNameFormatter, widthGrow: 3, headerSort: true },
+          { title: "Name", field: "model_label", sorter: "string", formatter: modelNameFormatter, widthGrow: 3, headerSort: true },
           { title: "Created", field: "created_sort", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().created_display), width: 105, headerSort: true },
           { title: "Response", field: "response_column", sorter: "string", widthGrow: 1.6, headerSort: true },
           { title: "Weight", field: "weight_display", sorter: "string", widthGrow: 1.2, headerSort: true },

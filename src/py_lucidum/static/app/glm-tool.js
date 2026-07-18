@@ -135,6 +135,7 @@ export function createGlmTool({
   let config = null;
   let activeDetail = null;
   let coefficientRows = [];
+  let coefficientSort = { key: "index", direction: "asc" };
   let modelTable = null;
   let modelTableRenderSeq = 0;
   let modelRows = [];
@@ -396,9 +397,9 @@ export function createGlmTool({
         <div id="glm-screen-panel-models" class="glm-tab-panel ${activeTab === "models" ? "" : "hidden"}" data-glm-panel="models" role="tabpanel" aria-labelledby="glm-screen-tab-models">
           <div class="glm-model-navigator">
             <div class="glm-model-actions app-control-strip app-control-strip-row app-control-strip--actions" role="group" aria-label="GLM model actions">
-              <button id="glmRenameModelBtn" class="tab app-control-button" type="button">Rename</button>
-              <button id="glmActivateModelBtn" class="tab app-control-button" type="button">Activate</button>
-              <button id="glmDeleteModelBtn" class="danger-action app-control-button" type="button">Delete</button>
+              <button id="glmRenameModelBtn" class="app-control-button app-command-button" type="button">Rename</button>
+              <button id="glmActivateModelBtn" class="app-control-button app-command-button" type="button">Activate</button>
+              <button id="glmDeleteModelBtn" class="app-control-button app-command-button app-command-button--danger" type="button">Delete</button>
             </div>
             <div id="glmModelGrid" class="glm-grid glm-model-grid"></div>
             <div id="glmModelFallback" class="glm-model-fallback"></div>
@@ -2368,26 +2369,29 @@ export function createGlmTool({
     closeGlmCoefficientContextMenu();
     const penalized = activeModelIsPenalized();
     const query = String(el("glmCoefficientSearch")?.value || "").trim().toLowerCase();
+    const indexedRows = rows.map((row, index) => ({ row, index }));
     const filtered = query
-      ? rows.filter((row) => Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(query)))
-      : rows;
+      ? indexedRows.filter(({ row }) => Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(query)))
+      : indexedRows;
     if (!filtered.length) {
-      table.innerHTML = `<tbody><tr><td class="glm-empty-cell">No coefficients to show</td></tr></tbody>`;
+      table.innerHTML = `<tbody><tr><td class="glm-empty-cell" colspan="5">No coefficients to show</td></tr></tbody>`;
       return;
     }
-    const visibleRows = filtered.map((row) => ({ row, index: rows.indexOf(row) }));
+    const visibleRows = sortedCoefficientRows(filtered);
     table.innerHTML = `
       <thead>
         <tr>
-          <th>term</th>
-          <th class="numeric">estimate</th>
-          <th class="numeric">std.error</th>
-          <th class="numeric">p.value</th>
+          ${coefficientSortHeaderHtml("index", "#", true)}
+          ${coefficientSortHeaderHtml("term", "term")}
+          ${coefficientSortHeaderHtml("estimate", "estimate", true)}
+          ${coefficientSortHeaderHtml("std_error", "std.error", true)}
+          ${coefficientSortHeaderHtml("p_value", "p.value", true)}
         </tr>
       </thead>
       <tbody>
         ${visibleRows.map(({ row, index }) => `
           <tr class="${penalized ? "" : glmCoefficientPValueClass(row.p_value)}" data-glm-coefficient-index="${index}">
+            <td class="numeric">${(index + 1).toLocaleString()}</td>
             <td>${escapeHtml(row.term)}</td>
             <td class="numeric">${escapeHtml(formatModelMetric(row.estimate))}</td>
             <td class="numeric">${penalized ? "" : escapeHtml(formatModelMetric(row.std_error))}</td>
@@ -2396,8 +2400,49 @@ export function createGlmTool({
         `).join("")}
       </tbody>
     `;
+    table.querySelectorAll("[data-glm-coefficient-sort]").forEach((button) => {
+      button.addEventListener("click", () => setCoefficientSort(button.dataset.glmCoefficientSort));
+    });
     table.querySelectorAll("[data-glm-coefficient-index]").forEach((row) => {
       row.addEventListener("contextmenu", openGlmCoefficientContextMenuForRow);
+    });
+  }
+
+  function coefficientSortHeaderHtml(key, label, numeric = false) {
+    const active = coefficientSort.key === key;
+    const direction = active ? coefficientSort.direction : "";
+    const ariaSort = active ? (direction === "desc" ? "descending" : "ascending") : "none";
+    return `<th class="glm-coefficient-sort-header${numeric ? " numeric" : ""}" aria-sort="${ariaSort}">
+      <button class="glm-coefficient-sort-button" type="button" data-glm-coefficient-sort="${key}" aria-label="Sort by ${escapeHtml(label)}">
+        <span>${escapeHtml(label)}</span><span class="glm-coefficient-sort-indicator" aria-hidden="true"></span>
+      </button>
+    </th>`;
+  }
+
+  function setCoefficientSort(key) {
+    if (!["index", "term", "estimate", "std_error", "p_value"].includes(key)) return;
+    coefficientSort = coefficientSort.key === key
+      ? { key, direction: coefficientSort.direction === "asc" ? "desc" : "asc" }
+      : { key, direction: "asc" };
+    renderCoefficientTable(coefficientRows);
+  }
+
+  function sortedCoefficientRows(rows) {
+    const direction = coefficientSort.direction === "desc" ? -1 : 1;
+    const key = coefficientSort.key;
+    return [...rows].sort((left, right) => {
+      if (key === "index") return direction * (left.index - right.index);
+      if (key === "term") {
+        const compared = String(left.row.term || "").localeCompare(String(right.row.term || ""), undefined, { numeric: true, sensitivity: "base" });
+        return compared ? direction * compared : left.index - right.index;
+      }
+      const leftValue = modelNumberOrNull(left.row[key]);
+      const rightValue = modelNumberOrNull(right.row[key]);
+      if (leftValue === null && rightValue === null) return left.index - right.index;
+      if (leftValue === null) return 1;
+      if (rightValue === null) return -1;
+      const compared = leftValue - rightValue;
+      return compared ? direction * compared : left.index - right.index;
     });
   }
 
@@ -2634,11 +2679,15 @@ export function createGlmTool({
         selectableRowsRangeMode: "click",
         columns: [
           { title: "", field: "active", formatter: modelNavigator.activeDotFormatter, hozAlign: "center", headerHozAlign: "center", width: 28, minWidth: 28, headerSort: false, resizable: false },
-          { title: "Model", field: "model_label", sorter: "string", formatter: modelNavigator.nameFormatter, widthGrow: 3, headerSort: true },
+          { title: "Name", field: "model_label", sorter: "string", formatter: modelNavigator.nameFormatter, widthGrow: 3, headerSort: true },
           { title: "Created", field: "created_sort", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().created_display), width: 105, headerSort: true },
           { title: "Response", field: "response_column", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.4, headerSort: true },
           { title: "Weight", field: "weight_display", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.1, headerSort: true },
           { title: "Family", field: "family", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue() || ""), widthGrow: 1.1, headerSort: true },
+          { title: "Terms", field: "n_terms", sorter: "number", formatter: (cell) => escapeHtml(modelNavigator.optionalCount(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 68, headerSort: true },
+          { title: "Features", field: "n_features", sorter: "number", formatter: (cell) => escapeHtml(modelNavigator.optionalCount(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 76, headerSort: true },
+          { title: "Interactions", field: "n_interactions", sorter: "number", formatter: (cell) => escapeHtml(modelNavigator.optionalCount(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 100, headerSort: true },
+          { title: "Tabulated", field: "tabulated", sorter: "boolean", formatter: (cell) => cell.getValue() ? "Yes" : "-", width: 82, headerSort: true },
           { title: "Deviance", field: "deviance", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true },
           { title: "AIC", field: "aic", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true },
           { title: "BIC", field: "bic", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true },

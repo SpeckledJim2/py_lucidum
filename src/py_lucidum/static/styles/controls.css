@@ -1233,6 +1233,50 @@
         white-space: nowrap;
       }
 
+      .app-command-button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        color: var(--muted);
+        cursor: pointer;
+        font-weight: 400;
+      }
+
+      .app-command-button:not(:disabled):hover,
+      .app-command-button:not(:disabled):focus-visible {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        color: var(--accent);
+      }
+
+      .app-command-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .app-command-button--danger {
+        color: var(--danger);
+        margin-inline-start: 4px;
+      }
+
+      .app-command-button--danger:not(:disabled):hover,
+      .app-command-button--danger:not(:disabled):focus-visible {
+        background: color-mix(in srgb, var(--danger) 10%, transparent);
+        color: var(--danger);
+      }
+
+      .app-command-button--danger:focus-visible {
+        outline-color: color-mix(in srgb, var(--danger) 72%, white);
+      }
+
+      .app-command-button:disabled,
+      .app-command-button:disabled:hover,
+      .app-command-button:disabled:focus-visible {
+        background: transparent;
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
       .app-control-input {
         border-radius: var(--app-control-button-radius);
         box-sizing: border-box;
