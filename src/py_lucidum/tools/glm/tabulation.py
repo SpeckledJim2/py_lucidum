@@ -455,17 +455,34 @@ def _round_grid_value(value: float) -> float | int:
     return int(rounded) if float(rounded).is_integer() else rounded
 
 
+def _exact_grid_value(value: float) -> float | int:
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
 def _numeric_levels(minimum: float, maximum: float, band: float, base_value: Any) -> list[Any]:
     if band <= 0:
         band = 1.0
     count = int(math.floor((maximum - minimum) / band)) + 1
     count = max(1, min(count, MAX_TABULATION_CELLS))
-    levels = [_round_grid_value(minimum + index * band) for index in range(count)]
-    if levels and float(levels[-1]) < maximum - 1e-9:
-        levels.append(_round_grid_value(maximum))
+    minimum_value = _exact_grid_value(minimum)
+    maximum_value = _exact_grid_value(maximum)
+    levels = [minimum_value]
+    for index in range(1, count):
+        value = _round_grid_value(minimum + index * band)
+        if float(value) <= minimum or float(value) >= maximum or value in levels:
+            continue
+        levels.append(value)
+    if maximum > minimum and maximum_value not in levels:
+        levels.append(maximum_value)
     base_number = _as_number(base_value)
     if base_number is not None:
         base = _round_grid_value(base_number)
+        if minimum <= base_number <= maximum:
+            if float(base) < minimum:
+                base = minimum_value
+            elif float(base) > maximum:
+                base = maximum_value
         if base not in levels:
             levels.append(base)
             levels = sorted(levels, key=lambda value: float(value))

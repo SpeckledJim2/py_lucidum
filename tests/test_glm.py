@@ -986,6 +986,61 @@ if result.get("iteration") != 10:
             ["response", "denominator", "Age Years", "Segment", "offset_base", "SAMPLE", "unused"],
         )
 
+        stateful_cases = [
+            ("bs(`Age Years`, df=4)", ["response", "Age Years"]),
+            ("cs(`Age Years`, df=4)", ["response", "Age Years"]),
+            ("poly(`Age Years`, degree=2)", ["response", "Age Years"]),
+            ("bs(`Age Years`, df=4):C(Segment)", ["response", "Age Years", "Segment"]),
+        ]
+        for formula, expected_columns in stateful_cases:
+            with self.subTest(formula=formula):
+                stateful = validate_request(
+                    dataset,
+                    {
+                        "formula": formula,
+                        "response_column": "response",
+                        "family": "normal",
+                        "training_scope": "all",
+                    },
+                )
+                self.assertTrue(stateful["ok"], stateful)
+                stateful_columns = required_training_columns(dataset, stateful)
+                self.assertEqual(stateful_columns, expected_columns)
+                self.assertNotIn("unused", stateful_columns)
+
+    def test_glm_training_projects_basis_spline_column_and_writes_artifacts(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "1 + bs(Age, df=4)",
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        model_id = result["model_id"]
+        predictions = store.read_parquet_records(store.artifact_path(model_id, "predictions"))
+        coefficient_features = {
+            feature
+            for row in result["coefficients"]
+            for feature in row["features"]
+        }
+
+        self.assertEqual(result["scored_rows"], dataset.row_count())
+        self.assertEqual(len(predictions), dataset.row_count())
+        self.assertTrue(all(row["glm_prediction"] is not None for row in predictions))
+        self.assertEqual(coefficient_features, {"Age"})
+        self.assertEqual({row["feature"] for row in result["feature_importance"]}, {"Age"})
+        self.assertTrue(store.artifact_path(model_id, "coefficients").exists())
+        self.assertTrue(store.artifact_path(model_id, "feature_importance").exists())
+        self.assertTrue(store.artifact_path(model_id, "predictions").exists())
+        self.assertTrue(store.artifact_path(model_id, "manifest").exists())
+
     def test_polars_training_preserves_fit_and_score_row_eligibility(self) -> None:
         self.require_glm_dependencies()
         path = self.root / "polars_eligibility.parquet"
@@ -1786,6 +1841,58 @@ ORDER BY __lucidum_row_id
         levels = [row["x"] for row in table_rows if row["status"] == "ok"]
         self.assertEqual(min(levels), 0)
         self.assertEqual(max(levels), 100)
+
+    def test_glm_tabulation_numeric_levels_preserve_exact_boundaries(self) -> None:
+        minimum = 0.570250890043796
+        maximum = 2.19481851723323
+
+        levels = glm_tabulation._numeric_levels(minimum, maximum, 0.1, 0.936150505293458)
+
+        self.assertEqual(levels[0], minimum)
+        self.assertEqual(levels[-1], maximum)
+        self.assertTrue(all(minimum <= float(value) <= maximum for value in levels))
+        self.assertIn(round(minimum + 0.1, 10), levels)
+        integer_levels = glm_tabulation._numeric_levels(1.0, 3.0, 1.0, 2.0)
+        self.assertEqual(integer_levels, [1, 2, 3])
+        self.assertTrue(all(isinstance(value, int) for value in integer_levels))
+
+    def test_glm_tabulation_builds_default_basis_spline_at_high_precision_boundaries(self) -> None:
+        self.require_glm_dependencies()
+        data_path = self.root / "high_precision_spline.csv"
+        minimum = 0.570250890043796
+        values = [minimum + index * 0.1 for index in range(20)]
+        rows = ["y,x\n"]
+        rows.extend(f"{100 + index * 1.5},{value!r}\n" for index, value in enumerate(values))
+        data_path.write_text("".join(rows), encoding="utf-8")
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path)
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "1 + bs(x, df=4)",
+                "response_column": "y",
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        model_id = result["model_id"]
+
+        build_tabulations(dataset, store, {"model_ids": [model_id]}, {"rows": []})
+        tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
+        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "x.parquet")
+        tabulated_predictions = store.read_parquet_records(store.artifact_path(model_id, "tabulated_predictions"))
+        levels = [row["x"] for row in table_rows if row["status"] == "ok"]
+
+        self.assertEqual(tab_manifest["status"], "tabulated")
+        self.assertEqual(min(levels), values[0])
+        self.assertEqual(max(levels), values[-1])
+        self.assertTrue(all(values[0] <= float(value) <= values[-1] for value in levels))
+        self.assertEqual(len(tabulated_predictions), len(values))
+        self.assertTrue(all(row["glm_tabulated_prediction"] is not None for row in tabulated_predictions))
+        self.assertTrue(store.artifact_path(model_id, "tabulation_manifest").exists())
+        self.assertTrue(store.artifact_path(model_id, "tabulated_predictions").exists())
 
     def test_glm_tabulation_log_transform_bounds_stay_on_raw_scale(self) -> None:
         self.require_glm_dependencies()

@@ -643,8 +643,9 @@ def formula_source_columns(formula: str, source_columns: list[str]) -> list[str]
     from formulaic import Formula  # type: ignore[import-not-found]
     from formulaic.parser import DefaultFormulaParser  # type: ignore[import-not-found]
 
+    formula_text = str(formula or "1")
     parsed = Formula(
-        str(formula or "1"),
+        formula_text,
         _parser=DefaultFormulaParser(include_intercept=False),
         _context={
             "__formulaic_variables_available__": source_columns,
@@ -652,6 +653,8 @@ def formula_source_columns(formula: str, source_columns: list[str]) -> list[str]
         },
     )
     required = {str(variable) for variable in parsed.required_variables}
+    # Formulaic can omit data arguments to stateful transforms such as bs, cs, and poly.
+    required.update(column_tokens(formula_text, source_columns))
     return [column for column in source_columns if column in required]
 
 
