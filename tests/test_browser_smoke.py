@@ -12851,20 +12851,178 @@ COPY (
                 page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
-                if not page.locator("#glmTabulationColor").is_checked():
-                    page.locator("#glmTabulationColor").check()
-                    page.locator("#glmTabulationTable .glm-tabulation-colour-cell").first.wait_for(timeout=10_000)
-                page.locator('[data-glm-tabulation-scale="exp"]').click()
+                exp_button = page.locator("#glmTabulationExpBtn")
+                colour_button = page.locator("#glmTabulationColorBtn")
+                if exp_button.get_attribute("aria-pressed") == "true":
+                    exp_button.click()
+                    page.wait_for_function(
+                        "() => document.querySelector('#glmTabulationExpBtn')?.getAttribute('aria-pressed') === 'false'",
+                        timeout=10_000,
+                    )
+                if colour_button.get_attribute("aria-pressed") == "true":
+                    colour_button.click()
+                    page.wait_for_function(
+                        "() => document.querySelector('#glmTabulationColorBtn')?.getAttribute('aria-pressed') === 'false'",
+                        timeout=10_000,
+                    )
+                tabulation_inactive_controls = page.evaluate(
+                    """
+                    () => {
+                      const selectors = {
+                        table: '[data-glm-tabulation-view="table"]',
+                        plot: '[data-glm-tabulation-view="plot"]',
+                        exp: '#glmTabulationExpBtn',
+                        colour: '#glmTabulationColorBtn',
+                      };
+                      const buttons = Object.fromEntries(
+                        Object.entries(selectors).map(([name, selector]) => [name, document.querySelector(selector)])
+                      );
+                      const styles = Object.fromEntries(
+                        Object.entries(buttons).map(([name, button]) => [name, getComputedStyle(button)])
+                      );
+                      const exportButton = document.querySelector('#glmExportTabulationsBtn');
+                      const exportIcon = exportButton?.querySelector('.glm-tabulation-export-icon');
+                      return {
+                        labels: Object.fromEntries(Object.entries(buttons).map(([name, button]) => [name, button?.textContent.trim()])),
+                        pressed: Object.fromEntries(Object.entries(buttons).map(([name, button]) => [name, button?.getAttribute('aria-pressed')])),
+                        colors: Object.fromEntries(Object.entries(styles).map(([name, style]) => [name, style.color])),
+                        weights: Object.fromEntries(Object.entries(styles).map(([name, style]) => [name, style.fontWeight])),
+                        backgrounds: Object.fromEntries(Object.entries(styles).map(([name, style]) => [name, style.backgroundColor])),
+                        borderWidths: Object.fromEntries(Object.entries(styles).map(([name, style]) => [name, style.borderTopWidth])),
+                        widths: Object.fromEntries(Object.entries(buttons).map(([name, button]) => [name, button?.getBoundingClientRect().width])),
+                        scaleStorage: localStorage.getItem('py_lucidum_glm_tabulation_scale'),
+                        colourStorage: localStorage.getItem('py_lucidum_glm_tabulation_color'),
+                        viewStorage: localStorage.getItem('py_lucidum_glm_tabulation_view'),
+                        exportLabel: exportButton?.getAttribute('aria-label'),
+                        exportTitle: exportButton?.getAttribute('title'),
+                        exportText: exportButton?.textContent.trim(),
+                        exportIconSize: exportIcon
+                          ? [exportIcon.getBoundingClientRect().width, exportIcon.getBoundingClientRect().height]
+                          : [],
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    tabulation_inactive_controls["labels"],
+                    {"table": "Table", "plot": "Plot", "exp": "Exp", "colour": "Colour"},
+                )
+                self.assertEqual(
+                    tabulation_inactive_controls["pressed"],
+                    {"table": "true", "plot": "false", "exp": "false", "colour": "false"},
+                )
+                self.assertEqual(tabulation_inactive_controls["colors"]["plot"], tabulation_inactive_controls["colors"]["exp"])
+                self.assertEqual(tabulation_inactive_controls["colors"]["exp"], tabulation_inactive_controls["colors"]["colour"])
+                self.assertNotEqual(tabulation_inactive_controls["colors"]["table"], tabulation_inactive_controls["colors"]["exp"])
+                self.assertEqual(tabulation_inactive_controls["weights"]["table"], "700")
+                self.assertEqual(tabulation_inactive_controls["weights"]["plot"], "400")
+                self.assertEqual(tabulation_inactive_controls["weights"]["exp"], "400")
+                self.assertEqual(tabulation_inactive_controls["weights"]["colour"], "400")
+                self.assertEqual(set(tabulation_inactive_controls["backgrounds"].values()), {"rgba(0, 0, 0, 0)"})
+                self.assertEqual(set(tabulation_inactive_controls["borderWidths"].values()), {"0px"})
+                self.assertIn(tabulation_inactive_controls["scaleStorage"], (None, "linear"))
+                self.assertIn(tabulation_inactive_controls["colourStorage"], (None, "false"))
+                self.assertIn(tabulation_inactive_controls["viewStorage"], (None, "table"))
+                self.assertEqual(tabulation_inactive_controls["exportLabel"], "Export XLSX")
+                self.assertEqual(tabulation_inactive_controls["exportTitle"], "Export XLSX")
+                self.assertEqual(tabulation_inactive_controls["exportText"], "")
+                self.assertEqual(tabulation_inactive_controls["exportIconSize"], [16, 16])
+
+                exp_button.hover()
+                tabulation_exp_hover = exp_button.evaluate(
+                    "button => ({ color: getComputedStyle(button).color, background: getComputedStyle(button).backgroundColor })"
+                )
+                self.assertEqual(tabulation_exp_hover["color"], tabulation_inactive_controls["colors"]["table"])
+                self.assertEqual(tabulation_exp_hover["background"], "rgba(0, 0, 0, 0)")
+                page.locator('[data-glm-tabulation-view="plot"]').focus()
+                page.keyboard.press("Tab")
+                self.assertEqual(page.evaluate("() => document.activeElement?.id"), "glmTabulationExpBtn")
+                self.assertEqual(exp_button.evaluate("button => getComputedStyle(button).outlineWidth"), "2px")
+
+                exp_button.click()
+                colour_button.click()
                 page.wait_for_function(
                     """
                     () => {
                       const ageRow = [...document.querySelectorAll("#glmTabulationTableGrid .tabulator-row")]
                         .find((row) => row.textContent.includes("Age"));
-                      return ageRow?.querySelector('.tabulator-cell[tabulator-field="display_span"]')?.textContent.trim() === "2.7183";
+                      return ageRow?.querySelector('.tabulator-cell[tabulator-field="display_span"]')?.textContent.trim() === "2.7183"
+                        && document.querySelector('#glmTabulationExpBtn')?.getAttribute('aria-pressed') === 'true'
+                        && document.querySelector('#glmTabulationColorBtn')?.getAttribute('aria-pressed') === 'true';
                     }
                     """,
                     timeout=10_000,
                 )
+                page.locator("#glmTabulationTable .glm-tabulation-colour-cell").first.wait_for(timeout=10_000)
+                tabulation_active_controls = page.evaluate(
+                    """
+                    () => {
+                      const table = document.querySelector('[data-glm-tabulation-view="table"]');
+                      const exp = document.querySelector('#glmTabulationExpBtn');
+                      const colour = document.querySelector('#glmTabulationColorBtn');
+                      return {
+                        expPressed: exp?.getAttribute('aria-pressed'),
+                        colourPressed: colour?.getAttribute('aria-pressed'),
+                        expColor: getComputedStyle(exp).color,
+                        colourColor: getComputedStyle(colour).color,
+                        tableColor: getComputedStyle(table).color,
+                        expWeight: getComputedStyle(exp).fontWeight,
+                        colourWeight: getComputedStyle(colour).fontWeight,
+                        expWidth: exp?.getBoundingClientRect().width,
+                        colourWidth: colour?.getBoundingClientRect().width,
+                        scaleStorage: localStorage.getItem('py_lucidum_glm_tabulation_scale'),
+                        colourStorage: localStorage.getItem('py_lucidum_glm_tabulation_color'),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(tabulation_active_controls["expPressed"], "true")
+                self.assertEqual(tabulation_active_controls["colourPressed"], "true")
+                self.assertEqual(tabulation_active_controls["expColor"], tabulation_active_controls["tableColor"])
+                self.assertEqual(tabulation_active_controls["colourColor"], tabulation_active_controls["tableColor"])
+                self.assertEqual(tabulation_active_controls["expWeight"], "700")
+                self.assertEqual(tabulation_active_controls["colourWeight"], "700")
+                self.assertAlmostEqual(
+                    tabulation_active_controls["expWidth"],
+                    tabulation_inactive_controls["widths"]["exp"],
+                    delta=0.1,
+                )
+                self.assertAlmostEqual(
+                    tabulation_active_controls["colourWidth"],
+                    tabulation_inactive_controls["widths"]["colour"],
+                    delta=0.1,
+                )
+                self.assertEqual(tabulation_active_controls["scaleStorage"], "exp")
+                self.assertEqual(tabulation_active_controls["colourStorage"], "true")
+
+                exp_button.click()
+                page.wait_for_function(
+                    "() => document.querySelector('#glmTabulationExpBtn')?.getAttribute('aria-pressed') === 'false' && localStorage.getItem('py_lucidum_glm_tabulation_scale') === 'linear'",
+                    timeout=10_000,
+                )
+                self.assertAlmostEqual(
+                    exp_button.evaluate("button => button.getBoundingClientRect().width"),
+                    tabulation_inactive_controls["widths"]["exp"],
+                    delta=0.1,
+                )
+                exp_button.click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const ageRow = [...document.querySelectorAll('#glmTabulationTableGrid .tabulator-row')]
+                        .find((row) => row.textContent.includes('Age'));
+                      return document.querySelector('#glmTabulationExpBtn')?.getAttribute('aria-pressed') === 'true'
+                        && ageRow?.querySelector('.tabulator-cell[tabulator-field="display_span"]')?.textContent.trim() === '2.7183';
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                colour_button.click()
+                page.wait_for_function(
+                    "() => document.querySelector('#glmTabulationColorBtn')?.getAttribute('aria-pressed') === 'false' && !document.querySelector('#glmTabulationTable .glm-tabulation-colour-cell')",
+                    timeout=10_000,
+                )
+                colour_button.click()
                 page.locator("#glmTabulationTable .glm-tabulation-colour-cell").first.wait_for(timeout=10_000)
                 tabulation_geometry = page.evaluate(
                     """
@@ -12883,6 +13041,9 @@ COPY (
                       const tabulateButton = document.querySelector("#glmBuildTabulationsBtn");
                       const rightButtons = [...rightControls.querySelectorAll("button")];
                       const crosstab = document.querySelector("#glmTabulationCrosstab");
+                      const crosstabGroup = document.querySelector(".glm-tabulation-crosstab-group");
+                      const rightControlGroup = document.querySelector(".glm-tabulation-control-right");
+                      const exportButton = document.querySelector("#glmExportTabulationsBtn");
                       const navigatorButton = document.querySelector("#glmRenameModelBtn");
                       const toolRect = tool.getBoundingClientRect();
                       const toolbarRect = toolbar.getBoundingClientRect();
@@ -12906,6 +13067,9 @@ COPY (
                       const navigatorButtonStyle = getComputedStyle(navigatorButton);
                       const tabulateButtonRect = tabulateButton.getBoundingClientRect();
                       const crosstabRect = crosstab.getBoundingClientRect();
+                      const crosstabGroupRect = crosstabGroup.getBoundingClientRect();
+                      const rightControlGroupRect = rightControlGroup.getBoundingClientRect();
+                      const exportButtonRect = exportButton.getBoundingClientRect();
                       return {
                         layoutTopGap: layoutRect.top - toolbarRect.bottom,
                         layoutBottomGap: toolRect.bottom - layoutRect.bottom,
@@ -12951,6 +13115,10 @@ COPY (
                             - (rightControlsRect.bottom - rect.bottom)
                           );
                         }),
+                        rightButtonLabels: rightButtons.map((button) => button.textContent.trim()),
+                        rightButtonPressed: rightButtons.map((button) => button.getAttribute("aria-pressed")),
+                        rightButtonBorderWidths: rightButtons.map((button) => getComputedStyle(button).borderTopWidth),
+                        rightButtonBackgrounds: rightButtons.map((button) => getComputedStyle(button).backgroundColor),
                         allButtonsUseSharedClass: [tabulateButton, ...rightButtons]
                           .every((button) => button.classList.contains("app-control-button")),
                         allButtonFontSizes: [tabulateButton, ...rightButtons]
@@ -12963,6 +13131,11 @@ COPY (
                           .map((button) => getComputedStyle(button).borderTopLeftRadius),
                         allButtonBoxSizing: [tabulateButton, ...rightButtons]
                           .map((button) => getComputedStyle(button).boxSizing),
+                        exportWidth: document.querySelector("#glmExportTabulationsBtn")?.getBoundingClientRect().width,
+                        exportIconSize: (() => {
+                          const icon = document.querySelector("#glmExportTabulationsBtn .glm-tabulation-export-icon");
+                          return icon ? [icon.getBoundingClientRect().width, icon.getBoundingClientRect().height] : [];
+                        })(),
                         navigatorButtonMetrics: {
                           fontSize: navigatorButtonStyle.fontSize,
                           paddingTop: navigatorButtonStyle.paddingTop,
@@ -12971,6 +13144,12 @@ COPY (
                           boxSizing: navigatorButtonStyle.boxSizing,
                         },
                         crosstabHeight: crosstabRect.height,
+                        crosstabWidth: crosstabRect.width,
+                        crosstabGroupWidth: crosstabGroupRect.width,
+                        rightControlGroupWidth: rightControlGroupRect.width,
+                        rightControlFillDelta: Math.abs(
+                          rightControlGroupRect.width - crosstabGroupRect.width - exportButtonRect.width - 8
+                        ),
                         crosstabCenterDelta: Math.abs(
                           (crosstabRect.top + crosstabRect.height / 2)
                           - (rightControlsRect.top + rightControlsRect.height / 2)
@@ -13029,12 +13208,18 @@ COPY (
                 self.assertEqual(tabulation_geometry["rightButtonHeights"], [28, 28, 28, 28, 28])
                 self.assertTrue(all(delta <= 0.1 for delta in tabulation_geometry["rightButtonCenterDeltas"]))
                 self.assertTrue(all(delta <= 0.1 for delta in tabulation_geometry["rightButtonEdgeDeltas"]))
+                self.assertEqual(tabulation_geometry["rightButtonLabels"], ["Table", "Plot", "Exp", "Colour", ""])
+                self.assertEqual(tabulation_geometry["rightButtonPressed"], ["true", "false", "true", "true", None])
+                self.assertEqual(set(tabulation_geometry["rightButtonBorderWidths"]), {"0px"})
+                self.assertEqual(set(tabulation_geometry["rightButtonBackgrounds"]), {"rgba(0, 0, 0, 0)"})
                 self.assertTrue(tabulation_geometry["allButtonsUseSharedClass"])
                 self.assertEqual(set(tabulation_geometry["allButtonFontSizes"]), {"12px"})
-                self.assertEqual(set(tabulation_geometry["allButtonPaddingTop"]), {"2px"})
-                self.assertEqual(set(tabulation_geometry["allButtonPaddingRight"]), {"8px"})
-                self.assertEqual(set(tabulation_geometry["allButtonRadii"]), {"5px"})
+                self.assertEqual(set(tabulation_geometry["allButtonPaddingTop"]), {"2px", "6px"})
+                self.assertEqual(set(tabulation_geometry["allButtonPaddingRight"]), {"6px", "8px"})
+                self.assertEqual(set(tabulation_geometry["allButtonRadii"]), {"0px", "5px"})
                 self.assertEqual(set(tabulation_geometry["allButtonBoxSizing"]), {"border-box"})
+                self.assertEqual(tabulation_geometry["exportWidth"], 28)
+                self.assertEqual(tabulation_geometry["exportIconSize"], [16, 16])
                 self.assertEqual(
                     tabulation_geometry["navigatorButtonMetrics"],
                     {
@@ -13046,6 +13231,10 @@ COPY (
                     },
                 )
                 self.assertEqual(tabulation_geometry["crosstabHeight"], 28)
+                self.assertGreater(tabulation_geometry["crosstabWidth"], 240)
+                self.assertGreater(tabulation_geometry["crosstabGroupWidth"], tabulation_geometry["crosstabWidth"])
+                self.assertLess(tabulation_geometry["crosstabGroupWidth"], tabulation_geometry["rightControlGroupWidth"])
+                self.assertLessEqual(tabulation_geometry["rightControlFillDelta"], 0.5)
                 self.assertLessEqual(tabulation_geometry["crosstabCenterDelta"], 0.1)
                 self.assertAlmostEqual(tabulation_geometry["resizerTopGap"], 0, delta=0.5)
                 self.assertAlmostEqual(tabulation_geometry["resizerBottomGap"], 0, delta=0.5)
@@ -13204,6 +13393,9 @@ COPY (
                         ageMax: ageRow?.querySelector('.tabulator-cell[tabulator-field="display_max"]')?.textContent.trim() || "",
                         ageSpan: ageRow?.querySelector('.tabulator-cell[tabulator-field="display_span"]')?.textContent.trim() || "",
                         exportText: document.querySelector("#glmExportTabulationsBtn")?.textContent.trim() || "",
+                        exportLabel: document.querySelector("#glmExportTabulationsBtn")?.getAttribute("aria-label"),
+                        exportTitle: document.querySelector("#glmExportTabulationsBtn")?.getAttribute("title"),
+                        exportHasIcon: Boolean(document.querySelector("#glmExportTabulationsBtn .glm-tabulation-export-icon")),
                         exportDisabled: document.querySelector("#glmExportTabulationsBtn")?.disabled,
                         diagnosticsHidden: document.querySelector("#glmTabulationDiagnostics")?.classList.contains("hidden"),
                         splitDelta: Math.abs(
@@ -13238,7 +13430,10 @@ COPY (
                 self.assertEqual(tabulation_single_state["ageMin"], "1")
                 self.assertEqual(tabulation_single_state["ageMax"], "2.7183")
                 self.assertEqual(tabulation_single_state["ageSpan"], "2.7183")
-                self.assertEqual(tabulation_single_state["exportText"], "Export xlsx")
+                self.assertEqual(tabulation_single_state["exportText"], "")
+                self.assertEqual(tabulation_single_state["exportLabel"], "Export XLSX")
+                self.assertEqual(tabulation_single_state["exportTitle"], "Export XLSX")
+                self.assertTrue(tabulation_single_state["exportHasIcon"])
                 self.assertFalse(tabulation_single_state["exportDisabled"])
                 self.assertTrue(tabulation_single_state["diagnosticsHidden"])
                 self.assertLess(tabulation_single_state["splitDelta"], 36)
@@ -13271,17 +13466,33 @@ COPY (
                       };
                       const cell = document.querySelector("#glmTabulationTable .glm-tabulation-colour-cell");
                       const styles = cell ? getComputedStyle(cell) : null;
+                      const activeControl = getComputedStyle(document.querySelector("#glmTabulationExpBtn"));
+                      const inactiveControl = getComputedStyle(document.querySelector('[data-glm-tabulation-view="plot"]'));
+                      const exportControl = getComputedStyle(document.querySelector("#glmExportTabulationsBtn"));
                       return {
                         dark: document.body.classList.contains("dark"),
                         background: styles?.backgroundColor || "",
                         color: styles?.color || "",
                         contrast: styles ? contrast(styles.color, styles.backgroundColor) : 0,
+                        activeControlColor: activeControl.color,
+                        inactiveControlColor: inactiveControl.color,
+                        exportControlColor: exportControl.color,
+                        activeControlWeight: activeControl.fontWeight,
+                        inactiveControlWeight: inactiveControl.fontWeight,
+                        controlBackgrounds: [activeControl.backgroundColor, inactiveControl.backgroundColor, exportControl.backgroundColor],
+                        controlBorders: [activeControl.borderTopWidth, inactiveControl.borderTopWidth, exportControl.borderTopWidth],
                       };
                     }
                     """
                 )
                 self.assertFalse(tabulation_light_colour["dark"])
                 self.assertGreaterEqual(tabulation_light_colour["contrast"], 4.5)
+                self.assertNotEqual(tabulation_light_colour["activeControlColor"], tabulation_light_colour["inactiveControlColor"])
+                self.assertEqual(tabulation_light_colour["inactiveControlColor"], tabulation_light_colour["exportControlColor"])
+                self.assertEqual(tabulation_light_colour["activeControlWeight"], "700")
+                self.assertEqual(tabulation_light_colour["inactiveControlWeight"], "400")
+                self.assertEqual(set(tabulation_light_colour["controlBackgrounds"]), {"rgba(0, 0, 0, 0)"})
+                self.assertEqual(set(tabulation_light_colour["controlBorders"]), {"0px"})
                 page.locator("#themeBtn").click()
                 page.wait_for_function(
                     """
@@ -13322,11 +13533,21 @@ COPY (
                       };
                       const cell = document.querySelector("#glmTabulationTable .glm-tabulation-colour-cell");
                       const styles = cell ? getComputedStyle(cell) : null;
+                      const activeControl = getComputedStyle(document.querySelector("#glmTabulationExpBtn"));
+                      const inactiveControl = getComputedStyle(document.querySelector('[data-glm-tabulation-view="plot"]'));
+                      const exportControl = getComputedStyle(document.querySelector("#glmExportTabulationsBtn"));
                       return {
                         dark: document.body.classList.contains("dark"),
                         background: styles?.backgroundColor || "",
                         color: styles?.color || "",
                         contrast: styles ? contrast(styles.color, styles.backgroundColor) : 0,
+                        activeControlColor: activeControl.color,
+                        inactiveControlColor: inactiveControl.color,
+                        exportControlColor: exportControl.color,
+                        activeControlWeight: activeControl.fontWeight,
+                        inactiveControlWeight: inactiveControl.fontWeight,
+                        controlBackgrounds: [activeControl.backgroundColor, inactiveControl.backgroundColor, exportControl.backgroundColor],
+                        controlBorders: [activeControl.borderTopWidth, inactiveControl.borderTopWidth, exportControl.borderTopWidth],
                       };
                     }
                     """
@@ -13335,17 +13556,87 @@ COPY (
                 self.assertNotEqual(tabulation_dark_colour["background"], tabulation_light_colour["background"])
                 self.assertNotEqual(tabulation_dark_colour["color"], tabulation_light_colour["color"])
                 self.assertGreaterEqual(tabulation_dark_colour["contrast"], 4.5)
+                self.assertNotEqual(tabulation_dark_colour["activeControlColor"], tabulation_dark_colour["inactiveControlColor"])
+                self.assertEqual(tabulation_dark_colour["inactiveControlColor"], tabulation_dark_colour["exportControlColor"])
+                self.assertNotEqual(tabulation_dark_colour["activeControlColor"], tabulation_light_colour["activeControlColor"])
+                self.assertNotEqual(tabulation_dark_colour["inactiveControlColor"], tabulation_light_colour["inactiveControlColor"])
+                self.assertEqual(tabulation_dark_colour["activeControlWeight"], "700")
+                self.assertEqual(tabulation_dark_colour["inactiveControlWeight"], "400")
+                self.assertEqual(set(tabulation_dark_colour["controlBackgrounds"]), {"rgba(0, 0, 0, 0)"})
+                self.assertEqual(set(tabulation_dark_colour["controlBorders"]), {"0px"})
                 page.locator("#themeBtn").click()
                 page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
 
-                page.locator("#glmExportTabulationsBtn").click()
+                export_busy_state = page.evaluate(
+                    """
+                    () => {
+                      const button = document.querySelector("#glmExportTabulationsBtn");
+                      button.click();
+                      const icon = button.querySelector(".glm-tabulation-export-icon");
+                      const spinner = getComputedStyle(button, "::before");
+                      return {
+                        width: button.getBoundingClientRect().width,
+                        disabled: button.disabled,
+                        busy: button.getAttribute("aria-busy"),
+                        label: button.getAttribute("aria-label"),
+                        title: button.getAttribute("title"),
+                        text: button.textContent.trim(),
+                        iconDisplay: getComputedStyle(icon).display,
+                        spinnerContent: spinner.content,
+                        spinnerWidth: spinner.width,
+                        borderWidth: getComputedStyle(button).borderTopWidth,
+                        background: getComputedStyle(button).backgroundColor,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(export_busy_state["width"], 28)
+                self.assertTrue(export_busy_state["disabled"])
+                self.assertEqual(export_busy_state["busy"], "true")
+                self.assertEqual(export_busy_state["label"], "Exporting XLSX")
+                self.assertEqual(export_busy_state["title"], "Exporting XLSX")
+                self.assertEqual(export_busy_state["text"], "")
+                self.assertEqual(export_busy_state["iconDisplay"], "none")
+                self.assertEqual(export_busy_state["spinnerContent"], '\"\"')
+                self.assertEqual(export_busy_state["spinnerWidth"], "12px")
+                self.assertEqual(export_busy_state["borderWidth"], "0px")
+                self.assertEqual(export_busy_state["background"], "rgba(0, 0, 0, 0)")
                 page.locator("#glmTabulationNotice", has_text="Saved XLSX:").wait_for(timeout=10_000)
                 export_path = page.locator("#glmTabulationNotice").text_content(timeout=10_000).replace("Saved XLSX:", "", 1).strip()
                 self.assertTrue(export_path.endswith("browser-smoke-glm_tabulations_exp.xlsx"))
                 self.assertTrue(Path(export_path).exists(), export_path)
+                self.assertEqual(page.locator("#glmExportTabulationsBtn").get_attribute("aria-label"), "Export XLSX")
+                self.assertIsNone(page.locator("#glmExportTabulationsBtn").get_attribute("aria-busy"))
 
                 page.locator('[data-glm-tabulation-view="plot"]').click()
                 page.locator("#glmTabulationPlot canvas").first.wait_for(timeout=10_000)
+                tabulation_plot_state = page.evaluate(
+                    """
+                    () => {
+                      const table = document.querySelector('[data-glm-tabulation-view="table"]');
+                      const plot = document.querySelector('[data-glm-tabulation-view="plot"]');
+                      return {
+                        tablePressed: table?.getAttribute('aria-pressed'),
+                        plotPressed: plot?.getAttribute('aria-pressed'),
+                        tableColor: getComputedStyle(table).color,
+                        plotColor: getComputedStyle(plot).color,
+                        tableWeight: getComputedStyle(table).fontWeight,
+                        plotWeight: getComputedStyle(plot).fontWeight,
+                        tableWidth: table?.getBoundingClientRect().width,
+                        plotWidth: plot?.getBoundingClientRect().width,
+                        storage: localStorage.getItem('py_lucidum_glm_tabulation_view'),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(tabulation_plot_state["tablePressed"], "false")
+                self.assertEqual(tabulation_plot_state["plotPressed"], "true")
+                self.assertNotEqual(tabulation_plot_state["tableColor"], tabulation_plot_state["plotColor"])
+                self.assertEqual(tabulation_plot_state["tableWeight"], "400")
+                self.assertEqual(tabulation_plot_state["plotWeight"], "700")
+                self.assertAlmostEqual(tabulation_plot_state["tableWidth"], tabulation_inactive_controls["widths"]["table"], delta=0.1)
+                self.assertAlmostEqual(tabulation_plot_state["plotWidth"], tabulation_inactive_controls["widths"]["plot"], delta=0.1)
+                self.assertEqual(tabulation_plot_state["storage"], "plot")
                 initial_plot_width = page.evaluate(
                     """
                     () => window.echarts.getInstanceByDom(document.querySelector("#glmTabulationPlot"))?.getWidth() || 0
@@ -13383,6 +13674,9 @@ COPY (
                 )
                 page.locator('[data-glm-tabulation-view="table"]').click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
+                self.assertEqual(page.locator('[data-glm-tabulation-view="table"]').get_attribute("aria-pressed"), "true")
+                self.assertEqual(page.locator('[data-glm-tabulation-view="plot"]').get_attribute("aria-pressed"), "false")
+                self.assertEqual(page.evaluate("() => localStorage.getItem('py_lucidum_glm_tabulation_view')"), "table")
 
                 page.locator("#glmTabulationModelGrid .tabulator-row", has_text="Second smoke GLM").click(modifiers=[row_selection_modifier])
                 page.wait_for_function(
@@ -13395,23 +13689,33 @@ COPY (
                 )
                 tabulation_multi_state = page.evaluate(
                     """
-                    () => ({
-                      selectedModels: [...document.querySelectorAll("#glmTabulationModelGrid .tabulator-row.tabulator-selected")]
-                        .map((row) => row.textContent),
-                      commonHeaders: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-col-title")]
-                        .map((node) => node.textContent.trim()).filter(Boolean),
-                      otherHeaders: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-col-title")]
-                        .map((node) => node.textContent.trim()).filter(Boolean),
-                      commonRows: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-row")]
-                        .map((row) => row.textContent),
-                      otherRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row")]
-                        .map((row) => row.textContent),
-                      commonSelectedRows: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-row.tabulator-selected")]
-                        .map((row) => row.textContent),
-                      otherSelectedRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row.tabulator-selected")]
-                        .map((row) => row.textContent),
-                      exportDisabled: document.querySelector("#glmExportTabulationsBtn")?.disabled,
-                    })
+                    () => {
+                      const exportButton = document.querySelector("#glmExportTabulationsBtn");
+                      const exportStyle = getComputedStyle(exportButton);
+                      return {
+                        selectedModels: [...document.querySelectorAll("#glmTabulationModelGrid .tabulator-row.tabulator-selected")]
+                          .map((row) => row.textContent),
+                        commonHeaders: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-col-title")]
+                          .map((node) => node.textContent.trim()).filter(Boolean),
+                        otherHeaders: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-col-title")]
+                          .map((node) => node.textContent.trim()).filter(Boolean),
+                        commonRows: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-row")]
+                          .map((row) => row.textContent),
+                        otherRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row")]
+                          .map((row) => row.textContent),
+                        commonSelectedRows: [...document.querySelectorAll("#glmTabulationCommonTableGrid .tabulator-row.tabulator-selected")]
+                          .map((row) => row.textContent),
+                        otherSelectedRows: [...document.querySelectorAll("#glmTabulationOtherTableGrid .tabulator-row.tabulator-selected")]
+                          .map((row) => row.textContent),
+                        exportDisabled: exportButton?.disabled,
+                        exportLabel: exportButton?.getAttribute("aria-label"),
+                        exportTitle: exportButton?.getAttribute("title"),
+                        exportOpacity: exportStyle.opacity,
+                        exportCursor: exportStyle.cursor,
+                        exportBackground: exportStyle.backgroundColor,
+                        exportIconDisplay: getComputedStyle(exportButton.querySelector(".glm-tabulation-export-icon")).display,
+                      };
+                    }
                     """
                 )
                 self.assertTrue(any("Browser smoke GLM" in text for text in tabulation_multi_state["selectedModels"]))
@@ -13424,6 +13728,12 @@ COPY (
                 self.assertTrue(any("Age" in text for text in tabulation_multi_state["commonSelectedRows"]))
                 self.assertEqual(tabulation_multi_state["otherSelectedRows"], [])
                 self.assertTrue(tabulation_multi_state["exportDisabled"])
+                self.assertEqual(tabulation_multi_state["exportLabel"], "Export XLSX")
+                self.assertEqual(tabulation_multi_state["exportTitle"], "Export XLSX")
+                self.assertEqual(tabulation_multi_state["exportOpacity"], "0.5")
+                self.assertEqual(tabulation_multi_state["exportCursor"], "not-allowed")
+                self.assertEqual(tabulation_multi_state["exportBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(tabulation_multi_state["exportIconDisplay"], "block")
 
                 page.locator("#glmTabulationOtherTableGrid .tabulator-row", has_text="Segment").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)

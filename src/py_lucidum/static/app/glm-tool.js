@@ -473,17 +473,16 @@ export function createGlmTool({
           <div class="glm-tabulation-controls app-control-strip app-control-strip-row">
             <div class="glm-tabulation-controls-row glm-tabulation-controls-primary">
               <div class="glm-tabulation-control-group glm-tabulation-control-left">
-                <div class="segmented glm-tabulation-view-toggle" role="group" aria-label="Tabulation view">
-                  <button type="button" data-glm-tabulation-view="table" class="app-control-button ${tabulationView === "table" ? "active" : ""}">Table</button>
-                  <button type="button" data-glm-tabulation-view="plot" class="app-control-button ${tabulationView === "plot" ? "active" : ""}" ${features.length > 2 ? "disabled" : ""}>Plot</button>
+                <div class="glm-tabulation-option-group glm-tabulation-view-toggle" role="group" aria-label="Tabulation view">
+                  <button type="button" data-glm-tabulation-view="table" data-stable-label="Table" class="app-control-button glm-tabulation-option-button ${tabulationView === "table" ? "active" : ""}" aria-pressed="${tabulationView === "table" ? "true" : "false"}">Table</button>
+                  <button type="button" data-glm-tabulation-view="plot" data-stable-label="Plot" class="app-control-button glm-tabulation-option-button ${tabulationView === "plot" ? "active" : ""}" aria-pressed="${tabulationView === "plot" ? "true" : "false"}" ${features.length > 2 ? "disabled" : ""}>Plot</button>
                 </div>
               </div>
               <div class="glm-tabulation-control-group glm-tabulation-control-middle">
-                <div class="segmented glm-tabulation-scale-toggle" role="group" aria-label="Tabulation display scale">
-                  <button type="button" data-glm-tabulation-scale="linear" class="app-control-button ${tabulationScale === "linear" ? "active" : ""}">linear</button>
-                  <button type="button" data-glm-tabulation-scale="exp" class="app-control-button ${tabulationScale === "exp" ? "active" : ""}">exp</button>
+                <div class="glm-tabulation-option-group glm-tabulation-scale-toggle" role="group" aria-label="Tabulation display scale">
+                  <button id="glmTabulationExpBtn" type="button" data-glm-tabulation-scale="exp" data-stable-label="Exp" class="app-control-button glm-tabulation-option-button ${tabulationScale === "exp" ? "active" : ""}" aria-label="Exponential scale" aria-pressed="${tabulationScale === "exp" ? "true" : "false"}">Exp</button>
                 </div>
-                <label class="glm-tabulation-check"><input id="glmTabulationColor" type="checkbox" ${tabulationColor ? "checked" : ""} /> colour</label>
+                <button id="glmTabulationColorBtn" type="button" data-stable-label="Colour" class="app-control-button glm-tabulation-option-button ${tabulationColor ? "active" : ""}" aria-label="Colour cells" aria-pressed="${tabulationColor ? "true" : "false"}">Colour</button>
               </div>
               <div class="glm-tabulation-control-group glm-tabulation-control-right">
                 <div class="glm-tabulation-crosstab-group">
@@ -492,7 +491,11 @@ export function createGlmTool({
                     ${tabulationCrosstabOptionsHtml(crosstabOptions)}
                   </select>
                 </div>
-                <button id="glmExportTabulationsBtn" class="tab app-control-button model-busy-button glm-inline-action-button glm-tabulation-export-button ${isExportingTabulations ? "building" : ""}" type="button" ${canExportSelectedTabulations() ? "" : "disabled"} ${isExportingTabulations ? "aria-busy=\"true\"" : ""}>${isExportingTabulations ? "Exporting..." : "Export xlsx"}</button>
+                <button id="glmExportTabulationsBtn" class="app-control-button model-busy-button glm-tabulation-export-button ${isExportingTabulations ? "building" : ""}" type="button" aria-label="${isExportingTabulations ? "Exporting XLSX" : "Export XLSX"}" title="${isExportingTabulations ? "Exporting XLSX" : "Export XLSX"}" ${canExportSelectedTabulations() ? "" : "disabled"} ${isExportingTabulations ? "aria-busy=\"true\"" : ""}>
+                  <svg class="glm-tabulation-export-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M4 3h10l5 5v3M14 3v5h5M5 12h8v8H5zM5 16h8M9 12v8M18 13v7m0 0 3-3m-3 3-3-3"></path>
+                  </svg>
+                </button>
               </div>
             </div>
           </div>
@@ -1068,17 +1071,24 @@ export function createGlmTool({
     }
     document.querySelectorAll("[data-glm-tabulation-view]").forEach((button) => {
       const view = button.dataset.glmTabulationView || "table";
-      button.classList.toggle("active", view === tabulationView);
+      const active = view === tabulationView;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
       button.disabled = view === "plot" && features.length > 2;
     });
     document.querySelectorAll("[data-glm-tabulation-view-panel]").forEach((panel) => {
       panel.classList.toggle("hidden", panel.dataset.glmTabulationViewPanel !== tabulationView);
     });
     document.querySelectorAll("[data-glm-tabulation-scale]").forEach((button) => {
-      button.classList.toggle("active", (button.dataset.glmTabulationScale || "linear") === tabulationScale);
+      const active = tabulationScale === "exp";
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
     });
-    const colorInput = el("glmTabulationColor");
-    if (colorInput) colorInput.checked = tabulationColor;
+    const colorButton = el("glmTabulationColorBtn");
+    if (colorButton) {
+      colorButton.classList.toggle("active", tabulationColor);
+      colorButton.setAttribute("aria-pressed", tabulationColor ? "true" : "false");
+    }
     const crosstabOptions = tabulationCrosstabOptions(features, selectedIds);
     normaliseTabulationCrosstab(crosstabOptions);
     const crosstabSelect = el("glmTabulationCrosstab");
@@ -1103,12 +1113,7 @@ export function createGlmTool({
       syncButtonBusyState(buildButton, isTabulating);
     }
     const exportButton = el("glmExportTabulationsBtn");
-    if (exportButton) {
-      exportButton.disabled = !canExportSelectedTabulations();
-      exportButton.classList.toggle("building", isExportingTabulations);
-      exportButton.textContent = isExportingTabulations ? "Exporting..." : "Export xlsx";
-      syncButtonBusyState(exportButton, isExportingTabulations);
-    }
+    if (exportButton) syncTabulationExportButton(exportButton);
     refreshTabulationDiagnostics();
   }
 
@@ -1164,20 +1169,15 @@ export function createGlmTool({
     });
     document.querySelectorAll("[data-glm-tabulation-scale]").forEach((button) => {
       button.addEventListener("click", () => {
-        const nextScale = button.dataset.glmTabulationScale || "linear";
-        if (nextScale === tabulationScale) {
-          syncTabulationControls();
-          return;
-        }
-        tabulationScale = nextScale;
+        tabulationScale = tabulationScale === "exp" ? "linear" : "exp";
         localStorage.setItem("py_lucidum_glm_tabulation_scale", tabulationScale);
         syncTabulationControls();
         renderTabulationSelectorTables({ forceTables: true });
         loadTabulationView();
       });
     });
-    el("glmTabulationColor")?.addEventListener("change", (event) => {
-      tabulationColor = Boolean(event.target.checked);
+    el("glmTabulationColorBtn")?.addEventListener("click", () => {
+      tabulationColor = !tabulationColor;
       localStorage.setItem("py_lucidum_glm_tabulation_color", String(tabulationColor));
       syncTabulationControls();
       if (tabulationView === "table" && Array.isArray(tabulationPayload?.rows) && Array.isArray(tabulationPayload?.columns)) {
@@ -2251,6 +2251,16 @@ export function createGlmTool({
     }
   }
 
+  function syncTabulationExportButton(button) {
+    if (!button) return;
+    const label = isExportingTabulations ? "Exporting XLSX" : "Export XLSX";
+    button.disabled = !canExportSelectedTabulations();
+    button.classList.toggle("building", isExportingTabulations);
+    button.setAttribute("aria-label", label);
+    button.setAttribute("title", label);
+    syncButtonBusyState(button, isExportingTabulations);
+  }
+
   function renderLiveProgress(progress) {
     if (isBuilding) {
       setAppReadyStatus(glmBuildReadyBadgeLabel(progress), { elapsedStartedAt: buildElapsedStartedAt });
@@ -2277,12 +2287,7 @@ export function createGlmTool({
       syncButtonBusyState(tabulationButton, isTabulating);
     }
     const exportButton = el("glmExportTabulationsBtn");
-    if (exportButton) {
-      exportButton.disabled = !canExportSelectedTabulations();
-      exportButton.classList.toggle("building", isExportingTabulations);
-      exportButton.textContent = isExportingTabulations ? "Exporting..." : "Export xlsx";
-      syncButtonBusyState(exportButton, isExportingTabulations);
-    }
+    if (exportButton) syncTabulationExportButton(exportButton);
   }
 
   function diagnosticsForActiveModel(activeModelId) {

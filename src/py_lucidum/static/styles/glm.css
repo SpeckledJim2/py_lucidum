@@ -1183,6 +1183,96 @@
         min-width: 0;
       }
 
+      .glm-tabulation-option-group {
+        align-items: center;
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 0;
+      }
+
+      .glm-tabulation-option-button,
+      .glm-tabulation-export-button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        font-weight: 400;
+      }
+
+      .glm-tabulation-option-button {
+        padding-inline: 6px;
+        text-align: center;
+      }
+
+      .glm-tabulation-option-button::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .glm-tabulation-option-button:not(:disabled):hover,
+      .glm-tabulation-option-button:not(:disabled):focus-visible,
+      .glm-tabulation-export-button:not(:disabled):hover,
+      .glm-tabulation-export-button:not(:disabled):focus-visible {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .glm-tabulation-option-button:focus-visible,
+      .glm-tabulation-export-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .glm-tabulation-option-button.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .glm-tabulation-option-button:disabled,
+      .glm-tabulation-option-button:disabled:hover,
+      .glm-tabulation-export-button:disabled,
+      .glm-tabulation-export-button:disabled:hover {
+        background: transparent;
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      .glm-tabulation-export-button {
+        flex: 0 0 28px;
+        padding: 6px;
+        width: 28px;
+      }
+
+      .glm-tabulation-export-button.building:disabled {
+        color: var(--accent);
+        opacity: 1;
+      }
+
+      .glm-tabulation-export-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+        width: 16px;
+      }
+
+      .glm-tabulation-export-button[aria-busy="true"] .glm-tabulation-export-icon {
+        display: none;
+      }
+
       .glm-tabulation-control-left {
         flex: 0 0 auto;
       }
@@ -1196,7 +1286,6 @@
         justify-content: flex-end;
       }
 
-      .glm-tabulation-check,
       .glm-tabulation-crosstab-label {
         align-items: center;
         color: var(--muted);
@@ -1210,7 +1299,7 @@
       .glm-tabulation-crosstab-group {
         align-items: center;
         display: inline-flex;
-        flex: 0 1 auto;
+        flex: 1 1 auto;
         gap: 6px;
         min-width: 0;
       }
@@ -1220,11 +1309,11 @@
         border: 1px solid var(--line);
         border-radius: 4px;
         color: var(--text);
+        flex: 1 1 auto;
         font-size: 12px;
         height: var(--app-control-button-height);
-        max-width: 240px;
         min-width: 0;
-        width: clamp(150px, 18vw, 240px);
+        width: auto;
       }
 
       .glm-tabulation-inline-notice {
