@@ -61,6 +61,7 @@ export function createGlmFormulaBuilder({
   onBuildModel = () => {},
   onCoefficientSearch = () => {},
   onCopyCoefficients = () => {},
+  onCopyFormula = () => {},
   onDownloadCoefficients = () => {},
 }) {
   let aceEditor = null;
@@ -73,7 +74,11 @@ export function createGlmFormulaBuilder({
   let selectedRegularizationAlpha = localStorage.getItem("py_lucidum_glm_regularization_alpha") || "0.01";
   let formulaDraft = localStorage.getItem("py_lucidum_glm_formula")
     || "# GLM formula\n# Enter RHS terms, or response ~ terms\n";
-  let formulaAssistOpen = localStorage.getItem("py_lucidum_glm_formula_assist_open") === "true";
+  const storedBuilderPanel = localStorage.getItem("py_lucidum_glm_builder_panel");
+  let builderPanel = ["formula", "parameters", "none"].includes(storedBuilderPanel)
+    ? storedBuilderPanel
+    : (localStorage.getItem("py_lucidum_glm_formula_assist_open") === "true" ? "formula" : "parameters");
+  let formulaAssistOpen = builderPanel === "formula";
   let formulaAssistTab = localStorage.getItem("py_lucidum_glm_formula_assist_tab") || "snippets";
   let formulaAssistFeatureSearch = "";
   let formulaAssistSelectedFeature = localStorage.getItem("py_lucidum_glm_formula_assist_feature") || "";
@@ -348,7 +353,26 @@ export function createGlmFormulaBuilder({
     drawer.classList.toggle("hidden", !formulaAssistOpen);
     drawer.innerHTML = formulaAssistContentHtml();
     bindFormulaAssistDrawerControls();
+    const parametersOpen = builderPanel === "parameters";
+    el("glmBuilderParametersPanel")?.classList.toggle("hidden", !parametersOpen);
+    syncBuilderPanelButton(el("glmFormulaAssistBtn"), formulaAssistOpen);
+    syncBuilderPanelButton(el("glmModelParametersBtn"), parametersOpen);
     if (formulaAssistOpen && formulaAssistTab === "levels") loadFormulaAssistLevels();
+    if (aceEditor) window.requestAnimationFrame(() => aceEditor?.resize());
+  }
+
+  function syncBuilderPanelButton(button, active) {
+    if (!button) return;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-expanded", active ? "true" : "false");
+  }
+
+  function toggleBuilderPanel(panel) {
+    builderPanel = builderPanel === panel ? "none" : panel;
+    formulaAssistOpen = builderPanel === "formula";
+    localStorage.setItem("py_lucidum_glm_builder_panel", builderPanel);
+    localStorage.setItem("py_lucidum_glm_formula_assist_open", formulaAssistOpen ? "true" : "false");
+    renderFormulaAssistDrawer();
   }
 
   function refreshFormulaAssistFeatureOptions() {
@@ -671,18 +695,19 @@ export function createGlmFormulaBuilder({
         if (button.disabled) return;
         selectedTrainingScope = button.dataset.glmScope || "all";
         localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
-        document.querySelectorAll("[data-glm-scope]").forEach((item) => item.classList.toggle("active", item === button));
+        document.querySelectorAll("[data-glm-scope]").forEach((item) => {
+          const active = item === button;
+          item.classList.toggle("active", active);
+          item.setAttribute("aria-pressed", active ? "true" : "false");
+        });
       });
     });
     el("glmClearFormulaBtn")?.addEventListener("click", () => setFormulaText(""));
-    el("glmFormulaAssistBtn")?.addEventListener("click", () => {
-      formulaAssistOpen = !formulaAssistOpen;
-      localStorage.setItem("py_lucidum_glm_formula_assist_open", formulaAssistOpen ? "true" : "false");
-      el("glmFormulaAssistBtn")?.classList.toggle("active", formulaAssistOpen);
-      renderFormulaAssistDrawer();
-    });
+    el("glmFormulaAssistBtn")?.addEventListener("click", () => toggleBuilderPanel("formula"));
+    el("glmModelParametersBtn")?.addEventListener("click", () => toggleBuilderPanel("parameters"));
     el("glmFontSmallerBtn")?.addEventListener("click", () => adjustFontSize(-1));
     el("glmFontLargerBtn")?.addEventListener("click", () => adjustFontSize(1));
+    el("glmCopyFormulaBtn")?.addEventListener("click", () => onCopyFormula(getFormulaText()));
     el("glmBuildBtn")?.addEventListener("click", onBuildModel);
     el("glmCopyCoefficientsBtn")?.addEventListener("click", onCopyCoefficients);
     el("glmDownloadCoefficientsBtn")?.addEventListener("click", onDownloadCoefficients);
@@ -1124,7 +1149,9 @@ export function createGlmFormulaBuilder({
       selectedTrainingScope = trainingScope;
       localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
       document.querySelectorAll("[data-glm-scope]").forEach((button) => {
-        button.classList.toggle("active", button.dataset.glmScope === selectedTrainingScope);
+        const active = button.dataset.glmScope === selectedTrainingScope;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
       });
     }
 
@@ -1192,6 +1219,9 @@ export function createGlmFormulaBuilder({
     },
     get formulaAssistOpen() {
       return formulaAssistOpen;
+    },
+    get parametersOpen() {
+      return builderPanel === "parameters";
     },
     get selectedRegularizationAlpha() {
       return selectedRegularizationAlpha;

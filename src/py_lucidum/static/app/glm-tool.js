@@ -190,6 +190,7 @@ export function createGlmTool({
     onBuildModel: buildModel,
     onCoefficientSearch: () => renderCoefficientTable(coefficientRows),
     onCopyCoefficients: copyCoefficients,
+    onCopyFormula: copyFormula,
     onDownloadCoefficients: downloadCoefficients,
   });
   const modelNavigator = createGlmModelNavigator({
@@ -335,16 +336,23 @@ export function createGlmTool({
               <div class="glm-panel-header app-control-strip app-control-strip-row app-control-strip--titled">
                 <h3 class="glm-panel-title">GLM formula</h3>
                 <div class="glm-builder-actions">
-                  <button id="glmFormulaAssistBtn" class="tab app-control-button glm-icon-action-button ${formulaBuilder.formulaAssistOpen ? "active" : ""}" type="button" aria-label="Formula tools" title="Formula tools">f(x)</button>
+                  <div class="glm-builder-panel-toggles" role="group" aria-label="Formula builder panels">
+                    <button id="glmFormulaAssistBtn" class="app-control-button glm-builder-option-button glm-icon-action-button ${formulaBuilder.formulaAssistOpen ? "active" : ""}" type="button" aria-label="Formula tools" title="Formula tools" aria-controls="glmFormulaAssistDrawer" aria-expanded="${formulaBuilder.formulaAssistOpen ? "true" : "false"}">f(x)</button>
+                    <button id="glmModelParametersBtn" class="app-control-button glm-builder-option-button glm-icon-action-button ${formulaBuilder.parametersOpen ? "active" : ""}" type="button" aria-label="Model parameters" title="Model parameters" aria-controls="glmBuilderParametersPanel" aria-expanded="${formulaBuilder.parametersOpen ? "true" : "false"}">
+                      <svg class="glm-model-parameters-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M4 6h3m4 0h9M9 4v4M4 12h9m4 0h3M15 10v4M4 18h5m4 0h7M11 16v4"></path>
+                      </svg>
+                    </button>
+                  </div>
                   <div class="segmented glm-scope-control glm-header-scope-control" role="group" aria-label="Rows to fit">
-                    <button type="button" data-glm-scope="all" class="app-control-button ${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}">All</button>
-                    <button type="button" data-glm-scope="training" class="app-control-button ${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" ${trainingDisabled ? "disabled" : ""}>Training</button>
+                    <button type="button" data-glm-scope="all" data-stable-label="All" class="app-control-button glm-builder-option-button ${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}" aria-pressed="${formulaBuilder.selectedTrainingScope === "all" ? "true" : "false"}">All</button>
+                    <button type="button" data-glm-scope="training" data-stable-label="Training" class="app-control-button glm-builder-option-button ${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" aria-pressed="${formulaBuilder.selectedTrainingScope === "training" ? "true" : "false"}" ${trainingDisabled ? "disabled" : ""}>Training</button>
                   </div>
                   <button id="glmBuildBtn" class="tab app-control-button model-busy-button glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
               </div>
               ${formulaBuilder.formulaAssistDrawerHtml()}
-              <div class="glm-builder-control-row glm-builder-control-stack">
+              <div id="glmBuilderParametersPanel" class="glm-builder-control-row glm-builder-control-stack ${formulaBuilder.parametersOpen ? "" : "hidden"}">
                 <div class="glm-control-line">
                   <div class="glm-family-row">
                     <label class="glm-control-label" for="glmFamilySelect">Family</label>
@@ -368,10 +376,16 @@ export function createGlmTool({
               <div class="glm-editor-shell">
                 <div id="glmFormulaEditor" class="glm-formula-editor"></div>
                 <textarea id="glmFormulaText" class="glm-formula-text" spellcheck="false">${escapeHtml(formulaBuilder.formulaDraft)}</textarea>
-                <div class="glm-editor-font-controls" role="group" aria-label="Formula editor font size">
+                <div class="glm-editor-font-controls" role="group" aria-label="Formula editor controls">
+                  <button id="glmClearFormulaBtn" class="glm-editor-font-button" type="button" aria-label="Clear formula" title="Clear formula">×</button>
                   <button id="glmFontSmallerBtn" class="glm-editor-font-button" type="button" aria-label="Decrease formula font size" title="Decrease font size">A-</button>
                   <button id="glmFontLargerBtn" class="glm-editor-font-button" type="button" aria-label="Increase formula font size" title="Increase font size">A+</button>
-                  <button id="glmClearFormulaBtn" class="glm-editor-font-button" type="button" aria-label="Clear formula" title="Clear formula">×</button>
+                  <button id="glmCopyFormulaBtn" class="glm-editor-font-button" type="button" aria-label="Copy formula" title="Copy formula">
+                    <svg class="glm-editor-copy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                      <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path>
+                    </svg>
+                  </button>
                 </div>
               </div>
             </section>
@@ -380,8 +394,17 @@ export function createGlmTool({
               <div class="glm-panel-header glm-coefficient-header app-control-strip app-control-strip-row app-control-strip--titled">
                 <h3 class="glm-panel-title">Coefficients</h3>
                 <div class="glm-coefficient-actions">
-                  <button id="glmCopyCoefficientsBtn" class="tab app-control-button glm-inline-action-button" type="button">Copy</button>
-                  <button id="glmDownloadCoefficientsBtn" class="tab app-control-button glm-inline-action-button" type="button">Download</button>
+                  <button id="glmCopyCoefficientsBtn" class="app-control-button glm-coefficient-action-button" type="button" aria-label="Copy coefficients" title="Copy coefficients">
+                    <svg class="glm-coefficient-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                      <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path>
+                    </svg>
+                  </button>
+                  <button id="glmDownloadCoefficientsBtn" class="app-control-button glm-coefficient-action-button" type="button" aria-label="Download coefficients" title="Download coefficients">
+                    <svg class="glm-coefficient-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"></path>
+                    </svg>
+                  </button>
                 </div>
               </div>
               <div id="glmCoefficientMeta" class="glm-coefficient-meta">${diagnosticsHtml(diagnostics, activeModel, coefficientRowsForActiveModel(data.active_model_id))}</div>
@@ -2617,6 +2640,12 @@ export function createGlmTool({
   function coefficientsAsTsv(rows = coefficientRows) {
     const headers = ["term", "estimate", "std_error", "statistic", "p_value", "ci_lower", "ci_upper"];
     return [headers.join("\t"), ...rows.map((row) => headers.map((header) => String(row[header] ?? "")).join("\t"))].join("\n");
+  }
+
+  function copyFormula(formula) {
+    copyTextToClipboard(String(formula ?? "")).then((ok) => {
+      showClipboardToast(ok ? "Copied formula" : "Copy failed", !ok);
+    });
   }
 
   function copyCoefficients() {

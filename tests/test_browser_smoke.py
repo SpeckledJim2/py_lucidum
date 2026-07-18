@@ -10672,6 +10672,12 @@ COPY (
                       const fontSmaller = document.querySelector("#glmFontSmallerBtn");
                       const fontLarger = document.querySelector("#glmFontLargerBtn");
                       const clearFormula = document.querySelector("#glmClearFormulaBtn");
+                      const copyFormula = document.querySelector("#glmCopyFormulaBtn");
+                      const copyFormulaIcon = copyFormula.querySelector("svg");
+                      const formulaToggle = document.querySelector("#glmFormulaAssistBtn");
+                      const parametersToggle = document.querySelector("#glmModelParametersBtn");
+                      const allRowsToggle = document.querySelector('[data-glm-scope="all"]');
+                      const trainingRowsToggle = document.querySelector('[data-glm-scope="training"]');
                       const resizer = document.querySelector("#glmBuilderResizer");
                       const resizerRect = resizer.getBoundingClientRect();
                       const resizerRule = getComputedStyle(resizer, "::before");
@@ -10691,6 +10697,7 @@ COPY (
                       const fontSmallerStyle = getComputedStyle(fontSmaller);
                       const fontLargerStyle = getComputedStyle(fontLarger);
                       const clearFormulaStyle = getComputedStyle(clearFormula);
+                      const copyFormulaStyle = getComputedStyle(copyFormula);
                       return {
                         formulaBorderWidth: getComputedStyle(formulaPanel).borderTopWidth,
                         formulaBorderRadius: getComputedStyle(formulaPanel).borderTopLeftRadius,
@@ -10726,6 +10733,29 @@ COPY (
                         ),
                         formulaButtonHeights: formulaButtons.map((button) => button.getBoundingClientRect().height),
                         coefficientButtonHeights: coefficientButtons.map((button) => button.getBoundingClientRect().height),
+                        coefficientButtonGap: coefficientButtons[1].getBoundingClientRect().left
+                          - coefficientButtons[0].getBoundingClientRect().right,
+                        coefficientActionStates: coefficientButtons.map((button) => {
+                          const style = getComputedStyle(button);
+                          const icon = button.querySelector("svg").getBoundingClientRect();
+                          return {
+                            ariaLabel: button.getAttribute("aria-label"),
+                            title: button.getAttribute("title"),
+                            text: button.textContent.trim(),
+                            background: style.backgroundColor,
+                            borderWidth: style.borderTopWidth,
+                            width: button.getBoundingClientRect().width,
+                            iconWidth: icon.width,
+                            iconHeight: icon.height,
+                          };
+                        }),
+                        panelToggleGap: parametersToggle.getBoundingClientRect().left
+                          - formulaToggle.getBoundingClientRect().right,
+                        panelToScopeGap: allRowsToggle.getBoundingClientRect().left
+                          - parametersToggle.getBoundingClientRect().right,
+                        scopeToggleGap: trainingRowsToggle.getBoundingClientRect().left
+                          - allRowsToggle.getBoundingClientRect().right,
+                        scopeButtonPaddingInline: getComputedStyle(allRowsToggle).paddingLeft,
                         formulaButtonCenterDeltas: formulaButtons.map((button) => {
                           const rect = button.getBoundingClientRect();
                           return Math.abs(
@@ -10761,6 +10791,8 @@ COPY (
                         coefficientActionsPosition: getComputedStyle(coefficientActions).position,
                         normalisationInHeader: formulaHeader.contains(normalisationControls),
                         normalisationTopGap: normalisationControlsRect.top - formulaHeaderRect.bottom,
+                        parametersBottomBorderWidth: getComputedStyle(normalisationControls).borderBottomWidth,
+                        parametersBottomBorderColor: getComputedStyle(normalisationControls).borderBottomColor,
                         coefficientMetaInHeader: coefficientHeader.contains(coefficientMeta),
                         coefficientMetaTopGap: coefficientMetaRect.top - coefficientHeaderRect.bottom,
                         dividerWidth: resizerRule.width,
@@ -10779,17 +10811,27 @@ COPY (
                           - formulaPanelRect.right,
                         dividerToCoefficientGap: coefficientPanelRect.left
                           - (resizerRect.left + (resizerRect.width + Number.parseFloat(resizerRule.width)) / 2),
-                        headerEditorButtonCount: headerActions.querySelectorAll("#glmFontSmallerBtn, #glmFontLargerBtn, #glmClearFormulaBtn").length,
+                        headerEditorButtonCount: headerActions.querySelectorAll("#glmFontSmallerBtn, #glmFontLargerBtn, #glmClearFormulaBtn, #glmCopyFormulaBtn").length,
                         fontControlsInEditor: editorShell.contains(fontControls),
                         clearFormulaInEditor: editorShell.contains(clearFormula),
+                        copyFormulaInEditor: editorShell.contains(copyFormula),
                         editorTopBorderWidth: editorShellStyle.borderTopWidth,
                         editorTopBorderColor: editorShellStyle.borderTopColor,
                         fontControlsTopInset: fontControlsRect.top - editorShellRect.top,
                         fontControlsRightInset: editorShellRect.right - fontControlsRect.right,
-                        fontButtonOrder: fontSmaller.getBoundingClientRect().left < fontLarger.getBoundingClientRect().left,
-                        fontButtonGap: fontLarger.getBoundingClientRect().left - fontSmaller.getBoundingClientRect().right,
-                        clearButtonOrder: fontLarger.getBoundingClientRect().left < clearFormula.getBoundingClientRect().left,
-                        clearButtonGap: clearFormula.getBoundingClientRect().left - fontLarger.getBoundingClientRect().right,
+                        fontControlsDirection: getComputedStyle(fontControls).flexDirection,
+                        fontControlsBackground: getComputedStyle(fontControls).backgroundColor,
+                        fontControlsBorderWidth: getComputedStyle(fontControls).borderTopWidth,
+                        fontControlsBackdropFilter: getComputedStyle(fontControls).backdropFilter,
+                        fontControlsPadding: getComputedStyle(fontControls).paddingTop,
+                        editorControlOrder: [...fontControls.querySelectorAll("button")].map((button) => button.id),
+                        clearToFontGap: fontSmaller.getBoundingClientRect().top - clearFormula.getBoundingClientRect().bottom,
+                        fontButtonGap: fontLarger.getBoundingClientRect().top - fontSmaller.getBoundingClientRect().bottom,
+                        fontToCopyGap: copyFormula.getBoundingClientRect().top - fontLarger.getBoundingClientRect().bottom,
+                        fontButtonWidths: [clearFormula, fontSmaller, fontLarger, copyFormula]
+                          .map((button) => button.getBoundingClientRect().width),
+                        copyIconWidth: copyFormulaIcon.getBoundingClientRect().width,
+                        copyIconHeight: copyFormulaIcon.getBoundingClientRect().height,
                         clearButtonRightInset: editorShellRect.right - clearFormula.getBoundingClientRect().right,
                         clearButtonText: clearFormula.textContent.trim(),
                         fontButtonBorderWidth: fontSmallerStyle.borderTopWidth,
@@ -10800,6 +10842,9 @@ COPY (
                           && clearFormulaStyle.backgroundColor === fontLargerStyle.backgroundColor
                           && clearFormulaStyle.fontSize === fontLargerStyle.fontSize
                           && clearFormulaStyle.fontWeight === fontLargerStyle.fontWeight,
+                        copyMatchesLargerStyle: copyFormulaStyle.borderTopWidth === fontLargerStyle.borderTopWidth
+                          && copyFormulaStyle.backgroundColor === fontLargerStyle.backgroundColor
+                          && copyFormulaStyle.fontWeight === fontLargerStyle.fontWeight,
                       };
                     }
                     """
@@ -10830,8 +10875,28 @@ COPY (
                 self.assertEqual(glm_builder_geometry["coefficientHeaderPaddingRight"], "8px")
                 self.assertLessEqual(glm_builder_geometry["formulaTitleCenterDelta"], 0.1)
                 self.assertLessEqual(glm_builder_geometry["coefficientTitleCenterDelta"], 0.1)
-                self.assertEqual(glm_builder_geometry["formulaButtonHeights"], [28, 28, 28, 28])
+                self.assertEqual(glm_builder_geometry["formulaButtonHeights"], [28, 28, 28, 28, 28])
                 self.assertEqual(glm_builder_geometry["coefficientButtonHeights"], [28, 28])
+                self.assertAlmostEqual(glm_builder_geometry["coefficientButtonGap"], 0, delta=0.5)
+                self.assertEqual(
+                    [state["ariaLabel"] for state in glm_builder_geometry["coefficientActionStates"]],
+                    ["Copy coefficients", "Download coefficients"],
+                )
+                self.assertEqual(
+                    [state["title"] for state in glm_builder_geometry["coefficientActionStates"]],
+                    ["Copy coefficients", "Download coefficients"],
+                )
+                for coefficient_action in glm_builder_geometry["coefficientActionStates"]:
+                    self.assertEqual(coefficient_action["text"], "")
+                    self.assertEqual(coefficient_action["background"], "rgba(0, 0, 0, 0)")
+                    self.assertEqual(coefficient_action["borderWidth"], "0px")
+                    self.assertEqual(coefficient_action["width"], 28)
+                    self.assertEqual(coefficient_action["iconWidth"], 16)
+                    self.assertEqual(coefficient_action["iconHeight"], 16)
+                self.assertAlmostEqual(glm_builder_geometry["panelToggleGap"], 0, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["panelToScopeGap"], 16, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["scopeToggleGap"], 0, delta=0.5)
+                self.assertEqual(glm_builder_geometry["scopeButtonPaddingInline"], "6px")
                 self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["formulaButtonCenterDeltas"]))
                 self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["coefficientButtonCenterDeltas"]))
                 self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["formulaButtonEdgeDeltas"]))
@@ -10866,21 +10931,200 @@ COPY (
                 self.assertEqual(glm_builder_geometry["headerEditorButtonCount"], 0)
                 self.assertTrue(glm_builder_geometry["fontControlsInEditor"])
                 self.assertTrue(glm_builder_geometry["clearFormulaInEditor"])
-                self.assertEqual(glm_builder_geometry["editorTopBorderWidth"], "1px")
-                self.assertEqual(glm_builder_geometry["editorTopBorderColor"], glm_builder_geometry["toolbarLineColor"])
-                self.assertAlmostEqual(glm_builder_geometry["fontControlsTopInset"], 7, delta=0.5)
-                self.assertAlmostEqual(glm_builder_geometry["fontControlsRightInset"], 18, delta=0.5)
-                self.assertTrue(glm_builder_geometry["fontButtonOrder"])
-                self.assertAlmostEqual(glm_builder_geometry["fontButtonGap"], 7, delta=0.5)
-                self.assertTrue(glm_builder_geometry["clearButtonOrder"])
-                self.assertAlmostEqual(glm_builder_geometry["clearButtonGap"], 11, delta=0.5)
-                self.assertAlmostEqual(glm_builder_geometry["clearButtonRightInset"], 14, delta=0.5)
+                self.assertTrue(glm_builder_geometry["copyFormulaInEditor"])
+                self.assertEqual(glm_builder_geometry["parametersBottomBorderWidth"], "1px")
+                self.assertEqual(glm_builder_geometry["parametersBottomBorderColor"], glm_builder_geometry["toolbarLineColor"])
+                self.assertEqual(glm_builder_geometry["editorTopBorderWidth"], "0px")
+                self.assertAlmostEqual(glm_builder_geometry["fontControlsTopInset"], 6, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["fontControlsRightInset"], 13, delta=0.5)
+                self.assertEqual(glm_builder_geometry["fontControlsDirection"], "column")
+                self.assertEqual(
+                    glm_builder_geometry["editorControlOrder"],
+                    ["glmClearFormulaBtn", "glmFontSmallerBtn", "glmFontLargerBtn", "glmCopyFormulaBtn"],
+                )
+                self.assertAlmostEqual(glm_builder_geometry["clearToFontGap"], 3, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["fontButtonGap"], 3, delta=0.5)
+                self.assertAlmostEqual(glm_builder_geometry["fontToCopyGap"], 3, delta=0.5)
+                self.assertEqual(glm_builder_geometry["fontButtonWidths"], [24, 24, 24, 24])
+                self.assertEqual(glm_builder_geometry["copyIconWidth"], 16)
+                self.assertEqual(glm_builder_geometry["copyIconHeight"], 16)
+                self.assertNotEqual(glm_builder_geometry["fontControlsBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(glm_builder_geometry["fontControlsBorderWidth"], "0px")
+                self.assertEqual(glm_builder_geometry["fontControlsBackdropFilter"], "blur(2px)")
+                self.assertEqual(glm_builder_geometry["fontControlsPadding"], "2px")
+                self.assertAlmostEqual(glm_builder_geometry["clearButtonRightInset"], 15, delta=0.5)
                 self.assertEqual(glm_builder_geometry["clearButtonText"], "×")
                 self.assertTrue(glm_builder_geometry["clearMatchesLargerStyle"])
+                self.assertTrue(glm_builder_geometry["copyMatchesLargerStyle"])
                 self.assertEqual(glm_builder_geometry["fontButtonBorderWidth"], "0px")
                 self.assertEqual(glm_builder_geometry["fontButtonBackground"], "rgba(0, 0, 0, 0)")
                 self.assertEqual(glm_builder_geometry["fontButtonSize"], "14px")
-                self.assertEqual(glm_builder_geometry["fontButtonWeight"], "800")
+                self.assertEqual(glm_builder_geometry["fontButtonWeight"], "400")
+
+                builder_was_dark = page.evaluate("() => document.body.classList.contains('dark')")
+                page.evaluate("() => document.body.classList.remove('dark')")
+                builder_option_state = page.evaluate(
+                    """
+                    () => {
+                      function resolvedTokenColor(token) {
+                        const probe = document.createElement("span");
+                        probe.style.color = `var(${token})`;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      }
+                      function state(selector) {
+                        const button = document.querySelector(selector);
+                        const style = getComputedStyle(button);
+                        return {
+                          active: button.classList.contains("active"),
+                          background: style.backgroundColor,
+                          borderWidth: style.borderTopWidth,
+                          color: style.color,
+                          expanded: button.getAttribute("aria-expanded"),
+                          pressed: button.getAttribute("aria-pressed"),
+                        };
+                      }
+                      const icon = document.querySelector("#glmModelParametersBtn svg");
+                      return {
+                        transparent: "rgba(0, 0, 0, 0)",
+                        muted: resolvedTokenColor("--muted"),
+                        accent: resolvedTokenColor("--accent"),
+                        formula: state("#glmFormulaAssistBtn"),
+                        parameters: state("#glmModelParametersBtn"),
+                        allRows: state('[data-glm-scope="all"]'),
+                        trainingRows: state('[data-glm-scope="training"]'),
+                        build: state("#glmBuildBtn"),
+                        parametersVisible: document.querySelector("#glmBuilderParametersPanel").getClientRects().length > 0,
+                        formulaVisible: document.querySelector("#glmFormulaAssistDrawer").getClientRects().length > 0,
+                        sidebarBackground: getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
+                        parametersBackground: getComputedStyle(document.querySelector("#glmBuilderParametersPanel")).backgroundColor,
+                        storedPanel: localStorage.getItem("py_lucidum_glm_builder_panel"),
+                        iconWidth: icon.getBoundingClientRect().width,
+                        iconHeight: icon.getBoundingClientRect().height,
+                      };
+                    }
+                    """
+                )
+                self.assertFalse(builder_option_state["formula"]["active"])
+                self.assertEqual(builder_option_state["formula"]["expanded"], "false")
+                self.assertEqual(builder_option_state["formula"]["color"], builder_option_state["muted"])
+                self.assertTrue(builder_option_state["parameters"]["active"])
+                self.assertEqual(builder_option_state["parameters"]["expanded"], "true")
+                self.assertEqual(builder_option_state["parameters"]["color"], builder_option_state["accent"])
+                self.assertTrue(builder_option_state["allRows"]["active"])
+                self.assertEqual(builder_option_state["allRows"]["pressed"], "true")
+                self.assertEqual(builder_option_state["allRows"]["color"], builder_option_state["accent"])
+                self.assertFalse(builder_option_state["trainingRows"]["active"])
+                self.assertEqual(builder_option_state["trainingRows"]["pressed"], "false")
+                self.assertEqual(builder_option_state["trainingRows"]["color"], builder_option_state["muted"])
+                for option in ("formula", "parameters", "allRows", "trainingRows"):
+                    self.assertEqual(builder_option_state[option]["background"], builder_option_state["transparent"])
+                    self.assertEqual(builder_option_state[option]["borderWidth"], "0px")
+                self.assertTrue(builder_option_state["parametersVisible"])
+                self.assertFalse(builder_option_state["formulaVisible"])
+                self.assertEqual(builder_option_state["parametersBackground"], builder_option_state["sidebarBackground"])
+                self.assertIsNone(builder_option_state["storedPanel"])
+                self.assertEqual(builder_option_state["iconWidth"], 16)
+                self.assertEqual(builder_option_state["iconHeight"], 16)
+                self.assertNotEqual(builder_option_state["build"]["background"], builder_option_state["transparent"])
+                self.assertNotEqual(builder_option_state["build"]["borderWidth"], "0px")
+
+                coefficient_action_colors = page.evaluate(
+                    """
+                    () => ({
+                      copy: getComputedStyle(document.querySelector("#glmCopyCoefficientsBtn")).color,
+                      download: getComputedStyle(document.querySelector("#glmDownloadCoefficientsBtn")).color,
+                    })
+                    """
+                )
+                self.assertEqual(coefficient_action_colors["copy"], builder_option_state["muted"])
+                self.assertEqual(coefficient_action_colors["download"], builder_option_state["muted"])
+                page.locator("#glmCopyCoefficientsBtn").hover()
+                self.assertEqual(
+                    page.locator("#glmCopyCoefficientsBtn").evaluate("(button) => getComputedStyle(button).color"),
+                    builder_option_state["accent"],
+                )
+                page.locator("#glmCopyCoefficientsBtn").focus()
+                page.keyboard.press("Tab")
+                coefficient_download_focus = page.locator("#glmDownloadCoefficientsBtn").evaluate(
+                    """
+                    (button) => ({
+                      active: document.activeElement === button,
+                      outlineStyle: getComputedStyle(button).outlineStyle,
+                      outlineWidth: getComputedStyle(button).outlineWidth,
+                    })
+                    """
+                )
+                self.assertTrue(coefficient_download_focus["active"])
+                self.assertEqual(coefficient_download_focus["outlineStyle"], "solid")
+                self.assertEqual(coefficient_download_focus["outlineWidth"], "2px")
+                page.evaluate("() => document.activeElement?.blur()")
+                page.mouse.move(0, 0)
+
+                page.locator("#glmFormulaAssistBtn").hover()
+                formula_hover_color = page.locator("#glmFormulaAssistBtn").evaluate(
+                    "(button) => getComputedStyle(button).color"
+                )
+                self.assertEqual(formula_hover_color, builder_option_state["accent"])
+                page.mouse.move(0, 0)
+                page.locator("#glmFormulaAssistBtn").focus()
+                page.keyboard.press("Tab")
+                parameters_focus = page.evaluate(
+                    """
+                    () => {
+                      const button = document.querySelector("#glmModelParametersBtn");
+                      const style = getComputedStyle(button);
+                      return { activeId: document.activeElement?.id || "", outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+                    }
+                    """
+                )
+                self.assertEqual(parameters_focus["activeId"], "glmModelParametersBtn")
+                self.assertEqual(parameters_focus["outlineStyle"], "solid")
+                self.assertEqual(parameters_focus["outlineWidth"], "2px")
+                page.evaluate("() => { document.activeElement?.blur(); document.body.classList.add('dark'); }")
+                dark_builder_options = page.evaluate(
+                    """
+                    () => {
+                      function resolvedTokenColor(token) {
+                        const probe = document.createElement("span");
+                        probe.style.color = `var(${token})`;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      }
+                      const formula = getComputedStyle(document.querySelector("#glmFormulaAssistBtn"));
+                      const parameters = getComputedStyle(document.querySelector("#glmModelParametersBtn"));
+                      return {
+                        muted: resolvedTokenColor("--muted"),
+                        accent: resolvedTokenColor("--accent"),
+                        formulaBackground: formula.backgroundColor,
+                        formulaBorder: formula.borderTopWidth,
+                        formulaColor: formula.color,
+                        parametersBackground: parameters.backgroundColor,
+                        parametersBorder: parameters.borderTopWidth,
+                        parametersColor: parameters.color,
+                        sidebarBackground: getComputedStyle(document.querySelector("#appSidebar")).backgroundColor,
+                        parametersPanelBackground: getComputedStyle(document.querySelector("#glmBuilderParametersPanel")).backgroundColor,
+                        formulaPanelBackground: getComputedStyle(document.querySelector("#glmFormulaAssistDrawer")).backgroundColor,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(dark_builder_options["formulaBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(dark_builder_options["formulaBorder"], "0px")
+                self.assertEqual(dark_builder_options["formulaColor"], dark_builder_options["muted"])
+                self.assertEqual(dark_builder_options["parametersBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(dark_builder_options["parametersBorder"], "0px")
+                self.assertEqual(dark_builder_options["parametersColor"], dark_builder_options["accent"])
+                self.assertEqual(dark_builder_options["parametersPanelBackground"], dark_builder_options["sidebarBackground"])
+                self.assertEqual(dark_builder_options["formulaPanelBackground"], dark_builder_options["sidebarBackground"])
+                page.evaluate(
+                    "(wasDark) => document.body.classList.toggle('dark', wasDark)",
+                    builder_was_dark,
+                )
 
                 page.evaluate(
                     '() => document.documentElement.style.setProperty("--app-tool-row-height", "58px")'
@@ -10897,7 +11141,7 @@ COPY (
                       return tab?.getBoundingClientRect().height === 58
                         && formula?.getBoundingClientRect().height === 58
                         && coefficients?.getBoundingClientRect().height === 58
-                        && buttons.length === 6
+                        && buttons.length === 7
                         && buttons.every((button) => button.getBoundingClientRect().height === 28);
                     }
                     """,
@@ -10936,7 +11180,7 @@ COPY (
                 self.assertTrue(all(strip["titleCenterDelta"] <= 0.1 for strip in scaled_control_geometry))
                 self.assertEqual(
                     [strip["buttonHeights"] for strip in scaled_control_geometry],
-                    [[28, 28, 28, 28], [28, 28]],
+                    [[28, 28, 28, 28, 28], [28, 28]],
                 )
                 self.assertTrue(
                     all(
@@ -10969,7 +11213,7 @@ COPY (
                     }
                     """
                 )
-                for glm_editor_button in ("#glmFontSmallerBtn", "#glmFontLargerBtn", "#glmClearFormulaBtn"):
+                for glm_editor_button in ("#glmFontSmallerBtn", "#glmFontLargerBtn", "#glmClearFormulaBtn", "#glmCopyFormulaBtn"):
                     page.locator(glm_editor_button).hover()
                     self.assertEqual(
                         page.locator(glm_editor_button).evaluate("(button) => getComputedStyle(button).color"),
@@ -11069,6 +11313,22 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.evaluate(
+                    """
+                    () => {
+                      window.__lucidumCopiedFormula = null;
+                      Object.defineProperty(navigator, "clipboard", {
+                        configurable: true,
+                        value: {
+                          writeText: async (text) => { window.__lucidumCopiedFormula = text; },
+                        },
+                      });
+                    }
+                    """
+                )
+                page.locator("#glmCopyFormulaBtn").click()
+                page.wait_for_function("() => window.__lucidumCopiedFormula === 'Age'", timeout=10_000)
+                page.locator("#clipboardToast", has_text="Copied formula").wait_for(timeout=10_000)
 
                 closed_editor_top = page.evaluate(
                     """
@@ -11133,6 +11393,10 @@ COPY (
                     page.locator(".glm-editor-font-controls").evaluate("(controls) => controls.getBoundingClientRect().top"),
                     closed_font_controls_top + 100,
                 )
+                self.assertEqual(
+                    page.locator("#glmFormulaAssistDrawer").evaluate("(panel) => getComputedStyle(panel).backgroundColor"),
+                    page.locator("#appSidebar").evaluate("(sidebar) => getComputedStyle(sidebar).backgroundColor"),
+                )
                 page.locator("#glmFormulaAssistBtn").click()
                 page.wait_for_function(
                     """
@@ -11140,25 +11404,88 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.wait_for_function(
+                editor_only_position = page.evaluate(
                     """
-                    (closedTop) => {
+                    () => {
                       const controls = document.querySelector(".glm-formula-panel .glm-builder-control-row");
                       const family = document.querySelector("#glmFamilySelect");
                       const editor = document.querySelector("#glmFormulaEditor");
+                      const editorShell = document.querySelector(".glm-editor-shell");
+                      const header = document.querySelector(".glm-formula-panel .glm-panel-header");
                       const fontControls = document.querySelector(".glm-editor-font-controls");
-                      if (!controls || !family || !editor || !fontControls) return false;
-                      return controls.getClientRects().length > 0
-                        && family.getClientRects().length > 0
-                        && Math.abs(editor.getBoundingClientRect().top - closedTop.editor) <= 2
-                        && Math.abs(fontControls.getBoundingClientRect().top - closedTop.fontControls) <= 2;
+                      return {
+                        controlsVisible: Boolean(controls?.getClientRects().length),
+                        familyVisible: Boolean(family?.getClientRects().length),
+                        editor: editor?.getBoundingClientRect().top || 0,
+                        editorShellTop: editorShell?.getBoundingClientRect().top || 0,
+                        editorShellBorderTop: getComputedStyle(editorShell).borderTopWidth,
+                        headerBottom: header?.getBoundingClientRect().bottom || 0,
+                        headerDividerHeight: getComputedStyle(header, "::after").height,
+                        fontControls: fontControls?.getBoundingClientRect().top || 0,
+                        formulaExpanded: document.querySelector("#glmFormulaAssistBtn")?.getAttribute("aria-expanded"),
+                        parametersExpanded: document.querySelector("#glmModelParametersBtn")?.getAttribute("aria-expanded"),
+                        formulaActive: document.querySelector("#glmFormulaAssistBtn")?.classList.contains("active"),
+                        parametersActive: document.querySelector("#glmModelParametersBtn")?.classList.contains("active"),
+                        storedPanel: localStorage.getItem("py_lucidum_glm_builder_panel"),
+                      };
+                    }
+                    """
+                )
+                self.assertFalse(editor_only_position["controlsVisible"])
+                self.assertFalse(editor_only_position["familyVisible"])
+                self.assertEqual(editor_only_position["formulaExpanded"], "false")
+                self.assertEqual(editor_only_position["parametersExpanded"], "false")
+                self.assertFalse(editor_only_position["formulaActive"])
+                self.assertFalse(editor_only_position["parametersActive"])
+                self.assertEqual(editor_only_position["storedPanel"], "none")
+                self.assertEqual(editor_only_position["headerDividerHeight"], "1px")
+                self.assertEqual(editor_only_position["editorShellBorderTop"], "0px")
+                self.assertAlmostEqual(
+                    editor_only_position["editorShellTop"],
+                    editor_only_position["headerBottom"],
+                    delta=0.5,
+                )
+                self.assertLess(editor_only_position["editor"], closed_editor_top - 20)
+                self.assertLess(editor_only_position["fontControls"], closed_font_controls_top - 20)
+
+                page.locator("#glmModelParametersBtn").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const panel = document.querySelector("#glmBuilderParametersPanel");
+                      const family = document.querySelector("#glmFamilySelect");
+                      return panel && !panel.classList.contains("hidden")
+                        && family?.getClientRects().length > 0
+                        && document.querySelector("#glmFormulaAssistDrawer")?.classList.contains("hidden")
+                        && document.querySelector("#glmModelParametersBtn")?.getAttribute("aria-expanded") === "true"
+                        && document.querySelector("#glmFormulaAssistBtn")?.getAttribute("aria-expanded") === "false"
+                        && localStorage.getItem("py_lucidum_glm_builder_panel") === "parameters";
                     }
                     """,
-                    arg={"editor": closed_editor_top, "fontControls": closed_font_controls_top},
                     timeout=10_000,
                 )
+                parameters_reopened_position = page.evaluate(
+                    """
+                    () => ({
+                      editor: document.querySelector("#glmFormulaEditor")?.getBoundingClientRect().top || 0,
+                      fontControls: document.querySelector(".glm-editor-font-controls")?.getBoundingClientRect().top || 0,
+                      family: document.querySelector("#glmFamilySelect")?.value || "",
+                      familyParameter: document.querySelector("#glmFamilyParameter")?.value || "",
+                      regularizationMode: document.querySelector("#glmRegularizationMode")?.value || "",
+                    })
+                    """
+                )
+                self.assertAlmostEqual(parameters_reopened_position["editor"], closed_editor_top, delta=2)
+                self.assertAlmostEqual(parameters_reopened_position["fontControls"], closed_font_controls_top, delta=2)
+                self.assertEqual(parameters_reopened_position["family"], "tweedie")
+                self.assertEqual(parameters_reopened_position["familyParameter"], "1.5")
+                self.assertEqual(parameters_reopened_position["regularizationMode"], "none")
+
                 page.locator("#glmFormulaAssistBtn").click()
                 page.locator("#glmFormulaAssistDrawer:not(.hidden)").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#glmModelParametersBtn").get_attribute("aria-expanded"), "false")
+                self.assertEqual(page.locator("#glmFormulaAssistBtn").get_attribute("aria-expanded"), "true")
+                self.assertEqual(page.evaluate("localStorage.getItem('py_lucidum_glm_builder_panel')"), "formula")
                 page.locator('[data-glm-assist-tab="snippets"]').click()
                 page.locator("#glmFormulaAssistFeatureSearch").click()
                 page.keyboard.type("Ag")
@@ -13194,6 +13521,8 @@ COPY (
                     "node => Number(node.textContent.match(/(\\d+)s/)?.[1] || -1)"
                 )
                 self.assertEqual(glm_build_payload["value"]["family"], "tweedie")
+                self.assertEqual(glm_build_payload["value"]["family_parameter"], "1.5")
+                self.assertEqual(glm_build_payload["value"]["regularization"], {"mode": "none"})
                 glm_busy_button = page.locator("#glmBuildBtn").evaluate(
                     """
                     (button) => {

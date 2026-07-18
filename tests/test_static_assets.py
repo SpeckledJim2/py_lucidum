@@ -650,6 +650,41 @@ if (gbmTarget.innerHTML.includes("<th>Model</th>")) throw new Error("GBM fallbac
 """
         self.run_node_script(script)
 
+    def test_glm_formula_builder_panel_state_defaults_and_migrates(self) -> None:
+        module = Path("src/py_lucidum/static/app/glm-formula-builder.js").resolve().as_uri()
+        script = f"""
+import {{ createGlmFormulaBuilder }} from "{module}";
+
+function createStorage(initial = {{}}) {{
+  const values = new Map(Object.entries(initial));
+  globalThis.localStorage = {{
+    getItem: (key) => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  }};
+}}
+
+function builder(initial = {{}}) {{
+  createStorage(initial);
+  return createGlmFormulaBuilder({{
+    el: () => null,
+    escapeHtml: (value) => String(value ?? ""),
+  }});
+}}
+
+const fresh = builder();
+if (!fresh.parametersOpen || fresh.formulaAssistOpen) throw new Error("fresh builder should show parameters");
+const legacyFormula = builder({{ py_lucidum_glm_formula_assist_open: "true" }});
+if (!legacyFormula.formulaAssistOpen || legacyFormula.parametersOpen) throw new Error("legacy formula drawer state was not migrated");
+const storedFormula = builder({{ py_lucidum_glm_builder_panel: "formula" }});
+if (!storedFormula.formulaAssistOpen || storedFormula.parametersOpen) throw new Error("stored formula panel failed");
+const storedParameters = builder({{ py_lucidum_glm_builder_panel: "parameters" }});
+if (storedParameters.formulaAssistOpen || !storedParameters.parametersOpen) throw new Error("stored parameters panel failed");
+const storedNone = builder({{ py_lucidum_glm_builder_panel: "none" }});
+if (storedNone.formulaAssistOpen || storedNone.parametersOpen) throw new Error("stored editor-only panel failed");
+"""
+        self.run_node_script(script)
+
 
 
 
@@ -1050,6 +1085,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         glm_css = (static_root / "styles/glm.css").read_text(encoding="utf-8")
         gbm_css = (static_root / "styles/gbm.css").read_text(encoding="utf-8")
         glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
+        glm_formula_builder = (static_root / "app/glm-formula-builder.js").read_text(encoding="utf-8")
         gbm = (static_root / "app/gbm-tool.js").read_text(encoding="utf-8")
         gbm_feature_controls = (static_root / "app/gbm-feature-parameter-controls.js").read_text(encoding="utf-8")
         specs = (static_root / "app/specifications-tool.js").read_text(encoding="utf-8")
@@ -1103,6 +1139,51 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--titled", glm)
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", glm)
         self.assertIn("app-control-strip app-control-strip-row app-control-strip--actions", gbm)
+        self.assertIn('id="glmFormulaAssistBtn" class="app-control-button glm-builder-option-button', glm)
+        self.assertIn('aria-controls="glmFormulaAssistDrawer"', glm)
+        self.assertIn('id="glmModelParametersBtn" class="app-control-button glm-builder-option-button', glm)
+        self.assertIn('aria-label="Model parameters" title="Model parameters"', glm)
+        self.assertIn('aria-controls="glmBuilderParametersPanel"', glm)
+        self.assertIn('class="glm-model-parameters-icon" viewBox="0 0 24 24"', glm)
+        self.assertIn('id="glmBuilderParametersPanel"', glm)
+        self.assertIn('class="glm-editor-font-controls" role="group" aria-label="Formula editor controls"', glm)
+        self.assertIn('id="glmCopyFormulaBtn" class="glm-editor-font-button"', glm)
+        self.assertIn('aria-label="Copy formula" title="Copy formula"', glm)
+        self.assertIn('class="glm-editor-copy-icon" viewBox="0 0 24 24"', glm)
+        self.assertIn('id="glmCopyCoefficientsBtn" class="app-control-button glm-coefficient-action-button"', glm)
+        self.assertIn('aria-label="Copy coefficients" title="Copy coefficients"', glm)
+        self.assertIn('id="glmDownloadCoefficientsBtn" class="app-control-button glm-coefficient-action-button"', glm)
+        self.assertIn('aria-label="Download coefficients" title="Download coefficients"', glm)
+        self.assertEqual(glm.count('class="glm-coefficient-action-icon" viewBox="0 0 24 24"'), 2)
+        self.assertNotIn('id="glmCopyCoefficientsBtn" class="tab ', glm)
+        self.assertNotIn('id="glmDownloadCoefficientsBtn" class="tab ', glm)
+        self.assertIn('data-glm-scope="all" data-stable-label="All" class="app-control-button glm-builder-option-button', glm)
+        self.assertIn('data-glm-scope="training" data-stable-label="Training" class="app-control-button glm-builder-option-button', glm)
+        self.assertIn('id="glmBuildBtn" class="tab app-control-button model-busy-button glm-build-button', glm)
+        self.assertNotIn('id="glmFormulaAssistBtn" class="tab ', glm)
+        self.assertIn(".glm-builder-actions .glm-builder-option-button.active,", glm_css)
+        self.assertIn(".glm-header-scope-control {\n        gap: 0;", glm_css)
+        self.assertIn(".glm-header-scope-control button.glm-builder-option-button {\n        padding-inline: 6px;", glm_css)
+        self.assertIn("margin-inline-end: var(--app-control-strip-gap);", glm_css)
+        self.assertIn(".glm-builder-control-row {\n        align-items: center;\n        background: var(--sidebar-bg);\n        border-bottom: 1px solid var(--line);", glm_css)
+        self.assertIn(".glm-formula-assist-drawer {\n        background: var(--sidebar-bg);", glm_css)
+        self.assertIn(".glm-model-parameters-icon {", glm_css)
+        self.assertIn(".glm-editor-font-controls {\n        align-items: stretch;\n        backdrop-filter: blur(2px);\n        background: color-mix(in srgb, var(--panel) 88%, transparent);\n        border: 0;", glm_css)
+        self.assertIn("flex-direction: column;\n        gap: 3px;\n        padding: 2px;", glm_css)
+        self.assertIn("font-weight: 400;", glm_css)
+        self.assertIn(".glm-editor-copy-icon {", glm_css)
+        self.assertIn(".glm-editor-shell {\n        border-top: 0;", glm_css)
+        self.assertIn(".glm-coefficient-action-button {", glm_css)
+        self.assertIn(".glm-coefficient-action-button:focus-visible {", glm_css)
+        self.assertIn(".glm-coefficient-action-icon {", glm_css)
+        self.assertNotIn("#glmFontLargerBtn {", glm_css)
+        self.assertNotIn("#glmClearFormulaBtn {", glm_css)
+        self.assertIn('localStorage.getItem("py_lucidum_glm_builder_panel")', glm_formula_builder)
+        self.assertIn('localStorage.setItem("py_lucidum_glm_builder_panel", builderPanel);', glm_formula_builder)
+        self.assertIn('toggleBuilderPanel("formula")', glm_formula_builder)
+        self.assertIn('toggleBuilderPanel("parameters")', glm_formula_builder)
+        self.assertIn('onCopyFormula = () => {},', glm_formula_builder)
+        self.assertIn('onCopyFormula(getFormulaText())', glm_formula_builder)
         for tool, prefix in ((glm, "glm"), (gbm, "gbm")):
             self.assertIn(
                 f'id="{prefix}RenameModelBtn" class="app-control-button app-command-button"',

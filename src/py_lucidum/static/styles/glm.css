@@ -170,6 +170,8 @@
 
       .glm-builder-control-row {
         align-items: center;
+        background: var(--sidebar-bg);
+        border-bottom: 1px solid var(--line);
         display: flex;
         flex: 0 0 auto;
         flex-wrap: wrap;
@@ -295,7 +297,20 @@
       }
 
       .glm-header-scope-control {
+        gap: 0;
         margin-left: 0;
+      }
+
+      .glm-header-scope-control button.glm-builder-option-button {
+        padding-inline: 6px;
+      }
+
+      .glm-builder-panel-toggles {
+        align-items: center;
+        display: flex;
+        flex: 0 0 auto;
+        gap: 0;
+        margin-inline-end: var(--app-control-strip-gap);
       }
 
       .glm-builder-actions {
@@ -306,6 +321,74 @@
         gap: var(--app-control-strip-gap);
         justify-content: flex-end;
         min-width: 0;
+      }
+
+      .glm-builder-actions .glm-builder-option-button,
+      .glm-builder-actions .segmented button.glm-builder-option-button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        font-weight: 400;
+      }
+
+      .glm-builder-actions .glm-builder-option-button:not(:disabled):hover,
+      .glm-builder-actions .glm-builder-option-button:not(:disabled):focus-visible {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .glm-builder-actions .glm-builder-option-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .glm-builder-actions .glm-builder-option-button.active,
+      .glm-builder-actions .segmented button.glm-builder-option-button.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .glm-builder-actions .glm-builder-option-button:disabled,
+      .glm-builder-actions .glm-builder-option-button:disabled:hover {
+        background: transparent;
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      .glm-header-scope-control .glm-builder-option-button::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      #glmFormulaAssistBtn {
+        min-width: 34px;
+      }
+
+      #glmModelParametersBtn {
+        padding-inline: 6px;
+        width: 28px;
+      }
+
+      .glm-model-parameters-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
       }
 
       .glm-inline-action-button,
@@ -340,18 +423,24 @@
       }
 
       .glm-editor-shell {
-        border-top: 1px solid var(--line);
+        border-top: 0;
         flex: 1 1 auto;
         min-height: 0;
         position: relative;
       }
 
       .glm-editor-font-controls {
-        align-items: center;
+        align-items: stretch;
+        backdrop-filter: blur(2px);
+        background: color-mix(in srgb, var(--panel) 88%, transparent);
+        border: 0;
+        border-radius: 4px;
         display: flex;
+        flex-direction: column;
         gap: 3px;
+        padding: 2px;
         position: absolute;
-        right: 18px;
+        right: 13px;
         top: 6px;
         z-index: 5;
       }
@@ -365,10 +454,11 @@
         cursor: pointer;
         font: inherit;
         font-size: 14px;
-        font-weight: 800;
+        font-weight: 400;
         line-height: 1;
         min-height: 24px;
         padding: 3px 2px;
+        width: 24px;
       }
 
       .glm-editor-font-button:hover {
@@ -376,13 +466,16 @@
         color: var(--accent);
       }
 
-      #glmFontLargerBtn {
-        transform: translateX(4px);
-      }
-
-      #glmClearFormulaBtn {
-        margin-left: 8px;
-        transform: translateX(4px);
+      .glm-editor-copy-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        margin: auto;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
       }
 
       .glm-editor-font-button:focus-visible {
@@ -391,7 +484,7 @@
       }
 
       .glm-formula-assist-drawer {
-        background: color-mix(in srgb, var(--panel) 96%, var(--line));
+        background: var(--sidebar-bg);
         border-bottom: 1px solid var(--line);
         border-top: 0;
         display: flex;
@@ -401,10 +494,6 @@
         min-height: 0;
         overflow: hidden;
         padding: 8px 10px;
-      }
-
-      .glm-formula-assist-drawer:not(.hidden) + .glm-builder-control-row {
-        display: none;
       }
 
       .glm-formula-assist-top {
@@ -741,7 +830,40 @@
       .glm-coefficient-actions {
         display: flex;
         flex: 0 0 auto;
-        gap: var(--app-control-strip-gap);
+        gap: 0;
+      }
+
+      .glm-coefficient-action-button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        padding: 6px;
+        width: 28px;
+      }
+
+      .glm-coefficient-action-button:hover,
+      .glm-coefficient-action-button:focus-visible {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .glm-coefficient-action-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .glm-coefficient-action-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
       }
 
       .glm-table-tools {
