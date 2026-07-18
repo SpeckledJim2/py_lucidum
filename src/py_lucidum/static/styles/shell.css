@@ -180,7 +180,7 @@
         flex: 1;
       }
 
-      .startup-progress {
+      .app-status-badge {
         max-width: min(360px, 30vw);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -195,37 +195,37 @@
         padding: 6px 10px;
       }
 
-      .startup-progress.ready {
+      .app-status-badge.ready {
         color: #166534;
         border-color: #86efac;
         background: #f0fdf4;
       }
 
-      .startup-progress.busy {
+      .app-status-badge.busy {
         color: #92400e;
         border-color: #fbbf24;
         background: #fffbeb;
       }
 
-      .startup-progress.error {
+      .app-status-badge.error {
         color: #991b1b;
         border-color: #fca5a5;
         background: #fef2f2;
       }
 
-      body.dark .startup-progress.ready {
+      body.dark .app-status-badge.ready {
         color: #bbf7d0;
         border-color: #166534;
         background: #052e16;
       }
 
-      body.dark .startup-progress.busy {
+      body.dark .app-status-badge.busy {
         color: #fde68a;
         border-color: #92400e;
         background: #451a03;
       }
 
-      body.dark .startup-progress.error {
+      body.dark .app-status-badge.error {
         color: #fecaca;
         border-color: #7f1d1d;
         background: #450a0a;

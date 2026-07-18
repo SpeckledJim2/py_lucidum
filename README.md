@@ -21,8 +21,8 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 
   ![UK Postcode Unit mapping tool](docs/assets/postcode_unit.png)
 
-- **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables with XLSX export, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions.
-- **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, SHAP plotting when SHAP rows are saved during training, and XLSX export for saved tabulations.
+- **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables with XLSX export, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions. The header status badge reports elapsed time from the build click through fitting and post-fit scoring, and separately times tabulation through row scoring.
+- **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, SHAP plotting when SHAP rows are saved during training, and XLSX export for saved tabulations. The header status badge reports elapsed time through training, scoring, SHAP calculation, artifact saving, and final client refresh.
 - **Filters, Favourites, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, sidebar Favourites for saved metric/filter/Line/Bar/Histogram/Map views, separate KPI metric presets, and GBM feature scenarios/interaction constraints.
 - **Specifications**: default editor tab for feature, KPI, and filter specification CSV files, with continuous validation and save actions against the app's current metadata contracts.
 

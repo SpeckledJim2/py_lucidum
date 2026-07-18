@@ -9635,14 +9635,28 @@ COPY (
                 page.route("**/api/glm/tabulations/jobs/glm-tabulation-progress-job", tabulation_job_route)
                 page.locator("#glmBuildTabulationsBtn").click()
                 page.locator("#glmBuildStatus", has_text="Tabulating GLM...").wait_for(timeout=10_000)
-                page.locator("#startupProgress.busy", has_text="Tabulating GLM...").wait_for(timeout=10_000)
+                page.locator("#appStatusBadge.busy", has_text="Tabulating GLM").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => Number(document.querySelector("#appStatusBadge .app-status-badge-elapsed")
+                      ?.textContent.match(/(\\d+)s/)?.[1] || -1) >= 1
+                    """,
+                    timeout=10_000,
+                )
+                tabulating_elapsed = page.locator("#appStatusBadge .app-status-badge-elapsed").evaluate(
+                    "node => Number(node.textContent.match(/(\\d+)s/)?.[1] || -1)"
+                )
                 tabulation_job_phase["value"] = "scoring"
                 page.locator("#glmBuildStatus", has_text="Scoring tabulations...").wait_for(timeout=10_000)
                 page.locator("#glmBuildStatus", has_text="6 rows to score").wait_for(timeout=10_000)
-                page.locator("#startupProgress.busy", has_text="Scoring tabulations...").wait_for(timeout=10_000)
+                page.locator("#appStatusBadge.busy", has_text="Scoring tabulations").wait_for(timeout=10_000)
+                scoring_elapsed = page.locator("#appStatusBadge .app-status-badge-elapsed").evaluate(
+                    "node => Number(node.textContent.match(/(\\d+)s/)?.[1] || -1)"
+                )
+                self.assertGreaterEqual(scoring_elapsed, tabulating_elapsed)
                 tabulation_job_phase["value"] = "succeeded"
                 page.locator("#glmBuildTabulationsBtn", has_text="Tabulate").wait_for(timeout=10_000)
-                page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
+                page.locator("#appStatusBadge.ready", has_text="Ready").wait_for(timeout=10_000)
                 page.unroute("**/api/glm/tabulations/build", tabulation_build_route)
                 page.unroute("**/api/glm/tabulations/jobs/glm-tabulation-progress-job", tabulation_job_route)
                 page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age × Segment").click()
@@ -12967,7 +12981,17 @@ COPY (
                 page.locator("#glmBuildBtn").hover()
                 page.locator("#glmBuildBtn").click()
                 page.locator("#glmBuildStatus").get_by_text("Fitting GLM").wait_for(timeout=10_000)
-                page.locator("#startupProgress.busy", has_text="Training GLM...").wait_for(timeout=10_000)
+                page.locator("#appStatusBadge.busy", has_text="Training GLM").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => Number(document.querySelector("#appStatusBadge .app-status-badge-elapsed")
+                      ?.textContent.match(/(\\d+)s/)?.[1] || -1) >= 1
+                    """,
+                    timeout=10_000,
+                )
+                glm_training_elapsed = page.locator("#appStatusBadge .app-status-badge-elapsed").evaluate(
+                    "node => Number(node.textContent.match(/(\\d+)s/)?.[1] || -1)"
+                )
                 self.assertEqual(glm_build_payload["value"]["family"], "tweedie")
                 glm_busy_button = page.locator("#glmBuildBtn").evaluate(
                     """
@@ -13002,14 +13026,16 @@ COPY (
                 page.locator("#glmBuildStatus").get_by_text("Scoring GLM predictions").wait_for(timeout=10_000)
                 page.locator("#glmBuildStatus").get_by_text("6 rows to score").wait_for(timeout=10_000)
                 self.assertNotIn("training rows", page.locator("#glmBuildStatus").text_content())
-                page.locator("#startupProgress.busy", has_text="Scoring GLM...").wait_for(timeout=10_000)
-                glm_scoring_badge = page.locator("#startupProgress").evaluate(
+                page.locator("#appStatusBadge.busy", has_text="Scoring GLM").wait_for(timeout=10_000)
+                glm_scoring_badge = page.locator("#appStatusBadge").evaluate(
                     """
                     (badge) => ({
                       busy: badge.classList.contains("busy"),
                       ready: badge.classList.contains("ready"),
                       color: getComputedStyle(badge).color,
                       background: getComputedStyle(badge).backgroundColor,
+                      elapsed: Number(badge.querySelector(".app-status-badge-elapsed")?.textContent.match(/(\\d+)s/)?.[1] || -1),
+                      elapsedAriaHidden: badge.querySelector(".app-status-badge-elapsed")?.getAttribute("aria-hidden"),
                     })
                     """
                 )
@@ -13017,9 +13043,12 @@ COPY (
                 self.assertFalse(glm_scoring_badge["ready"])
                 self.assertEqual(glm_scoring_badge["color"], "rgb(146, 64, 14)")
                 self.assertEqual(glm_scoring_badge["background"], "rgb(255, 251, 235)")
+                self.assertGreaterEqual(glm_scoring_badge["elapsed"], glm_training_elapsed)
+                self.assertEqual(glm_scoring_badge["elapsedAriaHidden"], "true")
                 glm_job_phase["value"] = "succeeded"
                 page.locator("#glmBuildBtn", has_text="Build GLM").wait_for(timeout=10_000)
-                page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
+                page.locator("#appStatusBadge.ready", has_text="Ready").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#appStatusBadge .app-status-badge-elapsed").text_content(), "")
                 page.wait_for_function(
                     """
                     () => {
@@ -19230,6 +19259,16 @@ COPY (
                             },
                         }
                     else:
+                        progress_phase = (
+                            live_job_status["value"]
+                            if live_job_status["value"] in {"scoring", "shap", "artifacts"}
+                            else "training"
+                        )
+                        progress_message = {
+                            "scoring": "best iteration 2, scoring...",
+                            "shap": "best iteration 2, SHAP values...",
+                            "artifacts": "best iteration 2, tree artifacts...",
+                        }.get(progress_phase, "training, tree 2/10, test gamma 7.2")
                         payload = {
                             "job_id": "live-job",
                             "status": "running",
@@ -19238,8 +19277,8 @@ COPY (
                             "result": None,
                             "error": None,
                             "progress": {
-                                "phase": "training",
-                                "message": "training, tree 2/10, test gamma 7.2",
+                                "phase": progress_phase,
+                                "message": progress_message,
                                 "iteration": 2,
                                 "total_iterations": 10,
                                 "percent": 18,
@@ -19335,13 +19374,21 @@ COPY (
                 page.locator("#gbmTrainBtn").hover()
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmTrainingStatus").get_by_text("training, tree 2/10, test gamma 7.2").wait_for(timeout=10_000)
-                page.locator("#startupProgress.busy", has_text="Training GBM (1/25)...").wait_for(timeout=10_000)
-                gbm_training_badge = page.locator("#startupProgress").evaluate(
+                page.locator("#appStatusBadge.busy", has_text="Training GBM (1/25)").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => Number(document.querySelector("#appStatusBadge .app-status-badge-elapsed")
+                      ?.textContent.match(/(\\d+)s/)?.[1] || -1) >= 1
+                    """,
+                    timeout=10_000,
+                )
+                gbm_training_badge = page.locator("#appStatusBadge").evaluate(
                     """
                     (badge) => ({
                       busy: badge.classList.contains("busy"),
                       ready: badge.classList.contains("ready"),
                       background: getComputedStyle(badge).backgroundColor,
+                      elapsed: Number(badge.querySelector(".app-status-badge-elapsed")?.textContent.match(/(\\d+)s/)?.[1] || -1),
                     })
                     """
                 )
@@ -19398,9 +19445,23 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                for phase, label in (
+                    ("scoring", "Scoring GBM"),
+                    ("shap", "Calculating GBM SHAP"),
+                    ("artifacts", "Saving GBM"),
+                ):
+                    live_job_status["value"] = phase
+                    phase_badge = page.locator("#appStatusBadge.busy", has_text=label)
+                    phase_badge.wait_for(timeout=10_000)
+                    phase_elapsed = phase_badge.evaluate(
+                        "badge => Number(badge.querySelector('.app-status-badge-elapsed')?.textContent.match(/(\\d+)s/)?.[1] || -1)"
+                    )
+                    self.assertGreaterEqual(phase_elapsed, gbm_training_badge["elapsed"])
                 live_job_status["value"] = "succeeded"
+                page.locator("#appStatusBadge.busy", has_text="Finalising GBM").wait_for(timeout=10_000)
                 page.locator("#gbmTrainBtn", has_text="Train GBM").wait_for(timeout=10_000)
-                page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
+                page.locator("#appStatusBadge.ready", has_text="Ready").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#appStatusBadge .app-status-badge-elapsed").text_content(), "")
                 gbm_ready_button = page.locator("#gbmTrainBtn").evaluate(
                     """
                     (button) => {
@@ -19430,6 +19491,8 @@ COPY (
                 live_job_status["value"] = "failed"
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmNotice", has_text="Synthetic GBM training failure").wait_for(timeout=10_000)
+                page.locator("#appStatusBadge.ready", has_text="Ready").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#appStatusBadge .app-status-badge-elapsed").text_content(), "")
                 gbm_failed_button = page.locator("#gbmTrainBtn").evaluate(
                     """
                     (button) => ({

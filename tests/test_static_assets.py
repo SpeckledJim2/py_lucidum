@@ -907,9 +907,40 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
         self.assertIn("export function glmTabulationReadyBadgeLabel", glm)
         self.assertIn('liveProgress = { phase: "queued", message: "Tabulating GLM..." };', glm)
-        self.assertIn('? "Scoring tabulations..."', glm)
-        self.assertIn(': "Tabulating GLM...";', glm)
-        self.assertIn("else if (isTabulating) setAppReadyStatus(glmTabulationReadyBadgeLabel(progress));", glm)
+        self.assertIn('? "Scoring tabulations"', glm)
+        self.assertIn(': "Tabulating GLM";', glm)
+        self.assertIn(
+            "setAppReadyStatus(glmTabulationReadyBadgeLabel(progress), { elapsedStartedAt: tabulationElapsedStartedAt });",
+            glm,
+        )
+
+    def test_app_status_badge_times_models_and_glm_tabulation(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        index = (static_root / "index.html").read_text(encoding="utf-8")
+        shell = (static_root / "styles/shell.css").read_text(encoding="utf-8")
+        main = (static_root / "app/main.js").read_text(encoding="utf-8")
+        glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
+        gbm = (static_root / "app/gbm-tool.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="appStatusBadge" class="app-status-badge"', index)
+        self.assertIn('class="app-status-badge-elapsed" aria-hidden="true"', index)
+        self.assertIn(".app-status-badge.busy {", shell)
+        self.assertIn("function setAppStatusBadge(message, stateClass = \"\", options = {})", main)
+        self.assertIn("appStatusBadgeElapsedStartedAt !== elapsedStartedAt", main)
+        self.assertIn("buildElapsedStartedAt = performance.now();", glm)
+        self.assertIn("elapsedStartedAt: buildElapsedStartedAt", glm)
+        self.assertLess(glm.index("buildElapsedStartedAt = performance.now();"), glm.index('api("/api/glm/validate"'))
+        self.assertIn("tabulationElapsedStartedAt = performance.now();", glm)
+        self.assertIn("elapsedStartedAt: tabulationElapsedStartedAt", glm)
+        self.assertIn("trainingElapsedStartedAt = performance.now();", gbm)
+        self.assertIn("elapsedStartedAt: trainingElapsedStartedAt", gbm)
+        self.assertLess(gbm.index("trainingElapsedStartedAt = performance.now();"), gbm.index('api("/api/gbm/validate"'))
+        self.assertIn('if (phase === "scoring") return "Scoring GBM";', gbm)
+        self.assertIn('if (phase === "shap") return "Calculating GBM SHAP";', gbm)
+        self.assertIn('if (phase === "artifacts") return "Saving GBM";', gbm)
+        self.assertIn('if (phase === "succeeded") return "Finalising GBM";', gbm)
+        self.assertNotIn("startupProgress", index + shell + main)
+        self.assertNotIn("startup-progress", index + shell + main)
 
     def test_sidebar_rail_and_control_pane_use_distinct_theme_tokens(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"

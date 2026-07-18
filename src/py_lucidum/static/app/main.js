@@ -223,7 +223,11 @@
       const BAND_STEPS = makeBandSteps();
       let serverHeartbeatTimer = null;
       let startupTelemetryTimer = null;
-      let startupProgressStartedAt = 0;
+      let startupTelemetryStartedAt = 0;
+      let appStatusBadgeTimer = null;
+      let appStatusBadgeElapsedStartedAt = null;
+      let appStatusBadgeMessage = "";
+      let appStatusBadgeStateClass = "";
       let clipboardToastTimer = null;
       let toolButtonTooltip = null;
       let toolButtonTooltipTarget = null;
@@ -449,7 +453,7 @@
         setGroupMeta,
         setRenderTiming,
         setStatus,
-        setAppReadyStatus: setReadyBadge,
+        setAppReadyStatus,
         setToolTimingFailed,
         showClipboardToast,
         startToolTiming,
@@ -479,7 +483,7 @@
         setGroupMeta,
         setRenderTiming,
         setStatus,
-        setAppReadyStatus: setReadyBadge,
+        setAppReadyStatus,
         setToolTimingFailed,
         showClipboardToast,
         startToolTiming,
@@ -550,24 +554,69 @@
       }
 
       function startupElapsedSeconds() {
-        if (!startupProgressStartedAt) return 0;
-        return Math.max(0, Math.round((performance.now() - startupProgressStartedAt) / 1000));
+        if (!startupTelemetryStartedAt) return 0;
+        return Math.max(0, Math.floor((performance.now() - startupTelemetryStartedAt) / 1000));
       }
 
-      function setStartupProgress(message, stateClass = "") {
-        const node = el("startupProgress");
+      function elapsedSecondsSince(startedAt) {
+        if (!Number.isFinite(startedAt)) return null;
+        return Math.max(0, Math.floor((performance.now() - startedAt) / 1000));
+      }
+
+      function renderAppStatusBadge(message, stateClass = "", elapsedSeconds = null) {
+        const node = el("appStatusBadge");
         if (!node) return;
-        node.textContent = message || "";
+        const text = message || "";
+        const label = node.querySelector(".app-status-badge-label");
+        const elapsed = node.querySelector(".app-status-badge-elapsed");
+        if (label && label.textContent !== text) label.textContent = text;
+        if (elapsed) {
+          elapsed.textContent = Number.isFinite(elapsedSeconds)
+            ? ` · ${Math.max(0, Math.floor(elapsedSeconds))}s`
+            : "";
+        }
         node.classList.toggle("ready", stateClass === "ready");
         node.classList.toggle("busy", stateClass === "busy");
         node.classList.toggle("error", stateClass === "error");
-        node.classList.toggle("hidden", !message);
+        node.classList.toggle("hidden", !text);
         scheduleDatasetMetaCompactCheck();
       }
 
-      function setReadyBadge(message = "Ready") {
+      function stopAppStatusBadgeTimer() {
+        if (appStatusBadgeTimer) window.clearInterval(appStatusBadgeTimer);
+        appStatusBadgeTimer = null;
+        appStatusBadgeElapsedStartedAt = null;
+      }
+
+      function setAppStatusBadge(message, stateClass = "", options = {}) {
+        const elapsedStartedAt = options?.elapsedStartedAt;
+        const hasElapsedTimer = typeof elapsedStartedAt === "number" && Number.isFinite(elapsedStartedAt);
+        appStatusBadgeMessage = message || "";
+        appStatusBadgeStateClass = stateClass;
+        if (hasElapsedTimer) {
+          if (appStatusBadgeElapsedStartedAt !== elapsedStartedAt) {
+            stopAppStatusBadgeTimer();
+            appStatusBadgeElapsedStartedAt = elapsedStartedAt;
+          }
+          if (!appStatusBadgeTimer) {
+            appStatusBadgeTimer = window.setInterval(() => {
+              renderAppStatusBadge(
+                appStatusBadgeMessage,
+                appStatusBadgeStateClass,
+                elapsedSecondsSince(appStatusBadgeElapsedStartedAt),
+              );
+            }, 1000);
+          }
+          renderAppStatusBadge(appStatusBadgeMessage, appStatusBadgeStateClass, elapsedSecondsSince(elapsedStartedAt));
+          return;
+        }
+        stopAppStatusBadgeTimer();
+        renderAppStatusBadge(appStatusBadgeMessage, appStatusBadgeStateClass, options?.elapsedSeconds);
+      }
+
+      function setAppReadyStatus(message = "Ready", options = {}) {
         const text = message || "Ready";
-        setStartupProgress(text, text === "Ready" ? "ready" : "busy");
+        setAppStatusBadge(text, text === "Ready" ? "ready" : "busy", options);
       }
 
       function currentTelemetryAction(snapshot) {
@@ -577,27 +626,27 @@
 
       function startStartupTelemetryPolling(fallbackLabel) {
         stopStartupTelemetryPolling();
-        startupProgressStartedAt = performance.now();
+        startupTelemetryStartedAt = performance.now();
         startupTelemetryTimer = window.setInterval(async () => {
           try {
             const snapshot = await api("/api/telemetry", { method: "GET" });
             const current = currentTelemetryAction(snapshot);
             const elapsed = current?.current_action_seconds ?? startupElapsedSeconds();
             if (current?.current_action) {
-              setStartupProgress(`${current.current_action} · ${Math.round(elapsed)}s`);
+              setAppStatusBadge(current.current_action, "", { elapsedSeconds: elapsed });
             } else {
-              setStartupProgress(`${fallbackLabel} · ${startupElapsedSeconds()}s`);
+              setAppStatusBadge(fallbackLabel, "", { elapsedSeconds: startupElapsedSeconds() });
             }
           } catch (_) {
-            setStartupProgress(`${fallbackLabel} · ${startupElapsedSeconds()}s`);
+            setAppStatusBadge(fallbackLabel, "", { elapsedSeconds: startupElapsedSeconds() });
           }
         }, 1000);
       }
 
       function stopStartupTelemetryPolling() {
-        if (!startupTelemetryTimer) return;
-        window.clearInterval(startupTelemetryTimer);
+        if (startupTelemetryTimer) window.clearInterval(startupTelemetryTimer);
         startupTelemetryTimer = null;
+        startupTelemetryStartedAt = 0;
       }
 
       async function cacheShutdownIcon() {
@@ -4609,19 +4658,19 @@
         syncSidebarToggleButton();
         cacheShutdownIcon();
         try {
-          setStartupProgress("Requesting schema");
+          setAppStatusBadge("Requesting schema");
           startStartupTelemetryPolling("Requesting schema");
           state.schema = await api("/api/schema");
           state.datasetViewerColumnCount = null;
           renderSidebarVersion();
           syncHeaderButtons();
           stopStartupTelemetryPolling();
-          setStartupProgress("Schema received");
+          setAppStatusBadge("Schema received");
           const path = state.schema.path.split(/[\\/]/).pop();
           const fileMeta = schemaFileMeta();
           document.title = path ? `lucidum · ${path}` : "lucidum";
           resetFilterRowMetaToSchema();
-          setStartupProgress("Rendering controls");
+          setAppStatusBadge("Rendering controls");
           chooseDefaults();
           renderKpis();
           renderFavourites();
@@ -4642,15 +4691,15 @@
             : defaultStartupTool;
           setTool(state.tool, false);
           syncMobileSidebarLayout({ initial: true });
-          setStartupProgress("Loading initial dataset");
+          setAppStatusBadge("Loading initial dataset");
           await refreshMetricSummary({ force: true });
           await refreshActiveTool({ force: true });
           if (startupFavouriteResult.message) setStatus(startupFavouriteResult.message, startupFavouriteResult.statusError);
-          setStartupProgress("Ready", "ready");
+          setAppStatusBadge("Ready", "ready");
           startServerHeartbeat();
         } catch (error) {
           stopStartupTelemetryPolling();
-          setStartupProgress("Startup failed", "error");
+          setAppStatusBadge("Startup failed", "error");
           el("datasetMeta").textContent = "Dataset failed to load";
           setStatus(error.message, true);
         }

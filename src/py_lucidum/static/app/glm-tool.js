@@ -46,15 +46,15 @@ function glmAutoModelTimeLabel(date = new Date()) {
 export function glmBuildReadyBadgeLabel(progress = null) {
   const phase = String(progress?.phase || "").trim().toLowerCase();
   return phase === "scoring" || phase === "writing" || phase === "succeeded"
-    ? "Scoring GLM..."
-    : "Training GLM...";
+    ? "Scoring GLM"
+    : "Training GLM";
 }
 
 export function glmTabulationReadyBadgeLabel(progress = null) {
   const phase = String(progress?.phase || "").trim().toLowerCase();
   return phase === "scoring" || phase === "writing" || phase === "succeeded"
-    ? "Scoring tabulations..."
-    : "Tabulating GLM...";
+    ? "Scoring tabulations"
+    : "Tabulating GLM";
 }
 
 function modelNumberOrNull(value) {
@@ -146,7 +146,9 @@ export function createGlmTool({
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
   let isBuilding = false;
+  let buildElapsedStartedAt = null;
   let isTabulating = false;
+  let tabulationElapsedStartedAt = null;
   let isExportingTabulations = false;
   let liveProgress = null;
   let tabulationConfig = null;
@@ -1595,8 +1597,10 @@ export function createGlmTool({
 
   async function buildSelectedTabulations() {
     if (isTabulating) return;
+    tabulationElapsedStartedAt = performance.now();
     const model_ids = tabulationSelectedModelIds();
     if (!model_ids.length) {
+      tabulationElapsedStartedAt = null;
       setGlmNotice("Choose at least one model to tabulate");
       return;
     }
@@ -1664,6 +1668,7 @@ export function createGlmTool({
           await refreshTabulationConfig({ force: true });
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
+          tabulationElapsedStartedAt = null;
         } else {
           setTabulationFailure(job.error || progress.message || "Model tabulation failed");
         }
@@ -1681,6 +1686,7 @@ export function createGlmTool({
     }
     isTabulating = false;
     setAppReadyStatus("Ready");
+    tabulationElapsedStartedAt = null;
     liveProgress = { phase: "failed", message: String(message || "Model tabulation failed") };
     renderLiveProgress(liveProgress);
     renderTabulationsPanel();
@@ -2109,6 +2115,7 @@ export function createGlmTool({
 
   async function buildModel() {
     if (isBuilding) return;
+    buildElapsedStartedAt = performance.now();
     const payload = buildPayload();
     const familyError = validateFamilyParameter(payload.family, payload.family_parameter);
     if (familyError) {
@@ -2153,6 +2160,7 @@ export function createGlmTool({
     }
     isBuilding = false;
     setAppReadyStatus("Ready");
+    buildElapsedStartedAt = null;
     liveProgress = { phase: "failed", message: String(message || "GLM training did not save a model") };
     renderLiveProgress(liveProgress);
     setGlmNotice("");
@@ -2186,6 +2194,7 @@ export function createGlmTool({
           await applyModelMutationResult({ model: job.result, config: latest });
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
+          buildElapsedStartedAt = null;
         } else {
           setBuildFailure(job.error || progress.message || "GLM training did not save a model");
         }
@@ -2219,8 +2228,11 @@ export function createGlmTool({
   }
 
   function renderLiveProgress(progress) {
-    if (isBuilding) setAppReadyStatus(glmBuildReadyBadgeLabel(progress));
-    else if (isTabulating) setAppReadyStatus(glmTabulationReadyBadgeLabel(progress));
+    if (isBuilding) {
+      setAppReadyStatus(glmBuildReadyBadgeLabel(progress), { elapsedStartedAt: buildElapsedStartedAt });
+    } else if (isTabulating) {
+      setAppReadyStatus(glmTabulationReadyBadgeLabel(progress), { elapsedStartedAt: tabulationElapsedStartedAt });
+    }
     const status = el("glmBuildStatus");
     if (!status) return;
     status.innerHTML = buildStatusHtml(progress);

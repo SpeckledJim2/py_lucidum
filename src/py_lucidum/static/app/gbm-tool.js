@@ -78,10 +78,15 @@ function formatTrainingBadgeCount(value) {
 }
 
 export function gbmTrainingReadyBadgeLabel(progress = null) {
+  const phase = String(progress?.phase || "").trim().toLowerCase();
+  if (phase === "scoring") return "Scoring GBM";
+  if (phase === "shap") return "Calculating GBM SHAP";
+  if (phase === "artifacts") return "Saving GBM";
+  if (phase === "succeeded") return "Finalising GBM";
   const current = formatTrainingBadgeCount(progress?.grid_model_number);
   const total = formatTrainingBadgeCount(progress?.grid_model_count ?? progress?.grid?.trainable_count);
-  if (current && total) return `Training GBM (${current}/${total})...`;
-  return "Training GBM...";
+  if (current && total) return `Training GBM (${current}/${total})`;
+  return "Training GBM";
 }
 
 function formatModelMetric(value) {
@@ -141,6 +146,7 @@ export function createGbmTool({
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
   let isTraining = false;
+  let trainingElapsedStartedAt = null;
   let liveProgress = null;
   let liveEvaluationParameters = null;
   let gridSampleValue = GBM_GRID_SAMPLE_DEFAULT;
@@ -2951,6 +2957,7 @@ export function createGbmTool({
 
   async function train() {
     if (isTraining) return;
+    trainingElapsedStartedAt = performance.now();
     setStatus("");
     setChartMessage("");
     const featureScenario = currentFeatureScenarioPayload();
@@ -2977,6 +2984,7 @@ export function createGbmTool({
     try {
       const validation = await api("/api/gbm/validate", { method: "POST", body: JSON.stringify(payload) });
       if (!validation.ok) {
+        trainingElapsedStartedAt = null;
         setGbmNotice(validation.errors.join("; "));
         return;
       }
@@ -2985,7 +2993,7 @@ export function createGbmTool({
       setGroupMeta(tool, "Training GBM...");
       startToolTiming(tool);
       setTrainingState(true);
-      setAppReadyStatus(gbmTrainingReadyBadgeLabel());
+      setAppReadyStatus(gbmTrainingReadyBadgeLabel(), { elapsedStartedAt: trainingElapsedStartedAt });
       modelListLastRefreshAt = 0;
       liveEvaluationParameters = payload.parameters;
       liveProgress = null;
@@ -2996,6 +3004,7 @@ export function createGbmTool({
     } catch (error) {
       setTrainingState(false);
       setAppReadyStatus("Ready");
+      trainingElapsedStartedAt = null;
       liveEvaluationParameters = null;
       gridTrainingNotice = "";
       setToolTimingFailed(tool);
@@ -3029,6 +3038,7 @@ export function createGbmTool({
           modelListRefreshSeq += 1;
           setTrainingState(false);
           setAppReadyStatus("Ready");
+          trainingElapsedStartedAt = null;
           liveEvaluationParameters = null;
           gridTrainingNotice = "";
           setToolTimingFailed(tool);
@@ -3038,6 +3048,7 @@ export function createGbmTool({
           return;
         }
         modelListRefreshSeq += 1;
+        setAppReadyStatus("Finalising GBM", { elapsedStartedAt: trainingElapsedStartedAt });
         liveProgress = null;
         liveEvaluationParameters = null;
         gridTrainingNotice = "";
@@ -3050,12 +3061,14 @@ export function createGbmTool({
         syncGbmModelCountFromConfig(data);
         setTrainingState(false);
         setAppReadyStatus("Ready");
+        trainingElapsedStartedAt = null;
         setTrainingStatus("");
         measureToolRender(tool, () => render(data));
         if (!preserveProfile) refreshActiveTool({ force: true });
       } catch (error) {
         setTrainingState(false);
         setAppReadyStatus("Ready");
+        trainingElapsedStartedAt = null;
         liveEvaluationParameters = null;
         gridTrainingNotice = "";
         setToolTimingFailed(tool);
@@ -3071,7 +3084,7 @@ export function createGbmTool({
 
   function renderLiveProgress(progress, job = null) {
     liveProgress = progress;
-    setAppReadyStatus(gbmTrainingReadyBadgeLabel(progress));
+    setAppReadyStatus(gbmTrainingReadyBadgeLabel(progress), { elapsedStartedAt: trainingElapsedStartedAt });
     setTrainingStatus(progress.message || "", progress.phase || "", trainingStatusDetail(progress, job));
     if (progress.message) setGroupMeta(tool, progress.message);
     if (progress.evaluation) {
