@@ -201,6 +201,12 @@
         background: #f0fdf4;
       }
 
+      .startup-progress.busy {
+        color: #92400e;
+        border-color: #fbbf24;
+        background: #fffbeb;
+      }
+
       .startup-progress.error {
         color: #991b1b;
         border-color: #fca5a5;
@@ -211,6 +217,12 @@
         color: #bbf7d0;
         border-color: #166534;
         background: #052e16;
+      }
+
+      body.dark .startup-progress.busy {
+        color: #fde68a;
+        border-color: #92400e;
+        background: #451a03;
       }
 
       body.dark .startup-progress.error {

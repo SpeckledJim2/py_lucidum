@@ -9330,6 +9330,7 @@ COPY (
             "denominator_column": "denominator",
             "training_scope": training_scope,
             "regularization": regularization or {"mode": "none"},
+            "timings": {"fit_ms": 1234.5, "elapsed_ms": 62789.0},
         }
         if family_parameter is not None:
             manifest["family_parameter"] = family_parameter
@@ -12030,6 +12031,8 @@ COPY (
                         activeDots: document.querySelectorAll("#glmModelGrid .glm-model-active-dot").length,
                         activeDotRowText: dot?.closest(".tabulator-row")?.textContent || "",
                         activeDotCenterDelta,
+                        fitTimeText: document.querySelector('#glmModelGrid .tabulator-row .tabulator-cell[tabulator-field="fit_ms"]')?.textContent.trim() || "",
+                        overallTimeText: document.querySelector('#glmModelGrid .tabulator-row .tabulator-cell[tabulator-field="elapsed_ms"]')?.textContent.trim() || "",
                         selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
                         renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
                         activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
@@ -12040,8 +12043,10 @@ COPY (
                 )
                 self.assertEqual(
                     glm_navigator_state["headers"],
-                    ["Model", "Created", "Response", "Weight", "Family", "Deviance", "AIC", "BIC", "Rows"],
+                    ["Model", "Created", "Response", "Weight", "Family", "Deviance", "AIC", "BIC", "Rows", "Fit time", "Overall time"],
                 )
+                self.assertEqual(glm_navigator_state["fitTimeText"], "1.2s")
+                self.assertEqual(glm_navigator_state["overallTimeText"], "1m 03s")
                 self.assertEqual(glm_navigator_state["borderWidth"], "0px")
                 self.assertEqual(glm_navigator_state["borderRadius"], "0px")
                 self.assertEqual(glm_navigator_state["gridBorderLeftWidth"], "0px")
@@ -12839,7 +12844,7 @@ COPY (
                 self.assertEqual(len(tabulation_other_selected_state["otherSelectedRows"]), 1)
                 self.assertTrue(any("Segment" in text for text in tabulation_other_selected_state["otherSelectedRows"]))
 
-                glm_job_succeed = {"value": False}
+                glm_job_phase = {"value": "fitting"}
                 glm_build_payload = {"value": None}
 
                 def glm_build_route(route: Any) -> None:
@@ -12861,7 +12866,7 @@ COPY (
                     )
 
                 def glm_job_route(route: Any) -> None:
-                    if glm_job_succeed["value"]:
+                    if glm_job_phase["value"] == "succeeded":
                         payload = {
                             "job_id": "glm-live-job",
                             "status": "succeeded",
@@ -12884,9 +12889,10 @@ COPY (
                             "result": None,
                             "error": None,
                             "progress": {
-                                "phase": "fitting",
-                                "message": "Fitting GLM",
+                                "phase": glm_job_phase["value"],
+                                "message": "Scoring GLM predictions" if glm_job_phase["value"] == "scoring" else "Fitting GLM",
                                 "training_rows": 3,
+                                "scoring_rows": 6 if glm_job_phase["value"] == "scoring" else 0,
                             },
                         }
                     route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
@@ -12905,6 +12911,7 @@ COPY (
                 page.locator("#glmBuildBtn").hover()
                 page.locator("#glmBuildBtn").click()
                 page.locator("#glmBuildStatus").get_by_text("Fitting GLM").wait_for(timeout=10_000)
+                page.locator("#startupProgress.busy", has_text="Training GLM...").wait_for(timeout=10_000)
                 self.assertEqual(glm_build_payload["value"]["family"], "tweedie")
                 glm_busy_button = page.locator("#glmBuildBtn").evaluate(
                     """
@@ -12935,7 +12942,26 @@ COPY (
                 self.assertEqual(glm_busy_button["spinnerWidth"], "12px")
                 self.assertEqual(glm_busy_button["spinnerAnimation"], "model-busy-button-spin")
                 glm_pointer_moves_while_busy = page.evaluate("window.__glmBusyPointerMoves")
-                glm_job_succeed["value"] = True
+                glm_job_phase["value"] = "scoring"
+                page.locator("#glmBuildStatus").get_by_text("Scoring GLM predictions").wait_for(timeout=10_000)
+                page.locator("#glmBuildStatus").get_by_text("6 rows to score").wait_for(timeout=10_000)
+                self.assertNotIn("training rows", page.locator("#glmBuildStatus").text_content())
+                page.locator("#startupProgress.busy", has_text="Scoring GLM...").wait_for(timeout=10_000)
+                glm_scoring_badge = page.locator("#startupProgress").evaluate(
+                    """
+                    (badge) => ({
+                      busy: badge.classList.contains("busy"),
+                      ready: badge.classList.contains("ready"),
+                      color: getComputedStyle(badge).color,
+                      background: getComputedStyle(badge).backgroundColor,
+                    })
+                    """
+                )
+                self.assertTrue(glm_scoring_badge["busy"])
+                self.assertFalse(glm_scoring_badge["ready"])
+                self.assertEqual(glm_scoring_badge["color"], "rgb(146, 64, 14)")
+                self.assertEqual(glm_scoring_badge["background"], "rgb(255, 251, 235)")
+                glm_job_phase["value"] = "succeeded"
                 page.locator("#glmBuildBtn", has_text="Build GLM").wait_for(timeout=10_000)
                 page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
                 page.wait_for_function(
@@ -19253,7 +19279,19 @@ COPY (
                 page.locator("#gbmTrainBtn").hover()
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmTrainingStatus").get_by_text("training, tree 2/10, test gamma 7.2").wait_for(timeout=10_000)
-                page.locator("#startupProgress.ready", has_text="Training GBM (1/25)...").wait_for(timeout=10_000)
+                page.locator("#startupProgress.busy", has_text="Training GBM (1/25)...").wait_for(timeout=10_000)
+                gbm_training_badge = page.locator("#startupProgress").evaluate(
+                    """
+                    (badge) => ({
+                      busy: badge.classList.contains("busy"),
+                      ready: badge.classList.contains("ready"),
+                      background: getComputedStyle(badge).backgroundColor,
+                    })
+                    """
+                )
+                self.assertTrue(gbm_training_badge["busy"])
+                self.assertFalse(gbm_training_badge["ready"])
+                self.assertEqual(gbm_training_badge["background"], "rgb(255, 251, 235)")
                 gbm_busy_button = page.locator("#gbmTrainBtn").evaluate(
                     """
                     (button) => {

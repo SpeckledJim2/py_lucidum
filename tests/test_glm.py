@@ -29,8 +29,11 @@ from py_lucidum.tools.glm.tabulation import build_tabulations, export_tabulation
 from py_lucidum.tools.glm.training import (
     MissingGlmDependency,
     _raise_actionable_singular_matrix_error,
+    _shared_post_fit_design_matrix,
     _suppress_tabmat_mixed_dtype_warning,
+    build_predictions_frame,
     coefficient_rows,
+    diagnostics_payload,
     formula_context,
     glm_formula_drop_first,
     glm_dependencies,
@@ -306,7 +309,8 @@ class GlmToolTests(unittest.TestCase):
             self.assertGreaterEqual(float(timings[key]), 0.0)
 
     def assert_glm_manifest_timing_metadata(self, timings: dict[str, Any]) -> None:
-        self.assertEqual(set(timings), {"elapsed_ms"})
+        self.assertEqual(set(timings), {"fit_ms", "elapsed_ms"})
+        self.assertGreaterEqual(float(timings["fit_ms"]), 0.0)
         self.assertGreaterEqual(float(timings["elapsed_ms"]), 0.0)
 
     def spline_data_path(self) -> Path:
@@ -504,6 +508,11 @@ if result.get("iteration") != 10:
 
         def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
             self.assertEqual(kwargs["env"]["PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD"], "1")
+            request = json.loads(Path(cmd[-2]).read_text(encoding="utf-8"))
+            Path(request["progress_path"]).write_text(
+                json.dumps({"phase": "scoring", "message": "Scoring GLM predictions", "percent": 70}),
+                encoding="utf-8",
+            )
             response_path = Path(cmd[-1])
             response_path.write_text(
                 json.dumps({"ok": True, "result": {"model_id": model_id, "timings": {"dependency_ms": 12.3, "fit_ms": 45.6}}}),
@@ -530,6 +539,7 @@ if result.get("iteration") != 10:
         self.assertEqual(timings["dependency_ms"], 20.0)
         self.assertEqual(store.manifest(model_id)["timings"], {"elapsed_ms": 1.0})
         self.assertEqual(progress[0]["message"], "Running isolated GLM fit worker")
+        self.assertIn("scoring", [item.get("phase") for item in progress])
         self.assertEqual(progress[-1]["timings"]["dependency_ms"], 20.0)
 
     def test_glm_persistent_worker_reuses_process_when_isolation_required(self) -> None:
@@ -549,6 +559,12 @@ if result.get("iteration") != 10:
         self.assertTrue(first["timings"]["worker_started"])
         self.assertFalse(second["timings"]["worker_started"])
         self.assertGreaterEqual(float(second["timings"]["worker_total_ms"]), 0.0)
+        phases = [item.get("phase") for item in progress]
+        self.assertIn("fitting", phases)
+        self.assertIn("scoring", phases)
+        self.assertLess(phases.index("fitting"), phases.index("scoring"))
+        scoring_progress = next(item for item in progress if item.get("phase") == "scoring")
+        self.assertEqual(scoring_progress["scoring_rows"], dataset.row_count())
         self.assert_glm_manifest_timing_metadata(store.manifest(second["model_id"])["timings"])
         self.assertNotIn("worker_started", store.manifest(second["model_id"])["timings"])
 
@@ -1084,6 +1100,27 @@ COPY (
         self.assertEqual([row["__lucidum_row_id"] for row in predictions], [1, 2, 3, 4, 7])
         self.assertTrue(all(row["glm_prediction"] is not None for row in predictions))
         self.assertTrue(all(row["glm_prediction_rate"] is not None for row in predictions))
+
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+        prediction_rate_by_id = {int(row["__lucidum_row_id"]): float(row["glm_prediction_rate"]) for row in predictions}
+        with store.artifact_path(result["model_id"], "estimator").open("rb") as handle:
+            estimator = pickle.load(handle)
+        expected = diagnostics_payload(
+            estimator,
+            np.asarray([1.0, 2.0]),
+            np.asarray([prediction_rate_by_id[1], prediction_rate_by_id[2]]),
+            np.asarray([1.0, 1.0]),
+            np,
+            len(result["coefficients"]),
+        )
+        for key in ("deviance", "null_deviance", "dispersion", "aic", "aicc", "bic"):
+            if expected[key] is None:
+                self.assertIsNone(result["diagnostics"][key])
+            else:
+                self.assertAlmostEqual(float(result["diagnostics"][key]), float(expected[key]), places=10)
 
     def test_glm_training_writes_weighted_predictions_and_publishes_source(self) -> None:
         self.require_glm_dependencies()
@@ -1622,6 +1659,341 @@ ORDER BY __lucidum_row_id
         self.assertEqual(by_term["C(Segment)[A]"], ["Segment"])
         self.assertEqual(by_term["Age:Segment[A]"], ["Age", "Segment"])
         self.assertEqual(by_term["pmin(Age, 60)"], ["Age"])
+
+    def test_glm_coefficient_rows_reuse_stored_covariance(self) -> None:
+        try:
+            import numpy as np
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class FakeModel:
+            covariance_matrix_ = np.eye(2)
+            feature_names_ = ["Age"]
+            fit_intercept = True
+            coef_ = np.asarray([0.5])
+            intercept_ = 1.0
+
+            def __init__(self) -> None:
+                self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+            def coef_table(self, *args: Any, **kwargs: Any) -> Any:
+                self.calls.append((args, kwargs))
+                return pd.DataFrame(
+                    {
+                        "coef": [1.0, 0.5],
+                        "se": [0.1, 0.2],
+                        "z_value": [10.0, 2.5],
+                        "p_value": [0.0, 0.01],
+                        "ci_lower": [0.8, 0.1],
+                        "ci_upper": [1.2, 0.9],
+                    },
+                    index=["Intercept", "Age"],
+                )
+
+        model = FakeModel()
+        rows = coefficient_rows(
+            model,
+            pd.DataFrame({"Age": [30.0, 40.0]}),
+            np.asarray([1.0, 2.0]),
+            None,
+            {},
+            np,
+            pd,
+            ["Age"],
+        )
+
+        self.assertEqual(model.calls, [((), {})])
+        self.assertEqual([row["term"] for row in rows], ["(Intercept)", "Age"])
+        self.assertEqual([row["std_error"] for row in rows], [0.1, 0.2])
+
+    def test_glm_diagnostics_use_supplied_predictions(self) -> None:
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class FakeFamily:
+            @staticmethod
+            def deviance(y: Any, mu: Any, *, sample_weight: Any = None) -> float:
+                weights = np.ones(len(y)) if sample_weight is None else np.asarray(sample_weight)
+                return float(np.sum(weights * np.square(np.asarray(y) - np.asarray(mu))))
+
+            @staticmethod
+            def dispersion(y: Any, mu: Any, *, sample_weight: Any = None, ddof: int = 0) -> float:
+                weights = np.ones(len(y)) if sample_weight is None else np.asarray(sample_weight)
+                return float(np.sum(weights * np.square(np.asarray(y) - np.asarray(mu))) / (weights.sum() - ddof))
+
+            @staticmethod
+            def log_likelihood(y: Any, mu: Any, *, sample_weight: Any = None) -> float:
+                weights = np.ones(len(y)) if sample_weight is None else np.asarray(sample_weight)
+                return float(-0.5 * np.sum(weights * np.square(np.asarray(y) - np.asarray(mu))))
+
+        class FakeModel:
+            family_instance = FakeFamily()
+            coef_ = np.asarray([0.5, 0.0])
+            fit_intercept = True
+
+            @staticmethod
+            def predict(*_args: Any, **_kwargs: Any) -> Any:
+                raise AssertionError("diagnostics must reuse supplied predictions")
+
+        y = np.asarray([1.0, 2.0, 4.0, 8.0])
+        mu = np.asarray([1.1, 1.9, 4.2, 7.8])
+        weights = np.asarray([1.0, 2.0, 3.0, 4.0])
+        diagnostics = diagnostics_payload(FakeModel(), y, mu, weights, np, 3)
+        log_likelihood = FakeFamily.log_likelihood(y, mu, sample_weight=weights)
+        expected_aic = -2 * log_likelihood + 4
+
+        self.assertAlmostEqual(float(diagnostics["deviance"]), FakeFamily.deviance(y, mu, sample_weight=weights))
+        self.assertAlmostEqual(float(diagnostics["dispersion"]), FakeFamily.dispersion(y, mu, sample_weight=weights, ddof=3))
+        self.assertAlmostEqual(float(diagnostics["aic"]), expected_aic)
+        self.assertAlmostEqual(float(diagnostics["aicc"]), expected_aic + 12)
+        self.assertAlmostEqual(float(diagnostics["bic"]), -2 * log_likelihood + 2 * np.log(len(y)))
+
+        unweighted = diagnostics_payload(FakeModel(), y, mu, None, np, 3)
+        unweighted_log_likelihood = FakeFamily.log_likelihood(y, mu)
+        self.assertAlmostEqual(float(unweighted["deviance"]), FakeFamily.deviance(y, mu))
+        self.assertAlmostEqual(float(unweighted["aic"]), -2 * unweighted_log_likelihood + 4)
+
+        del FakeFamily.log_likelihood
+        unavailable = diagnostics_payload(FakeModel(), y, mu, None, np, 3)
+        self.assertIsNone(unavailable["aic"])
+        self.assertIsNone(unavailable["aicc"])
+        self.assertIsNone(unavailable["bic"])
+
+    def test_glm_prediction_frame_scores_once_and_retains_response_values(self) -> None:
+        try:
+            import numpy as np
+            import polars as pl
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.calls: list[tuple[int, Any]] = []
+
+            def predict(self, frame: Any, *, context: dict[str, Any], offset: Any) -> Any:
+                self.calls.append((frame.height, np.asarray(offset)))
+                return np.asarray([0.5, 1.5])
+
+        frame = pl.DataFrame(
+            {
+                "__lucidum_row_id": [1, 2, 3],
+                "denominator": [2.0, 0.0, 4.0],
+                "x": [10.0, 20.0, 30.0],
+            }
+        )
+        offsets = np.asarray([0.1, 0.2, 0.3])
+        model = FakeModel()
+        result = build_predictions_frame(
+            frame,
+            model,
+            "denominator",
+            {},
+            np,
+            pl,
+            offset_values=offsets,
+        )
+
+        self.assertEqual(len(model.calls), 1)
+        self.assertEqual(model.calls[0][0], 2)
+        np.testing.assert_allclose(model.calls[0][1], [0.1, 0.3])
+        np.testing.assert_array_equal(result.score_mask, [True, False, True])
+        np.testing.assert_allclose(result.response_values, [0.5, 1.5])
+        self.assertEqual(result.frame.get_column("__lucidum_row_id").to_list(), [1, 3])
+        self.assertEqual(result.frame.get_column("glm_prediction").to_list(), [1.0, 6.0])
+        self.assertEqual(result.frame.get_column("glm_prediction_rate").to_list(), [0.5, 1.5])
+
+    def test_glm_all_row_spline_shares_post_fit_design_matrix(self) -> None:
+        self.require_glm_dependencies()
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "1 + bs(Age, df=4)",
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "all",
+            },
+        )
+        self.assertEqual(result["diagnostics"]["training_rows"], dataset.row_count())
+        self.assertEqual(result["diagnostics"]["scored_rows"], dataset.row_count())
+
+        with store.artifact_path(result["model_id"], "estimator").open("rb") as handle:
+            estimator = pickle.load(handle)
+        _, _, _, _, pd, pl = glm_training_dependencies()
+        score_frame = data_frame_from_dataset(dataset, ["actualNumerator", "Age"])
+        context = formula_context(np)
+        expected_predictions = np.asarray(estimator.predict(score_frame, context=context), dtype=float)
+        prediction_rows = store.read_parquet_records(store.artifact_path(result["model_id"], "predictions"))
+        np.testing.assert_allclose(
+            [float(row["glm_prediction"]) for row in prediction_rows],
+            expected_predictions,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        expected_importance = glm_feature_importance_rows(
+            estimator,
+            score_frame,
+            ["Age"],
+            None,
+            context,
+            np,
+            pd,
+        )
+        self.assertEqual(result["feature_importance"], expected_importance)
+        expected_diagnostics = diagnostics_payload(
+            estimator,
+            score_frame.get_column("actualNumerator").to_numpy(),
+            expected_predictions,
+            None,
+            np,
+            len(result["coefficients"]),
+        )
+        for key in ("deviance", "null_deviance", "dispersion", "aic", "aicc", "bic"):
+            if expected_diagnostics[key] is None:
+                self.assertIsNone(result["diagnostics"][key])
+            else:
+                self.assertAlmostEqual(float(result["diagnostics"][key]), float(expected_diagnostics[key]), places=10)
+
+        original_spec = estimator.X_model_spec_
+
+        class CountingSpec:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(original_spec, name)
+
+            def get_model_matrix(self, frame: Any, *, context: dict[str, Any]) -> Any:
+                self.calls += 1
+                return original_spec.get_model_matrix(frame, context=context)
+
+        counting_spec = CountingSpec()
+        estimator.X_model_spec_ = counting_spec
+        row_mask = np.ones(score_frame.height, dtype=bool)
+        shared_matrix = _shared_post_fit_design_matrix(
+            estimator,
+            score_frame,
+            row_mask,
+            row_mask.copy(),
+            context,
+            np,
+        )
+        with patch.object(estimator, "predict", wraps=estimator.predict) as captured_predict:
+            replay_predictions = build_predictions_frame(
+                score_frame,
+                estimator,
+                "",
+                context,
+                np,
+                pl,
+                design_matrix=shared_matrix,
+            )
+        replay_importance = glm_feature_importance_rows(
+            estimator,
+            score_frame,
+            ["Age"],
+            None,
+            context,
+            np,
+            pd,
+            design_matrix=shared_matrix,
+        )
+
+        self.assertEqual(counting_spec.calls, 1)
+        self.assertIs(captured_predict.call_args.args[0], shared_matrix)
+        np.testing.assert_allclose(replay_predictions.response_values, expected_predictions, rtol=1e-12, atol=1e-12)
+        self.assertEqual(replay_importance, expected_importance)
+
+    def test_glm_shared_design_matrix_falls_back_when_fit_and_score_rows_differ(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "score_fallback.csv"
+        path.write_text(
+            "y,denominator,x,log_offset,SAMPLE\n"
+            "10,1,1,0,training\n"
+            "20,1,2,0,test\n"
+            ",1,3,0,training\n"
+            "40,0,4,0,training\n"
+            "50,1,5,NaN,training\n"
+            "60,1,6,0,training\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        payload = {
+            "formula": "1 + x + offset(log_offset)",
+            "response_column": "y",
+            "denominator_column": "denominator",
+            "family": "normal",
+            "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+        }
+        training_result = train_model(dataset, store, {**payload, "training_scope": "training"}, activate=False)
+        all_result = train_model(dataset, store, {**payload, "training_scope": "all"}, activate=False)
+
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+        score_mask = np.asarray([True, True, True, False, False, True])
+        training_fit_mask = np.asarray([True, False, False, False, False, True])
+        all_fit_mask = np.asarray([True, True, False, False, False, True])
+        self.assertIsNone(_shared_post_fit_design_matrix(None, None, training_fit_mask, score_mask, {}, np))
+        self.assertIsNone(_shared_post_fit_design_matrix(None, None, all_fit_mask, score_mask, {}, np))
+        self.assertEqual(training_result["diagnostics"]["training_rows"], 2)
+        self.assertEqual(all_result["diagnostics"]["training_rows"], 3)
+        for result in (training_result, all_result):
+            prediction_rows = store.read_parquet_records(store.artifact_path(result["model_id"], "predictions"))
+            self.assertEqual([row["__lucidum_row_id"] for row in prediction_rows], [1, 2, 3, 6])
+            self.assertTrue(all(row["glm_prediction"] is not None for row in prediction_rows))
+
+    def test_glm_training_aligns_weighted_offset_diagnostics(self) -> None:
+        self.require_glm_dependencies()
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "actualNumerator ~ Age + offset(log(denominator))",
+                "denominator_column": "denominator",
+                "family": "normal",
+                "training_scope": "training",
+            },
+        )
+
+        prediction_rows = store.read_parquet_records(store.artifact_path(result["model_id"], "predictions"))
+        self.assertEqual([row["__lucidum_row_id"] for row in prediction_rows], [1, 2, 3, 4, 5, 6])
+        self.assertEqual(result["diagnostics"]["training_rows"], 4)
+        self.assertEqual(result["diagnostics"]["eligible_rows"], 6)
+        self.assertEqual(result["diagnostics"]["scored_rows"], 6)
+
+        prediction_rate_by_id = {int(row["__lucidum_row_id"]): float(row["glm_prediction_rate"]) for row in prediction_rows}
+        fit_ids = [1, 3, 4, 6]
+        y_fit = np.asarray([0.1, 0.1, 0.15, 0.15])
+        weights = np.asarray([100.0, 300.0, 300.0, 500.0])
+        mu = np.asarray([prediction_rate_by_id[row_id] for row_id in fit_ids])
+        with store.artifact_path(result["model_id"], "estimator").open("rb") as handle:
+            estimator = pickle.load(handle)
+        family = estimator.family_instance
+        coefficient_count = len(result["coefficients"])
+        expected = diagnostics_payload(estimator, y_fit, mu, weights, np, coefficient_count)
+
+        for key in ("deviance", "null_deviance", "dispersion", "aic", "aicc", "bic"):
+            self.assertAlmostEqual(float(result["diagnostics"][key]), float(expected[key]), places=10)
 
     def test_glm_training_with_offset_stores_terms_and_predicts(self) -> None:
         self.require_glm_dependencies()

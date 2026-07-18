@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import math
 import os
@@ -46,6 +47,15 @@ GLM_PENALIZED_RANK_DEFICIENT_WARNING = (
     "but unpenalized coefficient inference would not be identifiable."
 )
 GLM_DESIGN_CONDITION_LIMIT = 1e12
+
+
+@dataclass(frozen=True)
+class PredictionFrameResult:
+    frame: Any
+    response_values: Any
+    score_mask: Any
+    scored_rows: int
+    fitted_na_rows: int
 
 
 def _elapsed_ms(started: float) -> float:
@@ -296,23 +306,47 @@ def train_model_in_subprocess_one_shot(
         tmp_path = Path(tmp_dir)
         request_path = tmp_path / "request.json"
         response_path = tmp_path / "response.json"
+        progress_path = tmp_path / "progress.json"
         request_path.write_text(
             json.dumps(
                 {
                     "dataset_path": str(dataset.path),
                     "payload": payload,
                     "activate": activate,
+                    "progress_path": str(progress_path),
                 }
             ),
             encoding="utf-8",
         )
-        completed = subprocess.run(
-            [sys.executable, "-m", "py_lucidum.tools.glm.worker", str(request_path), str(response_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-            env={**os.environ, "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1"},
-        )
+        completed_values: list[subprocess.CompletedProcess[str]] = []
+        worker_errors: list[BaseException] = []
+
+        def run_worker_process() -> None:
+            try:
+                completed_values.append(
+                    subprocess.run(
+                        [sys.executable, "-m", "py_lucidum.tools.glm.worker", str(request_path), str(response_path)],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env={**os.environ, "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1"},
+                    )
+                )
+            except BaseException as exc:
+                worker_errors.append(exc)
+
+        worker_thread = threading.Thread(target=run_worker_process, daemon=True)
+        worker_thread.start()
+        last_progress_text = ""
+        while worker_thread.is_alive():
+            worker_thread.join(timeout=0.05)
+            last_progress_text = forward_worker_progress(progress_path, progress, last_progress_text)
+        last_progress_text = forward_worker_progress(progress_path, progress, last_progress_text)
+        if worker_errors:
+            raise worker_errors[0]
+        if not completed_values:
+            raise RuntimeError("GLM worker exited without returning a process result")
+        completed = completed_values[0]
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()
             if len(detail) > 800:
@@ -342,6 +376,23 @@ def train_model_in_subprocess_one_shot(
     _merge_result_timings(result, worker_timings)
     progress({"phase": "writing", "message": "GLM worker saved artifacts", "percent": 90, "timings": result.get("timings")})
     return result
+
+
+def forward_worker_progress(path: Path, callback: ProgressCallback, previous_text: str = "") -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return previous_text
+    if not text or text == previous_text:
+        return previous_text
+    try:
+        progress = json.loads(text)
+    except json.JSONDecodeError:
+        return previous_text
+    if not isinstance(progress, dict):
+        return text
+    callback(progress)
+    return text
 
 
 class _GlmFitWorkerResponseError(RuntimeError):
@@ -393,7 +444,7 @@ class PersistentGlmFitWorker:
                 worker_started = time.perf_counter()
                 process.stdin.write(json.dumps({"request_id": request_id, "request_path": str(request_path), "response_path": str(response_path)}) + "\n")
                 process.stdin.flush()
-                self._wait_for_ack(process, request_id)
+                self._wait_for_ack(process, request_id, progress)
                 worker_total_ms = _elapsed_ms(worker_started)
                 if not response_path.exists():
                     raise RuntimeError("GLM fit worker did not write a response.")
@@ -480,7 +531,7 @@ class PersistentGlmFitWorker:
         self._process = process
         return process, True
 
-    def _wait_for_ack(self, process: subprocess.Popen[str], request_id: str) -> None:
+    def _wait_for_ack(self, process: subprocess.Popen[str], request_id: str, progress_callback: ProgressCallback) -> None:
         if process.stdout is None:
             raise RuntimeError("GLM fit worker stdout is not available.")
         while True:
@@ -492,6 +543,11 @@ class PersistentGlmFitWorker:
             except json.JSONDecodeError:
                 continue
             if str(message.get("request_id") or "") != request_id:
+                continue
+            if str(message.get("type") or "") == "progress":
+                progress = message.get("progress")
+                if isinstance(progress, dict):
+                    progress_callback(progress)
                 continue
             if not message.get("ok", True):
                 raise RuntimeError(str(message.get("error") or "GLM fit worker failed."))
@@ -886,7 +942,10 @@ def coefficient_rows(
     table = None
     if include_inference:
         try:
-            table = model.coef_table(fit_frame, y_fit, sample_weight=fit_weight, context=context)
+            if getattr(model, "covariance_matrix_", None) is not None:
+                table = model.coef_table()
+            else:
+                table = model.coef_table(fit_frame, y_fit, sample_weight=fit_weight, context=context)
         except Exception:
             table = None
     if table is not None:
@@ -974,11 +1033,16 @@ def glm_feature_importance_rows(
     context: dict[str, Any],
     np: Any,
     pd: Any,
+    *,
+    design_matrix: Any | None = None,
 ) -> list[dict[str, Any]]:
     groups = term_groups(model, [], source_columns)
     if not groups:
         return []
-    matrix = np.asarray(model_matrix(model, fit_frame, context), dtype=float)
+    matrix = np.asarray(
+        design_matrix if design_matrix is not None else model_matrix(model, fit_frame, context),
+        dtype=float,
+    )
     if matrix.ndim != 2 or matrix.shape[0] == 0:
         return []
     coefficients = np.asarray(getattr(model, "coef_", []), dtype=float)
@@ -1043,6 +1107,19 @@ def glm_feature_importance_rows(
     return sorted(rows, key=lambda row: (-float(row["importance"] or 0.0), str(row["feature"]).lower()))
 
 
+def _shared_post_fit_design_matrix(
+    model: Any,
+    fit_frame: Any,
+    fit_mask: Any,
+    score_mask: Any,
+    context: dict[str, Any],
+    np: Any,
+) -> Any | None:
+    if not np.array_equal(fit_mask, score_mask):
+        return None
+    return np.asarray(model_matrix(model, fit_frame, context), dtype=float)
+
+
 def safe_metric(callable_metric: Any, *args: Any, **kwargs: Any) -> float | None:
     try:
         return json_safe_number(callable_metric(*args, **kwargs))
@@ -1052,19 +1129,12 @@ def safe_metric(callable_metric: Any, *args: Any, **kwargs: Any) -> float | None
 
 def diagnostics_payload(
     model: Any,
-    fit_frame: Any,
     y_fit: Any,
+    mu: Any,
     fit_weight: Any,
-    context: dict[str, Any],
     np: Any,
     coefficient_count: int,
-    *,
-    offset_values: Any | None = None,
 ) -> dict[str, Any]:
-    predict_kwargs = {"context": context}
-    if offset_values is not None:
-        predict_kwargs["offset"] = offset_values
-    mu = model.predict(fit_frame, **predict_kwargs)
     family = model.family_instance
     parameters = max(1, coefficient_count)
     deviance = safe_metric(family.deviance, y_fit, mu, sample_weight=fit_weight)
@@ -1072,13 +1142,29 @@ def diagnostics_payload(
     mean_target = float(np.average(np.asarray(y_fit, dtype=float), weights=np.asarray(fit_weight, dtype=float))) if fit_weight is not None else float(np.mean(y_fit))
     null_mu = np.full_like(np.asarray(y_fit, dtype=float), mean_target, dtype=float)
     null_deviance = safe_metric(family.deviance, y_fit, null_mu, sample_weight=fit_weight)
-    metric_kwargs = dict(predict_kwargs)
+    coefficients = np.asarray(getattr(model, "coef_", []), dtype=float)
+    nonzero = int(np.count_nonzero(np.abs(coefficients) > np.finfo(coefficients.dtype).eps))
+    effective_parameters = nonzero + int(bool(getattr(model, "fit_intercept", True)))
+    observation_count = int(np.asarray(y_fit).shape[0])
+    log_likelihood = safe_metric(getattr(family, "log_likelihood", None), y_fit, mu, sample_weight=fit_weight)
+    if log_likelihood is None:
+        aic = None
+        aicc = None
+        bic = None
+    else:
+        aic = float(-2 * log_likelihood + 2 * effective_parameters)
+        aicc = (
+            float(aic + 2 * effective_parameters * (effective_parameters + 1) / (observation_count - effective_parameters - 1))
+            if observation_count > effective_parameters + 1
+            else None
+        )
+        bic = float(-2 * log_likelihood + np.log(observation_count) * effective_parameters)
     return {
         "deviance": deviance,
         "null_deviance": null_deviance,
-        "aic": safe_metric(getattr(model, "aic", None), fit_frame, y_fit, fit_weight, **metric_kwargs),
-        "aicc": safe_metric(getattr(model, "aicc", None), fit_frame, y_fit, fit_weight, **metric_kwargs),
-        "bic": safe_metric(getattr(model, "bic", None), fit_frame, y_fit, fit_weight, **metric_kwargs),
+        "aic": aic,
+        "aicc": aicc,
+        "bic": bic,
         "dispersion": dispersion,
     }
 
@@ -1092,7 +1178,8 @@ def build_predictions_frame(
     pl: Any,
     *,
     offset_values: Any | None = None,
-) -> tuple[Any, int, int]:
+    design_matrix: Any | None = None,
+) -> PredictionFrameResult:
     if denominator_column:
         denominator = polars_numeric_array(frame, denominator_column, pl)
         score_mask = np.isfinite(denominator) & (denominator > 0)
@@ -1103,12 +1190,18 @@ def build_predictions_frame(
         score_mask = score_mask & np.isfinite(offset_values)
 
     score_frame = frame.filter(pl.Series("__lucidum_score_mask", score_mask))
+    predict_frame = score_frame
+    if design_matrix is not None:
+        if int(design_matrix.shape[0]) != score_frame.height:
+            raise ValueError("Precomputed GLM design matrix does not match the scoring rows")
+        predict_frame = design_matrix
     predict_kwargs = {"context": context}
     if offset_values is not None:
         predict_kwargs["offset"] = np.asarray(offset_values[score_mask], dtype=float)
-    predictions = model.predict(score_frame, **predict_kwargs)
-    prediction_values = np.asarray(predictions, dtype=float)
-    rate_values = prediction_values.copy() if denominator is not None else None
+    predictions = model.predict(predict_frame, **predict_kwargs)
+    response_values = np.asarray(predictions, dtype=float)
+    prediction_values = response_values
+    rate_values = response_values if denominator is not None else None
     if denominator is not None:
         prediction_values = prediction_values * denominator[score_mask]
     finite = np.isfinite(prediction_values)
@@ -1127,7 +1220,13 @@ def build_predictions_frame(
         ).fill_nan(None)
     fitted_na_rows = int((~finite).sum())
     scored_rows = int(finite.sum())
-    return pl.DataFrame(output_columns), scored_rows, fitted_na_rows
+    return PredictionFrameResult(
+        frame=pl.DataFrame(output_columns),
+        response_values=response_values,
+        score_mask=score_mask,
+        scored_rows=scored_rows,
+        fitted_na_rows=fitted_na_rows,
+    )
 
 
 def regularization_summary(model: Any, regularization: dict[str, Any], np: Any) -> dict[str, Any]:
@@ -1340,10 +1439,49 @@ def _train_model_impl(
     timings["fit_ms"] = _elapsed_ms(fit_started)
     regularization = regularization_summary(estimator, regularization, np)
 
-    progress({"phase": "scoring", "message": "Scoring GLM predictions", "percent": 70})
+    score_mask = np.asarray(eligible_mask, dtype=bool)
+    if offset_values is not None:
+        score_mask = score_mask & np.isfinite(offset_values)
+    progress(
+        {
+            "phase": "scoring",
+            "message": "Scoring GLM predictions",
+            "percent": 70,
+            "scoring_rows": int(score_mask.sum()),
+        }
+    )
     score_started = time.perf_counter()
     with _capture_glm_warnings() as captured_warnings:
-        predictions, scored_rows, fitted_na_rows = build_predictions_frame(frame, estimator, denominator_column, context, np, pl, offset_values=offset_values)
+        # Matching row sets can share one fitted matrix across both post-fit consumers.
+        shared_design_matrix = _shared_post_fit_design_matrix(
+            estimator,
+            fit_frame,
+            fit_mask,
+            score_mask,
+            context,
+            np,
+        )
+        prediction_result = build_predictions_frame(
+            frame,
+            estimator,
+            denominator_column,
+            context,
+            np,
+            pl,
+            offset_values=offset_values,
+            design_matrix=shared_design_matrix,
+        )
+        predictions = prediction_result.frame
+        scored_rows = prediction_result.scored_rows
+        fitted_na_rows = prediction_result.fitted_na_rows
+        fit_rows_within_score = fit_mask[prediction_result.score_mask]
+        if int(fit_rows_within_score.sum()) != len(y_fit):
+            raise RuntimeError("GLM scoring rows no longer align with the fitted rows")
+        fit_predictions = (
+            prediction_result.response_values
+            if bool(fit_rows_within_score.all())
+            else prediction_result.response_values[fit_rows_within_score]
+        )
         coefficients = coefficient_rows(
             estimator,
             fit_frame,
@@ -1364,16 +1502,15 @@ def _train_model_impl(
             context,
             np,
             pd,
+            design_matrix=shared_design_matrix,
         )
         diagnostics = diagnostics_payload(
             estimator,
-            fit_frame,
             y_fit,
+            fit_predictions,
             fit_weight_values,
-            context,
             np,
             len(coefficients),
-            offset_values=fit_offset_values,
         )
     numerical_warnings.extend(_glm_numerical_warning_messages(captured_warnings))
     model_warnings = _dedupe_warnings(
@@ -1424,7 +1561,14 @@ def _train_model_impl(
         "timings": {},
     }
 
-    progress({"phase": "writing", "message": "Saving GLM artifacts", "percent": 90})
+    progress(
+        {
+            "phase": "writing",
+            "message": "Saving GLM artifacts",
+            "percent": 90,
+            "scoring_rows": int(score_mask.sum()),
+        }
+    )
     artifact_write_started = time.perf_counter()
     coefficient_frame = pl.DataFrame(
         coefficients,
@@ -1459,8 +1603,19 @@ def _train_model_impl(
     store.write_json(store.artifact_path(model_id, "diagnostics"), jsonable(diagnostics, np, pd))
     timings["artifact_write_ms"] = _elapsed_ms(artifact_write_started)
     timings["elapsed_ms"] = _elapsed_ms(started)
-    manifest["timings"] = {"elapsed_ms": timings["elapsed_ms"]}
-    progress({"phase": "writing", "message": "Saved GLM artifacts", "percent": 95, "timings": timings})
+    manifest["timings"] = {
+        "fit_ms": timings["fit_ms"],
+        "elapsed_ms": timings["elapsed_ms"],
+    }
+    progress(
+        {
+            "phase": "writing",
+            "message": "Saved GLM artifacts",
+            "percent": 95,
+            "scoring_rows": int(score_mask.sum()),
+            "timings": timings,
+        }
+    )
     store.write_json(store.artifact_path(model_id, "manifest"), manifest)
 
     result = store.activate_model(model_id) if activate else store.model_list_item(model_dir, manifest, store.active_model_id())

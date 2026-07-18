@@ -26,6 +26,10 @@ export function createGlmModelNavigator({
         aic: modelNumberOrNull(diagnostics.aic),
         bic: modelNumberOrNull(diagnostics.bic),
         training_rows: Number(model.training_rows || diagnostics.training_rows || 0),
+        fit_ms: timingMilliseconds(model, "fit_ms"),
+        fit_display: timingDisplay(model, "fit_ms"),
+        elapsed_ms: timingMilliseconds(model, "elapsed_ms"),
+        elapsed_display: timingDisplay(model, "elapsed_ms"),
       };
     });
   }
@@ -50,6 +54,8 @@ export function createGlmModelNavigator({
             <th>AIC</th>
             <th>BIC</th>
             <th>rows</th>
+            <th>fit time</th>
+            <th>overall time</th>
           </tr>
         </thead>
         <tbody>
@@ -79,6 +85,8 @@ export function createGlmModelNavigator({
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.aic))}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.bic))}</td>
         <td class="numeric">${Number(model.training_rows || diagnostics.training_rows || 0).toLocaleString()}</td>
+        <td class="numeric">${escapeHtml(timingDisplay(model, "fit_ms"))}</td>
+        <td class="numeric">${escapeHtml(timingDisplay(model, "elapsed_ms"))}</td>
       </tr>
     `;
   }
@@ -98,4 +106,25 @@ export function createGlmModelNavigator({
     rowHtml,
     rows,
   };
+}
+
+function timingMilliseconds(model, name) {
+  const milliseconds = Number(model?.timings?.[name]);
+  return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : -1;
+}
+
+function timingDisplay(model, name) {
+  return formatMilliseconds(timingMilliseconds(model, name));
+}
+
+function formatMilliseconds(value) {
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "--";
+  if (milliseconds < 1000) return `${Math.round(milliseconds).toLocaleString()}ms`;
+  const seconds = milliseconds / 1000;
+  if (seconds < 60) return `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })}s`;
+  const roundedSeconds = Math.round(seconds);
+  const minutes = Math.floor(roundedSeconds / 60);
+  const remainder = roundedSeconds % 60;
+  return `${minutes}m ${remainder.toString().padStart(2, "0")}s`;
 }

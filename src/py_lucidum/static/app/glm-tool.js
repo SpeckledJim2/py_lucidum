@@ -43,6 +43,13 @@ function glmAutoModelTimeLabel(date = new Date()) {
   return `${hour}:${minute}:${second}`;
 }
 
+export function glmBuildReadyBadgeLabel(progress = null) {
+  const phase = String(progress?.phase || "").trim().toLowerCase();
+  return phase === "scoring" || phase === "writing" || phase === "succeeded"
+    ? "Scoring GLM..."
+    : "Training GLM...";
+}
+
 function modelNumberOrNull(value) {
   return sharedModelNumberOrNull(value);
 }
@@ -2137,6 +2144,7 @@ export function createGlmTool({
       pollTimer = null;
     }
     isBuilding = false;
+    setAppReadyStatus("Ready");
     liveProgress = { phase: "failed", message: String(message || "GLM training did not save a model") };
     renderLiveProgress(liveProgress);
     setGlmNotice("");
@@ -2183,9 +2191,13 @@ export function createGlmTool({
   function buildStatusHtml(progress) {
     if (!progress) return "";
     const main = String(progress.message || progress.phase || "");
-    const rows = Number(progress.training_rows || 0);
+    const phase = String(progress.phase || "").trim().toLowerCase();
+    const postFit = phase === "scoring" || phase === "writing" || phase === "succeeded";
+    const rows = Number(postFit ? (progress.scoring_rows || 0) : (progress.training_rows || 0));
     const cells = Number(progress.cells || 0);
-    const detail = rows ? `${rows.toLocaleString()} training rows` : (cells ? `${cells.toLocaleString()} cells` : "");
+    const detail = rows
+      ? `${rows.toLocaleString()} ${postFit ? "rows to score" : "training rows"}`
+      : (cells ? `${cells.toLocaleString()} cells` : "");
     return `<span class="glm-build-status-main">${escapeHtml(main)}</span>${detail ? `<span class="glm-build-status-detail">${escapeHtml(detail)}</span>` : ""}`;
   }
 
@@ -2199,6 +2211,7 @@ export function createGlmTool({
   }
 
   function renderLiveProgress(progress) {
+    if (isBuilding) setAppReadyStatus(glmBuildReadyBadgeLabel(progress));
     const status = el("glmBuildStatus");
     if (!status) return;
     status.innerHTML = buildStatusHtml(progress);
@@ -2609,6 +2622,8 @@ export function createGlmTool({
           { title: "AIC", field: "aic", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true },
           { title: "BIC", field: "bic", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 96, headerSort: true },
           { title: "Rows", field: "training_rows", sorter: "number", formatter: (cell) => Number(cell.getValue() || 0).toLocaleString(), hozAlign: "right", headerHozAlign: "right", width: 86, headerSort: true },
+          { title: "Fit time", field: "fit_ms", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().fit_display), hozAlign: "right", headerHozAlign: "right", width: 84, headerSort: true, tooltip: "Glum coefficient fitting time" },
+          { title: "Overall time", field: "elapsed_ms", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().elapsed_display), hozAlign: "right", headerHozAlign: "right", width: 104, headerSort: true, tooltip: "Full GLM build time, including fitting, scoring, diagnostics, feature importance, and artifact writing" },
         ],
       });
       modelTable.on("rowSelectionChanged", syncSelectedModelsFromTable);

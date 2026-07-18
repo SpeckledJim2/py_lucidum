@@ -39,7 +39,19 @@ def error_response(exc: Exception) -> dict[str, Any]:
     }
 
 
-def run_worker(request_path: Path, response_path: Path, *, dataset_cache: dict[str, tuple[tuple[int, int], Dataset]] | None = None) -> int:
+def write_progress(path: Path, progress: dict[str, Any]) -> None:
+    pending_path = path.with_name(f"{path.name}.tmp")
+    pending_path.write_text(json.dumps(progress, default=str), encoding="utf-8")
+    pending_path.replace(path)
+
+
+def run_worker(
+    request_path: Path,
+    response_path: Path,
+    *,
+    dataset_cache: dict[str, tuple[tuple[int, int], Dataset]] | None = None,
+    progress_callback: Any = None,
+) -> int:
     request = json.loads(request_path.read_text(encoding="utf-8"))
     dataset_path = Path(str(request["dataset_path"]))
     payload = request.get("payload")
@@ -48,7 +60,16 @@ def run_worker(request_path: Path, response_path: Path, *, dataset_cache: dict[s
     activate = bool(request.get("activate", True))
     dataset = cached_dataset(dataset_path, dataset_cache)
     store = GlmModelStore(dataset_path)
-    result = _train_model_impl(dataset, store, payload, activate=activate)
+    progress_path_value = str(request.get("progress_path") or "").strip()
+    progress_path = Path(progress_path_value) if progress_path_value else None
+
+    def report_progress(progress: dict[str, Any]) -> None:
+        if progress_callback is not None:
+            progress_callback(progress)
+        if progress_path is not None:
+            write_progress(progress_path, progress)
+
+    result = _train_model_impl(dataset, store, payload, activate=activate, progress_callback=report_progress)
     response_path.write_text(json.dumps({"ok": True, "result": result}, default=str), encoding="utf-8")
     return 0
 
@@ -64,11 +85,16 @@ def run_server() -> int:
             return 0
         request_id = str(message.get("request_id") or "")
         response_path = Path(str(message.get("response_path") or ""))
+
+        def report_progress(progress: dict[str, Any]) -> None:
+            print(json.dumps({"request_id": request_id, "type": "progress", "progress": progress}, default=str), flush=True)
+
         try:
             run_worker(
                 Path(str(message.get("request_path") or "")),
                 response_path,
                 dataset_cache=dataset_cache,
+                progress_callback=report_progress,
             )
             ack = {"request_id": request_id, "ok": True}
         except Exception as exc:  # returned to the parent build job

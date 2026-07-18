@@ -559,13 +559,15 @@
         if (!node) return;
         node.textContent = message || "";
         node.classList.toggle("ready", stateClass === "ready");
+        node.classList.toggle("busy", stateClass === "busy");
         node.classList.toggle("error", stateClass === "error");
         node.classList.toggle("hidden", !message);
         scheduleDatasetMetaCompactCheck();
       }
 
       function setReadyBadge(message = "Ready") {
-        setStartupProgress(message || "Ready", "ready");
+        const text = message || "Ready";
+        setStartupProgress(text, text === "Ready" ? "ready" : "busy");
       }
 
       function currentTelemetryAction(snapshot) {
