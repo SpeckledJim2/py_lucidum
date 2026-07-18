@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -21,11 +22,21 @@ def run_worker(request_path: Path, response_path: Path) -> int:
     dataset = Dataset(dataset_path)
     store = GlmModelStore(dataset_path)
     gbm_store = GbmModelStore(dataset_path) if request.get("gbm_available") else None
+    progress_path = Path(str(request["progress_path"])) if request.get("progress_path") else None
+
+    def publish_progress(progress: dict[str, object]) -> None:
+        if progress_path is None:
+            return
+        pending_path = progress_path.with_suffix(f".{os.getpid()}.tmp")
+        pending_path.write_text(json.dumps(progress, default=str), encoding="utf-8")
+        pending_path.replace(progress_path)
+
     result = _build_tabulations_impl(
         dataset,
         store,
         payload,
         request.get("feature_spec"),
+        progress_callback=publish_progress,
         gbm_store=gbm_store,
     )
     response_path.write_text(json.dumps({"ok": True, "result": result}, default=str), encoding="utf-8")

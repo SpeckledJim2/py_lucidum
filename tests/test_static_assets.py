@@ -899,6 +899,18 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('id="lineBarTabs" class="tabs hidden"', index)
         self.assertNotIn('id="lineBarTabs" class="tool-screen-nav', index)
 
+    def test_glm_tabulation_reports_table_and_row_scoring_progress(self) -> None:
+        glm = (
+            Path(__file__).resolve().parents[1]
+            / "src/py_lucidum/static/app/glm-tool.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("export function glmTabulationReadyBadgeLabel", glm)
+        self.assertIn('liveProgress = { phase: "queued", message: "Tabulating GLM..." };', glm)
+        self.assertIn('? "Scoring tabulations..."', glm)
+        self.assertIn(': "Tabulating GLM...";', glm)
+        self.assertIn("else if (isTabulating) setAppReadyStatus(glmTabulationReadyBadgeLabel(progress));", glm)
+
     def test_sidebar_rail_and_control_pane_use_distinct_theme_tokens(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")

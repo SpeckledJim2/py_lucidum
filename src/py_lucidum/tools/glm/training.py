@@ -58,6 +58,13 @@ class PredictionFrameResult:
     fitted_na_rows: int
 
 
+@dataclass(frozen=True)
+class PostFitDesignMatrix:
+    full_matrix: Any
+    predictor_matrix: Any
+    diagnostics: dict[str, Any]
+
+
 def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 1)
 
@@ -841,19 +848,7 @@ def _matrix_to_numpy(matrix: Any, np: Any) -> Any:
     return np.asarray(matrix, dtype=float)
 
 
-def design_matrix_diagnostics(
-    formula: str,
-    fit_frame: Any,
-    context: dict[str, Any],
-    np: Any,
-    *,
-    ensure_full_rank: bool,
-) -> dict[str, Any]:
-    from formulaic import model_matrix as formulaic_model_matrix  # type: ignore[import-not-found]
-
-    matrices = formulaic_model_matrix(formula, fit_frame, context=context, ensure_full_rank=ensure_full_rank)
-    matrix = getattr(matrices, "rhs", matrices)
-    values = _matrix_to_numpy(matrix, np)
+def _design_matrix_diagnostics_from_values(values: Any, np: Any) -> dict[str, Any]:
     if values.ndim == 1:
         values = values.reshape((-1, 1))
     if values.ndim != 2:
@@ -875,6 +870,61 @@ def design_matrix_diagnostics(
         "condition_number": condition_number if condition_number_finite else None,
         "condition_number_finite": condition_number_finite,
     }
+
+
+def _design_matrix_column_names(matrix: Any) -> list[str]:
+    model_spec = getattr(matrix, "model_spec", None)
+    names = getattr(model_spec, "column_names", None)
+    return [str(name) for name in names] if names is not None else []
+
+
+def _canonical_design_column_name(name: str) -> str:
+    # Glum's Tabmat materializer omits Formulaic's treatment-contrast `T.` marker.
+    return str(name).replace("[T.", "[")
+
+
+def post_fit_design_matrix(
+    formula: str,
+    fit_frame: Any,
+    model: Any,
+    context: dict[str, Any],
+    np: Any,
+    *,
+    ensure_full_rank: bool,
+) -> PostFitDesignMatrix:
+    from formulaic import model_matrix as formulaic_model_matrix  # type: ignore[import-not-found]
+
+    matrices = formulaic_model_matrix(formula, fit_frame, context=context, ensure_full_rank=ensure_full_rank)
+    matrix = getattr(matrices, "rhs", matrices)
+    full_matrix = _matrix_to_numpy(matrix, np)
+    if full_matrix.ndim == 1:
+        full_matrix = full_matrix.reshape((-1, 1))
+    diagnostics = _design_matrix_diagnostics_from_values(full_matrix, np)
+
+    matrix_columns = _design_matrix_column_names(matrix)
+    feature_names = [str(name) for name in getattr(model, "feature_names_", [])]
+    has_intercept = bool(getattr(model, "fit_intercept", True))
+    predictor_columns = matrix_columns
+    predictor_matrix = full_matrix
+    if has_intercept and matrix_columns[:1] == ["Intercept"]:
+        predictor_columns = matrix_columns[1:]
+        predictor_matrix = full_matrix[:, 1:]
+        if not bool(np.shares_memory(full_matrix, predictor_matrix)):
+            raise RuntimeError("The GLM predictor matrix could not be represented as a no-copy view")
+    if (
+        (has_intercept and matrix_columns[:1] != ["Intercept"])
+        or [_canonical_design_column_name(name) for name in predictor_columns]
+        != [_canonical_design_column_name(name) for name in feature_names]
+    ):
+        raise RuntimeError(
+            "The post-fit GLM design matrix columns do not align with Glum's fitted feature names "
+            f"(Formulaic: {matrix_columns!r}; Glum: {feature_names!r})"
+        )
+    return PostFitDesignMatrix(
+        full_matrix=full_matrix,
+        predictor_matrix=predictor_matrix,
+        diagnostics=diagnostics,
+    )
 
 
 def check_unpenalized_design_matrix(diagnostics: dict[str, Any]) -> None:
@@ -1107,17 +1157,15 @@ def glm_feature_importance_rows(
     return sorted(rows, key=lambda row: (-float(row["importance"] or 0.0), str(row["feature"]).lower()))
 
 
-def _shared_post_fit_design_matrix(
-    model: Any,
-    fit_frame: Any,
+def _shared_prediction_design_matrix(
+    predictor_matrix: Any,
     fit_mask: Any,
     score_mask: Any,
-    context: dict[str, Any],
     np: Any,
 ) -> Any | None:
     if not np.array_equal(fit_mask, score_mask):
         return None
-    return np.asarray(model_matrix(model, fit_frame, context), dtype=float)
+    return predictor_matrix
 
 
 def safe_metric(callable_metric: Any, *args: Any, **kwargs: Any) -> float | None:
@@ -1379,16 +1427,6 @@ def _train_model_impl(
     fit_frame = frame.filter(pl.Series("__lucidum_fit_mask", fit_mask)).with_columns(pl.Series(TARGET_COLUMN, y_fit))
     fit_weight_values = np.asarray(fit_weight[fit_mask], dtype=float) if fit_weight is not None else None
     fit_offset_values = np.asarray(offset_values[fit_mask], dtype=float) if offset_values is not None else None
-    design_diagnostics = design_matrix_diagnostics(
-        estimator_fitted_formula,
-        fit_frame,
-        context,
-        np,
-        ensure_full_rank=drop_first,
-    )
-    if not is_penalized:
-        check_unpenalized_design_matrix(design_diagnostics)
-    design_warnings = design_matrix_warnings(design_diagnostics, penalized=is_penalized)
 
     progress({"phase": "fitting", "message": "Fitting GLM", "percent": 35, "training_rows": int(fit_mask.sum())})
     estimator_kwargs = {
@@ -1452,25 +1490,51 @@ def _train_model_impl(
     )
     score_started = time.perf_counter()
     with _capture_glm_warnings() as captured_warnings:
-        # Matching row sets can share one fitted matrix across both post-fit consumers.
-        shared_design_matrix = _shared_post_fit_design_matrix(
-            estimator,
+        prediction_result = None
+        if not np.array_equal(fit_mask, score_mask):
+            # Avoid retaining the fitting matrix while raw-frame scoring builds
+            # a separate matrix for a larger or differently ordered row set.
+            prediction_result = build_predictions_frame(
+                frame,
+                estimator,
+                denominator_column,
+                context,
+                np,
+                pl,
+                offset_values=offset_values,
+            )
+
+        # Glum augments its Formulaic context with Tabmat encoders during fitting.
+        # Rebuild Lucidum's standard context for the dense diagnostic matrix.
+        fit_design = post_fit_design_matrix(
+            estimator_fitted_formula,
             fit_frame,
+            estimator,
+            formula_context(np),
+            np,
+            ensure_full_rank=drop_first,
+        )
+        design_diagnostics = fit_design.diagnostics
+        if not is_penalized:
+            check_unpenalized_design_matrix(design_diagnostics)
+        design_warnings = design_matrix_warnings(design_diagnostics, penalized=is_penalized)
+        prediction_design_matrix = _shared_prediction_design_matrix(
+            fit_design.predictor_matrix,
             fit_mask,
             score_mask,
-            context,
             np,
         )
-        prediction_result = build_predictions_frame(
-            frame,
-            estimator,
-            denominator_column,
-            context,
-            np,
-            pl,
-            offset_values=offset_values,
-            design_matrix=shared_design_matrix,
-        )
+        if prediction_result is None:
+            prediction_result = build_predictions_frame(
+                frame,
+                estimator,
+                denominator_column,
+                context,
+                np,
+                pl,
+                offset_values=offset_values,
+                design_matrix=prediction_design_matrix,
+            )
         predictions = prediction_result.frame
         scored_rows = prediction_result.scored_rows
         fitted_na_rows = prediction_result.fitted_na_rows
@@ -1502,7 +1566,7 @@ def _train_model_impl(
             context,
             np,
             pd,
-            design_matrix=shared_design_matrix,
+            design_matrix=fit_design.predictor_matrix,
         )
         diagnostics = diagnostics_payload(
             estimator,
@@ -1512,6 +1576,8 @@ def _train_model_impl(
             np,
             len(coefficients),
         )
+    del prediction_design_matrix
+    del fit_design
     numerical_warnings.extend(_glm_numerical_warning_messages(captured_warnings))
     model_warnings = _dedupe_warnings(
         [

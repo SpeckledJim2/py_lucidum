@@ -29,7 +29,7 @@ from py_lucidum.tools.glm.tabulation import build_tabulations, export_tabulation
 from py_lucidum.tools.glm.training import (
     MissingGlmDependency,
     _raise_actionable_singular_matrix_error,
-    _shared_post_fit_design_matrix,
+    _shared_prediction_design_matrix,
     _suppress_tabmat_mixed_dtype_warning,
     build_predictions_frame,
     coefficient_rows,
@@ -39,6 +39,7 @@ from py_lucidum.tools.glm.training import (
     glm_dependencies,
     glm_training_dependencies,
     glm_feature_importance_rows,
+    post_fit_design_matrix,
     data_frame_from_dataset,
     required_training_columns,
     stop_persistent_glm_fit_worker,
@@ -1401,6 +1402,33 @@ FROM {dataset.relation_sql_for_source(source_id)}
 
         self.assertEqual(store.list_models(), [])
 
+    def test_ill_conditioned_post_fit_matrix_refuses_to_save_model(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "ill_conditioned.csv"
+        rows = ["y,x\n"]
+        for index in range(1, 51):
+            rows.append(f"{1 + index / 10:.17g},{index * 1e-14:.17g}\n")
+        path.write_text("".join(rows), encoding="utf-8")
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+
+        with self.assertRaisesRegex(
+            Exception,
+            "Training did not save a model: the GLM design matrix is too ill-conditioned .*condition number 6.93e\\+12",
+        ):
+            train_model(
+                dataset,
+                store,
+                {
+                    "formula": "1 + x",
+                    "response_column": "y",
+                    "family": "normal",
+                    "training_scope": "all",
+                },
+            )
+
+        self.assertEqual(store.list_models(), [])
+
     def test_rank_warning_formula_persists_warning_on_successful_regularized_fit(self) -> None:
         self.require_glm_dependencies()
         dataset = Dataset(self.data_path)
@@ -1864,28 +1892,25 @@ ORDER BY __lucidum_row_id
             else:
                 self.assertAlmostEqual(float(result["diagnostics"][key]), float(expected_diagnostics[key]), places=10)
 
-        original_spec = estimator.X_model_spec_
+        from formulaic import model_matrix as formulaic_model_matrix
 
-        class CountingSpec:
-            def __init__(self) -> None:
-                self.calls = 0
-
-            def __getattr__(self, name: str) -> Any:
-                return getattr(original_spec, name)
-
-            def get_model_matrix(self, frame: Any, *, context: dict[str, Any]) -> Any:
-                self.calls += 1
-                return original_spec.get_model_matrix(frame, context=context)
-
-        counting_spec = CountingSpec()
-        estimator.X_model_spec_ = counting_spec
+        fit_frame = score_frame.with_columns(
+            pl.Series(TARGET_COLUMN, score_frame.get_column("actualNumerator").to_numpy())
+        )
         row_mask = np.ones(score_frame.height, dtype=bool)
-        shared_matrix = _shared_post_fit_design_matrix(
-            estimator,
-            score_frame,
+        with patch("formulaic.model_matrix", wraps=formulaic_model_matrix) as captured_matrix_build:
+            fit_design = post_fit_design_matrix(
+                f"{TARGET_COLUMN} ~ 1 + bs(Age, df=4)",
+                fit_frame,
+                estimator,
+                context,
+                np,
+                ensure_full_rank=True,
+            )
+        shared_matrix = _shared_prediction_design_matrix(
+            fit_design.predictor_matrix,
             row_mask,
             row_mask.copy(),
-            context,
             np,
         )
         with patch.object(estimator, "predict", wraps=estimator.predict) as captured_predict:
@@ -1909,10 +1934,98 @@ ORDER BY __lucidum_row_id
             design_matrix=shared_matrix,
         )
 
-        self.assertEqual(counting_spec.calls, 1)
+        self.assertEqual(captured_matrix_build.call_count, 1)
+        self.assertIs(shared_matrix, fit_design.predictor_matrix)
+        self.assertTrue(np.shares_memory(fit_design.full_matrix, fit_design.predictor_matrix))
+        self.assertEqual(fit_design.full_matrix.shape[1], fit_design.predictor_matrix.shape[1] + 1)
+        self.assertEqual(fit_design.diagnostics["columns"], fit_design.full_matrix.shape[1])
         self.assertIs(captured_predict.call_args.args[0], shared_matrix)
         np.testing.assert_allclose(replay_predictions.response_values, expected_predictions, rtol=1e-12, atol=1e-12)
         self.assertEqual(replay_importance, expected_importance)
+
+    def test_glm_post_fit_design_matrix_aligns_intercept_variants_and_categoricals(self) -> None:
+        self.require_glm_dependencies()
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        from py_lucidum.tools.glm.terms import model_matrix as fitted_model_matrix
+        _, _, _, _, _, pl = glm_training_dependencies()
+
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        cases = (
+            ("1 + Age + C(Segment)", True, False),
+            ("0 + bs(Age, df=4)", False, False),
+            ("1", False, True),
+        )
+        for formula, estimator_has_intercept, intercept_only in cases:
+            with self.subTest(formula=formula):
+                payload = {
+                    "formula": formula,
+                    "response_column": "actualNumerator",
+                    "family": "normal",
+                    "training_scope": "all",
+                }
+                result = train_model(dataset, store, payload, activate=False)
+                manifest = store.manifest(result["model_id"])
+                validation = validate_request(dataset, payload)
+                source_columns = required_training_columns(dataset, validation)
+                fit_frame = data_frame_from_dataset(dataset, source_columns)
+                fitted_formula = str(validation["formula"]["fitted"])
+                if intercept_only:
+                    internal_column = str(manifest["formula"]["internal_intercept_column"])
+                    fit_frame = fit_frame.with_columns(pl.lit(1.0).alias(internal_column))
+                    fitted_formula = f"{TARGET_COLUMN} ~ 0 + `{internal_column}`"
+                fit_frame = fit_frame.with_columns(
+                    pl.Series(TARGET_COLUMN, fit_frame.get_column("actualNumerator").to_numpy())
+                )
+                with store.artifact_path(result["model_id"], "estimator").open("rb") as handle:
+                    estimator = pickle.load(handle)
+                context = formula_context(np)
+                fit_design = post_fit_design_matrix(
+                    fitted_formula,
+                    fit_frame,
+                    estimator,
+                    context,
+                    np,
+                    ensure_full_rank=True,
+                )
+                expected_predictors = np.asarray(fitted_model_matrix(estimator, fit_frame, context), dtype=float)
+
+                self.assertEqual(bool(estimator.fit_intercept), estimator_has_intercept)
+                self.assertEqual(fit_design.predictor_matrix.shape, expected_predictors.shape)
+                self.assertEqual(fit_design.diagnostics["columns"], fit_design.full_matrix.shape[1])
+                np.testing.assert_allclose(fit_design.predictor_matrix, expected_predictors, rtol=0, atol=0)
+                if estimator_has_intercept:
+                    self.assertEqual(fit_design.full_matrix.shape[1], fit_design.predictor_matrix.shape[1] + 1)
+                    self.assertTrue(np.shares_memory(fit_design.full_matrix, fit_design.predictor_matrix))
+                else:
+                    self.assertIs(fit_design.predictor_matrix, fit_design.full_matrix)
+
+    def test_glm_post_fit_design_matrix_rejects_misaligned_feature_names(self) -> None:
+        self.require_glm_dependencies()
+        try:
+            import numpy as np
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+        _, _, _, _, _, pl = glm_training_dependencies()
+
+        class MisalignedModel:
+            fit_intercept = False
+            feature_names_ = ["not_x"]
+
+        frame = pl.DataFrame({TARGET_COLUMN: [1.0, 2.0, 3.0], "x": [1.0, 2.0, 3.0]})
+        with self.assertRaisesRegex(RuntimeError, "do not align with Glum's fitted feature names"):
+            post_fit_design_matrix(
+                f"{TARGET_COLUMN} ~ 0 + x",
+                frame,
+                MisalignedModel(),
+                formula_context(np),
+                np,
+                ensure_full_rank=True,
+            )
 
     def test_glm_shared_design_matrix_falls_back_when_fit_and_score_rows_differ(self) -> None:
         self.require_glm_dependencies()
@@ -1946,14 +2059,30 @@ ORDER BY __lucidum_row_id
         score_mask = np.asarray([True, True, True, False, False, True])
         training_fit_mask = np.asarray([True, False, False, False, False, True])
         all_fit_mask = np.asarray([True, True, False, False, False, True])
-        self.assertIsNone(_shared_post_fit_design_matrix(None, None, training_fit_mask, score_mask, {}, np))
-        self.assertIsNone(_shared_post_fit_design_matrix(None, None, all_fit_mask, score_mask, {}, np))
+        predictor_matrix = np.ones((2, 1))
+        self.assertIsNone(_shared_prediction_design_matrix(predictor_matrix, training_fit_mask, score_mask, np))
+        self.assertIsNone(_shared_prediction_design_matrix(predictor_matrix, all_fit_mask, score_mask, np))
         self.assertEqual(training_result["diagnostics"]["training_rows"], 2)
         self.assertEqual(all_result["diagnostics"]["training_rows"], 3)
-        for result in (training_result, all_result):
+        _, _, _, _, pd, pl = glm_training_dependencies()
+        source_frame = data_frame_from_dataset(dataset, ["y", "denominator", "x", "log_offset", "SAMPLE"])
+        for result, fit_ids in ((training_result, [1, 6]), (all_result, [1, 2, 6])):
             prediction_rows = store.read_parquet_records(store.artifact_path(result["model_id"], "predictions"))
             self.assertEqual([row["__lucidum_row_id"] for row in prediction_rows], [1, 2, 3, 6])
             self.assertTrue(all(row["glm_prediction"] is not None for row in prediction_rows))
+            fit_frame = source_frame.filter(pl.col("__lucidum_row_id").is_in(fit_ids))
+            with store.artifact_path(result["model_id"], "estimator").open("rb") as handle:
+                estimator = pickle.load(handle)
+            expected_importance = glm_feature_importance_rows(
+                estimator,
+                fit_frame,
+                ["x"],
+                np.ones(len(fit_ids)),
+                formula_context(np),
+                np,
+                pd,
+            )
+            self.assertEqual(result["feature_importance"], expected_importance)
 
     def test_glm_training_aligns_weighted_offset_diagnostics(self) -> None:
         self.require_glm_dependencies()
@@ -2022,6 +2151,8 @@ ORDER BY __lucidum_row_id
 
     def test_glm_tabulations_persist_predictions_and_publish_source_column(self) -> None:
         self.require_glm_dependencies()
+        _glum, glr, _glrcv, np, pd = glm_dependencies()
+        del _glum, _glrcv
         dataset = Dataset(self.data_path)
         store = GlmModelStore(self.data_path)
         result = train_model(
@@ -2037,7 +2168,8 @@ ORDER BY __lucidum_row_id
             ]
         }
 
-        payload = build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+        with patch.object(glr, "linear_predictor", side_effect=AssertionError("valid prediction artifacts must avoid rescoring")):
+            payload = glm_tabulation._build_tabulations_impl(dataset, store, {"model_ids": [model_id]}, feature_spec)
         tab_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))
 
         self.assertEqual(payload["model_ids"], [model_id])
@@ -2045,7 +2177,6 @@ ORDER BY __lucidum_row_id
         diagnostics = tab_manifest["diagnostics"]
         self.assertIn("mean_linear_error", diagnostics)
         self.assertIn("linear_sd_error", diagnostics)
-        _, _, _, np, pd = glm_dependencies()
         with store.artifact_path(model_id, "estimator").open("rb") as handle:
             estimator = pickle.load(handle)
         score_frame = glm_tabulation._tabulation_frame_from_dataset(dataset, ["Age", "Segment"])
@@ -2080,6 +2211,90 @@ ORDER BY __lucidum_row_id
         with dataset.lock:
             rows = dataset.con.execute(f"SELECT COUNT(glm_tabulated_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
         self.assertGreater(rows[0], 0)
+
+    def test_glm_tabulation_prediction_artifact_aligns_denominator_offset_and_ineligible_rows(self) -> None:
+        self.require_glm_dependencies()
+        _glum, glr, _glrcv, _np, pd = glm_dependencies()
+        del _glum, _glrcv, _np
+        path = self.root / "tabulation_prediction_alignment.csv"
+        path.write_text(
+            "y,denominator,x,log_offset,SAMPLE\n"
+            "10,1,1,0,training\n"
+            ",1,2,0,test\n"
+            "30,0,3,0,training\n"
+            "40,1,4,NaN,test\n"
+            "50,1,5,0,training\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "1 + x + offset(log_offset)",
+                "response_column": "y",
+                "denominator_column": "denominator",
+                "family": "normal",
+                "training_scope": "training",
+                "regularization": {"mode": "manual", "alpha": 0.1, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+
+        with patch.object(glr, "linear_predictor", side_effect=AssertionError("valid prediction artifacts must avoid rescoring")):
+            glm_tabulation._build_tabulations_impl(
+                dataset,
+                store,
+                {"model_ids": [model_id]},
+                {"rows": [{"feature": "x", "grouping": "Test", "base": "1", "min": "1", "max": "5", "banding": "1"}]},
+            )
+
+        prediction_rows = store.read_parquet_records(store.artifact_path(model_id, "predictions"))
+        self.assertEqual([row["__lucidum_row_id"] for row in prediction_rows], [1, 2, 5])
+        predictions = {int(row["__lucidum_row_id"]): float(row["glm_prediction_rate"]) for row in prediction_rows}
+        tabulated = pd.DataFrame(store.read_parquet_records(store.artifact_path(model_id, "tabulated_predictions")))
+        self.assertEqual(tabulated["__lucidum_row_id"].tolist(), [1, 2, 3, 4, 5])
+        self.assertEqual(tabulated.loc[tabulated["glm_tabulation_missing"], "__lucidum_row_id"].tolist(), [3, 4])
+        errors = pd.Series(
+            [
+                predictions[int(row["__lucidum_row_id"])] - float(row["glm_tabulated_linear_prediction"])
+                for row in tabulated.to_dict("records")
+                if int(row["__lucidum_row_id"]) in predictions
+            ]
+        )
+        diagnostics = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))["diagnostics"]
+        self.assertAlmostEqual(float(diagnostics["mean_linear_error"]), float(errors.mean()))
+        self.assertAlmostEqual(float(diagnostics["linear_sd_error"]), float(errors.std()))
+
+    def test_glm_tabulation_missing_prediction_artifact_falls_back_to_linear_predictor(self) -> None:
+        self.require_glm_dependencies()
+        _glum, glr, _glrcv, _np, _pd = glm_dependencies()
+        del _glum, _glrcv, _np, _pd
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        result = train_model(
+            dataset,
+            store,
+            {"formula": "Age", "response_column": "actualNumerator", "family": "normal", "training_scope": "all"},
+        )
+        model_id = result["model_id"]
+        store.artifact_path(model_id, "predictions").unlink()
+        original_linear_predictor = glr.linear_predictor
+        calls = 0
+
+        def counted_linear_predictor(estimator: Any, *args: Any, **kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            return original_linear_predictor(estimator, *args, **kwargs)
+
+        with patch.object(glr, "linear_predictor", autospec=True, side_effect=counted_linear_predictor):
+            glm_tabulation._build_tabulations_impl(dataset, store, {"model_ids": [model_id]}, {"rows": []})
+
+        diagnostics = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))["diagnostics"]
+        self.assertEqual(calls, 1)
+        self.assertIsNotNone(diagnostics["mean_linear_error"])
+        self.assertIsNotNone(diagnostics["linear_sd_error"])
 
     def test_glm_tabulation_manifest_indexes_follow_formula_order(self) -> None:
         self.require_glm_dependencies()
@@ -2140,11 +2355,26 @@ ORDER BY __lucidum_row_id
                 {"feature": "Segment", "grouping": "Driver", "base": "A"},
             ]
         }
+        progress: list[dict[str, Any]] = []
 
         with patch.dict(sys.modules, {"lightgbm": object()}):
-            payload = glm_tabulation.build_tabulations(dataset, store, {"model_ids": [model_id]}, feature_spec)
+            payload = glm_tabulation.build_tabulations(
+                dataset,
+                store,
+                {"model_ids": [model_id]},
+                feature_spec,
+                progress_callback=progress.append,
+            )
 
         self.assertEqual(payload["model_ids"], [model_id])
+        tabulating = [entry for entry in progress if entry.get("phase") == "tabulating"]
+        scoring = [entry for entry in progress if entry.get("phase") == "scoring"]
+        self.assertTrue(tabulating)
+        self.assertTrue(scoring)
+        self.assertFalse(any(" of " in str(entry.get("message") or "") for entry in progress))
+        self.assertTrue(all(entry.get("message") == "Tabulating GLM..." for entry in tabulating))
+        self.assertEqual(scoring[-1].get("message"), "Scoring tabulations...")
+        self.assertEqual(scoring[-1].get("scoring_rows"), 6)
         self.assertEqual(
             store.artifact_path(model_id, "tabulation_manifest"),
             store.tabulations_dir(model_id) / "tabulation_manifest.json",
@@ -2634,6 +2864,125 @@ COPY (
         self.assertEqual(component.iloc[1], 0.25)
         self.assertTrue(pd.isna(component.iloc[2]))
         self.assertTrue(pd.isna(component.iloc[3]))
+
+    def test_glm_tabulation_categorical_normalization_scales_with_distinct_values(self) -> None:
+        self.require_glm_dependencies()
+        _glum, _glr, _glrcv, np, pd = glm_dependencies()
+        del _glum, _glr, _glrcv
+        series = pd.Series([0, 1.0, "1", 2, None, np.nan] * 2_000, dtype=object)
+        original_normalizer = glm_tabulation._normalise_categorical_key
+
+        with patch(
+            "py_lucidum.tools.glm.tabulation._normalise_categorical_key",
+            wraps=original_normalizer,
+        ) as normalize:
+            result = glm_tabulation._normalise_categorical_series(series, ["0", "1"], pd)
+
+        self.assertEqual(normalize.call_count, 4)
+        self.assertEqual(result.iloc[0], "0")
+        self.assertEqual(result.iloc[1], "1")
+        self.assertEqual(result.iloc[2], "1")
+        self.assertEqual(result.iloc[3], 2)
+        self.assertTrue(pd.isna(result.iloc[4]))
+        self.assertTrue(pd.isna(result.iloc[5]))
+
+    def test_glm_tabulation_prediction_artifact_selects_rate_aligns_rows_and_rejects_legacy_values(self) -> None:
+        self.require_glm_dependencies()
+        _glum, _glr, _glrcv, np, pd = glm_dependencies()
+        del _glum, _glr, _glrcv
+        store = GlmModelStore(self.data_path)
+        model_id = "prediction-artifact-test"
+        store.create_model_dir(model_id)
+        prediction_path = store.artifact_path(model_id, "predictions")
+
+        class LogLink:
+            @staticmethod
+            def link(values: Any) -> Any:
+                return np.log(values)
+
+        class Estimator:
+            link_instance = LogLink()
+
+        frame = pd.DataFrame({"__lucidum_row_id": [1, 2, 3, 4]})
+        glm_tabulation.write_dataframe_parquet(
+            pd.DataFrame(
+                {
+                    "__lucidum_row_id": [3, 1],
+                    "glm_prediction": [300.0, 100.0],
+                    "glm_prediction_rate": [8.0, 2.0],
+                }
+            ),
+            prediction_path,
+        )
+
+        rate_eta = glm_tabulation._exact_linear_predictions_from_artifact(
+            store,
+            model_id,
+            {"denominator_column": "denominator"},
+            Estimator(),
+            frame,
+            np,
+            pd,
+        )
+        prediction_eta = glm_tabulation._exact_linear_predictions_from_artifact(
+            store,
+            model_id,
+            {"denominator_column": ""},
+            Estimator(),
+            frame,
+            np,
+            pd,
+        )
+        self.assertAlmostEqual(float(rate_eta.iloc[0]), math.log(2.0))
+        self.assertTrue(pd.isna(rate_eta.iloc[1]))
+        self.assertAlmostEqual(float(rate_eta.iloc[2]), math.log(8.0))
+        self.assertTrue(pd.isna(rate_eta.iloc[3]))
+        self.assertAlmostEqual(float(prediction_eta.iloc[0]), math.log(100.0))
+        self.assertAlmostEqual(float(prediction_eta.iloc[2]), math.log(300.0))
+
+        glm_tabulation.write_dataframe_parquet(
+            pd.DataFrame({"__lucidum_row_id": [1], "glm_prediction": [100.0]}),
+            prediction_path,
+        )
+        self.assertIsNone(
+            glm_tabulation._exact_linear_predictions_from_artifact(
+                store,
+                model_id,
+                {"denominator_column": "denominator"},
+                Estimator(),
+                frame,
+                np,
+                pd,
+            )
+        )
+
+        glm_tabulation.write_dataframe_parquet(
+            pd.DataFrame({"__lucidum_row_id": [1], "glm_prediction": [0.0]}),
+            prediction_path,
+        )
+        self.assertIsNone(
+            glm_tabulation._exact_linear_predictions_from_artifact(
+                store,
+                model_id,
+                {"denominator_column": ""},
+                Estimator(),
+                frame,
+                np,
+                pd,
+            )
+        )
+        prediction_path.unlink()
+        self.assertIsNone(
+            glm_tabulation._exact_linear_predictions_from_artifact(
+                store,
+                model_id,
+                {"denominator_column": ""},
+                Estimator(),
+                frame,
+                np,
+                pd,
+            )
+        )
 
     def test_glm_tabulation_vectorized_interaction_lookup_writes_components(self) -> None:
         self.require_glm_dependencies()

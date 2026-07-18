@@ -50,6 +50,13 @@ export function glmBuildReadyBadgeLabel(progress = null) {
     : "Training GLM...";
 }
 
+export function glmTabulationReadyBadgeLabel(progress = null) {
+  const phase = String(progress?.phase || "").trim().toLowerCase();
+  return phase === "scoring" || phase === "writing" || phase === "succeeded"
+    ? "Scoring tabulations..."
+    : "Tabulating GLM...";
+}
+
 function modelNumberOrNull(value) {
   return sharedModelNumberOrNull(value);
 }
@@ -1594,7 +1601,7 @@ export function createGlmTool({
       return;
     }
     isTabulating = true;
-    liveProgress = { phase: "queued", message: "Starting model tabulations" };
+    liveProgress = { phase: "queued", message: "Tabulating GLM..." };
     renderLiveProgress(liveProgress);
     renderTabulationsPanel();
     try {
@@ -1673,6 +1680,7 @@ export function createGlmTool({
       tabulationPollTimer = null;
     }
     isTabulating = false;
+    setAppReadyStatus("Ready");
     liveProgress = { phase: "failed", message: String(message || "Model tabulation failed") };
     renderLiveProgress(liveProgress);
     renderTabulationsPanel();
@@ -2212,6 +2220,7 @@ export function createGlmTool({
 
   function renderLiveProgress(progress) {
     if (isBuilding) setAppReadyStatus(glmBuildReadyBadgeLabel(progress));
+    else if (isTabulating) setAppReadyStatus(glmTabulationReadyBadgeLabel(progress));
     const status = el("glmBuildStatus");
     if (!status) return;
     status.innerHTML = buildStatusHtml(progress);

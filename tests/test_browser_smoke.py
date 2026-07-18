@@ -9589,6 +9589,62 @@ COPY (
                 page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
                 page.get_by_role("tab", name="Tabulations").click()
                 page.locator("#glmTabulationModelGrid .tabulator-row").first.wait_for(timeout=10_000)
+                tabulation_job_phase = {"value": "tabulating"}
+
+                def tabulation_build_route(route: Any) -> None:
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "job_id": "glm-tabulation-progress-job",
+                                "status": "running",
+                                "progress": {"phase": "tabulating", "message": "Tabulating GLM...", "cells": 18},
+                            }
+                        ),
+                    )
+
+                def tabulation_job_route(route: Any) -> None:
+                    phase = tabulation_job_phase["value"]
+                    succeeded = phase == "succeeded"
+                    progress = (
+                        {"phase": "succeeded", "message": "Model tabulation complete", "percent": 100}
+                        if succeeded
+                        else {
+                            "phase": phase,
+                            "message": "Scoring tabulations..." if phase == "scoring" else "Tabulating GLM...",
+                            "cells": 18 if phase == "tabulating" else 0,
+                            "scoring_rows": 6 if phase == "scoring" else 0,
+                        }
+                    )
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "job_id": "glm-tabulation-progress-job",
+                                "status": "succeeded" if succeeded else "running",
+                                "result": {} if succeeded else None,
+                                "error": None,
+                                "progress": progress,
+                            }
+                        ),
+                    )
+
+                page.route("**/api/glm/tabulations/build", tabulation_build_route)
+                page.route("**/api/glm/tabulations/jobs/glm-tabulation-progress-job", tabulation_job_route)
+                page.locator("#glmBuildTabulationsBtn").click()
+                page.locator("#glmBuildStatus", has_text="Tabulating GLM...").wait_for(timeout=10_000)
+                page.locator("#startupProgress.busy", has_text="Tabulating GLM...").wait_for(timeout=10_000)
+                tabulation_job_phase["value"] = "scoring"
+                page.locator("#glmBuildStatus", has_text="Scoring tabulations...").wait_for(timeout=10_000)
+                page.locator("#glmBuildStatus", has_text="6 rows to score").wait_for(timeout=10_000)
+                page.locator("#startupProgress.busy", has_text="Scoring tabulations...").wait_for(timeout=10_000)
+                tabulation_job_phase["value"] = "succeeded"
+                page.locator("#glmBuildTabulationsBtn", has_text="Tabulate").wait_for(timeout=10_000)
+                page.locator("#startupProgress.ready", has_text="Ready").wait_for(timeout=10_000)
+                page.unroute("**/api/glm/tabulations/build", tabulation_build_route)
+                page.unroute("**/api/glm/tabulations/jobs/glm-tabulation-progress-job", tabulation_job_route)
                 page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age × Segment").click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
                 page.wait_for_function(

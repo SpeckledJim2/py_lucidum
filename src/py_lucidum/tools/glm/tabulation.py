@@ -325,6 +325,20 @@ def _normalise_categorical_key(value: Any, category_levels: list[Any] | None, pd
     return raw
 
 
+def _normalise_categorical_series(series: Any, category_levels: list[Any] | None, pd: Any) -> Any:
+    if not len(series):
+        return series.copy()
+    normalised_by_value: dict[Any, Any] = {}
+    for value in series.drop_duplicates():
+        try:
+            if pd.isna(value):
+                continue
+        except (TypeError, ValueError):
+            pass
+        normalised_by_value[value] = _normalise_categorical_key(value, category_levels, pd)
+    return series.map(normalised_by_value)
+
+
 def _clip_numeric_bound(
     feature: str,
     field: str,
@@ -385,7 +399,7 @@ def _base_value(
             raw_key = _normalise_categorical_key(raw, levels, pd)
             if raw_key in seen_values:
                 return raw_key, None, None
-        values = series.map(lambda value: _normalise_categorical_key(value, levels, pd)).dropna() if len(series) else []
+        values = _normalise_categorical_series(series, levels, pd).dropna() if len(series) else []
         if len(values):
             counts = values.value_counts(dropna=True)
             inferred = _json_value(counts.index[0]) if len(counts) else levels[0]
@@ -494,10 +508,8 @@ def _categorical_levels(frame: Any, fit_frame: Any, feature: str, base_value: An
         fitted = [_json_value(value) for value in category_levels if _json_value(value) is not None]
         all_values = list(dict.fromkeys(fitted))
         seen = set(all_values)
-        observed = [
-            _normalise_categorical_key(value, all_values, pd)
-            for value in (frame[feature].dropna().unique() if feature in frame.columns else [])
-        ]
+        observed_values = frame[feature].dropna().drop_duplicates() if feature in frame.columns else pd.Series(dtype=object)
+        observed = _normalise_categorical_series(observed_values, all_values, pd).dropna().tolist()
         unseen_values = sorted({value for value in observed if value is not None and value not in seen}, key=lambda value: str(value))
         all_values.extend(unseen_values)
         base_key = _normalise_categorical_key(base_value, all_values, pd)
@@ -592,7 +604,7 @@ def _prediction_frame(base: dict[str, Any], variables: list[str], grid: Any, pd:
 def _scored_feature_series(series: Any, meta: dict[str, Any], np: Any, pd: Any) -> Any:
     if not is_numeric_kind(str(meta.get("kind") or "")):
         category_levels = list(meta.get("category_levels") or [])
-        return series.map(lambda value: _normalise_categorical_key(value, category_levels, pd))
+        return _normalise_categorical_series(series, category_levels, pd)
     values = pd.to_numeric(series, errors="coerce")
     minimum = _as_number(meta.get("min"))
     maximum = _as_number(meta.get("max"))
@@ -630,6 +642,65 @@ def _component_from_table(frame: Any, table: Any, features: list[str], feature_m
         keys[feature] = _scored_feature_series(frame[feature], feature_meta[feature], np, pd)
     merged = keys.merge(lookup.drop_duplicates(subset=features), on=features, how="left", sort=False)
     return pd.Series(pd.to_numeric(merged["tabulated_linear"], errors="coerce").to_numpy(), index=frame.index, dtype=float)
+
+
+def _exact_linear_predictions_from_artifact(
+    store: GlmModelStore,
+    model_id: str,
+    manifest: dict[str, Any],
+    estimator: Any,
+    frame: Any,
+    np: Any,
+    pd: Any,
+) -> Any | None:
+    prediction_path = store.artifact_path(model_id, "predictions")
+    if not prediction_path.exists():
+        return None
+    prediction_column = "glm_prediction_rate" if manifest.get("denominator_column") else "glm_prediction"
+    con = duckdb.connect(database=":memory:")
+    try:
+        predictions = con.execute(
+            f"""
+SELECT
+  __lucidum_row_id,
+  {quote_ident(prediction_column)}
+FROM read_parquet({sql_literal(str(prediction_path))})
+"""
+        ).fetchdf()
+    except Exception:
+        return None
+    finally:
+        con.close()
+    if predictions.empty or "__lucidum_row_id" not in frame.columns:
+        return None
+
+    artifact_ids = pd.to_numeric(predictions["__lucidum_row_id"], errors="coerce")
+    frame_ids = pd.to_numeric(frame["__lucidum_row_id"], errors="coerce")
+    if artifact_ids.isna().any() or frame_ids.isna().any():
+        return None
+    artifact_integer_ids = artifact_ids.astype("int64")
+    frame_integer_ids = frame_ids.astype("int64")
+    if not (artifact_ids == artifact_integer_ids).all() or not (frame_ids == frame_integer_ids).all():
+        return None
+    artifact_ids = artifact_integer_ids
+    frame_ids = frame_integer_ids
+    if artifact_ids.duplicated().any() or not artifact_ids.isin(frame_ids).all():
+        return None
+
+    response_predictions = pd.to_numeric(predictions[prediction_column], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(response_predictions).all():
+        return None
+    try:
+        with np.errstate(all="ignore"):
+            linear_predictions = np.asarray(estimator.link_instance.link(response_predictions), dtype=float)
+    except Exception:
+        return None
+    if linear_predictions.shape != response_predictions.shape or not np.isfinite(linear_predictions).all():
+        return None
+
+    by_id = pd.Series(linear_predictions, index=artifact_ids.to_numpy(), dtype=float)
+    aligned = by_id.reindex(frame_ids.to_numpy()).to_numpy(dtype=float)
+    return pd.Series(aligned, index=frame.index, dtype=float)
 
 
 def _table_file_path(store: GlmModelStore, model_id: str, table_id: str) -> Path:
@@ -743,7 +814,7 @@ def _feature_value_mask(table: Any, feature: str, value: Any, feature_meta: dict
         return numbers.notna() & ((numbers.astype(float) - float(target)).abs() <= 1e-9)
     category_levels = list(feature_meta.get("category_levels") or [])
     target = _normalise_categorical_key(value, category_levels, pd)
-    return table[feature].map(lambda item: _normalise_categorical_key(item, category_levels, pd)) == target
+    return _normalise_categorical_series(table[feature], category_levels, pd) == target
 
 
 def _json_anchor_cell(anchor_cell: dict[str, Any], features: list[str]) -> dict[str, Any]:
@@ -1348,7 +1419,16 @@ def _build_model_tabulations(
         cell_count = 1
         for feature in features:
             cell_count *= max(1, len(table_feature_levels.get(feature, [])))
-        progress_callback({"phase": "tabulating", "message": f"Tabulating {table_label}", "model_id": model_id, "table_id": table_id, "cells": cell_count})
+        progress_callback(
+            {
+                "phase": "tabulating",
+                "message": "Tabulating GLM...",
+                "model_id": model_id,
+                "table_id": table_id,
+                "table_label": table_label,
+                "cells": cell_count,
+            }
+        )
         if cell_count > MAX_TABULATION_CELLS:
             warning = f"Skipped {table_label}: {cell_count:,} cells exceeds the 100,000-cell guard."
             warnings.append(warning)
@@ -1409,7 +1489,14 @@ def _build_model_tabulations(
     tables.insert(0, {"table_id": "base", "label": "base", "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": base_value, "max": base_value})
     _assign_table_indexes(tables)
 
-    progress_callback({"phase": "scoring", "message": f"Scoring tabulated GLM {model_id}", "model_id": model_id})
+    progress_callback(
+        {
+            "phase": "scoring",
+            "message": "Scoring tabulations...",
+            "model_id": model_id,
+            "scoring_rows": int(len(frame)),
+        }
+    )
     tabulated = frame[["__lucidum_row_id"]].copy()
     eta = pd.Series(base_value, index=frame.index, dtype=float)
     missing = pd.Series(False, index=frame.index, dtype=bool)
@@ -1446,20 +1533,32 @@ def _build_model_tabulations(
     tabulated["glm_tabulated_linear_prediction"] = eta.where(~missing, np.nan)
     tabulated["glm_tabulation_missing"] = missing
 
-    score_frame = frame.copy()
-    add_internal_intercept_column(score_frame, internal_intercept_column_from_manifest(manifest))
-    score_frame[TARGET_COLUMN] = 0.0
-    score_mask = pd.Series(True, index=frame.index)
-    offset_values = offset_values_for_frame(score_frame, offset_terms, context, np, pd)
-    if offset_values is not None:
-        score_mask = score_mask & offset_values.notna() & np.isfinite(offset_values.astype(float))
     try:
-        exact_eta = pd.Series(np.nan, index=frame.index, dtype=float)
-        exact_eta.loc[score_mask] = estimator.linear_predictor(
-            score_frame.loc[score_mask],
-            context=context,
-            offset=offset_values.loc[score_mask].astype(float).to_numpy() if offset_values is not None else None,
+        # Reuse saved scoring output; only legacy or unsafe artifacts need the
+        # much more expensive Formulaic model-matrix reconstruction below.
+        exact_eta = _exact_linear_predictions_from_artifact(
+            store,
+            model_id,
+            manifest,
+            estimator,
+            frame,
+            np,
+            pd,
         )
+        if exact_eta is None:
+            score_frame = frame.copy()
+            add_internal_intercept_column(score_frame, internal_intercept_column_from_manifest(manifest))
+            score_frame[TARGET_COLUMN] = 0.0
+            score_mask = pd.Series(True, index=frame.index)
+            offset_values = offset_values_for_frame(score_frame, offset_terms, context, np, pd)
+            if offset_values is not None:
+                score_mask = score_mask & offset_values.notna() & np.isfinite(offset_values.astype(float))
+            exact_eta = pd.Series(np.nan, index=frame.index, dtype=float)
+            exact_eta.loc[score_mask] = estimator.linear_predictor(
+                score_frame.loc[score_mask],
+                context=context,
+                offset=offset_values.loc[score_mask].astype(float).to_numpy() if offset_values is not None else None,
+            )
         error = exact_eta - tabulated["glm_tabulated_linear_prediction"]
         finite_error = error.dropna()
         mean_linear_error = json_safe_number(float(finite_error.mean())) if len(finite_error) else None
@@ -1571,6 +1670,14 @@ def should_isolate_glm_tabulation(model_refs: list[_TabulationModelRef]) -> bool
     )
 
 
+def _worker_progress(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def build_tabulations_in_subprocess(
     dataset: Dataset,
     payload: dict[str, Any],
@@ -1580,11 +1687,13 @@ def build_tabulations_in_subprocess(
     gbm_available: bool = False,
 ) -> dict[str, Any]:
     progress = progress_callback or (lambda _progress: None)
-    progress({"phase": "starting", "message": "Starting isolated GLM tabulation worker"})
+    progress({"phase": "tabulating", "message": "Tabulating GLM..."})
     with tempfile.TemporaryDirectory(prefix="lucidum-glm-tabulation-") as tmp_dir:
         tmp_path = Path(tmp_dir)
         request_path = tmp_path / "request.json"
         response_path = tmp_path / "response.json"
+        progress_path = tmp_path / "progress.json"
+        output_path = tmp_path / "worker.log"
         request_path.write_text(
             json.dumps(
                 {
@@ -1592,28 +1701,42 @@ def build_tabulations_in_subprocess(
                     "payload": payload,
                     "feature_spec": feature_spec,
                     "gbm_available": gbm_available,
+                    "progress_path": str(progress_path),
                 },
                 default=str,
             ),
             encoding="utf-8",
         )
-        completed = subprocess.run(
-            [sys.executable, "-m", "py_lucidum.tools.glm.tabulation_worker", str(request_path), str(response_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-            env={
-                **os.environ,
-                "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1",
-                "PY_LUCIDUM_GLM_TABULATION_WORKER": "1",
-            },
-        )
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "").strip()
+        last_progress: dict[str, Any] | None = None
+        with output_path.open("w+", encoding="utf-8") as output:
+            process = subprocess.Popen(
+                [sys.executable, "-m", "py_lucidum.tools.glm.tabulation_worker", str(request_path), str(response_path)],
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env={
+                    **os.environ,
+                    "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1",
+                    "PY_LUCIDUM_GLM_TABULATION_WORKER": "1",
+                },
+            )
+            while process.poll() is None:
+                worker_progress = _worker_progress(progress_path)
+                if worker_progress is not None and worker_progress != last_progress:
+                    progress(worker_progress)
+                    last_progress = worker_progress
+                time.sleep(0.02)
+            worker_progress = _worker_progress(progress_path)
+            if worker_progress is not None and worker_progress != last_progress:
+                progress(worker_progress)
+            output.seek(0)
+            worker_output = output.read().strip()
+        if process.returncode != 0:
+            detail = worker_output
             if len(detail) > 800:
                 detail = f"{detail[:800]}..."
             suffix = f" {detail}" if detail else ""
-            raise RuntimeError(f"GLM tabulation worker exited unexpectedly with code {completed.returncode}.{suffix}")
+            raise RuntimeError(f"GLM tabulation worker exited unexpectedly with code {process.returncode}.{suffix}")
         if not response_path.exists():
             raise RuntimeError("GLM tabulation worker exited without writing a response")
         response = json.loads(response_path.read_text(encoding="utf-8"))
@@ -1624,7 +1747,6 @@ def build_tabulations_in_subprocess(
     if not isinstance(result, dict):
         raise RuntimeError("GLM tabulation worker returned an invalid response")
     dataset.reload()
-    progress({"phase": "writing", "message": "GLM tabulation worker saved artifacts"})
     return result
 
 
@@ -1667,7 +1789,15 @@ def _build_tabulations_impl(
         raise ValueError("Choose at least one model to tabulate")
     results: list[dict[str, Any]] = []
     for index, model_ref in enumerate(model_refs, start=1):
-        progress({"phase": "starting", "message": f"Tabulating {model_ref.label_kind} {index} of {len(model_refs)}", "model_id": model_ref.model_id, "model_ref": model_ref.ref, "percent": int((index - 1) / len(model_refs) * 100)})
+        progress(
+            {
+                "phase": "starting",
+                "message": f"Tabulating {model_ref.label_kind}...",
+                "model_id": model_ref.model_id,
+                "model_ref": model_ref.ref,
+                "percent": int((index - 1) / len(model_refs) * 100),
+            }
+        )
         if model_ref.kind == "gbm":
             if gbm_store is None:
                 raise ValueError("GBM tabulation is unavailable because the GBM tool is not loaded")
