@@ -1,6 +1,7 @@
       body {
         --histogram-mean-color: #d13f3f;
         --histogram-median-color: #1f7a8c;
+        --histogram-bin-outline: #4b5563;
       }
 
       .visual-area.histogram-mode {
@@ -17,7 +18,7 @@
       }
 
       .histogram-bin-control {
-        min-width: 112px;
+        min-width: 84px;
       }
 
       .histogram-bin-input {
@@ -45,6 +46,10 @@
       .histogram-bin-input:not(:placeholder-shown) {
         color: var(--accent);
         font-weight: 700;
+      }
+
+      .histogram-bin-input[aria-invalid="true"] {
+        color: var(--danger, #b42318);
       }
 
       .app input.histogram-bin-input:focus {
@@ -141,7 +146,7 @@
       .histogram-wrap {
         display: grid;
         flex: 1 1 auto;
-        grid-template-columns: minmax(0, 1fr) minmax(240px, var(--histogram-stats-width, 310px));
+        grid-template-columns: minmax(0, 1fr) minmax(240px, var(--histogram-stats-width, 240px));
         height: auto;
         min-height: 0;
         min-width: 0;
@@ -173,7 +178,7 @@
       .histogram-split-resizer {
         bottom: 0;
         cursor: col-resize;
-        left: calc(100% - var(--histogram-stats-width, 310px));
+        left: calc(100% - var(--histogram-stats-width, 240px));
         min-width: 12px;
         position: absolute;
         top: 40px;
@@ -198,7 +203,7 @@
       #histogramGroupMeta:not(.hidden) {
         align-items: center;
         display: inline-flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         gap: 4px;
         justify-content: flex-end;
         max-width: 100%;
@@ -217,11 +222,13 @@
         background: var(--filter-applied-bg);
         border: 1px solid var(--filter-applied-border);
         border-radius: 4px;
+        box-sizing: border-box;
         color: var(--filter-applied-text);
         display: inline-flex;
         flex: 0 0 auto;
+        height: 13px;
         line-height: 1.1;
-        padding: 1px 4px;
+        padding: 0 4px;
         white-space: nowrap;
       }
 

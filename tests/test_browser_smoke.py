@@ -348,6 +348,265 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_histogram_binning_labels_outlines_and_dense_integer_axis(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "histogram_presentation.csv"
+            data_path.write_text(
+                "value,long_value,continuous_value\n" + "\n".join(
+                    f"{value},{100_000 + value},{value + 0.1:g}"
+                    for value in range(1, 51)
+                    for _ in range(100)
+                ) + "\n",
+                encoding="utf-8",
+            )
+            kpis_path = Path(tmp_dir) / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "VALUE,Value,value,N,2,currency\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"actual": "value", "denominator": "__none__"},
+                kpis_path=kpis_path,
+                use_kpis=True,
+                tools=["histogram"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 2000, "height": 900})
+                    page_errors: list[str] = []
+                    histogram_requests = 0
+
+                    def on_request(request: Any) -> None:
+                        nonlocal histogram_requests
+                        if request.url.endswith("/api/histogram/chart"):
+                            histogram_requests += 1
+
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", on_request)
+                    page.goto(f"{base_url}/?tool=histogram", wait_until="domcontentloaded")
+                    page.locator("#histogramChart canvas").wait_for(timeout=10_000)
+                    page.locator("#histogramToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """() => document.querySelector("#histogramToolbarToggleBtn")?.getAttribute("aria-expanded") === 'true'""",
+                        timeout=10_000,
+                    )
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#histogramBins").fill("50")
+                    page.wait_for_function(
+                        """() => (document.querySelector("#histogramGroupMeta")?.textContent || "").includes("50 bins")""",
+                        timeout=10_000,
+                    )
+
+                    chart_state = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                          const option = chart.getOption();
+                          const xAxis = chart.getModel().getComponent("xAxis")?.axis;
+                          const display = chart.getZr().storage.getDisplayList(true);
+                          const outlinedBins = display.filter((item) =>
+                            item.type === "rect" && Number(item.style?.lineWidth) === 0.5
+                          );
+                          const binBounds = outlinedBins
+                            .map((item) => ({ left: item.shape.x, right: item.shape.x + item.shape.width }))
+                            .sort((left, right) => left.left - right.left);
+                          const boundaryDeltas = binBounds.slice(1).map(
+                            (bounds, index) => bounds.left - binBounds[index].right
+                          );
+                          return {
+                            axisLabels: (xAxis?.getViewLabels?.() || [])
+                              .map((item) => String(item.formattedLabel || ""))
+                              .filter(Boolean),
+                            axisRotation: Number(option.xAxis?.[0]?.axisLabel?.rotate || 0),
+                            yInterval: Number(option.yAxis?.[0]?.interval || 0),
+                            verticalGridlines: option.xAxis?.[0]?.splitLine?.show,
+                            meanLabel: option.series
+                              .find((series) => series.name === "Mean")?.markLine?.label?.formatter,
+                            medianLabel: option.series
+                              .find((series) => series.name === "Median")?.markLine?.label?.formatter,
+                            medianOffset: option.series
+                              .find((series) => series.name === "Median")?.markLine?.label?.offset,
+                            medianPadding: option.series
+                              .find((series) => series.name === "Median")?.markLine?.label?.padding,
+                            outlinedBins: outlinedBins.length,
+                            maximumBoundaryDelta: Math.max(0, ...boundaryDeltas.map(Math.abs)),
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(chart_state["axisLabels"], [str(value) for value in range(1, 51)])
+                    self.assertEqual(chart_state["axisRotation"], 0)
+                    y_interval_magnitude = 10 ** math.floor(math.log10(chart_state["yInterval"]))
+                    self.assertIn(round(chart_state["yInterval"] / y_interval_magnitude, 10), {1, 2, 5, 10})
+                    self.assertFalse(chart_state["verticalGridlines"])
+                    self.assertEqual(chart_state["meanLabel"], "Mean £25.50")
+                    self.assertEqual(chart_state["medianLabel"], "Median £25.50")
+                    self.assertEqual(chart_state["medianOffset"], [0, 14])
+                    self.assertEqual(chart_state["medianPadding"], [0, 2, 4, 2])
+                    self.assertEqual(chart_state["outlinedBins"], 50)
+                    self.assertLessEqual(chart_state["maximumBoundaryDelta"], 1e-6)
+
+                    requests_before_labels = histogram_requests
+                    page.locator('.segmented[data-control="histogramLabels"] button[data-value="bins"]').click()
+                    page.wait_for_timeout(100)
+                    self.assertEqual(histogram_requests, requests_before_labels)
+
+                    def histogram_label_state() -> dict[str, Any]:
+                        return page.evaluate(
+                            r"""
+                            () => {
+                              const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                              const labels = chart.getZr().storage.getDisplayList(true).filter((item) =>
+                                item.type === "tspan"
+                                  && /^\d+(?:[.,]\d+)*%?$/.test(String(item.style?.text || ""))
+                                  && /^\d+px sans-serif$/.test(String(item.style?.font || ""))
+                              );
+                              return {
+                                count: labels.length,
+                                fonts: labels.map((item) => parseInt(item.style.font, 10)),
+                                texts: labels.map((item) => String(item.style.text || "")),
+                              };
+                            }
+                            """
+                        )
+
+                    wide_labels = histogram_label_state()
+                    self.assertEqual(wide_labels["count"], 50)
+                    self.assertTrue(all(7 <= size <= 10 for size in wide_labels["fonts"]))
+
+                    page.set_viewport_size({"width": 1280, "height": 800})
+                    page.wait_for_timeout(150)
+                    narrow_labels = histogram_label_state()
+                    self.assertEqual(narrow_labels["count"], 50)
+                    self.assertTrue(all(7 <= size <= 10 for size in narrow_labels["fonts"]))
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#actualNumerator").select_option("long_value")
+                    long_axis_state = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                          const option = chart.getOption();
+                          const axis = chart.getModel().getComponent("xAxis")?.axis;
+                          return {
+                            labels: (axis?.getViewLabels?.() || [])
+                              .map((item) => String(item.formattedLabel || ""))
+                              .filter(Boolean),
+                            rotate: Number(option.xAxis?.[0]?.axisLabel?.rotate || 0),
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(long_axis_state["rotate"], 65)
+                    self.assertTrue(long_axis_state["labels"])
+
+                    page.set_viewport_size({"width": 2000, "height": 900})
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('.segmented[data-control="histogramYAxis"] button[data-value="probability"]').click()
+                    page.wait_for_timeout(100)
+                    probability_labels = histogram_label_state()
+                    self.assertTrue(probability_labels["texts"])
+                    self.assertTrue(all(label.endswith("%") for label in probability_labels["texts"]))
+
+                    page.locator('.segmented[data-control="histogramLabels"] button[data-value="none"]').click()
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#actualNumerator").select_option("continuous_value")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#histogramBins").fill("201")
+                    page.wait_for_function(
+                        """() => (document.querySelector("#histogramGroupMeta")?.textContent || "").includes("201 bins")""",
+                        timeout=10_000,
+                    )
+                    no_outline_count = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                          return chart.getZr().storage.getDisplayList(true).filter((item) =>
+                            item.type === "rect" && Number(item.style?.lineWidth) === 0.5
+                          ).length;
+                        }
+                        """
+                    )
+                    self.assertEqual(no_outline_count, 0)
+
+                    def histogram_badge_layout() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const group = document.querySelector("#histogramGroupMeta");
+                              const filter = document.querySelector("#histogramFilter");
+                              group.classList.remove("hidden");
+                              group.innerHTML = '<span class="histogram-meta-text">200 bins - 8,281,102 / 11,543,778 rows</span>'
+                                + '<span class="histogram-sample-badge">100,000 sampled</span>';
+                              filter.classList.remove("hidden");
+                              filter.classList.add("histogram-filter--applied");
+                              document.querySelector("#histogramFilterText").textContent = `"data_group" = 'training'`;
+                              const sample = group.querySelector(".histogram-sample-badge");
+                              const sampleRect = sample.getBoundingClientRect();
+                              const filterRect = filter.getBoundingClientRect();
+                              const sampleStyle = getComputedStyle(sample);
+                              return {
+                                flexWrap: getComputedStyle(group).flexWrap,
+                                sampleHeight: sampleRect.height,
+                                filterHeight: filterRect.height,
+                                verticalGap: filterRect.top - sampleRect.bottom,
+                                alignedRight: Math.abs(sampleRect.right - filterRect.right),
+                                viewportRightOffset: window.innerWidth - sampleRect.right,
+                                borders: [
+                                  sampleStyle.borderTopWidth,
+                                  sampleStyle.borderRightWidth,
+                                  sampleStyle.borderBottomWidth,
+                                  sampleStyle.borderLeftWidth,
+                                ],
+                              };
+                            }
+                            """
+                        )
+
+                    wide_badges = histogram_badge_layout()
+                    page.set_viewport_size({"width": 1280, "height": 800})
+                    page.wait_for_timeout(100)
+                    narrow_badges = histogram_badge_layout()
+                    for badge_layout in (wide_badges, narrow_badges):
+                        self.assertEqual(badge_layout["flexWrap"], "nowrap")
+                        self.assertEqual(badge_layout["sampleHeight"], 13)
+                        self.assertEqual(badge_layout["filterHeight"], 13)
+                        self.assertGreaterEqual(badge_layout["verticalGap"], 0)
+                        self.assertLessEqual(badge_layout["alignedRight"], 0.5)
+                        self.assertEqual(badge_layout["borders"], ["1px", "1px", "1px", "1px"])
+                    self.assertAlmostEqual(
+                        wide_badges["viewportRightOffset"],
+                        narrow_badges["viewportRightOffset"],
+                        delta=0.5,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_histogram_full_bleed_settings_and_splitter(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "histogram_full_bleed.csv"
@@ -922,8 +1181,9 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.wait_for_timeout(100)
                     split_before = splitter_layout()
                     self.assertEqual(split_before["display"], "block")
-                    self.assertAlmostEqual(split_before["logicalStatsWidth"], 310, delta=0.5)
-                    self.assertAlmostEqual(split_before["stats"]["width"], 310, delta=0.5)
+                    self.assertAlmostEqual(split_before["logicalStatsWidth"], 240, delta=0.5)
+                    self.assertAlmostEqual(split_before["stats"]["width"], 240, delta=0.5)
+                    self.assertEqual(split_before["ariaNow"], split_before["ariaMin"])
                     self.assertAlmostEqual(split_before["splitter"]["width"], 12, delta=0.5)
                     self.assertEqual(split_before["splitter"]["ruleWidth"], 1)
                     self.assertEqual(split_before["firstHeaderBorderLeft"], 0)
@@ -994,14 +1254,14 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.mouse.up()
                     page.wait_for_function(
                         """
-                        () => document.querySelector(".histogram-stats-panel").getBoundingClientRect().width >= 369
+                          () => document.querySelector(".histogram-stats-panel").getBoundingClientRect().width >= 299
                         """,
                         timeout=10_000,
                     )
                     page.wait_for_timeout(100)
                     split_after_drag = splitter_layout()
-                    self.assertAlmostEqual(split_after_drag["logicalStatsWidth"], 370, delta=2)
-                    self.assertAlmostEqual(split_after_drag["stats"]["width"], 370, delta=2)
+                    self.assertAlmostEqual(split_after_drag["logicalStatsWidth"], 300, delta=2)
+                    self.assertAlmostEqual(split_after_drag["stats"]["width"], 300, delta=2)
                     self.assertAlmostEqual(
                         split_after_drag["chart"]["right"],
                         split_after_drag["statsGrid"]["left"],
@@ -8071,10 +8331,17 @@ COPY (
                     page.wait_for_function("""() => document.querySelector("#filterInput")?.value === "segment = 'B'" """, timeout=10_000)
 
                     page.locator("#histogramBins").fill("3")
+                    page.locator('.segmented[data-control="histogramBinMode"] button[data-value="width"]').click()
+                    page.locator("#histogramBins").fill("1.5")
                     page.locator('.segmented[data-control="histogramDistribution"] button[data-value="cumulative"]').click()
                     page.locator('.segmented[data-control="histogramYAxis"] button[data-value="probability"]').click()
+                    page.locator('.segmented[data-control="histogramLabels"] button[data-value="bins"]').click()
                     page.locator('.segmented[data-control="histogramLogScale"] button[data-value="y"]').click()
                     page.locator('.segmented[data-control="histogramSampleMode"] button[data-value="all"]').click()
+                    page.wait_for_function(
+                        """() => (document.querySelector("#histogramGroupMeta")?.textContent || "").includes("Width 1.5")""",
+                        timeout=10_000,
+                    )
 
                     self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                     page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
@@ -8102,17 +8369,22 @@ COPY (
                         saved_view["histogram"],
                         {
                             "bins": "3",
+                            "binMode": "width",
+                            "binWidth": "1.5",
                             "distribution": "cumulative",
                             "yAxis": "probability",
+                            "labels": "bins",
                             "logScale": "y",
                             "sampleMode": "all",
                         },
                     )
 
                     page.locator("#filterRowClearBtn").click()
+                    page.locator('.segmented[data-control="histogramBinMode"] button[data-value="count"]').click()
                     page.locator("#histogramBins").fill("8")
                     page.locator('.segmented[data-control="histogramDistribution"] button[data-value="incremental"]').click()
                     page.locator('.segmented[data-control="histogramYAxis"] button[data-value="sum"]').click()
+                    page.locator('.segmented[data-control="histogramLabels"] button[data-value="none"]').click()
                     page.locator('.segmented[data-control="histogramLogScale"] button[data-value="none"]').click()
                     page.locator('.segmented[data-control="histogramSampleMode"] button[data-value="100k"]').click()
                     page.wait_for_function("""() => !document.querySelector(".saved-favourite-option.active")""", timeout=10_000)
@@ -8120,9 +8392,11 @@ COPY (
                     page.locator(".saved-favourite-option").filter(has_text="Histogram view").click()
                     page.wait_for_function(
                         """() => document.querySelector("#histogramTool")?.classList.contains("active")
-                          && document.querySelector("#histogramBins")?.value === "3"
+                          && document.querySelector("#histogramBins")?.value === "1.5"
+                          && document.querySelector('.segmented[data-control="histogramBinMode"] button[data-value="width"]')?.classList.contains("active")
                           && document.querySelector('.segmented[data-control="histogramDistribution"] button[data-value="cumulative"]')?.classList.contains("active")
                           && document.querySelector('.segmented[data-control="histogramYAxis"] button[data-value="probability"]')?.classList.contains("active")
+                          && document.querySelector('.segmented[data-control="histogramLabels"] button[data-value="bins"]')?.classList.contains("active")
                           && document.querySelector('.segmented[data-control="histogramLogScale"] button[data-value="y"]')?.classList.contains("active")
                           && document.querySelector('.segmented[data-control="histogramSampleMode"] button[data-value="all"]')?.classList.contains("active")
                           && document.querySelector("#filterInput")?.value === "segment = 'B'"

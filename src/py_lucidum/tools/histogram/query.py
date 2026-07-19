@@ -40,6 +40,8 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         y_axis = normalise_y_axis(request.get("yAxis"))
         log_scale = normalise_log_scale(request.get("logScale"))
         sample_mode = normalise_sample_mode(request.get("sampleMode"))
+        bin_mode = normalise_bin_mode(request.get("binMode"))
+        bin_width_requested = normalise_bin_width(request.get("binWidth")) if bin_mode == "width" else None
         filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
 
         row_count = dataset.row_count_for_source(source_id)
@@ -60,24 +62,39 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         bins_count = stats_sampled_count if sample_values else valid_count
         bins_requested = normalise_bins(request.get("bins"), bins_count)
         warnings = histogram_warnings(denominator, counts, log_scale)
+        effective_bin_width: float | int | None = bin_width_requested
+        width_plan: dict[str, float | int] | None = None
 
         if valid_count <= 0:
             warnings.append("No valid histogram values were found after filtering.")
             rows: list[dict[str, Any]] = []
             sampled_valid_count = 0
             bins_used = 0
-            binning = continuous_binning_metadata(actual)
+            binning = continuous_binning_metadata(actual, step=bin_width_requested)
         else:
             if extent is None:
                 rows = []
                 sampled_valid_count = 0
                 bins_used = 0
-                binning = continuous_binning_metadata(actual)
+                binning = continuous_binning_metadata(actual, step=bin_width_requested)
             else:
-                integer_plan = integer_bin_plan(actual, denominator, log_scale, extent, bins_requested)
+                if bin_mode == "width":
+                    assert bin_width_requested is not None
+                    width_plan = continuous_bin_width_plan(bin_width_requested, extent, log_scale)
+                    bins_used = int(width_plan["bins"])
+                    integer_plan = integer_bin_width_plan(
+                        actual,
+                        denominator,
+                        extent,
+                        bin_width_requested,
+                        log_scale,
+                    )
+                else:
+                    integer_plan = integer_bin_plan(actual, denominator, log_scale, extent, bins_requested)
                 if integer_plan:
                     bins_used = integer_plan["bins"]
                     binning = integer_binning_metadata(actual, integer_plan)
+                    effective_bin_width = integer_plan["step"]
                     rows, sampled_valid_count = integer_histogram_rows(
                         dataset,
                         relation,
@@ -91,8 +108,16 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
                         sample_values,
                     )
                 else:
-                    bins_used = bin_count_for_extent(bins_requested, extent)
-                    binning = continuous_binning_metadata(actual, extent)
+                    if bin_mode == "count":
+                        bins_used = bin_count_for_extent(bins_requested, extent)
+                    binning = continuous_binning_metadata(
+                        actual,
+                        {
+                            "value_min": width_plan["min"],
+                            "value_max": width_plan["max"],
+                        } if width_plan else extent,
+                        step=bin_width_requested if bin_mode == "width" else None,
+                    )
                     rows, sampled_valid_count = histogram_rows(
                         dataset,
                         relation,
@@ -105,7 +130,12 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
                         bins_used,
                         extent,
                         sample_values,
+                        bin_width=bin_width_requested,
+                        bin_origin=float(width_plan["min"]) if width_plan else None,
+                        bin_max=float(width_plan["max"]) if width_plan else None,
                     )
+                    if bin_mode == "count" and log_scale not in {"x", "both"} and bins_used > 0:
+                        effective_bin_width = linear_bin_width(extent, bins_used)
 
         return {
             "source": source_id,
@@ -117,6 +147,9 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             "sampled_valid_count": sampled_valid_count,
             "bins": bins_used,
             "bins_requested": request.get("bins", "auto") or "auto",
+            "bin_mode": bin_mode,
+            "bin_width_requested": bin_width_requested,
+            "bin_width": effective_bin_width,
             "distribution": distribution,
             "y_axis": y_axis,
             "log_scale": log_scale,
@@ -177,6 +210,22 @@ def normalise_sample_mode(value: Any) -> str:
     return "100k"
 
 
+def normalise_bin_mode(value: Any) -> str:
+    raw = str(value or "count").strip().lower().replace("_", " ").replace("-", " ")
+    return "width" if raw in {"width", "bin width"} else "count"
+
+
+def normalise_bin_width(value: Any) -> float:
+    raw = str(value if value is not None else "").strip().replace(",", "")
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Bin width must be a positive number") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError("Bin width must be a positive number")
+    return parsed
+
+
 def normalise_bins(value: Any, valid_count: int) -> int:
     raw = str(value if value is not None else "auto").strip().lower().replace(",", "")
     if raw in {"", "auto"}:
@@ -200,6 +249,51 @@ def bin_count_for_extent(requested: int, extent: dict[str, Any]) -> int:
     if minimum == maximum:
         return 1
     return max(1, requested)
+
+
+def continuous_bin_width_plan(width: float, extent: dict[str, Any], log_scale: str) -> dict[str, float | int]:
+    minimum = json_number(extent.get("value_min"))
+    maximum = json_number(extent.get("value_max"))
+    if minimum is None or maximum is None:
+        return {"min": 0.0, "max": width, "bins": 0}
+    value_min = float(minimum)
+    value_max = float(maximum)
+    scaled_min = value_min / width
+    scaled_max = value_max / width
+    min_tolerance = max(1e-12, abs(scaled_min) * 1e-12)
+    max_tolerance = max(1e-12, abs(scaled_max) * 1e-12)
+    bin_min = math.floor(scaled_min + min_tolerance) * width
+    if log_scale in {"x", "both"} and bin_min <= 0:
+        bin_min = value_min
+        ratio = (value_max - bin_min) / width
+        tolerance = max(1e-12, abs(ratio) * 1e-12)
+        bins = max(1, math.ceil(ratio - tolerance))
+        bin_max = bin_min + bins * width
+    else:
+        bin_max = math.ceil(scaled_max - max_tolerance) * width
+        if bin_max <= bin_min:
+            bin_max = bin_min + width
+        bins = max(1, int(round((bin_max - bin_min) / width)))
+    if bins > MAX_EXPLICIT_BINS:
+        minimum_width = (value_max - value_min) / MAX_EXPLICIT_BINS
+        raise ValueError(
+            f"Bin width creates more than {MAX_EXPLICIT_BINS:,} bins; use a width of at least {format_bound(minimum_width)}"
+        )
+    return {
+        "min": 0.0 if bin_min == 0 else bin_min,
+        "max": 0.0 if bin_max == 0 else bin_max,
+        "bins": bins,
+    }
+
+
+def linear_bin_width(extent: dict[str, Any], bins: int) -> float | None:
+    minimum = json_number(extent.get("value_min"))
+    maximum = json_number(extent.get("value_max"))
+    if minimum is None or maximum is None or bins <= 0:
+        return None
+    if minimum == maximum:
+        return None
+    return (float(maximum) - float(minimum)) / bins
 
 
 def integer_bin_plan(
@@ -233,13 +327,56 @@ def integer_bin_plan(
     return {"min": min_int, "max": max_int, "step": step, "bins": bin_count}
 
 
-def continuous_binning_metadata(actual: dict[str, str], extent: dict[str, Any] | None = None) -> dict[str, Any]:
+def integer_bin_width_plan(
+    actual: dict[str, str],
+    denominator: dict[str, str | None],
+    extent: dict[str, Any],
+    requested_width: float,
+    log_scale: str,
+) -> dict[str, int] | None:
+    if denominator.get("column") or not float(requested_width).is_integer():
+        return None
+    value_min = json_number(extent.get("value_min"))
+    value_max = json_number(extent.get("value_max"))
+    if value_min is None or value_max is None:
+        return None
+    if not float(value_min).is_integer() or not float(value_max).is_integer():
+        return None
+    non_integral_count = int(extent.get("non_integral_count") or 0)
+    if actual.get("kind") != "integer" and non_integral_count:
+        return None
+    observed_min = int(round(float(value_min)))
+    observed_max = int(round(float(value_max)))
+    if observed_min > observed_max or max(abs(observed_min), abs(observed_max)) >= 9_007_199_254_740_992:
+        return None
+    step = int(requested_width)
+    if step < 1:
+        return None
+    min_int = math.floor(observed_min / step) * step
+    if log_scale in {"x", "both"} and min_int - 0.5 <= 0:
+        return None
+    bin_count = max(1, math.ceil((observed_max - min_int + 1) / step))
+    max_int = min_int + bin_count * step - 1
+    if bin_count > MAX_EXPLICIT_BINS:
+        raise ValueError(
+            f"Bin width creates more than {MAX_EXPLICIT_BINS:,} bins; use a width of at least "
+            f"{format_bound((observed_max - observed_min + 1) / MAX_EXPLICIT_BINS)}"
+        )
+    return {"min": min_int, "max": max_int, "step": step, "bins": bin_count}
+
+
+def continuous_binning_metadata(
+    actual: dict[str, str],
+    extent: dict[str, Any] | None = None,
+    *,
+    step: float | None = None,
+) -> dict[str, Any]:
     return {
         "mode": "continuous",
         "kind": actual.get("kind") or "numeric",
         "min": json_number((extent or {}).get("value_min")),
         "max": json_number((extent or {}).get("value_max")),
-        "step": None,
+        "step": json_number(step),
     }
 
 
@@ -548,32 +685,44 @@ def histogram_rows(
     bins: int,
     extent: dict[str, Any],
     sample_values: bool,
+    *,
+    bin_width: float | None = None,
+    bin_origin: float | None = None,
+    bin_max: float | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     value_source = value_source_name(sample_values)
-    bin_min = float(extent["bin_min"])
-    bin_max = float(extent["bin_max"])
     value_min = float(extent["value_min"])
     value_max = float(extent["value_max"])
-    if bins <= 1 or bin_min == bin_max:
+    original_unit_width = bin_width is not None
+    effective_bin_min = float(bin_origin) if original_unit_width and bin_origin is not None else (
+        value_min if original_unit_width else float(extent["bin_min"])
+    )
+    effective_bin_max = float(bin_max) if original_unit_width and bin_max is not None else (
+        value_max if original_unit_width else float(extent["bin_max"])
+    )
+    if not original_unit_width and (bins <= 1 or effective_bin_min == effective_bin_max):
         return single_bin_row(dataset, relation, actual, denominator, filter_sql, log_scale, distribution, y_axis, extent, sample_values)
-    bin_width = (bin_max - bin_min) / bins
-    lower_expr = "POWER(10, params.bin_min + bins.bin_index * params.bin_width)" if log_scale in {"x", "both"} else "params.bin_min + bins.bin_index * params.bin_width"
-    upper_expr = "POWER(10, params.bin_min + (bins.bin_index + 1) * params.bin_width)" if log_scale in {"x", "both"} else "params.bin_min + (bins.bin_index + 1) * params.bin_width"
+    effective_width = float(bin_width) if original_unit_width else (effective_bin_max - effective_bin_min) / bins
+    logarithmic_count_bins = log_scale in {"x", "both"} and not original_unit_width
+    lower_expr = "POWER(10, params.bin_min + bins.bin_index * params.bin_width)" if logarithmic_count_bins else "params.bin_min + bins.bin_index * params.bin_width"
+    upper_expr = "POWER(10, params.bin_min + (bins.bin_index + 1) * params.bin_width)" if logarithmic_count_bins else "params.bin_min + (bins.bin_index + 1) * params.bin_width"
+    final_upper_expr = "params.bin_max" if original_unit_width else f"{value_max}::DOUBLE"
     mid_expr = "SQRT(bin_lower * bin_upper)" if log_scale in {"x", "both"} else "(bin_lower + bin_upper) / 2"
+    indexed_value = "source_values.value" if original_unit_width else "source_values.bin_value"
     sql = f"""
 WITH {value_ctes_sql(relation, actual, denominator, filter_sql, log_scale, sample_values)},
 params AS (
   SELECT
-    {bin_min}::DOUBLE AS bin_min,
-    {bin_max}::DOUBLE AS bin_max,
-    {bin_width}::DOUBLE AS bin_width,
+    {effective_bin_min}::DOUBLE AS bin_min,
+    {effective_bin_max}::DOUBLE AS bin_max,
+    {effective_width}::DOUBLE AS bin_width,
     {bins}::INTEGER AS bin_count
 ),
 indexed AS (
   SELECT
     CASE
-      WHEN source_values.bin_value = params.bin_max THEN params.bin_count - 1
-      ELSE LEAST(params.bin_count - 1, GREATEST(0, FLOOR((source_values.bin_value - params.bin_min) / params.bin_width)::INTEGER))
+      WHEN {indexed_value} = params.bin_max THEN params.bin_count - 1
+      ELSE LEAST(params.bin_count - 1, GREATEST(0, FLOOR(({indexed_value} - params.bin_min) / params.bin_width)::INTEGER))
     END AS bin_index,
     source_values.value,
     source_values.weight_value
@@ -594,7 +743,7 @@ bin_rows AS (
   SELECT
     bins.bin_index,
     {lower_expr} AS bin_lower,
-    CASE WHEN bins.bin_index = params.bin_count - 1 THEN {value_max}::DOUBLE ELSE {upper_expr} END AS bin_upper,
+    CASE WHEN bins.bin_index = params.bin_count - 1 THEN {final_upper_expr} ELSE {upper_expr} END AS bin_upper,
     COALESCE(agg.row_count, 0) AS row_count,
     COALESCE(agg.volume, 0) AS volume
   FROM bin_numbers bins
@@ -616,7 +765,7 @@ cumulative AS (
 )
 SELECT
     bin_index,
-    CASE WHEN bin_index = 0 THEN {value_min}::DOUBLE ELSE bin_lower END AS bin_lower,
+    CASE WHEN bin_index = 0 THEN {effective_bin_min if original_unit_width else value_min}::DOUBLE ELSE bin_lower END AS bin_lower,
     bin_upper,
     {mid_expr} AS bin_mid,
     row_count,

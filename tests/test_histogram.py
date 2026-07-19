@@ -266,6 +266,67 @@ class HistogramToolTests(unittest.TestCase):
         self.assertEqual(result["binning"], {"mode": "integer", "kind": "integer", "min": 0, "max": 20, "step": 5})
         self.assertEqual([(row["bin_lower"], row["bin_upper"]) for row in result["rows"][:2]], [(-0.5, 4.5), (4.5, 9.5)])
 
+    def test_continuous_bin_width_uses_requested_width_and_rounded_final_bin(self) -> None:
+        value_path = Path(self.tmp.name) / "continuous_width.csv"
+        value_path.write_text("Value\n0.0\n1.0\n2.0\n4.5\n", encoding="utf-8")
+
+        result = histogram(
+            Dataset(value_path),
+            self.request(actual="Value", binMode="width", binWidth="2"),
+        )
+
+        self.assertEqual(result["bin_mode"], "width")
+        self.assertEqual(result["bin_width_requested"], 2)
+        self.assertEqual(result["bin_width"], 2)
+        self.assertEqual(result["bins"], 3)
+        self.assertEqual(
+            [(row["bin_lower"], row["bin_upper"], row["row_count"]) for row in result["rows"]],
+            [(0, 2, 2), (2, 4, 1), (4, 6, 1)],
+        )
+
+    def test_bin_width_anchors_continuous_bounds_to_width_multiples(self) -> None:
+        value_path = Path(self.tmp.name) / "rounded_continuous_width.csv"
+        value_path.write_text("Value\n2.2\n7.5\n12.2\n", encoding="utf-8")
+
+        result = histogram(
+            Dataset(value_path),
+            self.request(actual="Value", binMode="width", binWidth=5),
+        )
+
+        self.assertEqual(result["bins"], 3)
+        self.assertEqual(
+            [(row["bin_lower"], row["bin_upper"], row["row_count"]) for row in result["rows"]],
+            [(0, 5, 1), (5, 10, 1), (10, 15, 1)],
+        )
+
+    def test_whole_number_bin_width_preserves_integer_aware_bins(self) -> None:
+        age_path = Path(self.tmp.name) / "integer_width.csv"
+        age_path.write_text("Age\n" + "\n".join(str(value) for value in range(3, 18)) + "\n", encoding="utf-8")
+
+        result = histogram(
+            Dataset(age_path),
+            self.request(actual="Age", binMode="width", binWidth=5),
+        )
+
+        self.assertEqual(result["bins"], 4)
+        self.assertEqual(result["bin_width"], 5)
+        self.assertEqual(result["binning"], {"mode": "integer", "kind": "integer", "min": 0, "max": 19, "step": 5})
+        self.assertEqual([row["bin_label"] for row in result["rows"]], ["0 to 4", "5 to 9", "10 to 14", "15 to 19"])
+        self.assertEqual([row["row_count"] for row in result["rows"]], [2, 5, 5, 3])
+
+    def test_nonwhole_bin_width_uses_exact_continuous_boundaries_for_integer_actual(self) -> None:
+        age_path = Path(self.tmp.name) / "integer_fractional_width.csv"
+        age_path.write_text("Age\n0\n1\n2\n3\n4\n", encoding="utf-8")
+
+        result = histogram(
+            Dataset(age_path),
+            self.request(actual="Age", binMode="width", binWidth=2.5),
+        )
+
+        self.assertEqual(result["bins"], 2)
+        self.assertEqual(result["binning"], {"mode": "continuous", "kind": "integer", "min": 0, "max": 5, "step": 2.5})
+        self.assertEqual([(row["bin_lower"], row["bin_upper"]) for row in result["rows"]], [(0, 2.5), (2.5, 5)])
+
     def test_integral_numeric_actual_uses_integer_bins_without_integer_schema_kind(self) -> None:
         value_path = Path(self.tmp.name) / "whole_numeric.csv"
         value_path.write_text("Value\n0.0\n1.0\n2.0\n", encoding="utf-8")
@@ -315,6 +376,30 @@ class HistogramToolTests(unittest.TestCase):
         self.assertEqual(result["binning"]["mode"], "continuous")
         self.assertEqual(sum(row["row_count"] for row in result["rows"]), 2)
         self.assertTrue(any("nonpositive values excluded" in warning for warning in result["warnings"]))
+
+    def test_log_x_bin_width_remains_in_original_units(self) -> None:
+        log_path = Path(self.tmp.name) / "log_width.csv"
+        log_path.write_text("Actual\n10.1\n20.1\n30.1\n100\n", encoding="utf-8")
+
+        result = histogram(
+            Dataset(log_path),
+            self.request(actual="Actual", logScale="x", binMode="width", binWidth=30),
+        )
+
+        self.assertEqual(result["bins"], 3)
+        self.assertEqual(
+            [(row["bin_lower"], row["bin_upper"], row["row_count"]) for row in result["rows"]],
+            [(10.1, 40.1, 3), (40.1, 70.1, 0), (70.1, 100.1, 1)],
+        )
+
+    def test_invalid_or_excessively_narrow_bin_width_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive number"):
+            histogram(Dataset(self.data_path), self.request(binMode="width", binWidth=0))
+
+        wide_path = Path(self.tmp.name) / "wide_range.csv"
+        wide_path.write_text("Actual\n0\n10001\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "more than 10,000 bins"):
+            histogram(Dataset(wide_path), self.request(actual="Actual", binMode="width", binWidth=1))
 
 
 if __name__ == "__main__":

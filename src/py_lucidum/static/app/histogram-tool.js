@@ -6,10 +6,20 @@ const DEFAULT_HISTOGRAM_MEAN_COLOR = "#d13f3f";
 const DEFAULT_HISTOGRAM_MEDIAN_COLOR = "#1f7a8c";
 const HISTOGRAM_MEAN_ROW_CLASS = "histogram-stat-mean-row";
 const HISTOGRAM_MEDIAN_ROW_CLASS = "histogram-stat-median-row";
-const HISTOGRAM_X_AXIS_MIN_LABELS = 8;
-const HISTOGRAM_X_AXIS_MAX_LABELS = 20;
-const HISTOGRAM_X_AXIS_LABEL_PX = 48;
-const HISTOGRAM_STATS_DEFAULT_WIDTH = 310;
+const HISTOGRAM_X_AXIS_MIN_LABELS = 2;
+const HISTOGRAM_X_AXIS_MAX_LABELS = 100;
+const HISTOGRAM_X_AXIS_FONT_SIZE = 10;
+const HISTOGRAM_X_AXIS_LABEL_WIDTH_FACTOR = 0.56;
+const HISTOGRAM_X_AXIS_LABEL_PADDING = 10;
+const HISTOGRAM_X_AXIS_HORIZONTAL_PADDING = 102;
+const HISTOGRAM_X_AXIS_ROTATION = 65;
+const HISTOGRAM_Y_AXIS_TARGET_INTERVALS = 6;
+const HISTOGRAM_BIN_OUTLINE_LIMIT = 200;
+const HISTOGRAM_BIN_LABEL_MIN_FONT_SIZE = 7;
+const HISTOGRAM_BIN_LABEL_MAX_FONT_SIZE = 10;
+const HISTOGRAM_BIN_LABEL_WIDTH_FACTOR = 0.56;
+const HISTOGRAM_MEDIAN_LABEL_OFFSET = 14;
+const HISTOGRAM_STATS_DEFAULT_WIDTH = 240;
 const HISTOGRAM_STATS_MIN_WIDTH = 240;
 const HISTOGRAM_STATS_MAX_WIDTH = 560;
 const HISTOGRAM_CHART_MIN_WIDTH = 420;
@@ -47,6 +57,8 @@ export function createHistogramTool({
   let histogramBinsRefreshTimer = null;
   let histogramStatsWidth = HISTOGRAM_STATS_DEFAULT_WIDTH;
   let histogramChartResizeFrame = null;
+  let histogramAxisChartWidth = 0;
+  const histogramBinValues = { count: "auto", width: "" };
 
   function syncSegmented(control, value) {
     const group = document.querySelector(`.segmented[data-control="${control}"]`);
@@ -56,14 +68,83 @@ export function createHistogramTool({
     });
   }
 
+  function histogramBinMode() {
+    return state.histogramBinMode === "width" ? "width" : "count";
+  }
+
   function histogramBinsValue() {
-    const raw = String(el("histogramBins")?.value || "").trim();
-    return raw || "auto";
+    return normaliseHistogramBinsValue(histogramBinValues.count);
+  }
+
+  function histogramBinWidthValue() {
+    return String(histogramBinValues.width || "").trim();
   }
 
   function normaliseHistogramBinsValue(value) {
     const raw = String(value ?? "auto").trim();
     return raw || "auto";
+  }
+
+  function normaliseHistogramBinWidthValue(value) {
+    const raw = String(value ?? "").trim();
+    const number = Number(raw.replaceAll(",", ""));
+    return Number.isFinite(number) && number > 0 ? raw : "";
+  }
+
+  function formatHistogramBinInputNumber(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    return String(Number(number.toPrecision(10)));
+  }
+
+  function suggestedHistogramBinWidth(data = state.lastHistogramData) {
+    const direct = Number(data?.bin_width);
+    if (Number.isFinite(direct) && direct > 0) return formatHistogramBinInputNumber(direct);
+    const step = Number(data?.binning?.step);
+    if (Number.isFinite(step) && step > 0) return formatHistogramBinInputNumber(step);
+    const minimum = Number(data?.binning?.min);
+    const maximum = Number(data?.binning?.max);
+    const bins = Number(data?.bins);
+    const derived = (maximum - minimum) / bins;
+    return Number.isFinite(derived) && derived > 0 ? formatHistogramBinInputNumber(derived) : "1";
+  }
+
+  function syncHistogramBinInput() {
+    const mode = histogramBinMode();
+    const input = el("histogramBins");
+    const label = el("histogramBinValueLabel");
+    if (!input) return;
+    if (mode === "width") {
+      label.textContent = "Bin width";
+      input.value = histogramBinWidthValue();
+      input.placeholder = "Enter width";
+      input.inputMode = "decimal";
+      input.setAttribute("aria-label", "Histogram bin width");
+    } else {
+      label.textContent = "No. bins";
+      input.value = histogramBinsValue() === "auto" ? "" : histogramBinsValue();
+      input.placeholder = "Auto";
+      input.inputMode = "numeric";
+      input.setAttribute("aria-label", "Histogram number of bins");
+    }
+    input.removeAttribute("aria-invalid");
+  }
+
+  function captureHistogramBinInput() {
+    const raw = String(el("histogramBins")?.value || "").trim();
+    if (histogramBinMode() === "width") histogramBinValues.width = raw;
+    else histogramBinValues.count = raw || "auto";
+    return raw;
+  }
+
+  function histogramBinInputIsValid({ report = false } = {}) {
+    if (histogramBinMode() !== "width") return true;
+    const input = el("histogramBins");
+    const value = Number(histogramBinWidthValue().replaceAll(",", ""));
+    const valid = Number.isFinite(value) && value > 0;
+    input?.setAttribute("aria-invalid", valid ? "false" : "true");
+    if (!valid && report) setStatus("Bin width must be a positive number", true);
+    return valid;
   }
 
   function normaliseHistogramControlValue(value, allowed, fallback) {
@@ -74,8 +155,11 @@ export function createHistogramTool({
   function captureFavouriteState() {
     return {
       bins: histogramBinsValue(),
+      binMode: histogramBinMode(),
+      binWidth: histogramBinWidthValue(),
       distribution: state.histogramDistribution || "incremental",
       yAxis: state.histogramYAxis || "sum",
+      labels: state.histogramLabels || "none",
       logScale: state.histogramLogScale || "none",
       sampleMode: state.histogramSampleMode || "100k",
     };
@@ -86,7 +170,11 @@ export function createHistogramTool({
       window.clearTimeout(histogramBinsRefreshTimer);
       histogramBinsRefreshTimer = null;
     }
-    el("histogramBins").value = normaliseHistogramBinsValue(payload.bins);
+    histogramBinValues.count = normaliseHistogramBinsValue(payload.bins);
+    histogramBinValues.width = normaliseHistogramBinWidthValue(payload.binWidth);
+    const restoredBinMode = payload.binMode === "width" && histogramBinValues.width ? "width" : "count";
+    setSegmentedValue("histogramBinMode", restoredBinMode);
+    syncHistogramBinInput();
     setSegmentedValue(
       "histogramDistribution",
       normaliseHistogramControlValue(payload.distribution, ["incremental", "cumulative"], "incremental"),
@@ -94,6 +182,10 @@ export function createHistogramTool({
     setSegmentedValue(
       "histogramYAxis",
       normaliseHistogramControlValue(payload.yAxis, ["sum", "probability"], "sum"),
+    );
+    setSegmentedValue(
+      "histogramLabels",
+      normaliseHistogramControlValue(payload.labels, ["none", "bins"], "none"),
     );
     setSegmentedValue(
       "histogramLogScale",
@@ -107,17 +199,20 @@ export function createHistogramTool({
 
   function buildHistogramRequest() {
     if (!state.schema || !el("actualNumerator")?.value) return null;
-    return {
+    const request = {
       source: state.source || "dataset",
       actual: el("actualNumerator").value,
       denominator: el("denominator").value,
       bins: histogramBinsValue(),
+      binMode: histogramBinMode(),
       distribution: state.histogramDistribution || "incremental",
       yAxis: state.histogramYAxis || "sum",
       logScale: state.histogramLogScale || "none",
       sampleMode: state.histogramSampleMode || "100k",
       filter: state.activeFilter,
     };
+    if (histogramBinMode() === "width") request.binWidth = histogramBinWidthValue();
+    return request;
   }
 
   async function fetchHistogramData(request, requestKey) {
@@ -156,7 +251,9 @@ export function createHistogramTool({
     const sampledLabel = data.sampled_valid_count && data.sampled_valid_count !== data.valid_count
       ? `${formatNumber(data.sampled_valid_count)} sampled`
       : "";
-    const groupMeta = `${formatNumber(data.bins)} bins - ${rowMeta}`;
+    const groupMeta = data.bin_mode === "width"
+      ? `Width ${formatHistogramBinInputNumber(data.bin_width)} · ${formatNumber(data.bins)} bins - ${rowMeta}`
+      : `${formatNumber(data.bins)} bins - ${rowMeta}`;
     const groupMetaBadges = [
       invalidLabel ? `<span class="histogram-invalid-badge">${escapeHtml(invalidLabel)}</span>` : "",
       sampledLabel ? `<span class="histogram-sample-badge">${escapeHtml(sampledLabel)}</span>` : "",
@@ -180,7 +277,7 @@ export function createHistogramTool({
     measureToolRender("histogram", () => {
       applyToolPresentation("histogram");
       requestAnimationFrame(() => {
-        chart.resize();
+        resizeHistogramChart();
         statsTable?.redraw?.(true);
       });
     });
@@ -243,26 +340,32 @@ export function createHistogramTool({
     if (statisticClass) element.classList.add(statisticClass);
   }
 
-  function renderChart(data) {
+  function renderChart(data, options = {}) {
     const rows = Array.isArray(data.rows) ? data.rows : [];
     const xLog = data.log_scale === "x" || data.log_scale === "both";
     const yLog = data.log_scale === "y" || data.log_scale === "both";
     const yLabel = yAxisLabel(data);
     const yValues = rows.map((row) => Number(row.height)).filter((value) => Number.isFinite(value) && value > 0);
     const yBaseline = yLog ? (yValues.length ? Math.max(Math.min(...yValues) / 10, 1e-12) : 1e-12) : 0;
+    const yAxisPolicy = histogramYAxisPolicy(yValues, yLog);
     const xBounds = axisBounds(rows, xLog);
     const chartWidth = Number(chart.getWidth?.()) || el("histogramChart")?.clientWidth || 800;
+    histogramAxisChartWidth = chartWidth;
     const xAxisPolicy = histogramXAxisPolicy(data, rows, xLog, chartWidth, formatAxisValue);
+    const showBinLabels = state.histogramLabels === "bins";
     const barColor = getCss("--bar") || "#5bc0de";
+    const binOutlineColor = getCss("--histogram-bin-outline") || "#4b5563";
     const lineColor = getCss("--line") || "#d7dde7";
     const textColor = getCss("--text") || "#1f2937";
+    const chartPanelColor = getCss("--panel") || "#ffffff";
     const mutedColor = getCss("--muted") || "#6b7280";
     const panelColor = getCss("--panel-2") || "#f3f4f6";
     const dataRows = rows.map((row) => ({
       value: [row.bin_mid, row.height, row.bin_lower, row.bin_upper],
+      label: showBinLabels ? formatYAxisValue(row.height, data.y_axis) : "",
       row,
     }));
-    const referenceSeries = referenceLineSeries(data, xLog);
+    const referenceSeries = referenceLineSeries(data, xLog, chartPanelColor);
 
     chart.setOption(
       {
@@ -275,19 +378,25 @@ export function createHistogramTool({
           trigger: "item",
           formatter: histogramTooltip,
         },
-        grid: { left: 72, right: 30, top: 34, bottom: 92, containLabel: false },
+        grid: {
+          left: 72,
+          right: 30,
+          top: showBinLabels ? 50 : 34,
+          bottom: xAxisPolicy.gridBottom,
+          containLabel: false,
+        },
         xAxis: {
           type: xLog ? "log" : "value",
           name: data.response?.label || data.actual || "Actual",
           nameLocation: "middle",
-          nameGap: 34,
+          nameGap: xAxisPolicy.nameGap,
           min: xBounds.min,
           max: xBounds.max,
           scale: true,
           ...xAxisPolicy.axisOptions,
           axisLabel: { color: textColor, ...xAxisPolicy.axisLabel },
           axisLine: { lineStyle: { color: lineColor } },
-          splitLine: { lineStyle: { color: lineColor } },
+          splitLine: { show: false, lineStyle: { color: lineColor } },
           nameTextStyle: { color: textColor, fontSize: 13, fontWeight: 700 },
         },
         dataZoom: [
@@ -318,6 +427,7 @@ export function createHistogramTool({
           type: yLog ? "log" : "value",
           name: yLabel,
           min: yLog ? yBaseline : 0,
+          ...yAxisPolicy,
           axisLabel: { color: textColor, formatter: (value) => formatYAxisValue(value, data.y_axis) },
           axisLine: { lineStyle: { color: lineColor } },
           splitLine: { lineStyle: { color: lineColor } },
@@ -333,14 +443,21 @@ export function createHistogramTool({
             data: dataRows,
             itemStyle: { color: barColor },
             animation: false,
-            renderItem: (params, api) => renderHistogramBar(params, api, yBaseline, yLog, barColor),
+            renderItem: (params, api) => renderHistogramBar(params, api, {
+              yBaseline,
+              yLog,
+              color: barColor,
+              outlineColor: Number(data.bins) <= HISTOGRAM_BIN_OUTLINE_LIMIT ? binOutlineColor : "",
+              label: dataRows[params.dataIndex]?.label || "",
+              labelColor: textColor,
+            }),
           },
           ...referenceSeries,
         ],
       },
       true,
     );
-    requestAnimationFrame(() => chart.resize());
+    if (options.scheduleResize !== false) requestAnimationFrame(() => resizeHistogramChart());
   }
 
   function axisBounds(rows, xLog) {
@@ -350,12 +467,44 @@ export function createHistogramTool({
     return { min: Math.min(...lowers), max: Math.max(...uppers) };
   }
 
+  function histogramYAxisPolicy(values, yLog) {
+    if (yLog) return {};
+    const maximum = Math.max(0, ...values);
+    if (!Number.isFinite(maximum) || maximum <= 0) return {};
+    const interval = niceHistogramYAxisInterval(maximum / HISTOGRAM_Y_AXIS_TARGET_INTERVALS);
+    if (!Number.isFinite(interval) || interval <= 0) return {};
+    const tolerance = Math.max(1e-12, Math.abs(maximum) * 1e-12);
+    return {
+      interval,
+      max: Math.ceil((maximum - tolerance) / interval) * interval,
+    };
+  }
+
+  function niceHistogramYAxisInterval(rawInterval) {
+    const value = Math.max(Number.MIN_VALUE, Number(rawInterval) || 0);
+    const magnitude = 10 ** Math.floor(Math.log10(value));
+    const normalised = value / magnitude;
+    const multiplier = normalised <= 1.5 ? 1 : (normalised <= 3.5 ? 2 : (normalised <= 7.5 ? 5 : 10));
+    return multiplier * magnitude;
+  }
+
   function histogramXAxisPolicy(data, _rows, xLog, chartWidth, formatContinuousValue) {
     const axisLabel = {
       formatter: (value) => formatHistogramXAxisValue(value, data?.binning, formatContinuousValue),
     };
+    const plotWidth = Math.max(120, (Number(chartWidth) || 800) - HISTOGRAM_X_AXIS_HORIZONTAL_PADDING);
     if (xLog || data?.binning?.mode !== "integer") {
-      return { axisOptions: {}, axisLabel };
+      const samples = [data?.binning?.min, data?.binning?.max]
+        .map((value) => formatContinuousValue(value))
+        .filter(Boolean);
+      const labelWidth = estimatedHistogramAxisLabelWidth(samples);
+      const targetLabels = targetHistogramXAxisLabelCount(plotWidth, labelWidth);
+      return {
+        axisOptions: { splitNumber: targetLabels },
+        axisLabel: { ...axisLabel, hideOverlap: true },
+        nameGap: 34,
+        gridBottom: 92,
+      };
     }
     const minimum = Number(data.binning.min);
     const maximum = Number(data.binning.max);
@@ -364,24 +513,59 @@ export function createHistogramTool({
       return {
         axisOptions: { minInterval: 1, splitNumber: 1 },
         axisLabel: { ...axisLabel, hideOverlap: true },
+        nameGap: 34,
+        gridBottom: 92,
       };
     }
-    const targetLabels = targetHistogramXAxisLabelCount(chartWidth);
-    const step = niceIntegerAxisStep(range / targetLabels);
+    const widestLabel = estimatedHistogramAxisLabelWidth([
+      formatHistogramXAxisValue(minimum, data?.binning, formatContinuousValue),
+      formatHistogramXAxisValue(maximum, data?.binning, formatContinuousValue),
+    ]);
+    const integerLevelCount = Math.floor(range) + 1;
+    const horizontalTarget = targetHistogramXAxisLabelCount(plotWidth, widestLabel);
+    const rawTextWidth = Math.max(1, widestLabel - HISTOGRAM_X_AXIS_LABEL_PADDING);
+    const radians = (HISTOGRAM_X_AXIS_ROTATION * Math.PI) / 180;
+    const rotatedFootprint = rawTextWidth * Math.cos(radians)
+      + HISTOGRAM_X_AXIS_FONT_SIZE * Math.sin(radians)
+      + HISTOGRAM_X_AXIS_LABEL_PADDING;
+    const rotatedTarget = targetHistogramXAxisLabelCount(plotWidth, rotatedFootprint);
+    const useRotatedLabels = integerLevelCount > horizontalTarget && rotatedTarget > horizontalTarget;
+    const targetLabels = useRotatedLabels ? rotatedTarget : horizontalTarget;
+    const step = integerLevelCount <= targetLabels
+      ? 1
+      : niceIntegerAxisStep(range / Math.max(1, targetLabels - 1));
+    const rotatedHeight = useRotatedLabels
+      ? rawTextWidth * Math.sin(radians) + HISTOGRAM_X_AXIS_FONT_SIZE * Math.cos(radians)
+      : 0;
+    const nameGap = useRotatedLabels ? Math.max(34, Math.ceil(rotatedHeight) + 12) : 34;
     return {
       axisOptions: {
-        minInterval: 1,
+        minInterval: step,
         maxInterval: step,
         splitNumber: targetLabels,
       },
-      axisLabel: { ...axisLabel, hideOverlap: true },
+      axisLabel: {
+        ...axisLabel,
+        rotate: useRotatedLabels ? HISTOGRAM_X_AXIS_ROTATION : 0,
+        hideOverlap: false,
+      },
+      nameGap,
+      gridBottom: 58 + nameGap,
     };
   }
 
-  function targetHistogramXAxisLabelCount(chartWidth) {
-    const width = Number(chartWidth);
-    const raw = Number.isFinite(width) && width > 0 ? Math.floor(width / HISTOGRAM_X_AXIS_LABEL_PX) : 12;
-    return Math.max(HISTOGRAM_X_AXIS_MIN_LABELS, Math.min(HISTOGRAM_X_AXIS_MAX_LABELS, raw));
+  function estimatedHistogramAxisLabelWidth(labels) {
+    const maximumLength = labels.reduce((longest, label) => Math.max(longest, String(label || "").length), 1);
+    return Math.max(
+      14,
+      maximumLength * HISTOGRAM_X_AXIS_FONT_SIZE * HISTOGRAM_X_AXIS_LABEL_WIDTH_FACTOR
+        + HISTOGRAM_X_AXIS_LABEL_PADDING,
+    );
+  }
+
+  function targetHistogramXAxisLabelCount(plotWidth, labelWidth) {
+    const fitted = Math.floor(plotWidth / Math.max(1, labelWidth));
+    return Math.max(HISTOGRAM_X_AXIS_MIN_LABELS, Math.min(HISTOGRAM_X_AXIS_MAX_LABELS, fitted));
   }
 
   function niceIntegerAxisStep(rawStep) {
@@ -402,7 +586,8 @@ export function createHistogramTool({
     return rounded.toLocaleString(undefined, { maximumFractionDigits: 0 });
   }
 
-  function renderHistogramBar(_params, api, yBaseline, yLog, color) {
+  function renderHistogramBar(_params, api, options) {
+    const { yBaseline, yLog, color, outlineColor, label, labelColor } = options;
     const lower = Number(api.value(2));
     const upper = Number(api.value(3));
     const height = Number(api.value(1));
@@ -414,12 +599,13 @@ export function createHistogramTool({
     const rightPx = Math.max(start[0], end[0]);
     const topPx = Math.min(start[1], end[1]);
     const bottomPx = Math.max(start[1], end[1]);
-    const x = Math.floor(leftPx - 0.5);
-    const y = Math.floor(topPx);
-    const width = Math.max(1, Math.ceil(rightPx + 0.5) - x);
-    const barHeight = Math.max(1, Math.ceil(bottomPx) - y);
     const shape = echartsImpl.graphic.clipRectByRect(
-      { x, y, width, height: barHeight },
+      {
+        x: leftPx,
+        y: topPx,
+        width: Math.max(0.5, rightPx - leftPx),
+        height: Math.max(0.5, bottomPx - topPx),
+      },
       {
         x: _params.coordSys.x,
         y: _params.coordSys.y,
@@ -427,10 +613,47 @@ export function createHistogramTool({
         height: _params.coordSys.height,
       },
     );
-    return shape ? { type: "rect", shape, style: { fill: color } } : null;
+    if (!shape) return null;
+    const children = [{
+      type: "rect",
+      shape,
+      style: {
+        fill: color,
+        stroke: outlineColor || null,
+        lineWidth: outlineColor ? 0.5 : 0,
+      },
+    }];
+    const labelFontSize = histogramBinLabelFontSize(label, shape.width);
+    if (labelFontSize) {
+      children.push({
+        type: "text",
+        x: shape.x + shape.width / 2,
+        y: shape.y - 3,
+        style: {
+          text: label,
+          fill: labelColor,
+          font: `${labelFontSize}px sans-serif`,
+          align: "center",
+          verticalAlign: "bottom",
+        },
+        silent: true,
+      });
+    }
+    return { type: "group", children };
   }
 
-  function referenceLineSeries(data, xLog) {
+  function histogramBinLabelFontSize(label, binWidth) {
+    const text = String(label || "");
+    if (!text || !Number.isFinite(binWidth) || binWidth <= 0) return 0;
+    const availableWidth = Math.max(0, binWidth - 4);
+    const fitted = Math.floor(availableWidth / (text.length * HISTOGRAM_BIN_LABEL_WIDTH_FACTOR));
+    return Math.max(
+      HISTOGRAM_BIN_LABEL_MIN_FONT_SIZE,
+      Math.min(HISTOGRAM_BIN_LABEL_MAX_FONT_SIZE, fitted),
+    );
+  }
+
+  function referenceLineSeries(data, xLog, labelBackgroundColor) {
     const stats = data.stats || [];
     const mean = stats.find((row) => row.statistic === "Mean")?.value;
     const median = stats.find((row) => row.statistic === "Median")?.value;
@@ -438,13 +661,21 @@ export function createHistogramTool({
     const medianColor = getCss("--histogram-median-color") || DEFAULT_HISTOGRAM_MEDIAN_COLOR;
     return [
       referenceLine("Mean", mean, meanColor, xLog),
-      referenceLine("Median", median, medianColor, xLog),
+      referenceLine(
+        "Median",
+        median,
+        medianColor,
+        xLog,
+        HISTOGRAM_MEDIAN_LABEL_OFFSET,
+        labelBackgroundColor,
+      ),
     ].filter(Boolean);
   }
 
-  function referenceLine(name, rawValue, color, xLog) {
+  function referenceLine(name, rawValue, color, xLog, labelOffset = 0, labelBackgroundColor = "") {
     const value = Number(rawValue);
     if (!Number.isFinite(value) || (xLog && value <= 0)) return null;
+    const formattedValue = formatMetricValue(value, name);
     return {
       name,
       type: "line",
@@ -454,7 +685,14 @@ export function createHistogramTool({
       markLine: {
         symbol: "none",
         lineStyle: { color, width: 1.5, type: "dashed" },
-        label: { color, formatter: name, fontSize: 11 },
+        label: {
+          color,
+          formatter: formattedValue ? `${name} ${formattedValue}` : name,
+          fontSize: 11,
+          offset: [0, labelOffset],
+          backgroundColor: labelBackgroundColor || "transparent",
+          padding: labelBackgroundColor ? [0, 2, 4, 2] : 0,
+        },
         data: [{ xAxis: value }],
       },
     };
@@ -533,16 +771,49 @@ export function createHistogramTool({
         refreshHistogram();
       });
     });
-    el("histogramBins").addEventListener("input", () => {
+    document.querySelector('.segmented[data-control="histogramBinMode"]')?.addEventListener("click", (event) => {
+      if (event.target.tagName !== "BUTTON") return;
+      captureHistogramBinInput();
+      const nextMode = event.target.dataset.value === "width" ? "width" : "count";
+      if (nextMode === histogramBinMode()) return;
+      if (nextMode === "width" && !histogramBinWidthValue()) {
+        histogramBinValues.width = suggestedHistogramBinWidth();
+      }
+      setSegmentedValue("histogramBinMode", nextMode);
+      syncHistogramBinInput();
       clearActiveFavouriteSelection();
+      refreshHistogram();
+    });
+    document.querySelector('.segmented[data-control="histogramLabels"]')?.addEventListener("click", (event) => {
+      if (event.target.tagName !== "BUTTON") return;
+      const previousValue = state.histogramLabels;
+      setSegmentedValue("histogramLabels", event.target.dataset.value === "bins" ? "bins" : "none");
+      if (state.histogramLabels === previousValue) return;
+      clearActiveFavouriteSelection();
+      if (state.lastHistogramData) measureToolRender("histogram", () => renderChart(state.lastHistogramData));
+    });
+    el("histogramBins").addEventListener("input", () => {
+      captureHistogramBinInput();
+      clearActiveFavouriteSelection();
+      if (!histogramBinInputIsValid()) {
+        cancelHistogramBinsRefresh();
+        return;
+      }
       scheduleHistogramBinsRefresh();
     });
     el("histogramBins").addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       event.preventDefault();
+      captureHistogramBinInput();
+      if (!histogramBinInputIsValid({ report: true })) return;
       scheduleHistogramBinsRefresh({ immediate: true });
     });
-    el("histogramBins").addEventListener("blur", () => scheduleHistogramBinsRefresh({ immediate: true }));
+    el("histogramBins").addEventListener("blur", () => {
+      captureHistogramBinInput();
+      if (!histogramBinInputIsValid({ report: true })) return;
+      scheduleHistogramBinsRefresh({ immediate: true });
+    });
+    syncHistogramBinInput();
   }
 
   function bindHistogramSplitResize() {
@@ -629,6 +900,10 @@ export function createHistogramTool({
 
   function resizeHistogramChart({ flush = false } = {}) {
     chart.resize();
+    const resizedWidth = Number(chart.getWidth?.()) || 0;
+    if (state.lastHistogramData && Math.abs(resizedWidth - histogramAxisChartWidth) >= 1) {
+      renderChart(state.lastHistogramData, { scheduleResize: false });
+    }
     if (flush) chart.getZr?.().flush?.();
     redrawStatsLayoutFallback();
   }
@@ -647,10 +922,7 @@ export function createHistogramTool({
   }
 
   function scheduleHistogramBinsRefresh(options = {}) {
-    if (histogramBinsRefreshTimer) {
-      window.clearTimeout(histogramBinsRefreshTimer);
-      histogramBinsRefreshTimer = null;
-    }
+    cancelHistogramBinsRefresh();
     if (options.immediate) {
       return refreshHistogram();
     }
@@ -660,11 +932,20 @@ export function createHistogramTool({
     }, HISTOGRAM_BINS_REFRESH_DELAY_MS);
   }
 
+  function cancelHistogramBinsRefresh() {
+    if (!histogramBinsRefreshTimer) return;
+    window.clearTimeout(histogramBinsRefreshTimer);
+    histogramBinsRefreshTimer = null;
+  }
+
   function activate() {
+    syncSegmented("histogramBinMode", state.histogramBinMode);
     syncSegmented("histogramDistribution", state.histogramDistribution);
     syncSegmented("histogramYAxis", state.histogramYAxis);
+    syncSegmented("histogramLabels", state.histogramLabels);
     syncSegmented("histogramLogScale", state.histogramLogScale);
     syncSegmented("histogramSampleMode", state.histogramSampleMode);
+    syncHistogramBinInput();
     requestAnimationFrame(resize);
   }
 

@@ -327,9 +327,16 @@
             </div>
           </div>
           <div id="histogramToolbar" class="toolbar histogram-settings-strip app-control-strip app-settings-strip hidden">
+            <div class="control">
+              <h3>Binning</h3>
+              <div class="segmented" data-control="histogramBinMode">
+                <button data-value="count" data-stable-label="No. bins" class="active" type="button">No. bins</button>
+                <button data-value="width" data-stable-label="Bin width" type="button">Bin width</button>
+              </div>
+            </div>
             <div class="control histogram-bin-control">
-              <h3>Histogram bins</h3>
-              <input id="histogramBins" class="histogram-bin-input" type="text" inputmode="numeric" placeholder="Auto" aria-label="Histogram bins" />
+              <h3 id="histogramBinValueLabel">No. bins</h3>
+              <input id="histogramBins" class="histogram-bin-input" type="text" inputmode="numeric" placeholder="Auto" aria-label="Histogram number of bins" aria-labelledby="histogramBinValueLabel" />
             </div>
             <div class="control">
               <h3>Distribution</h3>
@@ -343,6 +350,13 @@
               <div class="segmented" data-control="histogramYAxis">
                 <button data-value="sum" data-stable-label="Sum" class="active" type="button">Sum</button>
                 <button data-value="probability" data-stable-label="Probability" type="button">Probability</button>
+              </div>
+            </div>
+            <div class="control">
+              <h3>Labels</h3>
+              <div class="segmented" data-control="histogramLabels">
+                <button data-value="none" data-stable-label="-" class="active" type="button">-</button>
+                <button data-value="bins" data-stable-label="Bins" type="button">Bins</button>
               </div>
             </div>
             <div class="control">
@@ -463,7 +477,7 @@
                 <section class="histogram-stats-panel" aria-label="Histogram metrics">
                   <div id="histogramStatsGrid" class="histogram-grid"></div>
                 </section>
-                <div id="histogramSplitResizer" class="histogram-split-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize histogram metrics table and chart" aria-controls="histogramStatsGrid histogramChart" aria-valuemin="240" aria-valuemax="560" aria-valuenow="310" tabindex="0"></div>
+                <div id="histogramSplitResizer" class="histogram-split-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize histogram metrics table and chart" aria-controls="histogramStatsGrid histogramChart" aria-valuemin="240" aria-valuemax="560" aria-valuenow="240" tabindex="0"></div>
                 <section class="histogram-chart-panel" aria-label="Histogram chart">
                   <div id="histogramChart"></div>
                 </section>
