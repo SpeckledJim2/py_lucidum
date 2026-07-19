@@ -151,7 +151,7 @@ export function createGbmTool({
   let liveEvaluationParameters = null;
   let gridSampleValue = GBM_GRID_SAMPLE_DEFAULT;
   let gridTrainingNotice = "";
-  const evaluationChart = createGbmEvaluationChart({ escapeHtml, formatEvaluationValue });
+  const evaluationChart = createGbmEvaluationChart({ escapeHtml, formatEvaluationValue, showClipboardToast });
   const parameterControls = createGbmParameterControls({
     escapeHtml,
     parameterOptions: () => config?.parameter_options || {},
@@ -170,6 +170,7 @@ export function createGbmTool({
   });
   let featureMetricMode = "gain";
   let featureMetricModelId = "";
+  let featureSetupOpen = localStorage.getItem("py_lucidum_gbm_feature_setup_open") === "true";
   let featureToolbarOutsideClickBound = false;
   let featureDraftState = null;
   let featureInteractionPairEditModelId = "";
@@ -244,7 +245,7 @@ export function createGbmTool({
     );
   }
 
-  function scheduleGbmTableRedraws() {
+  function scheduleGbmTableRedraws(tables = [featureTable, parameterTable, modelTable, ebmGainSummaryTable]) {
     const safeRedraw = (table) => {
       if (!table || typeof table.redraw !== "function" || !table.initialized || !table.element?.isConnected) return;
       try {
@@ -254,7 +255,7 @@ export function createGbmTool({
       }
     };
     const redraw = () => {
-      for (const table of [featureTable, parameterTable, modelTable, ebmGainSummaryTable]) {
+      for (const table of tables) {
         safeRedraw(table);
       }
     };
@@ -305,11 +306,13 @@ export function createGbmTool({
                   <h3 id="gbmFeatureSectionTitle" class="gbm-section-title">${escapeHtml(featureSectionTitle(data.features || []))}</h3>
                   <div class="gbm-feature-actions" role="group" aria-label="Feature selection">
                     ${featureMetricToggleHtml(data.features || [], data)}
-                    ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
-                    ${featureInteractionPairsDropdownHtml(data.active_feature_interaction_constraints || null, data.features || [])}
-                    ${featureScenarioDropdownHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
-                    <button id="gbmClearFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Clear all features" title="Clear all">×</button>
-                    <button id="gbmSelectFeaturesBtn" class="tab gbm-inline-action-button gbm-icon-action-button" type="button" aria-label="Select all features" title="Select all">✓</button>
+                    <button id="gbmFeatureSetupBtn" class="app-control-button gbm-feature-option-button gbm-feature-setup-button ${featureSetupOpen ? "active" : ""}" type="button" aria-label="Feature setup" title="Feature setup" aria-controls="gbmFeatureSetupPanel" aria-expanded="${featureSetupOpen ? "true" : "false"}">
+                      <svg class="gbm-feature-setup-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M4 6h3m4 0h9M9 4v4M4 12h9m4 0h3M15 10v4M4 18h5m4 0h7M11 16v4"></path>
+                      </svg>
+                    </button>
+                    <button id="gbmClearFeaturesBtn" class="app-control-button app-command-button gbm-feature-command-button" type="button" aria-label="Clear all features" title="Clear all">×</button>
+                    <button id="gbmSelectFeaturesBtn" class="app-control-button app-command-button gbm-feature-command-button" type="button" aria-label="Select all features" title="Select all">✓</button>
                   </div>
                 </div>
                 <div class="gbm-parameter-control-cell app-control-strip-row">
@@ -321,6 +324,13 @@ export function createGbmTool({
               </div>
             </div>
             <section class="gbm-panel-section gbm-grid-panel">
+              <div id="gbmFeatureSetupPanel" class="gbm-feature-setup-panel ${featureSetupOpen ? "" : "hidden"}" role="region" aria-label="Feature setup">
+                <div class="gbm-feature-setup-controls">
+                  ${featureScenarioDropdownHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
+                  ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
+                  ${featureInteractionPairsDropdownHtml(data.active_feature_interaction_constraints || null, data.features || [])}
+                </div>
+              </div>
               <div id="gbmFeatureGrid" class="gbm-grid"></div>
               <div id="gbmFeatureFallback" class="gbm-fallback-table"></div>
               <div id="gbmEbmGainSummaryGrid" class="gbm-grid gbm-ebm-gain-summary-grid hidden"></div>
@@ -517,23 +527,18 @@ export function createGbmTool({
   }
 
   function evaluationViewModeHtml() {
-    const selected = normaliseEvaluationViewMode(evaluationChart.getViewMode());
+    const tailActive = evaluationChart.getViewMode() === "tail";
     return `
-      <div id="gbmEvaluationViewMode" class="gbm-evaluation-view-mode" role="radiogroup" aria-label="Evaluation Log view">
-        <label class="gbm-evaluation-view-option">
-          <input type="radio" name="gbmEvaluationViewMode" value="all" ${selected === "all" ? "checked" : ""} />
-          <span>All</span>
-        </label>
-        <label class="gbm-evaluation-view-option">
-          <input type="radio" name="gbmEvaluationViewMode" value="tail" ${selected === "tail" ? "checked" : ""} />
-          <span>Tail</span>
-        </label>
+      <div id="gbmEvaluationViewMode" class="gbm-evaluation-view-mode" role="group" aria-label="Evaluation Log controls">
+        <button id="gbmEvaluationTailBtn" class="app-control-button gbm-evaluation-option-button${tailActive ? " active" : ""}" type="button" aria-pressed="${String(tailActive)}">Zoom tail</button>
+        <button id="gbmEvaluationCopyBtn" class="app-control-button gbm-evaluation-copy-button" type="button" aria-label="Copy Evaluation Log chart" title="Copy Evaluation Log chart">
+          <svg class="gbm-evaluation-copy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="8" y="8" width="10" height="10" rx="1.5"></rect>
+            <path d="M6 14H5.5A1.5 1.5 0 0 1 4 12.5v-7A1.5 1.5 0 0 1 5.5 4h7A1.5 1.5 0 0 1 14 5.5V6"></path>
+          </svg>
+        </button>
       </div>
     `;
-  }
-
-  function normaliseEvaluationViewMode(value) {
-    return String(value || "").trim().toLowerCase() === "tail" ? "tail" : "all";
   }
 
   function shouldShowCreateSampleButton(sample) {
@@ -726,6 +731,7 @@ export function createGbmTool({
 
   function bindFeatureActions() {
     bindFeatureToolbarOutsideClicks();
+    bindFeatureSetupActions();
     bindFeatureMetricActions();
     bindFeatureInteractionActions();
     bindFeatureInteractionPairActions();
@@ -807,7 +813,7 @@ export function createGbmTool({
     return `
       <div id="gbmFeatureMetricToggle" class="gbm-feature-metric-toggle" role="radiogroup" aria-label="Feature table metric">
         ${modes.map((mode) => `
-          <label class="gbm-feature-metric-option${selected === mode ? " active" : ""}">
+          <label class="gbm-feature-metric-option${selected === mode ? " active" : ""}" data-stable-label="${escapeHtml(featureMetricModeLabel(mode))}">
             <input type="radio" name="gbmFeatureMetric" value="${escapeHtml(mode)}" ${selected === mode ? "checked" : ""} />
             <span>${escapeHtml(featureMetricModeLabel(mode))}</span>
           </label>
@@ -829,6 +835,25 @@ export function createGbmTool({
         setFeatureMetricMode(input.value);
       });
     }
+  }
+
+  function bindFeatureSetupActions() {
+    el("gbmFeatureSetupBtn")?.addEventListener("click", () => {
+      featureSetupOpen = !featureSetupOpen;
+      localStorage.setItem("py_lucidum_gbm_feature_setup_open", String(featureSetupOpen));
+      syncFeatureSetupPanel();
+    });
+  }
+
+  function syncFeatureSetupPanel() {
+    const button = el("gbmFeatureSetupBtn");
+    const panel = el("gbmFeatureSetupPanel");
+    if (!button || !panel) return;
+    button.classList.toggle("active", featureSetupOpen);
+    button.setAttribute("aria-expanded", featureSetupOpen ? "true" : "false");
+    panel.classList.toggle("hidden", !featureSetupOpen);
+    if (!featureSetupOpen) closeGbmFeatureToolbarMenus();
+    scheduleGbmTableRedraws([featureTable, ebmGainSummaryTable]);
   }
 
   function setFeatureMetricMode(mode) {
@@ -1698,13 +1723,17 @@ export function createGbmTool({
   }
 
   function bindEvaluationViewModeActions() {
-    for (const input of document.querySelectorAll("input[name='gbmEvaluationViewMode']")) {
-      input.addEventListener("change", () => {
-        if (!input.checked) return;
-        evaluationChart.setViewMode(normaliseEvaluationViewMode(input.value));
-        rerenderEvaluationChart();
-      });
-    }
+    const tailButton = el("gbmEvaluationTailBtn");
+    tailButton?.addEventListener("click", () => {
+      const tailActive = evaluationChart.getViewMode() !== "tail";
+      evaluationChart.setViewMode(tailActive ? "tail" : "all");
+      tailButton.classList.toggle("active", tailActive);
+      tailButton.setAttribute("aria-pressed", String(tailActive));
+      rerenderEvaluationChart();
+    });
+    el("gbmEvaluationCopyBtn")?.addEventListener("click", () => {
+      void evaluationChart.copyToClipboard();
+    });
   }
 
   function rerenderEvaluationChart() {

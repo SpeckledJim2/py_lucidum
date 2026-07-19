@@ -358,9 +358,9 @@ The GBM tool is opt-in and must be requested with `line-bar`. Request `glm` sepa
 
 The GBM tool uses the same sidebar Actual, Weight, FAVOURITES, and KPI controls as Line and Bar, so users can choose the modelling response before training.
 
-The Features and parameters screen uses full-bleed Feature and Parameter grids beneath a shared control strip. Drag the Features/Parameters divider to trade width between those tables, or drag the top edge of the Evaluation Log strip to trade height between the Parameter grid and evaluation chart. The Control column stays narrow and fixed. Resized table and chart boundaries last for the current app session.
+The Features and parameters screen uses full-bleed Feature and Parameter grids beneath a shared control strip. The Feature header keeps its importance-metric choices and select/clear commands as borderless grey/blue controls. Its sliders button opens a Feature setup panel above the Feature grid for scenarios, constraint groups, and interaction pairs; the panel starts closed, remembers its state locally, and uses the sidebar background while open. Drag the Features/Parameters divider to trade width between those tables, or drag the top edge of the Evaluation Log strip to trade height between the Parameter grid and evaluation chart. The Control column stays narrow and fixed. Resized table and chart boundaries last for the current app session.
 
-If a Feature Specification is loaded, the Feature table shows its `Grouping` values, a multi-select interaction-constraint dropdown, and a scenario dropdown next to `Clear all`; choosing a scenario selects only that scenario's usable features.
+If a Feature Specification is loaded, the Feature table shows its `Grouping` values, and the Feature setup panel offers its scenario and multi-select interaction-constraint controls; choosing a scenario selects only that scenario's usable features.
 
 Choosing one or more interaction groups constrains the currently selected trainable features in each group so they can only interact with features in the same group, with all other selected features left together in a remainder constraint.
 
@@ -392,7 +392,7 @@ When feature interaction constraint groups are selected during training, saved `
 
 If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under the current dataset workspace in `models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved under the same dataset-version workspace.
 
-During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Use the inline `All` / `Tail` control to switch between the full history and a focused tail view. Long evaluation histories are sampled only for browser rendering; saved `evaluation.parquet` artifacts remain complete.
+During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Use the borderless `Zoom tail` toggle to switch between the full history and a focused tail view, or the adjacent copy icon to place the chart image on the clipboard. Long evaluation histories are sampled only for browser rendering; saved `evaluation.parquet` artifacts remain complete.
 
 ### Saved feature context
 

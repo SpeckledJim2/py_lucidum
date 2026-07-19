@@ -17370,6 +17370,24 @@ COPY (
                     timeout=10_000,
                 )
 
+            def set_feature_setup_open(open_panel: bool) -> None:
+                expected = "true" if open_panel else "false"
+                button = page.locator("#gbmFeatureSetupBtn")
+                if button.get_attribute("aria-expanded") != expected:
+                    button.click()
+                page.wait_for_function(
+                    """
+                    (openPanel) => {
+                      const button = document.querySelector("#gbmFeatureSetupBtn");
+                      const panel = document.querySelector("#gbmFeatureSetupPanel");
+                      return button?.getAttribute("aria-expanded") === String(openPanel)
+                        && panel?.classList.contains("hidden") !== openPanel;
+                    }
+                    """,
+                    arg=open_panel,
+                    timeout=10_000,
+                )
+
             def feature_scenario_state() -> dict[str, object]:
                 return page.evaluate(
                     """
@@ -17389,6 +17407,7 @@ COPY (
                 )
 
             def choose_feature_scenario(name: str) -> None:
+                set_feature_setup_open(True)
                 page.locator("#gbmFeatureScenarioButton").click()
                 page.locator(f'[data-gbm-feature-scenario="{name}"]').click()
 
@@ -17595,6 +17614,265 @@ COPY (
                 self.assertEqual(compact_nav_state["ariaLabel"], "Features and parameters")
                 self.assertEqual(compact_nav_state["title"], "Features and parameters")
                 page.set_viewport_size({"width": 1280, "height": 800})
+                feature_setup_requests_before = len(gbm_layout_api_requests)
+                feature_setup_closed = page.evaluate(
+                    """
+                    () => {
+                      const normalizeColor = (value) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = value;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
+                      const actions = document.querySelector(".gbm-feature-actions");
+                      const featureControlCell = document.querySelector(".gbm-feature-control-cell").getBoundingClientRect();
+                      const panel = document.querySelector("#gbmFeatureSetupPanel");
+                      const setup = document.querySelector("#gbmFeatureSetupBtn");
+                      const clear = document.querySelector("#gbmClearFeaturesBtn");
+                      const select = document.querySelector("#gbmSelectFeaturesBtn");
+                      const metricToggle = document.querySelector("#gbmFeatureMetricToggle").getBoundingClientRect();
+                      const setupRect = setup.getBoundingClientRect();
+                      const selectRect = select.getBoundingClientRect();
+                      const metricOptions = [...document.querySelectorAll("#gbmFeatureMetricToggle .gbm-feature-metric-option")];
+                      const activeMetric = document.querySelector("#gbmFeatureMetricToggle .gbm-feature-metric-option.active");
+                      const inactiveMetric = document.querySelector("#gbmFeatureMetricToggle .gbm-feature-metric-option:not(.active)");
+                      const icon = setup.querySelector(".gbm-feature-setup-icon");
+                      const featureGrid = document.querySelector("#gbmFeatureGrid").getBoundingClientRect();
+                      const parameterGrid = document.querySelector("#gbmParameterGrid").getBoundingClientRect();
+                      const evaluation = document.querySelector(".gbm-evaluation-panel").getBoundingClientRect();
+                      return {
+                        actionOrder: [...actions.children].map((node) => node.id || node.className),
+                        actionJustification: getComputedStyle(actions).justifyContent,
+                        metricCommandGap: setupRect.left - metricToggle.right,
+                        actionRightInset: featureControlCell.right - selectRect.right,
+                        panelHidden: panel.classList.contains("hidden"),
+                        panelDisplay: getComputedStyle(panel).display,
+                        panelBackground: getComputedStyle(panel).backgroundColor,
+                        panelBorder: getComputedStyle(panel).borderBottomWidth,
+                        sidebarBackground: normalizeColor("var(--sidebar-bg)"),
+                        setupExpanded: setup.getAttribute("aria-expanded"),
+                        setupActive: setup.classList.contains("active"),
+                        setupLabel: setup.getAttribute("aria-label"),
+                        setupTitle: setup.getAttribute("title"),
+                        setupControls: setup.getAttribute("aria-controls"),
+                        setupColor: getComputedStyle(setup).color,
+                        setupWeight: getComputedStyle(setup).fontWeight,
+                        setupBorder: getComputedStyle(setup).borderTopWidth,
+                        setupBackground: getComputedStyle(setup).backgroundColor,
+                        setupSize: [setup.getBoundingClientRect().width, setup.getBoundingClientRect().height],
+                        iconSize: [icon.getBoundingClientRect().width, icon.getBoundingClientRect().height],
+                        metricLabels: metricOptions.map((option) => option.textContent.trim()),
+                        metricHeights: metricOptions.map((option) => option.getBoundingClientRect().height),
+                        metricWidths: metricOptions.map((option) => option.getBoundingClientRect().width),
+                        metricBorder: getComputedStyle(activeMetric).borderTopWidth,
+                        metricBackground: getComputedStyle(activeMetric).backgroundColor,
+                        activeMetricColor: getComputedStyle(activeMetric).color,
+                        inactiveMetricColor: getComputedStyle(inactiveMetric).color,
+                        activeMetricWeight: getComputedStyle(activeMetric).fontWeight,
+                        inactiveMetricWeight: getComputedStyle(inactiveMetric).fontWeight,
+                        commandSizes: [clear, select].map((button) => [button.getBoundingClientRect().width, button.getBoundingClientRect().height]),
+                        commandBorders: [clear, select].map((button) => getComputedStyle(button).borderTopWidth),
+                        commandBackgrounds: [clear, select].map((button) => getComputedStyle(button).backgroundColor),
+                        commandColors: [clear, select].map((button) => getComputedStyle(button).color),
+                        commandLabels: [clear, select].map((button) => button.getAttribute("aria-label")),
+                        muted: normalizeColor("var(--muted)"),
+                        accent: normalizeColor("var(--accent)"),
+                        storage: localStorage.getItem("py_lucidum_gbm_feature_setup_open"),
+                        advancedInPanel: [
+                          "#gbmFeatureScenarioDropdown",
+                          "#gbmFeatureInteractionConstraintSelect",
+                          "#gbmFeatureInteractionPairSelect",
+                        ].every((selector) => panel.contains(document.querySelector(selector))),
+                        advancedVisible: [
+                          "#gbmFeatureScenarioButton",
+                          "#gbmFeatureInteractionConstraintButton",
+                          "#gbmFeatureInteractionPairButton",
+                        ].some((selector) => document.querySelector(selector)?.getBoundingClientRect().height > 0),
+                        featureGrid: { top: featureGrid.top, height: featureGrid.height },
+                        parameterGrid: { top: parameterGrid.top, height: parameterGrid.height },
+                        evaluation: { top: evaluation.top, height: evaluation.height },
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    feature_setup_closed["actionOrder"],
+                    ["gbmFeatureMetricToggle", "gbmFeatureSetupBtn", "gbmClearFeaturesBtn", "gbmSelectFeaturesBtn"],
+                )
+                self.assertEqual(feature_setup_closed["actionJustification"], "flex-end")
+                self.assertAlmostEqual(feature_setup_closed["metricCommandGap"], 34, delta=0.5)
+                self.assertAlmostEqual(feature_setup_closed["actionRightInset"], 8, delta=0.5)
+                self.assertTrue(feature_setup_closed["panelHidden"])
+                self.assertEqual(feature_setup_closed["panelDisplay"], "none")
+                self.assertEqual(feature_setup_closed["panelBackground"], feature_setup_closed["sidebarBackground"])
+                self.assertEqual(feature_setup_closed["panelBorder"], "1px")
+                self.assertEqual(feature_setup_closed["setupExpanded"], "false")
+                self.assertFalse(feature_setup_closed["setupActive"])
+                self.assertEqual(feature_setup_closed["setupLabel"], "Feature setup")
+                self.assertEqual(feature_setup_closed["setupTitle"], "Feature setup")
+                self.assertEqual(feature_setup_closed["setupControls"], "gbmFeatureSetupPanel")
+                self.assertEqual(feature_setup_closed["setupColor"], feature_setup_closed["muted"])
+                self.assertEqual(feature_setup_closed["setupWeight"], "400")
+                self.assertEqual(feature_setup_closed["setupBorder"], "0px")
+                self.assertEqual(feature_setup_closed["setupBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(feature_setup_closed["setupSize"], [28, 28])
+                self.assertEqual(feature_setup_closed["iconSize"], [16, 16])
+                self.assertEqual(feature_setup_closed["metricLabels"], ["Gain", "SHAP"])
+                self.assertEqual(feature_setup_closed["metricHeights"], [28, 28])
+                self.assertEqual(feature_setup_closed["metricBorder"], "0px")
+                self.assertEqual(feature_setup_closed["metricBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(feature_setup_closed["activeMetricColor"], feature_setup_closed["accent"])
+                self.assertEqual(feature_setup_closed["inactiveMetricColor"], feature_setup_closed["muted"])
+                self.assertEqual(feature_setup_closed["activeMetricWeight"], "700")
+                self.assertEqual(feature_setup_closed["inactiveMetricWeight"], "400")
+                self.assertEqual(feature_setup_closed["commandSizes"], [[28, 28], [28, 28]])
+                self.assertEqual(set(feature_setup_closed["commandBorders"]), {"0px"})
+                self.assertEqual(set(feature_setup_closed["commandBackgrounds"]), {"rgba(0, 0, 0, 0)"})
+                self.assertEqual(set(feature_setup_closed["commandColors"]), {feature_setup_closed["muted"]})
+                self.assertEqual(feature_setup_closed["commandLabels"], ["Clear all features", "Select all features"])
+                self.assertIsNone(feature_setup_closed["storage"])
+                self.assertTrue(feature_setup_closed["advancedInPanel"])
+                self.assertFalse(feature_setup_closed["advancedVisible"])
+
+                page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option", has_text="Gain").hover()
+                self.assertEqual(
+                    page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option", has_text="Gain").evaluate(
+                        "option => getComputedStyle(option).color"
+                    ),
+                    feature_setup_closed["accent"],
+                )
+                page.locator("#gbmClearFeaturesBtn").hover()
+                clear_hover_style = page.locator("#gbmClearFeaturesBtn").evaluate(
+                    "button => ({ color: getComputedStyle(button).color, background: getComputedStyle(button).backgroundColor })"
+                )
+                self.assertEqual(clear_hover_style["color"], feature_setup_closed["accent"])
+                self.assertNotEqual(clear_hover_style["background"], "rgba(0, 0, 0, 0)")
+                page.locator("input[name='gbmFeatureMetric']:checked").focus()
+                page.keyboard.press("Tab")
+                self.assertEqual(page.evaluate("() => document.activeElement?.id"), "gbmFeatureSetupBtn")
+                self.assertEqual(page.locator("#gbmFeatureSetupBtn").evaluate("button => getComputedStyle(button).outlineWidth"), "2px")
+
+                set_feature_setup_open(True)
+                feature_setup_open = page.evaluate(
+                    """
+                    () => {
+                      const panel = document.querySelector("#gbmFeatureSetupPanel");
+                      const setup = document.querySelector("#gbmFeatureSetupBtn");
+                      const featureGrid = document.querySelector("#gbmFeatureGrid").getBoundingClientRect();
+                      const parameterGrid = document.querySelector("#gbmParameterGrid").getBoundingClientRect();
+                      const evaluation = document.querySelector(".gbm-evaluation-panel").getBoundingClientRect();
+                      const controls = [...panel.querySelectorAll(".gbm-feature-menu-button")];
+                      return {
+                        panelHidden: panel.classList.contains("hidden"),
+                        panelBackground: getComputedStyle(panel).backgroundColor,
+                        setupExpanded: setup.getAttribute("aria-expanded"),
+                        setupActive: setup.classList.contains("active"),
+                        setupColor: getComputedStyle(setup).color,
+                        setupWeight: getComputedStyle(setup).fontWeight,
+                        storage: localStorage.getItem("py_lucidum_gbm_feature_setup_open"),
+                        controlLabels: controls.map((button) => button.textContent.trim()),
+                        controlHeights: controls.map((button) => button.getBoundingClientRect().height),
+                        controlBorders: controls.map((button) => getComputedStyle(button).borderTopWidth),
+                        controlBackgrounds: controls.map((button) => getComputedStyle(button).backgroundColor),
+                        controlColors: controls.map((button) => getComputedStyle(button).color),
+                        controlWeights: controls.map((button) => getComputedStyle(button).fontWeight),
+                        featureGrid: { top: featureGrid.top, height: featureGrid.height },
+                        parameterGrid: { top: parameterGrid.top, height: parameterGrid.height },
+                        evaluation: { top: evaluation.top, height: evaluation.height },
+                      };
+                    }
+                    """
+                )
+                self.assertFalse(feature_setup_open["panelHidden"])
+                self.assertEqual(feature_setup_open["panelBackground"], feature_setup_closed["sidebarBackground"])
+                self.assertEqual(feature_setup_open["setupExpanded"], "true")
+                self.assertTrue(feature_setup_open["setupActive"])
+                self.assertEqual(feature_setup_open["setupColor"], feature_setup_closed["accent"])
+                self.assertEqual(feature_setup_open["setupWeight"], "700")
+                self.assertEqual(feature_setup_open["storage"], "true")
+                self.assertEqual(feature_setup_open["controlLabels"], ["Features", "Trained constraint groups (1)", "Interaction pairs"])
+                self.assertEqual(feature_setup_open["controlHeights"], [28, 28, 28])
+                self.assertEqual(set(feature_setup_open["controlBorders"]), {"0px"})
+                self.assertEqual(set(feature_setup_open["controlBackgrounds"]), {"rgba(0, 0, 0, 0)"})
+                self.assertEqual(feature_setup_open["controlColors"][:2], [feature_setup_closed["accent"], feature_setup_closed["accent"]])
+                self.assertEqual(feature_setup_open["controlColors"][2], feature_setup_closed["muted"])
+                self.assertEqual(feature_setup_open["controlWeights"], ["700", "700", "400"])
+                self.assertGreater(feature_setup_open["featureGrid"]["top"], feature_setup_closed["featureGrid"]["top"])
+                self.assertLess(feature_setup_open["featureGrid"]["height"], feature_setup_closed["featureGrid"]["height"])
+                for pane in ("parameterGrid", "evaluation"):
+                    self.assertAlmostEqual(feature_setup_open[pane]["top"], feature_setup_closed[pane]["top"], delta=0.5)
+                    self.assertAlmostEqual(feature_setup_open[pane]["height"], feature_setup_closed[pane]["height"], delta=0.5)
+                self.assertEqual(len(gbm_layout_api_requests), feature_setup_requests_before)
+
+                feature_setup_light_theme = page.evaluate(
+                    """
+                    () => ({
+                      activeMetric: getComputedStyle(document.querySelector("#gbmFeatureMetricToggle .gbm-feature-metric-option.active")).color,
+                      inactiveMetric: getComputedStyle(document.querySelector("#gbmFeatureMetricToggle .gbm-feature-metric-option:not(.active)")).color,
+                      setup: getComputedStyle(document.querySelector("#gbmFeatureSetupBtn")).color,
+                      panel: getComputedStyle(document.querySelector("#gbmFeatureSetupPanel")).backgroundColor,
+                    })
+                    """
+                )
+                page.locator("#themeBtn").click()
+                page.wait_for_function("() => document.body.classList.contains('dark')", timeout=10_000)
+                feature_setup_dark_theme = page.evaluate(
+                    """
+                    () => {
+                      const probe = document.createElement("span");
+                      probe.style.color = "var(--sidebar-bg)";
+                      document.body.append(probe);
+                      const sidebar = getComputedStyle(probe).color;
+                      probe.remove();
+                      return {
+                        activeMetric: getComputedStyle(document.querySelector("#gbmFeatureMetricToggle .gbm-feature-metric-option.active")).color,
+                        inactiveMetric: getComputedStyle(document.querySelector("#gbmFeatureMetricToggle .gbm-feature-metric-option:not(.active)")).color,
+                        setup: getComputedStyle(document.querySelector("#gbmFeatureSetupBtn")).color,
+                        panel: getComputedStyle(document.querySelector("#gbmFeatureSetupPanel")).backgroundColor,
+                        sidebar,
+                      };
+                    }
+                    """
+                )
+                self.assertNotEqual(feature_setup_dark_theme["activeMetric"], feature_setup_dark_theme["inactiveMetric"])
+                self.assertEqual(feature_setup_dark_theme["activeMetric"], feature_setup_dark_theme["setup"])
+                self.assertEqual(feature_setup_dark_theme["panel"], feature_setup_dark_theme["sidebar"])
+                self.assertNotEqual(feature_setup_dark_theme["activeMetric"], feature_setup_light_theme["activeMetric"])
+                self.assertNotEqual(feature_setup_dark_theme["inactiveMetric"], feature_setup_light_theme["inactiveMetric"])
+                self.assertNotEqual(feature_setup_dark_theme["panel"], feature_setup_light_theme["panel"])
+                page.locator("#themeBtn").click()
+                page.wait_for_function("() => !document.body.classList.contains('dark')", timeout=10_000)
+
+                page.locator(".gbm-feature-setup-controls").evaluate("controls => { controls.style.width = '220px'; }")
+                wrapped_feature_setup = page.evaluate(
+                    """
+                    () => {
+                      const controls = document.querySelector(".gbm-feature-setup-controls");
+                      const buttons = [...controls.querySelectorAll(".gbm-feature-menu-button")];
+                      return {
+                        height: controls.getBoundingClientRect().height,
+                        buttonTops: buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
+                        overflow: controls.scrollWidth > controls.clientWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertGreater(wrapped_feature_setup["height"], 28)
+                self.assertGreater(len(set(wrapped_feature_setup["buttonTops"])), 1)
+                self.assertFalse(wrapped_feature_setup["overflow"])
+                page.locator(".gbm-feature-setup-controls").evaluate("controls => { controls.style.removeProperty('width'); }")
+
+                page.get_by_role("tab", name="Model navigator").click()
+                page.get_by_role("tab", name="Features and parameters").click()
+                self.assertEqual(page.locator("#gbmFeatureSetupBtn").get_attribute("aria-expanded"), "true")
+                page.reload(wait_until="domcontentloaded")
+                page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    "() => document.querySelector('#gbmFeatureSetupBtn')?.getAttribute('aria-expanded') === 'true' && !document.querySelector('#gbmFeatureSetupPanel')?.classList.contains('hidden')",
+                    timeout=10_000,
+                )
                 default_metric_state = page.evaluate(
                     """
                     () => {
@@ -17731,6 +18009,12 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                metric_widths_after_gain = page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option").evaluate_all(
+                    "options => options.map((option) => option.getBoundingClientRect().width)"
+                )
+                self.assertEqual(len(metric_widths_after_gain), len(feature_setup_closed["metricWidths"]))
+                for before, after in zip(feature_setup_closed["metricWidths"], metric_widths_after_gain, strict=True):
+                    self.assertAlmostEqual(before, after, delta=0.5)
                 assert_feature_heading_matches_checked(2)
                 if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") != "true":
                     page.locator("#gbmModelCollapseBtn").click()
@@ -17751,6 +18035,27 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                ebm_feature_controls = page.evaluate(
+                    """
+                    () => {
+                      const options = [...document.querySelectorAll("#gbmFeatureMetricToggle .gbm-feature-metric-option")];
+                      return {
+                        labels: options.map((option) => option.textContent.trim()),
+                        heights: options.map((option) => option.getBoundingClientRect().height),
+                        borders: options.map((option) => getComputedStyle(option).borderTopWidth),
+                        backgrounds: options.map((option) => getComputedStyle(option).backgroundColor),
+                        setupExpanded: document.querySelector("#gbmFeatureSetupBtn")?.getAttribute("aria-expanded"),
+                        panelHidden: document.querySelector("#gbmFeatureSetupPanel")?.classList.contains("hidden"),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(ebm_feature_controls["labels"], ["EBM Gain", "Gain", "SHAP"])
+                self.assertEqual(ebm_feature_controls["heights"], [28, 28, 28])
+                self.assertEqual(set(ebm_feature_controls["borders"]), {"0px"})
+                self.assertEqual(set(ebm_feature_controls["backgrounds"]), {"rgba(0, 0, 0, 0)"})
+                self.assertEqual(ebm_feature_controls["setupExpanded"], "true")
+                self.assertFalse(ebm_feature_controls["panelHidden"])
                 if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") != "true":
                     page.locator("#gbmModelCollapseBtn").click()
                 page.wait_for_function(
@@ -17770,6 +18075,8 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                self.assertEqual(page.locator("#gbmFeatureSetupBtn").get_attribute("aria-expanded"), "true")
+                self.assertFalse(page.locator("#gbmFeatureSetupPanel").evaluate("panel => panel.classList.contains('hidden')"))
                 initial_scenario = feature_scenario_state()
                 self.assertEqual(initial_scenario["value"], "")
                 self.assertIn("old_scenario (1; trained; missing from spec)", initial_scenario["rows"])
@@ -17831,11 +18138,25 @@ COPY (
                 self.assertLessEqual(constraint_menu_geometry["menuRight"], constraint_menu_geometry["viewportWidth"])
                 self.assertLessEqual(constraint_menu_geometry["menuBottom"], constraint_menu_geometry["viewportHeight"])
                 self.assertTrue(constraint_menu_geometry["hitVisibleMenu"])
-                page.locator("#gbmFeatureSectionTitle").click()
+                page.locator("#gbmFeatureSetupBtn").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#gbmFeatureInteractionConstraintMenu")?.classList.contains("hidden")
                       && document.querySelector("#gbmFeatureInteractionConstraintButton")?.getAttribute("aria-expanded") === "false"
+                      && document.querySelector("#gbmFeatureSetupBtn")?.getAttribute("aria-expanded") === "false"
+                      && document.querySelector("#gbmFeatureSetupPanel")?.classList.contains("hidden")
+                      && localStorage.getItem("py_lucidum_gbm_feature_setup_open") === "false"
+                    """,
+                    timeout=10_000,
+                )
+                set_feature_setup_open(True)
+                page.locator("#gbmFeatureInteractionConstraintButton").click()
+                page.keyboard.press("Escape")
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmFeatureInteractionConstraintMenu")?.classList.contains("hidden")
+                      && document.querySelector("#gbmFeatureInteractionConstraintButton")?.getAttribute("aria-expanded") === "false"
+                      && document.activeElement?.id === "gbmFeatureInteractionConstraintButton"
                     """,
                     timeout=10_000,
                 )
@@ -19917,11 +20238,40 @@ COPY (
                 switched_chart_options = page.evaluate(
                     """
                     () => {
+                      const resolveColor = (token) => {
+                        const probe = document.createElement("span");
+                        probe.style.color = `var(${token})`;
+                        document.body.append(probe);
+                        const color = getComputedStyle(probe).color;
+                        probe.remove();
+                        return color;
+                      };
                       const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
                       const option = chart.getOption();
+                      const controls = document.querySelector("#gbmEvaluationViewMode");
+                      const tail = document.querySelector("#gbmEvaluationTailBtn");
+                      const copy = document.querySelector("#gbmEvaluationCopyBtn");
+                      const copyIcon = copy.querySelector(".gbm-evaluation-copy-icon");
                       return {
-                        allChecked: document.querySelector("input[name='gbmEvaluationViewMode'][value='all']")?.checked,
-                        tailChecked: document.querySelector("input[name='gbmEvaluationViewMode'][value='tail']")?.checked,
+                        controlRole: controls.getAttribute("role"),
+                        controlLabel: controls.getAttribute("aria-label"),
+                        tailText: tail.textContent.trim(),
+                        tailPressed: tail.getAttribute("aria-pressed"),
+                        tailActive: tail.classList.contains("active"),
+                        tailColor: getComputedStyle(tail).color,
+                        tailWeight: getComputedStyle(tail).fontWeight,
+                        tailBackground: getComputedStyle(tail).backgroundColor,
+                        tailBorder: getComputedStyle(tail).borderTopWidth,
+                        tailHeight: tail.getBoundingClientRect().height,
+                        copyLabel: copy.getAttribute("aria-label"),
+                        copyTitle: copy.getAttribute("title"),
+                        copyColor: getComputedStyle(copy).color,
+                        copyBackground: getComputedStyle(copy).backgroundColor,
+                        copyBorder: getComputedStyle(copy).borderTopWidth,
+                        copySize: [copy.getBoundingClientRect().width, copy.getBoundingClientRect().height],
+                        copyIconSize: [copyIcon.getBoundingClientRect().width, copyIcon.getBoundingClientRect().height],
+                        muted: resolveColor("--muted"),
+                        accent: resolveColor("--accent"),
                         xMin: option.xAxis[0].min,
                         xMax: option.xAxis[0].max,
                         xInterval: option.xAxis[0].interval,
@@ -19942,8 +20292,33 @@ COPY (
                     }
                     """
                 )
-                self.assertTrue(switched_chart_options["allChecked"])
-                self.assertFalse(switched_chart_options["tailChecked"])
+                self.assertEqual(switched_chart_options["controlRole"], "group")
+                self.assertEqual(switched_chart_options["controlLabel"], "Evaluation Log controls")
+                self.assertEqual(switched_chart_options["tailText"], "Zoom tail")
+                self.assertEqual(switched_chart_options["tailPressed"], "false")
+                self.assertFalse(switched_chart_options["tailActive"])
+                self.assertEqual(switched_chart_options["tailColor"], switched_chart_options["muted"])
+                self.assertEqual(switched_chart_options["tailWeight"], "400")
+                self.assertEqual(switched_chart_options["tailBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(switched_chart_options["tailBorder"], "0px")
+                self.assertEqual(switched_chart_options["tailHeight"], 28)
+                self.assertEqual(switched_chart_options["copyLabel"], "Copy Evaluation Log chart")
+                self.assertEqual(switched_chart_options["copyTitle"], "Copy Evaluation Log chart")
+                self.assertEqual(switched_chart_options["copyColor"], switched_chart_options["muted"])
+                self.assertEqual(switched_chart_options["copyBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(switched_chart_options["copyBorder"], "0px")
+                self.assertEqual(switched_chart_options["copySize"], [28, 28])
+                self.assertEqual(switched_chart_options["copyIconSize"], [16, 16])
+                page.locator("#gbmEvaluationTailBtn").hover()
+                self.assertEqual(
+                    page.locator("#gbmEvaluationTailBtn").evaluate("button => getComputedStyle(button).color"),
+                    switched_chart_options["accent"],
+                )
+                page.locator("#gbmEvaluationCopyBtn").focus()
+                self.assertGreaterEqual(
+                    float(page.locator("#gbmEvaluationCopyBtn").evaluate("button => getComputedStyle(button).outlineWidth").removesuffix("px")),
+                    2,
+                )
                 self.assertEqual(switched_chart_options["xMin"], 0)
                 self.assertEqual(switched_chart_options["xMax"], 3000)
                 self.assertEqual(switched_chart_options["xInterval"], 100)
@@ -19956,7 +20331,19 @@ COPY (
                 self.assertTrue(switched_chart_options["hasBestIteration"])
                 self.assertLess(switched_chart_options["yMax"], switched_chart_options["firstTestValue"])
                 self.assertIn("<strong>Iteration:</strong> 2", switched_chart_options["tooltip"])
-                page.locator("input[name='gbmEvaluationViewMode'][value='tail']").check()
+                page.evaluate("window.__lucidumCopiedShapImage = null")
+                page.locator("#gbmEvaluationCopyBtn").click()
+                page.wait_for_function(
+                    """
+                    () => window.__lucidumCopiedShapImage
+                      && window.__lucidumCopiedShapImage.types.includes("image/png")
+                      && window.__lucidumCopiedShapImage.type === "image/png"
+                      && window.__lucidumCopiedShapImage.size > 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#clipboardToast").get_by_text("Evaluation Log chart image copied").wait_for(timeout=10_000)
+                page.locator("#gbmEvaluationTailBtn").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -19976,8 +20363,12 @@ COPY (
                       const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
                       const option = chart.getOption();
                       const testValues = option.series[1].data.map((point) => point[1]);
+                      const tail = document.querySelector("#gbmEvaluationTailBtn");
                       return {
-                        tailChecked: document.querySelector("input[name='gbmEvaluationViewMode'][value='tail']")?.checked,
+                        tailPressed: tail.getAttribute("aria-pressed"),
+                        tailActive: tail.classList.contains("active"),
+                        tailColor: getComputedStyle(tail).color,
+                        tailWeight: getComputedStyle(tail).fontWeight,
                         xMin: option.xAxis[0].min,
                         xMax: option.xAxis[0].max,
                         xInterval: option.xAxis[0].interval,
@@ -19991,7 +20382,10 @@ COPY (
                     }
                     """
                 )
-                self.assertTrue(tail_chart_options["tailChecked"])
+                self.assertEqual(tail_chart_options["tailPressed"], "true")
+                self.assertTrue(tail_chart_options["tailActive"])
+                self.assertEqual(tail_chart_options["tailColor"], switched_chart_options["accent"])
+                self.assertEqual(tail_chart_options["tailWeight"], "700")
                 self.assertEqual(tail_chart_options["xMin"], 2876)
                 self.assertEqual(tail_chart_options["xMax"], 3000)
                 self.assertEqual(tail_chart_options["xMax"] - tail_chart_options["xMin"], 124)
@@ -20002,7 +20396,7 @@ COPY (
                     tail_chart_options["yMax"] - tail_chart_options["yMin"],
                     tail_chart_options["testRange"] * 1.5,
                 )
-                page.locator("input[name='gbmEvaluationViewMode'][value='all']").check()
+                page.locator("#gbmEvaluationTailBtn").click()
                 page.wait_for_function(
                     """
                     () => {
@@ -20013,7 +20407,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("input[name='gbmEvaluationViewMode'][value='tail']").check()
+                page.locator("#gbmEvaluationTailBtn").click()
                 page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
                 page.evaluate("() => { window.prompt = () => 'renamed-smoke-model'; }")
@@ -20042,8 +20436,9 @@ COPY (
                 self.assertIn("old_scenario (1; trained; missing from spec)", restored_scenario["activeRows"])
                 assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='normal']").is_checked())
-                self.assertTrue(page.locator("input[name='gbmEvaluationViewMode'][value='tail']").is_checked())
-                page.locator("input[name='gbmEvaluationViewMode'][value='all']").check()
+                self.assertEqual(page.locator("#gbmEvaluationTailBtn").get_attribute("aria-pressed"), "true")
+                page.locator("#gbmEvaluationTailBtn").click()
+                self.assertEqual(page.locator("#gbmEvaluationTailBtn").get_attribute("aria-pressed"), "false")
                 live_job_status = {"value": "running"}
                 train_payload = {"value": None}
 
@@ -20278,7 +20673,7 @@ COPY (
                       const option = chart?.getOption();
                       return option?.title?.[0]?.text === "evaluation metric: gamma, test metric: 7.2, iteration: 2"
                         && option.xAxis?.[0]?.max === 10
-                        && document.querySelector("input[name='gbmEvaluationViewMode'][value='all']")?.checked
+                        && document.querySelector("#gbmEvaluationTailBtn")?.getAttribute("aria-pressed") === "false"
                         && option.series?.length === 2
                         && option.series[0].data.length === 2;
                     }
@@ -22238,10 +22633,19 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                set_feature_setup_open(False)
                 page.set_viewport_size({"width": 1280, "height": 1000})
                 layout = page.evaluate(
                     """
                     () => {
+                        const resolveColor = (token) => {
+                            const probe = document.createElement("span");
+                            probe.style.color = `var(${token})`;
+                            document.body.append(probe);
+                            const color = getComputedStyle(probe).color;
+                            probe.remove();
+                            return color;
+                        };
                         const visual = document.querySelector("#visualArea").getBoundingClientRect();
                         const tool = document.querySelector(".gbm-tool").getBoundingClientRect();
                         const workspace = document.querySelector("#gbmFeatureWorkspace").getBoundingClientRect();
@@ -22259,11 +22663,16 @@ COPY (
                         const gridSampleInput = document.querySelector("#gbmGridSampleInput");
                         const firstShapInput = document.querySelector("input[name='gbmShapRows']");
                         const checkedShapOption = document.querySelector(".gbm-shap-option:has(input:checked)");
+                        const uncheckedShapOption = [...document.querySelectorAll("#gbmShapRows .gbm-shap-option")]
+                          .find((option) => !option.querySelector("input")?.checked);
                         const mode = document.querySelector("#gbmTrainingMode");
                         const modeLabel = document.querySelector("#gbmTrainingMode .gbm-shap-label");
                         const checkedModeOption = document.querySelector(".gbm-mode-option:has(input:checked)");
+                        const uncheckedModeOption = [...document.querySelectorAll("#gbmTrainingMode .gbm-mode-option")]
+                          .find((option) => !option.querySelector("input")?.checked);
                         const sampleStatus = document.querySelector("#gbmSampleStatus");
                         const sampleStatusTitle = document.querySelector("#gbmSampleStatus .gbm-sample-status-title");
+                        const sampleStatusDetail = document.querySelector("#gbmSampleStatus .gbm-sample-status-detail");
                         const train = document.querySelector("#gbmTrainBtn");
                         const featureTitle = document.querySelector("#gbmFeatureSectionTitle");
                         const controlTitle = document.querySelector(".gbm-training-control-cell .gbm-section-title");
@@ -22324,11 +22733,24 @@ COPY (
                             gridSampleInputStep: gridSampleInput ? gridSampleInput.getAttribute("step") : "",
                             shapInputOpacity: firstShapInput ? getComputedStyle(firstShapInput).opacity : "",
                             checkedShapBackground: checkedShapOption ? getComputedStyle(checkedShapOption).backgroundColor : "",
+                            checkedShapBorder: checkedShapOption ? getComputedStyle(checkedShapOption).borderTopWidth : "",
+                            checkedShapColor: checkedShapOption ? getComputedStyle(checkedShapOption).color : "",
+                            checkedShapWeight: checkedShapOption ? getComputedStyle(checkedShapOption).fontWeight : "",
+                            uncheckedShapColor: uncheckedShapOption ? getComputedStyle(uncheckedShapOption).color : "",
+                            uncheckedShapWeight: uncheckedShapOption ? getComputedStyle(uncheckedShapOption).fontWeight : "",
                             modeRadios: document.querySelectorAll("input[name='gbmTrainingMode']").length,
                             modeLabels: [...document.querySelectorAll("#gbmTrainingMode .gbm-mode-option span")].map((node) => node.textContent.trim()),
                             checkedModeValue: document.querySelector("input[name='gbmTrainingMode']:checked")?.value || "",
                             modeTitle: mode ? mode.getAttribute("title") : "",
                             checkedModeBackground: checkedModeOption ? getComputedStyle(checkedModeOption).backgroundColor : "",
+                            checkedModeBorder: checkedModeOption ? getComputedStyle(checkedModeOption).borderTopWidth : "",
+                            checkedModeColor: checkedModeOption ? getComputedStyle(checkedModeOption).color : "",
+                            checkedModeWeight: checkedModeOption ? getComputedStyle(checkedModeOption).fontWeight : "",
+                            uncheckedModeColor: uncheckedModeOption ? getComputedStyle(uncheckedModeOption).color : "",
+                            uncheckedModeWeight: uncheckedModeOption ? getComputedStyle(uncheckedModeOption).fontWeight : "",
+                            headingColor: resolveColor("--sidebar-muted"),
+                            mutedColor: resolveColor("--muted"),
+                            accentColor: resolveColor("--accent"),
                             featureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-use-checkbox").length,
                             disabledFeatureCheckboxes: document.querySelectorAll("#gbmFeatureGrid .gbm-feature-disabled .gbm-use-checkbox").length,
                             rowHeight: firstRow ? firstRow.getBoundingClientRect().height : 0,
@@ -22342,6 +22764,7 @@ COPY (
                             sampleStatusText: sampleStatus ? sampleStatus.textContent.trim() : "",
                             sampleStatusTitleScrollWidth: sampleStatusTitle?.scrollWidth || 0,
                             sampleStatusTitleClientWidth: sampleStatusTitle?.clientWidth || 0,
+                            sampleStatusDetailWeight: sampleStatusDetail ? getComputedStyle(sampleStatusDetail).fontWeight : "",
                             sampleTop: sampleStatus ? Math.round(sampleStatus.getBoundingClientRect().top) : 0,
                             trainTop: train ? Math.round(train.getBoundingClientRect().top) : 0,
                             featureTitleTop: featureTitle ? Math.round(featureTitle.getBoundingClientRect().top) : 0,
@@ -22427,8 +22850,10 @@ COPY (
                             featureHeaders: headerTitles,
                             shapLabelFontSize: shapLabel ? getComputedStyle(shapLabel).fontSize : "",
                             shapLabelFontWeight: shapLabel ? getComputedStyle(shapLabel).fontWeight : "",
+                            shapLabelColor: shapLabel ? getComputedStyle(shapLabel).color : "",
                             modeLabelFontSize: modeLabel ? getComputedStyle(modeLabel).fontSize : "",
                             modeLabelFontWeight: modeLabel ? getComputedStyle(modeLabel).fontWeight : "",
+                            modeLabelColor: modeLabel ? getComputedStyle(modeLabel).color : "",
                         };
                     }
                     """
@@ -22446,12 +22871,22 @@ COPY (
                 self.assertEqual(layout["gridSampleInputMin"], "1")
                 self.assertEqual(layout["gridSampleInputStep"], "1")
                 self.assertEqual(layout["shapInputOpacity"], "0")
-                self.assertNotEqual(layout["checkedShapBackground"], layout["rowBackground"])
+                self.assertEqual(layout["checkedShapBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(layout["checkedShapBorder"], "0px")
+                self.assertEqual(layout["checkedShapColor"], layout["accentColor"])
+                self.assertEqual(layout["checkedShapWeight"], "700")
+                self.assertEqual(layout["uncheckedShapColor"], layout["mutedColor"])
+                self.assertEqual(layout["uncheckedShapWeight"], "400")
                 self.assertEqual(layout["modeRadios"], 2)
                 self.assertEqual(layout["modeLabels"], ["Normal", "EBM"])
                 self.assertEqual(layout["checkedModeValue"], "normal")
                 self.assertIn("2-leaf trees at learning rate 0.3", layout["modeTitle"])
-                self.assertNotEqual(layout["checkedModeBackground"], layout["rowBackground"])
+                self.assertEqual(layout["checkedModeBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(layout["checkedModeBorder"], "0px")
+                self.assertEqual(layout["checkedModeColor"], layout["accentColor"])
+                self.assertEqual(layout["checkedModeWeight"], "700")
+                self.assertEqual(layout["uncheckedModeColor"], layout["mutedColor"])
+                self.assertEqual(layout["uncheckedModeWeight"], "400")
                 self.assertGreater(layout["featureCheckboxes"], 0)
                 self.assertEqual(layout["disabledFeatureCheckboxes"], 0)
                 self.assertLess(layout["rowHeight"], 28)
@@ -22464,6 +22899,7 @@ COPY (
                 self.assertTrue(layout["trainParentInControls"])
                 self.assertIn("SAMPLE column found", layout["sampleStatusText"])
                 self.assertLessEqual(layout["sampleStatusTitleScrollWidth"], layout["sampleStatusTitleClientWidth"])
+                self.assertEqual(layout["sampleStatusDetailWeight"], "400")
                 self.assertEqual(layout["controlTitleText"], "Control")
                 self.assertLessEqual(abs(layout["featureTitleTop"] - layout["parameterTitleTop"]), 2)
                 self.assertLessEqual(abs(layout["featureTitleTop"] - layout["controlTitleTop"]), 2)
@@ -22477,6 +22913,10 @@ COPY (
                 self.assertGreater(layout["parameterTableColumnWidth"], layout["parameterControlsColumnWidth"])
                 self.assertGreaterEqual(layout["parameterTableColumnWidth"], 240)
                 self.assertEqual(layout["parameterControlsColumnWidth"], 162)
+                self.assertEqual(layout["shapLabelFontWeight"], "650")
+                self.assertEqual(layout["modeLabelFontWeight"], "650")
+                self.assertEqual(layout["shapLabelColor"], layout["headingColor"])
+                self.assertEqual(layout["modeLabelColor"], layout["headingColor"])
                 self.assertGreaterEqual(layout["trainTop"] - layout["parameterGridTop"], 7)
                 self.assertLess(layout["trainTop"], layout["sampleTop"])
                 self.assertLess(layout["sampleTop"], layout["shapTop"])
@@ -22537,8 +22977,6 @@ COPY (
                 self.assertEqual(layout["segmentKindText"], "categorical (3)")
                 self.assertEqual(layout["shapLabelFontSize"], layout["featureTitleFontSize"])
                 self.assertEqual(layout["modeLabelFontSize"], layout["featureTitleFontSize"])
-                self.assertEqual(layout["shapLabelFontWeight"], layout["featureTitleFontWeight"])
-                self.assertEqual(layout["modeLabelFontWeight"], layout["featureTitleFontWeight"])
                 self.assertIn("Feature", layout["featureHeaders"])
                 self.assertIn("Use", layout["featureHeaders"])
                 self.assertIn("Monotonicity", layout["featureHeaders"])

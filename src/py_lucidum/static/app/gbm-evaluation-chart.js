@@ -3,7 +3,7 @@ import { observeResize } from "./shared/model-ui.js";
 const GBM_EVALUATION_DOWNSAMPLE_THRESHOLD = 2000;
 const GBM_EVALUATION_MAX_PLOT_POINTS = 1500;
 
-export function createGbmEvaluationChart({ escapeHtml, formatEvaluationValue }) {
+export function createGbmEvaluationChart({ escapeHtml, formatEvaluationValue, showClipboardToast = () => {} }) {
   let chart = null;
   let resizeObserver = null;
   let viewMode = "all";
@@ -101,6 +101,25 @@ export function createGbmEvaluationChart({ escapeHtml, formatEvaluationValue }) 
 
   function getViewMode() {
     return viewMode;
+  }
+
+  async function copyToClipboard() {
+    if (!chart || !navigator.clipboard?.write || typeof window.ClipboardItem !== "function") {
+      showClipboardToast("Could not copy Evaluation Log chart image", true);
+      return;
+    }
+    try {
+      const dataUrl = chart.getDataURL({
+        type: "png",
+        pixelRatio: 2,
+        backgroundColor: cssVar("--panel", "#ffffff"),
+      });
+      const blob = await fetch(dataUrl).then((response) => response.blob());
+      await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blob })]);
+      showClipboardToast("Evaluation Log chart image copied");
+    } catch (_) {
+      showClipboardToast("Could not copy Evaluation Log chart image", true);
+    }
   }
 
   function dispose() {
@@ -474,6 +493,7 @@ export function createGbmEvaluationChart({ escapeHtml, formatEvaluationValue }) 
   }
 
   return {
+    copyToClipboard,
     dispose,
     getViewMode,
     render,

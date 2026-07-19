@@ -145,6 +145,7 @@
 
       .gbm-sample-status-detail {
         display: block;
+        font-weight: 400;
       }
 
       .gbm-sample-status-ok {
@@ -882,7 +883,7 @@
       .gbm-feature-actions {
         flex: 1 1 260px;
         flex-wrap: nowrap;
-        justify-content: flex-start;
+        justify-content: flex-end;
         min-width: 0;
         overflow-x: auto;
         scrollbar-width: none;
@@ -897,36 +898,56 @@
       }
 
       .gbm-feature-metric-toggle {
-        align-items: stretch;
-        border: 1px solid var(--line);
-        border-radius: 6px;
+        align-items: center;
         display: inline-flex;
         flex: 0 0 auto;
-        min-height: 22px;
-        overflow: hidden;
+        min-height: var(--app-control-button-height);
       }
 
       .gbm-feature-metric-option {
         align-items: center;
-        background: var(--panel);
-        color: var(--text);
+        background: transparent;
+        border: 0;
+        color: var(--muted);
         cursor: pointer;
-        display: inline-flex;
-        font-size: 11px;
-        font-weight: 700;
-        justify-content: center;
-        min-width: 42px;
-        padding: 2px 7px;
+        display: inline-grid;
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: var(--app-control-button-height);
+        padding-inline: 6px;
+        place-items: center;
         white-space: nowrap;
       }
 
-      .gbm-feature-metric-option + .gbm-feature-metric-option {
-        border-left: 1px solid var(--line);
+      .gbm-feature-metric-option span,
+      .gbm-feature-metric-option::after {
+        grid-area: 1 / 1;
+      }
+
+      .gbm-feature-metric-option::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
       }
 
       .gbm-feature-metric-option.active {
-        background: var(--accent);
-        color: white;
+        background: transparent;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .gbm-feature-metric-option:hover,
+      .gbm-feature-metric-option:has(input:focus-visible) {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-feature-metric-option:has(input:focus-visible) {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
       }
 
       .gbm-feature-metric-option input {
@@ -938,22 +959,123 @@
         position: absolute;
       }
 
-      .gbm-evaluation-view-option {
-        align-items: center;
-        color: var(--text);
-        display: inline-flex;
-        font-size: 11px;
+      .gbm-feature-option-button {
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        font-weight: 400;
+      }
+
+      .gbm-feature-option-button:not(:disabled):hover,
+      .gbm-feature-option-button:not(:disabled):focus-visible {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-feature-option-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .gbm-feature-option-button.active {
+        background: transparent;
+        color: var(--accent);
         font-weight: 700;
-        gap: 4px;
+      }
+
+      .gbm-feature-setup-button {
+        margin-left: 28px;
+        padding-inline: 6px;
+        width: 28px;
+      }
+
+      .gbm-feature-setup-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
+      }
+
+      .gbm-feature-command-button {
+        font-size: 14px;
+        line-height: 1;
+        padding: 0;
+        width: 28px;
+      }
+
+      .gbm-feature-setup-panel {
+        background: var(--sidebar-bg);
+        border-bottom: 1px solid var(--line);
+        flex: 0 0 auto;
+        min-width: 0;
+        padding: 8px var(--app-control-strip-padding-inline);
+      }
+
+      .gbm-feature-setup-controls {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .gbm-evaluation-option-button,
+      .gbm-evaluation-copy-button {
+        align-items: center;
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        cursor: pointer;
+        display: inline-grid;
+        font-weight: 400;
+        justify-content: center;
         line-height: 1.2;
         white-space: nowrap;
       }
 
-      .gbm-evaluation-view-option input {
-        accent-color: var(--accent);
-        height: 12px;
-        margin: 0;
-        width: 12px;
+      .gbm-evaluation-option-button:hover,
+      .gbm-evaluation-copy-button:hover,
+      .gbm-evaluation-option-button:focus-visible,
+      .gbm-evaluation-copy-button:focus-visible {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-evaluation-option-button:focus-visible,
+      .gbm-evaluation-copy-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .gbm-evaluation-option-button.active {
+        background: transparent;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .gbm-evaluation-copy-button {
+        padding: 0;
+        width: 28px;
+      }
+
+      .gbm-evaluation-copy-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
       }
 
       .gbm-inline-action-button {
@@ -961,16 +1083,6 @@
         min-height: 22px;
         padding: 3px 8px;
         white-space: nowrap;
-      }
-
-      .gbm-icon-action-button {
-        font-size: 13px;
-        font-weight: 700;
-        line-height: 20px;
-        min-width: 28px;
-        padding: 0;
-        text-align: center;
-        width: 28px;
       }
 
       .gbm-interaction-constraint-select,
@@ -982,27 +1094,24 @@
 
       .gbm-feature-menu-button {
         align-items: center;
-        background: linear-gradient(
-          to bottom,
-          color-mix(in srgb, var(--accent) 10%, var(--panel)),
-          color-mix(in srgb, var(--accent-2) 5%, var(--panel))
-        );
-        border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
-        border-radius: 5px;
-        color: var(--text);
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
         cursor: pointer;
         display: inline-flex;
         gap: 5px;
         font: inherit;
-        font-size: 11px;
-        font-weight: 750;
-        height: 22px;
+        font-size: var(--app-control-button-font-size);
+        font-weight: 400;
+        height: var(--app-control-button-height);
         justify-content: center;
-        line-height: 20px;
+        line-height: 1.2;
         max-width: 150px;
         min-width: 0;
         overflow: hidden;
-        padding: 1px 7px;
+        padding: 2px 6px;
         text-align: left;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1020,30 +1129,27 @@
       .gbm-feature-menu-button:hover,
       .gbm-feature-menu-button:focus-visible,
       .gbm-feature-menu-button[aria-expanded="true"] {
-        background: linear-gradient(
-          to bottom,
-          color-mix(in srgb, var(--accent) 18%, var(--panel)),
-          color-mix(in srgb, var(--accent-2) 10%, var(--panel))
-        );
-        border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
-        outline: none;
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-feature-menu-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
       }
 
       .gbm-feature-menu-button.has-constraints,
       .gbm-feature-menu-button.has-scenario {
-        background: linear-gradient(
-          to bottom,
-          color-mix(in srgb, var(--accent-2) 23%, var(--panel)),
-          color-mix(in srgb, var(--accent) 12%, var(--panel))
-        );
-        border-color: color-mix(in srgb, var(--accent-2) 68%, var(--line));
-        color: var(--text);
-        font-weight: 800;
+        background: transparent;
+        color: var(--accent);
+        font-weight: 700;
       }
 
       .gbm-feature-menu-button:disabled {
+        background: transparent;
+        color: var(--muted);
         cursor: not-allowed;
-        opacity: 0.55;
+        opacity: 0.5;
       }
 
       .gbm-feature-menu {
@@ -1605,6 +1711,12 @@
         margin: 0 0 6px;
       }
 
+      #gbmShapRows > .gbm-shap-label,
+      #gbmTrainingMode > .gbm-shap-label {
+        color: var(--sidebar-muted);
+        font-weight: 650;
+      }
+
       .gbm-shap-options {
         display: flex;
         flex-wrap: nowrap;
@@ -1615,26 +1727,38 @@
 
       .gbm-shap-option {
         align-items: center;
-        border: 1px solid var(--line);
-        border-radius: 5px;
-        color: var(--text);
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
         cursor: pointer;
         display: inline-flex;
         flex: 1 1 0;
+        font-weight: 400;
         gap: 4px;
         justify-content: center;
         min-height: 24px;
         min-width: 0;
         padding: 2px 5px;
         font-size: 12px;
-        background: var(--panel);
         width: 100%;
       }
 
+      .gbm-shap-option:hover,
+      .gbm-shap-option:has(input:focus-visible) {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .gbm-shap-option:has(input:focus-visible) {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
       .gbm-shap-option:has(input:checked) {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: white;
+        background: transparent;
+        border: 0;
+        color: var(--accent);
         font-weight: 700;
       }
 
