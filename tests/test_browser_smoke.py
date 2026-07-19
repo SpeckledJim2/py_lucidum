@@ -3056,6 +3056,120 @@ class BrowserSmokeTests(unittest.TestCase):
                         timeout=10_000,
                     )
 
+                    def assert_full_bleed_picker_search(
+                        section_selector: str,
+                        input_selector: str,
+                        clear_selector: str,
+                        expected_label: str,
+                    ) -> dict[str, object]:
+                        geometry = page.evaluate(
+                            """
+                            ({ sectionSelector, inputSelector, clearSelector }) => {
+                              const section = document.querySelector(sectionSelector);
+                              const input = document.querySelector(inputSelector);
+                              const clear = document.querySelector(clearSelector);
+                              const list = section?.querySelector(".feature-list");
+                              const firstRow = list?.querySelector(".feature");
+                              const controls = document.querySelector("#chartSideControls");
+                              const resizer = document.querySelector("#chartControlsResizer");
+                              const workspace = document.querySelector(".visual-area.line-bar-mode .workspace");
+                              const inputRect = input?.getBoundingClientRect();
+                              const clearRect = clear?.getBoundingClientRect();
+                              const listRect = list?.getBoundingClientRect();
+                              const firstRowRect = firstRow?.getBoundingClientRect();
+                              const sectionRect = section?.getBoundingClientRect();
+                              const controlsRect = controls?.getBoundingClientRect();
+                              const resizerRect = resizer?.getBoundingClientRect();
+                              const workspaceRect = workspace?.getBoundingClientRect();
+                              const inputStyle = input ? getComputedStyle(input) : null;
+                              const clearStyle = clear ? getComputedStyle(clear) : null;
+                              const listStyle = list ? getComputedStyle(list) : null;
+                              return {
+                                inputLeft: inputRect?.left ?? -1,
+                                inputRight: inputRect?.right ?? -1,
+                                inputTop: inputRect?.top ?? -1,
+                                inputBottom: inputRect?.bottom ?? -1,
+                                inputHeight: inputRect?.height ?? -1,
+                                clearLeft: clearRect?.left ?? -1,
+                                clearRight: clearRect?.right ?? -1,
+                                clearTop: clearRect?.top ?? -1,
+                                clearBottom: clearRect?.bottom ?? -1,
+                                clearHeight: clearRect?.height ?? -1,
+                                listLeft: listRect?.left ?? -1,
+                                listRight: listRect?.right ?? -1,
+                                listTop: listRect?.top ?? -1,
+                                firstRowLeft: firstRowRect?.left ?? -1,
+                                firstRowRight: firstRowRect?.right ?? -1,
+                                firstRowTop: firstRowRect?.top ?? -1,
+                                sectionLeft: sectionRect?.left ?? -1,
+                                sectionRight: sectionRect?.right ?? -1,
+                                controlsRight: controlsRect?.right ?? -1,
+                                workspaceLeft: workspaceRect?.left ?? -1,
+                                resizerLeft: resizerRect?.left ?? -1,
+                                resizerRight: resizerRect?.right ?? -1,
+                                dividerX: resizerRect
+                                  ? resizerRect.left + (resizerRect.width / 2)
+                                  : -1,
+                                textRight: inputRect && inputStyle
+                                  ? inputRect.right - parseFloat(inputStyle.paddingRight || "0")
+                                  : -1,
+                                inputBorders: inputStyle ? [
+                                  inputStyle.borderTopWidth,
+                                  inputStyle.borderRightWidth,
+                                  inputStyle.borderBottomWidth,
+                                  inputStyle.borderLeftWidth,
+                                ] : [],
+                                clearBorders: clearStyle ? [
+                                  clearStyle.borderTopWidth,
+                                  clearStyle.borderRightWidth,
+                                  clearStyle.borderBottomWidth,
+                                  clearStyle.borderLeftWidth,
+                                ] : [],
+                                listBorderTop: listStyle?.borderTopWidth || "",
+                                inputRadius: inputStyle?.borderRadius || "",
+                                clearRadius: clearStyle?.borderRadius || "",
+                                inputShared: input?.classList.contains("app-control-input") || false,
+                                clearShared: clear?.classList.contains("app-command-button") || false,
+                                inputLabel: input?.getAttribute("aria-label") || "",
+                              };
+                            }
+                            """,
+                            arg={
+                                "sectionSelector": section_selector,
+                                "inputSelector": input_selector,
+                                "clearSelector": clear_selector,
+                            },
+                        )
+                        self.assertAlmostEqual(geometry["inputLeft"], geometry["sectionLeft"], delta=0.5)
+                        self.assertAlmostEqual(geometry["inputLeft"], geometry["listLeft"], delta=0.5)
+                        self.assertAlmostEqual(geometry["inputLeft"], geometry["firstRowLeft"], delta=0.5)
+                        self.assertAlmostEqual(geometry["inputRight"], geometry["sectionRight"], delta=0.5)
+                        self.assertAlmostEqual(geometry["inputRight"], geometry["controlsRight"], delta=0.5)
+                        self.assertAlmostEqual(geometry["inputRight"], geometry["listRight"], delta=0.5)
+                        self.assertAlmostEqual(geometry["inputRight"], geometry["firstRowRight"], delta=0.5)
+                        self.assertAlmostEqual(geometry["inputRight"], geometry["dividerX"], delta=0.5)
+                        self.assertAlmostEqual(geometry["inputRight"], geometry["workspaceLeft"], delta=0.5)
+                        self.assertAlmostEqual(geometry["dividerX"] - geometry["resizerLeft"], 6, delta=0.5)
+                        self.assertAlmostEqual(geometry["resizerRight"] - geometry["dividerX"], 6, delta=0.5)
+                        self.assertAlmostEqual(geometry["inputBottom"], geometry["listTop"], delta=0.5)
+                        self.assertAlmostEqual(geometry["firstRowTop"], geometry["listTop"], delta=0.5)
+                        self.assertEqual(geometry["inputHeight"], 28)
+                        self.assertEqual(geometry["clearHeight"], 28)
+                        self.assertEqual(geometry["inputBorders"], ["1px", "0px", "1px", "0px"])
+                        self.assertEqual(geometry["clearBorders"], ["0px"] * 4)
+                        self.assertEqual(geometry["listBorderTop"], "0px")
+                        self.assertEqual(geometry["inputRadius"], "0px")
+                        self.assertEqual(geometry["clearRadius"], "0px")
+                        self.assertGreaterEqual(geometry["clearLeft"], geometry["inputLeft"])
+                        self.assertAlmostEqual(geometry["clearTop"], geometry["inputTop"], delta=0.5)
+                        self.assertLessEqual(geometry["clearBottom"], geometry["inputBottom"] + 0.5)
+                        self.assertAlmostEqual(geometry["clearRight"], geometry["inputRight"], delta=0.5)
+                        self.assertLessEqual(geometry["textRight"], geometry["clearLeft"])
+                        self.assertTrue(geometry["inputShared"])
+                        self.assertTrue(geometry["clearShared"])
+                        self.assertEqual(geometry["inputLabel"], expected_label)
+                        return geometry
+
                     initial_split_state = page.evaluate(
                         """
                         () => {
@@ -3107,6 +3221,68 @@ class BrowserSmokeTests(unittest.TestCase):
                         initial_split_state["featureHeight"],
                         initial_split_state["controlsHeight"] - 36,
                     )
+                    initial_feature_geometry = assert_full_bleed_picker_search(
+                        ".feature-section",
+                        "#featureSearch",
+                        "#featureSearchClear",
+                        "Search x-axis features",
+                    )
+                    chart_controls_resizer_box = page.locator("#chartControlsResizer").bounding_box()
+                    self.assertIsNotNone(chart_controls_resizer_box)
+                    assert chart_controls_resizer_box is not None
+                    divider_target_x = (
+                        chart_controls_resizer_box["x"]
+                        + (chart_controls_resizer_box["width"] / 2)
+                        + 40
+                    )
+                    divider_drag_y = chart_controls_resizer_box["y"] + 80
+                    page.mouse.move(
+                        chart_controls_resizer_box["x"] + (chart_controls_resizer_box["width"] / 2),
+                        divider_drag_y,
+                    )
+                    page.mouse.down()
+                    page.mouse.move(divider_target_x, divider_drag_y, steps=8)
+                    page.mouse.up()
+                    page.wait_for_function(
+                        """
+                        ({ targetX }) => {
+                          const controls = document.querySelector("#chartSideControls")?.getBoundingClientRect();
+                          const workspace = document.querySelector(".visual-area.line-bar-mode .workspace")?.getBoundingClientRect();
+                          const resizer = document.querySelector("#chartControlsResizer")?.getBoundingClientRect();
+                          const dividerX = resizer ? resizer.left + (resizer.width / 2) : -1;
+                          return controls && workspace
+                            && Math.abs(controls.right - targetX) <= 1
+                            && Math.abs(workspace.left - targetX) <= 1
+                            && Math.abs(dividerX - targetX) <= 1;
+                        }
+                        """,
+                        arg={"targetX": divider_target_x},
+                        timeout=10_000,
+                    )
+                    resized_feature_geometry = assert_full_bleed_picker_search(
+                        ".feature-section",
+                        "#featureSearch",
+                        "#featureSearchClear",
+                        "Search x-axis features",
+                    )
+                    self.assertGreater(
+                        resized_feature_geometry["inputRight"],
+                        initial_feature_geometry["inputRight"] + 39,
+                    )
+                    feature_count_before_search = page.locator("#featureList .feature").count()
+                    page.locator("#featureSearch").fill("feature_159")
+                    page.locator('#featureList .feature[data-value="feature_159"]').wait_for(timeout=10_000)
+                    feature_count_during_search = page.locator("#featureList .feature").count()
+                    self.assertLess(feature_count_during_search, feature_count_before_search)
+                    page.locator("#featureSearchClear").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#featureSearch")?.value === ""
+                          && document.activeElement?.id === "featureSearch"
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertGreater(page.locator("#featureList .feature").count(), feature_count_during_search)
                     page.locator("#featureSearch").focus()
                     feature_focus_state = page.evaluate(
                         """
@@ -3246,6 +3422,26 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(expanded_split_state["toggleLabel"], "Hide Expected controls")
                     self.assertNotEqual(expanded_split_state["iconTransform"], initial_split_state["iconTransform"])
                     self.assertGreater(expanded_split_state["expectedHeight"], 96)
+                    assert_full_bleed_picker_search(
+                        "#expectedSideSection",
+                        "#expectedSearch",
+                        "#expectedSearchClear",
+                        "Search Expected values",
+                    )
+                    expected_count_before_search = page.locator("#expectedList .feature").count()
+                    page.locator("#expectedSearch").fill("expected")
+                    page.locator('#expectedList .feature[data-value="expected"]').wait_for(timeout=10_000)
+                    expected_count_during_search = page.locator("#expectedList .feature").count()
+                    self.assertLess(expected_count_during_search, expected_count_before_search)
+                    page.locator("#expectedSearchClear").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#expectedSearch")?.value === ""
+                          && document.activeElement?.id === "expectedSearch"
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertGreater(page.locator("#expectedList .feature").count(), expected_count_during_search)
                     page.locator("#expectedSearch").focus()
                     expected_focus_state = page.evaluate(
                         """
@@ -18226,6 +18422,125 @@ COPY (
                 default_shap_feature_label = page.locator("#gbmShapFeatureList1 .feature.active .kind").text_content()
                 self.assertEqual(default_shap_feature_label, "Rank 1 · 0.2330")
                 self.assertNotIn("numeric", default_shap_feature_label)
+
+                def assert_full_bleed_shap_picker(index: int) -> dict[str, object]:
+                    geometry = page.evaluate(
+                        """
+                        ({ index }) => {
+                          const section = document.querySelector(`#gbmShapFeatureSection${index}`);
+                          const input = document.querySelector(`#gbmShapFeatureSearch${index}`);
+                          const clear = document.querySelector(`[data-gbm-shap-search-clear="${index}"]`);
+                          const list = document.querySelector(`#gbmShapFeatureList${index}`);
+                          const firstRow = list?.querySelector(".feature");
+                          const side = document.querySelector("#gbmShapSide");
+                          const main = document.querySelector(".gbm-shap-main");
+                          const resizer = document.querySelector("#gbmShapMainResizer");
+                          const sectionRect = section?.getBoundingClientRect();
+                          const inputRect = input?.getBoundingClientRect();
+                          const clearRect = clear?.getBoundingClientRect();
+                          const listRect = list?.getBoundingClientRect();
+                          const firstRowRect = firstRow?.getBoundingClientRect();
+                          const sideRect = side?.getBoundingClientRect();
+                          const mainRect = main?.getBoundingClientRect();
+                          const resizerRect = resizer?.getBoundingClientRect();
+                          const inputStyle = input ? getComputedStyle(input) : null;
+                          const clearStyle = clear ? getComputedStyle(clear) : null;
+                          const listStyle = list ? getComputedStyle(list) : null;
+                          return {
+                            sectionLeft: sectionRect?.left ?? -1,
+                            sectionRight: sectionRect?.right ?? -1,
+                            inputLeft: inputRect?.left ?? -1,
+                            inputRight: inputRect?.right ?? -1,
+                            inputTop: inputRect?.top ?? -1,
+                            inputBottom: inputRect?.bottom ?? -1,
+                            inputHeight: inputRect?.height ?? -1,
+                            clearLeft: clearRect?.left ?? -1,
+                            clearRight: clearRect?.right ?? -1,
+                            clearTop: clearRect?.top ?? -1,
+                            clearBottom: clearRect?.bottom ?? -1,
+                            clearHeight: clearRect?.height ?? -1,
+                            listLeft: listRect?.left ?? -1,
+                            listRight: listRect?.right ?? -1,
+                            listTop: listRect?.top ?? -1,
+                            firstRowLeft: firstRowRect?.left ?? -1,
+                            firstRowRight: firstRowRect?.right ?? -1,
+                            firstRowTop: firstRowRect?.top ?? -1,
+                            sideRight: sideRect?.right ?? -1,
+                            mainLeft: mainRect?.left ?? -1,
+                            dividerX: resizerRect ? resizerRect.left + (resizerRect.width / 2) : -1,
+                            textRight: inputRect && inputStyle
+                              ? inputRect.right - parseFloat(inputStyle.paddingRight || "0")
+                              : -1,
+                            inputBorders: inputStyle ? [
+                              inputStyle.borderTopWidth,
+                              inputStyle.borderRightWidth,
+                              inputStyle.borderBottomWidth,
+                              inputStyle.borderLeftWidth,
+                            ] : [],
+                            clearBorders: clearStyle ? [
+                              clearStyle.borderTopWidth,
+                              clearStyle.borderRightWidth,
+                              clearStyle.borderBottomWidth,
+                              clearStyle.borderLeftWidth,
+                            ] : [],
+                            listBorderTop: listStyle?.borderTopWidth || "",
+                            inputRadius: inputStyle?.borderRadius || "",
+                            clearRadius: clearStyle?.borderRadius || "",
+                            inputShared: input?.classList.contains("app-control-input") || false,
+                            clearShared: clear?.classList.contains("app-command-button") || false,
+                            inputLabel: input?.getAttribute("aria-label") || "",
+                          };
+                        }
+                        """,
+                        arg={"index": index},
+                    )
+                    self.assertAlmostEqual(geometry["inputLeft"], geometry["sectionLeft"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputLeft"], geometry["listLeft"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputLeft"], geometry["firstRowLeft"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputRight"], geometry["sectionRight"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputRight"], geometry["listRight"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputRight"], geometry["firstRowRight"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputRight"], geometry["sideRight"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputRight"], geometry["mainLeft"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputRight"], geometry["dividerX"], delta=0.5)
+                    self.assertAlmostEqual(geometry["inputBottom"], geometry["listTop"], delta=0.5)
+                    self.assertAlmostEqual(geometry["firstRowTop"], geometry["listTop"], delta=0.5)
+                    self.assertEqual(geometry["inputHeight"], 28)
+                    self.assertEqual(geometry["clearHeight"], 28)
+                    self.assertEqual(geometry["inputBorders"], ["1px", "0px", "1px", "0px"])
+                    self.assertEqual(geometry["clearBorders"], ["0px"] * 4)
+                    self.assertEqual(geometry["listBorderTop"], "0px")
+                    self.assertEqual(geometry["inputRadius"], "0px")
+                    self.assertEqual(geometry["clearRadius"], "0px")
+                    self.assertAlmostEqual(geometry["clearTop"], geometry["inputTop"], delta=0.5)
+                    self.assertLessEqual(geometry["clearBottom"], geometry["inputBottom"] + 0.5)
+                    self.assertAlmostEqual(geometry["clearRight"], geometry["inputRight"], delta=0.5)
+                    self.assertLessEqual(geometry["textRight"], geometry["clearLeft"])
+                    self.assertTrue(geometry["inputShared"])
+                    self.assertTrue(geometry["clearShared"])
+                    self.assertEqual(geometry["inputLabel"], f"Search Feature {index}")
+                    return geometry
+
+                assert_full_bleed_shap_picker(1)
+                feature1_count_before_search = page.locator("#gbmShapFeatureList1 .feature").count()
+                shap_search_requests_before = len(gbm_layout_api_requests)
+                page.locator("#gbmShapFeatureSearch1").fill("Age")
+                page.locator("#gbmShapFeatureList1 .feature", has_text="Age").wait_for(timeout=10_000)
+                feature1_count_during_search = page.locator("#gbmShapFeatureList1 .feature").count()
+                self.assertLess(feature1_count_during_search, feature1_count_before_search)
+                page.locator('[data-gbm-shap-search-clear="1"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmShapFeatureSearch1")?.value === ""
+                      && document.activeElement?.id === "gbmShapFeatureSearch1"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertGreater(
+                    page.locator("#gbmShapFeatureList1 .feature").count(),
+                    feature1_count_during_search,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), shap_search_requests_before)
                 shap_initial_layout = page.evaluate(
                     """
                     () => {
@@ -18576,6 +18891,25 @@ COPY (
                 page.locator("#gbmShapFeature2Toggle").click()
                 page.locator("#gbmShapFeatureSection2:not(.hidden)").wait_for(timeout=10_000)
                 self.assertEqual(len(gbm_layout_api_requests), feature2_requests_before)
+                assert_full_bleed_shap_picker(2)
+                feature2_count_before_search = page.locator("#gbmShapFeatureList2 .feature").count()
+                page.locator("#gbmShapFeatureSearch2").fill("Age")
+                page.locator("#gbmShapFeatureList2 .feature", has_text="Age").wait_for(timeout=10_000)
+                feature2_count_during_search = page.locator("#gbmShapFeatureList2 .feature").count()
+                self.assertLess(feature2_count_during_search, feature2_count_before_search)
+                page.locator('[data-gbm-shap-search-clear="2"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmShapFeatureSearch2")?.value === ""
+                      && document.activeElement?.id === "gbmShapFeatureSearch2"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertGreater(
+                    page.locator("#gbmShapFeatureList2 .feature").count(),
+                    feature2_count_during_search,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), feature2_requests_before)
                 divider_height_before = page.evaluate(
                     """() => document.querySelector("#gbmShapFeatureList1")?.closest(".gbm-shap-feature-section")?.getBoundingClientRect().height || 0"""
                 )
@@ -18662,6 +18996,8 @@ COPY (
                     arg=shap_main_geometry_before["sideWidth"],
                     timeout=10_000,
                 )
+                assert_full_bleed_shap_picker(1)
+                assert_full_bleed_shap_picker(2)
                 self.assertEqual(len(gbm_layout_api_requests), main_resize_requests_before)
                 shap_main_resizer.press("End")
                 page.wait_for_function(

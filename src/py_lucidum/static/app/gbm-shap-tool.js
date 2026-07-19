@@ -553,9 +553,9 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
             <button type="button" data-gbm-shap-feature="${index}" data-gbm-shap-sort="alpha" data-stable-label="A-Z">A-Z</button>
           </div>
         </div>
-        <div class="chart-search-row">
-          <input id="gbmShapFeatureSearch${index}" class="search" data-gbm-shap-search="${index}" placeholder="search" />
-          <button class="filter-action" type="button" data-gbm-shap-search-clear="${index}" title="Clear ${escapeHtml(title)} search" aria-label="Clear ${escapeHtml(title)} search">&times;</button>
+        <div class="chart-search-row gbm-shap-picker-search-row">
+          <input id="gbmShapFeatureSearch${index}" class="search app-control-input gbm-shap-picker-search-input" data-gbm-shap-search="${index}" placeholder="search" aria-label="Search ${escapeHtml(title)}" />
+          <button class="app-control-button app-command-button gbm-shap-picker-search-clear" type="button" data-gbm-shap-search-clear="${index}" title="Clear ${escapeHtml(title)} search" aria-label="Clear ${escapeHtml(title)} search">&times;</button>
         </div>
         <div id="gbmShapFeatureList${index}" class="feature-list gbm-shap-feature-list" role="listbox" aria-label="${escapeHtml(title)}"></div>
       </section>

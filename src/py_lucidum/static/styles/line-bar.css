@@ -6,7 +6,8 @@
 
       .visual-area.line-bar-mode {
         gap: 0;
-        grid-template-columns: var(--chart-controls-width, 340px) 12px minmax(0, 1fr);
+        grid-template-columns: var(--chart-controls-width, 340px) minmax(0, 1fr);
+        position: relative;
       }
 
       .visual-area.startup-mode {
@@ -40,7 +41,10 @@
 
       .chart-controls-resizer {
         cursor: col-resize;
+        inset-block: 0;
+        inset-inline-start: calc(var(--chart-controls-width, 340px) - 6px);
         min-width: 12px;
+        position: absolute;
         width: 12px;
         z-index: 4;
       }
@@ -150,6 +154,7 @@
         border-left: 0;
         border-radius: 0;
         border-right: 0;
+        border-top: 0;
         min-height: 0;
       }
 
@@ -159,6 +164,34 @@
 
       .chart-side-section .chart-search-row {
         margin: 0 8px 8px;
+      }
+
+      .chart-side-section .line-bar-picker-search-row {
+        display: block;
+        margin: 0;
+        position: relative;
+      }
+
+      .line-bar-picker-search-input {
+        border-inline: 0;
+        border-radius: 0;
+        padding-inline-end: 36px;
+      }
+
+      .line-bar-picker-search-clear {
+        border-radius: 0;
+        font-size: 15px;
+        inset-block-start: 0;
+        inset-inline-end: 0;
+        line-height: 1;
+        padding: 0;
+        position: absolute;
+        width: var(--app-control-button-height);
+        z-index: 1;
+      }
+
+      .line-bar-picker-search-clear:focus-visible {
+        outline-offset: -2px;
       }
 
       .chart-side-section .segmented:is(

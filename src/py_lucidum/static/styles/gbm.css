@@ -377,7 +377,39 @@
         min-width: 0;
       }
 
+      .gbm-shap-feature-section .gbm-shap-picker-search-row {
+        display: block;
+        margin: 0;
+        position: relative;
+      }
+
+      .gbm-shap-picker-search-input {
+        border-inline: 0;
+        border-radius: 0;
+        padding-inline-end: 36px;
+      }
+
+      .gbm-shap-picker-search-clear {
+        border-radius: 0;
+        font-size: 15px;
+        inset-block-start: 0;
+        inset-inline-end: 0;
+        line-height: 1;
+        padding: 0;
+        position: absolute;
+        width: var(--app-control-button-height);
+        z-index: 1;
+      }
+
+      .gbm-shap-picker-search-clear:focus-visible {
+        outline-offset: -2px;
+      }
+
       .gbm-shap-feature-list {
+        border-bottom: 0;
+        border-inline: 0;
+        border-radius: 0;
+        border-top: 0;
         min-height: 0;
       }
 
