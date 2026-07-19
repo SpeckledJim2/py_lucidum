@@ -1058,6 +1058,7 @@
         min-width: 0;
       }
 
+      .gbm-parameter-copy-button,
       .gbm-evaluation-option-button,
       .gbm-evaluation-copy-button {
         align-items: center;
@@ -1074,14 +1075,17 @@
         white-space: nowrap;
       }
 
+      .gbm-parameter-copy-button:hover,
       .gbm-evaluation-option-button:hover,
       .gbm-evaluation-copy-button:hover,
+      .gbm-parameter-copy-button:focus-visible,
       .gbm-evaluation-option-button:focus-visible,
       .gbm-evaluation-copy-button:focus-visible {
         background: transparent;
         color: var(--accent);
       }
 
+      .gbm-parameter-copy-button:focus-visible,
       .gbm-evaluation-option-button:focus-visible,
       .gbm-evaluation-copy-button:focus-visible {
         outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
@@ -1094,11 +1098,13 @@
         font-weight: 700;
       }
 
+      .gbm-parameter-copy-button,
       .gbm-evaluation-copy-button {
         padding: 0;
         width: 28px;
       }
 
+      .gbm-parameter-copy-icon,
       .gbm-evaluation-copy-icon {
         display: block;
         fill: none;

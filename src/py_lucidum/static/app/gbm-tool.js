@@ -3,6 +3,7 @@ import { createGbmEvaluationChart } from "./gbm-evaluation-chart.js";
 import {
   createGbmFeatureParameterLayout,
   createGbmParameterControls,
+  gbmParametersJson,
 } from "./gbm-feature-parameter-controls.js";
 import { createGbmModelNavigator } from "./gbm-model-navigator.js";
 import { createGbmShapTool } from "./gbm-shap-tool.js";
@@ -315,8 +316,14 @@ export function createGbmTool({
                     <button id="gbmSelectFeaturesBtn" class="app-control-button app-command-button gbm-feature-command-button" type="button" aria-label="Select all features" title="Select all">✓</button>
                   </div>
                 </div>
-                <div class="gbm-parameter-control-cell app-control-strip-row">
+                <div class="gbm-parameter-control-cell app-control-strip-row app-control-strip--titled">
                   <h3 class="gbm-section-title">Parameters</h3>
+                  <button id="gbmCopyParametersBtn" class="app-control-button gbm-parameter-copy-button" type="button" aria-label="Copy GBM parameters as JSON" title="Copy GBM parameters as JSON">
+                    <svg class="gbm-parameter-copy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <rect x="8" y="8" width="10" height="10" rx="1.5"></rect>
+                      <path d="M6 14H5.5A1.5 1.5 0 0 1 4 12.5v-7A1.5 1.5 0 0 1 5.5 4h7A1.5 1.5 0 0 1 14 5.5V6"></path>
+                    </svg>
+                  </button>
                 </div>
                 <div class="gbm-training-control-cell app-control-strip-row">
                   <h3 class="gbm-section-title">Control</h3>
@@ -740,8 +747,31 @@ export function createGbmTool({
     el("gbmSelectFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(true));
     el("gbmCreateSampleBtn")?.addEventListener("click", createSampleColumn);
     el("gbmTrainBtn")?.addEventListener("click", train);
+    el("gbmCopyParametersBtn")?.addEventListener("click", () => {
+      void copyGbmParameters();
+    });
     bindGridSampleInput();
     syncTrainingButton();
+  }
+
+  async function copyGbmParameters() {
+    let json;
+    try {
+      json = gbmParametersJson(currentParameters());
+    } catch (error) {
+      showClipboardToast(error instanceof Error ? error.message : "Could not copy GBM parameters", true);
+      return;
+    }
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(json);
+      } else {
+        fallbackCopyTextToClipboard(json);
+      }
+      showClipboardToast("GBM parameters copied");
+    } catch (_) {
+      showClipboardToast("Could not copy GBM parameters", true);
+    }
   }
 
   function syncFeatureMetricMode(data = {}) {

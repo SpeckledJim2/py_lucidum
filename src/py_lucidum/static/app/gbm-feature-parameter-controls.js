@@ -49,6 +49,36 @@ const GBM_CONTROL_STRIP_HEIGHT = 50;
 const GBM_DEFAULT_UPPER_BOUNDARY = 330;
 const GBM_RESIZE_STEP = 24;
 
+export const GBM_PARAMETER_GRID_COPY_ERROR = "Choose scalar parameter values before copying JSON; grid-search values cannot be passed directly to LightGBM.";
+
+export function gbmParametersJson(parameters = []) {
+  const result = {};
+  for (const parameter of parameters) {
+    if (!parameter || typeof parameter !== "object") continue;
+    const name = String(parameter.name || "").trim();
+    if (!name || name === "init_score") continue;
+    if (typeof parameter.value === "string" && /[{}]/.test(parameter.value)) {
+      throw new Error(GBM_PARAMETER_GRID_COPY_ERROR);
+    }
+    result[name] = coerceGbmParameterValue(parameter.value);
+  }
+  return JSON.stringify(result, null, 2);
+}
+
+export function coerceGbmParameterValue(value) {
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!text) return "";
+  const lower = text.toLowerCase();
+  if (lower === "true" || lower === "false") return lower === "true";
+  if (/^[+-]?\d+$/.test(text)) return Number.parseInt(text, 10);
+  if (/^[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?$/i.test(text)) {
+    const number = Number(text);
+    if (Number.isFinite(number)) return number;
+  }
+  return text;
+}
+
 export function createGbmFeatureParameterLayout({ onResize = () => {} } = {}) {
   let parameterWidth = null;
   let upperHeight = null;

@@ -17523,6 +17523,7 @@ COPY (
             page.add_init_script(
                 """
                 window.__lucidumCopiedShapImage = null;
+                window.__lucidumCopiedParameters = null;
                 if (typeof window.ClipboardItem !== "function") {
                   window.ClipboardItem = class ClipboardItem {
                     constructor(items) {
@@ -17546,7 +17547,9 @@ COPY (
                         size: blob?.size || 0,
                       };
                     },
-                    writeText: async () => {},
+                    writeText: async (text) => {
+                      window.__lucidumCopiedParameters = text;
+                    },
                   },
                 });
                 """
@@ -18404,6 +18407,69 @@ COPY (
                 self.assertEqual(feature_scenario_state()["value"], "")
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
+                parameter_copy_requests_before = len(gbm_layout_api_requests)
+                learning_rate_cell = page.locator(
+                    "#gbmParameterGrid .tabulator-row",
+                    has=page.locator(".tabulator-cell[tabulator-field='name']", has_text="learning_rate"),
+                ).locator(".tabulator-cell[tabulator-field='value']")
+                learning_rate_cell.click()
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").fill("0.125")
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").press("Enter")
+                page.evaluate("window.__lucidumCopiedParameters = null")
+                page.locator("#gbmCopyParametersBtn").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      if (!window.__lucidumCopiedParameters) return false;
+                      const params = JSON.parse(window.__lucidumCopiedParameters);
+                      return !("init_score" in params)
+                        && params.learning_rate === 0.125
+                        && typeof params.learning_rate === "number"
+                        && typeof params.num_iterations === "number"
+                        && window.__lucidumCopiedParameters.includes("\\n  ");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#clipboardToast", has_text="GBM parameters copied").wait_for(timeout=10_000)
+                parameter_copy_state = page.locator("#gbmCopyParametersBtn").evaluate(
+                    """
+                    (button) => {
+                      const buttonRect = button.getBoundingClientRect();
+                      const headerRect = button.closest(".gbm-parameter-control-cell").getBoundingClientRect();
+                      const iconRect = button.querySelector("svg").getBoundingClientRect();
+                      const style = getComputedStyle(button);
+                      return {
+                        label: button.getAttribute("aria-label"),
+                        title: button.title,
+                        buttonRight: buttonRect.right,
+                        headerRight: headerRect.right,
+                        buttonSize: [buttonRect.width, buttonRect.height],
+                        iconSize: [iconRect.width, iconRect.height],
+                        background: style.backgroundColor,
+                        border: style.borderWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(parameter_copy_state["label"], "Copy GBM parameters as JSON")
+                self.assertEqual(parameter_copy_state["title"], "Copy GBM parameters as JSON")
+                self.assertAlmostEqual(parameter_copy_state["headerRight"] - parameter_copy_state["buttonRight"], 10, delta=2)
+                self.assertEqual(parameter_copy_state["buttonSize"], [28, 28])
+                self.assertEqual(parameter_copy_state["iconSize"], [16, 16])
+                self.assertEqual(parameter_copy_state["background"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(parameter_copy_state["border"], "0px")
+                learning_rate_cell.click()
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").fill("{0.05, 0.1}")
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").press("Enter")
+                page.evaluate("window.__lucidumCopiedParameters = 'unchanged'")
+                page.locator("#gbmCopyParametersBtn").click()
+                page.locator(
+                    "#clipboardToast",
+                    has_text="Choose scalar parameter values before copying JSON; grid-search values cannot be passed directly to LightGBM.",
+                ).wait_for(timeout=10_000)
+                self.assertEqual(page.evaluate("window.__lucidumCopiedParameters"), "unchanged")
+                self.assertEqual(len(gbm_layout_api_requests), parameter_copy_requests_before)
                 page.get_by_role("tab", name="SHAP", exact=True).click()
                 page.locator("#gbmShapChart").wait_for(timeout=10_000)
                 page.wait_for_function(

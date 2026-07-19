@@ -1075,6 +1075,39 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
             controls,
         )
 
+    def test_gbm_parameter_json_is_lightgbm_compatible(self) -> None:
+        module = Path("src/py_lucidum/static/app/gbm-feature-parameter-controls.js").resolve().as_uri()
+        script = f"""
+import {{ GBM_PARAMETER_GRID_COPY_ERROR, gbmParametersJson }} from "{module}";
+
+const json = gbmParametersJson([
+  {{ name: "init_score", value: "Baseline", important: true }},
+  {{ name: "objective", value: "poisson", important: true }},
+  {{ name: "num_iterations", value: "250", important: true }},
+  {{ name: "learning_rate", value: " 5e-2 " }},
+  {{ name: "force_col_wise", value: "TRUE" }},
+  {{ name: "force_row_wise", value: "false" }},
+  {{ name: "monotone_constraints", value: [-1, 0, 1] }},
+  {{ name: "interaction_constraints", value: [[0, 1], [2]] }},
+]);
+const params = JSON.parse(json);
+if (Object.keys(params).join("|") !== "objective|num_iterations|learning_rate|force_col_wise|force_row_wise|monotone_constraints|interaction_constraints") throw new Error("parameter order or metadata filtering failed");
+if ("init_score" in params) throw new Error("init_score was copied");
+if (params.num_iterations !== 250 || params.learning_rate !== 0.05) throw new Error("numeric coercion failed");
+if (params.force_col_wise !== true || params.force_row_wise !== false) throw new Error("boolean coercion failed");
+if (JSON.stringify(params.monotone_constraints) !== "[-1,0,1]") throw new Error("list value changed");
+if (!json.includes('\\n  "objective": "poisson"')) throw new Error("JSON was not pretty printed");
+
+let message = "";
+try {{
+  gbmParametersJson([{{ name: "learning_rate", value: "{{0.05, 0.1}}" }}]);
+}} catch (error) {{
+  message = error.message;
+}}
+if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy was not blocked");
+"""
+        self.run_node_script(script)
+
     def test_app_control_strips_use_shared_height_tokens(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
@@ -1248,6 +1281,13 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         )
         self.assertIn('id="gbmClearFeaturesBtn" class="app-control-button app-command-button gbm-feature-command-button"', gbm)
         self.assertIn('id="gbmSelectFeaturesBtn" class="app-control-button app-command-button gbm-feature-command-button"', gbm)
+        self.assertIn('class="gbm-parameter-control-cell app-control-strip-row app-control-strip--titled"', gbm)
+        self.assertIn('id="gbmCopyParametersBtn" class="app-control-button gbm-parameter-copy-button"', gbm)
+        self.assertIn('aria-label="Copy GBM parameters as JSON" title="Copy GBM parameters as JSON"', gbm)
+        self.assertIn('class="gbm-parameter-copy-icon" viewBox="0 0 24 24"', gbm)
+        self.assertIn('void copyGbmParameters();', gbm)
+        self.assertIn('showClipboardToast("GBM parameters copied");', gbm)
+        self.assertIn('showClipboardToast("Could not copy GBM parameters", true);', gbm)
         self.assertNotIn('id="gbmClearFeaturesBtn" class="tab ', gbm)
         self.assertNotIn('id="gbmSelectFeaturesBtn" class="tab ', gbm)
         self.assertIn('data-stable-label="${escapeHtml(featureMetricModeLabel(mode))}"', gbm)
@@ -1261,6 +1301,8 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".gbm-feature-option-button.active {", gbm_css)
         self.assertIn(".gbm-feature-setup-button {\n        margin-left: 28px;", gbm_css)
         self.assertIn(".gbm-feature-setup-icon {", gbm_css)
+        self.assertIn(".gbm-parameter-copy-button,", gbm_css)
+        self.assertIn(".gbm-parameter-copy-icon,", gbm_css)
         self.assertIn(".gbm-feature-setup-panel {\n        background: var(--sidebar-bg);", gbm_css)
         self.assertIn(".gbm-feature-setup-controls {", gbm_css)
         self.assertIn(".gbm-feature-menu-button:focus-visible {", gbm_css)
