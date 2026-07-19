@@ -23421,6 +23421,203 @@ COPY (
                 for pane_name in ("feature", "parameter", "control", "upper", "chart"):
                     self.assertAlmostEqual(restored_panes[pane_name], resized_panes[pane_name], delta=2)
 
+                def compact_feature_layout() -> dict[str, object]:
+                    return page.evaluate(
+                        """
+                        () => {
+                          const workspace = document.querySelector("#gbmFeatureWorkspace");
+                          const rect = (selector) => {
+                            const bounds = document.querySelector(selector)?.getBoundingClientRect();
+                            return bounds ? {
+                              left: bounds.left,
+                              right: bounds.right,
+                              top: bounds.top,
+                              bottom: bounds.bottom,
+                              width: bounds.width,
+                              height: bounds.height,
+                            } : null;
+                          };
+                          return {
+                            workspace: rect("#gbmFeatureWorkspace"),
+                            workspaceClientWidth: workspace?.clientWidth || 0,
+                            workspaceScrollWidth: workspace?.scrollWidth || 0,
+                            workspaceClientHeight: workspace?.clientHeight || 0,
+                            workspaceScrollHeight: workspace?.scrollHeight || 0,
+                            featureHeader: rect(".gbm-feature-control-cell"),
+                            feature: rect(".gbm-grid-panel"),
+                            parameterHeader: rect(".gbm-parameter-control-cell"),
+                            parameter: rect(".gbm-parameter-section"),
+                            controlHeader: rect(".gbm-training-control-cell"),
+                            control: rect(".gbm-parameter-controls-column"),
+                            evaluationHeader: rect(".gbm-evaluation-control-strip"),
+                            evaluation: rect(".gbm-evaluation-panel"),
+                            featureResizerDisplay: getComputedStyle(document.querySelector("#gbmFeatureResizer")).display,
+                            parameterDividerDisplay: getComputedStyle(document.querySelector("#gbmParameterControlDivider")).display,
+                            evaluationResizerDisplay: getComputedStyle(document.querySelector("#gbmEvaluationResizer")).display,
+                            featureGridWidth: document.querySelector("#gbmFeatureGrid")?.getBoundingClientRect().width || 0,
+                            parameterGridWidth: document.querySelector("#gbmParameterGrid")?.getBoundingClientRect().width || 0,
+                            featureRows: document.querySelectorAll("#gbmFeatureGrid .tabulator-row").length,
+                            parameterRows: document.querySelectorAll("#gbmParameterGrid .tabulator-row").length,
+                            controlClientWidth: document.querySelector(".gbm-parameter-controls-column")?.clientWidth || 0,
+                            controlScrollWidth: document.querySelector(".gbm-parameter-controls-column")?.scrollWidth || 0,
+                            shapRow: rect("#gbmShapRows"),
+                            shapLabel: rect("#gbmShapRows > .gbm-shap-label"),
+                            shapOptions: rect("#gbmShapRows > .gbm-shap-options"),
+                            shapOptionWidths: [...document.querySelectorAll("#gbmShapRows .gbm-shap-option")]
+                              .map((option) => option.getBoundingClientRect().width),
+                            modeRow: rect("#gbmTrainingMode"),
+                            modeLabel: rect("#gbmTrainingMode > .gbm-shap-label"),
+                            modeOptions: rect("#gbmTrainingMode > .gbm-shap-options"),
+                            modeOptionWidths: [...document.querySelectorAll("#gbmTrainingMode .gbm-mode-option")]
+                              .map((option) => option.getBoundingClientRect().width),
+                          };
+                        }
+                        """
+                    )
+
+                def assert_compact_feature_layout(compact: dict[str, object]) -> None:
+                    workspace = compact["workspace"]
+                    assert isinstance(workspace, dict)
+                    sections = [
+                        compact["featureHeader"],
+                        compact["feature"],
+                        compact["parameterHeader"],
+                        compact["parameter"],
+                        compact["controlHeader"],
+                        compact["control"],
+                        compact["evaluationHeader"],
+                        compact["evaluation"],
+                    ]
+                    self.assertTrue(all(isinstance(section, dict) for section in sections))
+                    for section in sections:
+                        assert isinstance(section, dict)
+                        self.assertAlmostEqual(section["left"], workspace["left"], delta=1)
+                        self.assertAlmostEqual(section["right"], workspace["right"], delta=1)
+                    for current, following in zip(sections, sections[1:]):
+                        assert isinstance(current, dict)
+                        assert isinstance(following, dict)
+                        self.assertLessEqual(current["bottom"], following["top"] + 1)
+                    self.assertLessEqual(
+                        compact["workspaceScrollWidth"],
+                        compact["workspaceClientWidth"] + 1,
+                    )
+                    self.assertGreater(compact["workspaceScrollHeight"], compact["workspaceClientHeight"])
+                    self.assertEqual(compact["featureResizerDisplay"], "none")
+                    self.assertEqual(compact["parameterDividerDisplay"], "none")
+                    self.assertEqual(compact["evaluationResizerDisplay"], "none")
+                    self.assertAlmostEqual(compact["featureGridWidth"], workspace["width"], delta=1)
+                    self.assertAlmostEqual(compact["parameterGridWidth"], workspace["width"], delta=1)
+                    self.assertGreater(compact["featureRows"], 0)
+                    self.assertGreater(compact["parameterRows"], 0)
+                    self.assertLessEqual(compact["controlScrollWidth"], compact["controlClientWidth"])
+                    for prefix, minimum_width in (("shap", 44), ("mode", 60)):
+                        row = compact[f"{prefix}Row"]
+                        label = compact[f"{prefix}Label"]
+                        options = compact[f"{prefix}Options"]
+                        option_widths = compact[f"{prefix}OptionWidths"]
+                        assert isinstance(row, dict)
+                        assert isinstance(label, dict)
+                        assert isinstance(options, dict)
+                        assert isinstance(option_widths, list)
+                        self.assertAlmostEqual(options["right"], row["right"], delta=1)
+                        self.assertLess(options["width"], row["width"] * 0.75)
+                        self.assertAlmostEqual(
+                            (label["top"] + label["bottom"]) / 2,
+                            (options["top"] + options["bottom"]) / 2,
+                            delta=1,
+                        )
+                        self.assertEqual(row["height"], options["height"])
+                        self.assertTrue(all(width >= minimum_width for width in option_widths))
+
+                compact_request_count = len(gbm_layout_api_requests)
+                page.set_viewport_size({"width": 800, "height": 800})
+                page.wait_for_function(
+                    "() => getComputedStyle(document.querySelector('#gbmFeatureResizer')).display === 'none'",
+                    timeout=10_000,
+                )
+                assert_compact_feature_layout(compact_feature_layout())
+
+                page.set_viewport_size({"width": 390, "height": 844})
+                if not page.locator("body").evaluate("node => node.classList.contains('sidebar-collapsed')"):
+                    page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function(
+                    "() => document.body.classList.contains('sidebar-collapsed')",
+                    timeout=10_000,
+                )
+                mobile_layout = compact_feature_layout()
+                assert_compact_feature_layout(mobile_layout)
+                self.assertAlmostEqual(mobile_layout["workspace"]["width"], 340, delta=1)
+
+                page.locator("#gbmFeatureWorkspace").evaluate(
+                    "workspace => { workspace.scrollTop = document.querySelector('.gbm-training-control-cell').offsetTop; }"
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const workspace = document.querySelector("#gbmFeatureWorkspace").getBoundingClientRect();
+                      const train = document.querySelector("#gbmTrainBtn").getBoundingClientRect();
+                      return train.top >= workspace.top && train.bottom <= workspace.bottom;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureWorkspace").evaluate(
+                    "workspace => { workspace.scrollTop = workspace.scrollHeight; }"
+                )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const workspace = document.querySelector("#gbmFeatureWorkspace").getBoundingClientRect();
+                      const evaluation = document.querySelector(".gbm-evaluation-panel").getBoundingClientRect();
+                      return evaluation.top >= workspace.top && evaluation.bottom <= workspace.bottom + 1;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(len(gbm_layout_api_requests), compact_request_count)
+
+                page.set_viewport_size({"width": 1280, "height": 1000})
+                page.locator("#sidebarToggleBtn").click()
+                page.wait_for_function(
+                    """
+                    () => !document.body.classList.contains("sidebar-collapsed")
+                      && getComputedStyle(document.querySelector("#gbmFeatureResizer")).display !== "none"
+                    """,
+                    timeout=10_000,
+                )
+                desktop_roundtrip_panes = gbm_pane_sizes()
+                for pane_name in ("feature", "parameter", "control", "upper", "chart"):
+                    self.assertAlmostEqual(desktop_roundtrip_panes[pane_name], resized_panes[pane_name], delta=2)
+                self.assertEqual(
+                    page.locator("#gbmFeatureWorkspace").evaluate("workspace => workspace.scrollTop"),
+                    0,
+                )
+                desktop_control_options = page.evaluate(
+                    """
+                    () => {
+                      const rowState = (rowSelector, optionsSelector) => {
+                        const row = document.querySelector(rowSelector);
+                        const options = document.querySelector(optionsSelector);
+                        return {
+                          display: getComputedStyle(row).display,
+                          direction: getComputedStyle(row).flexDirection,
+                          rowWidth: row.getBoundingClientRect().width,
+                          optionsWidth: options.getBoundingClientRect().width,
+                        };
+                      };
+                      return {
+                        shap: rowState("#gbmShapRows", "#gbmShapRows > .gbm-shap-options"),
+                        mode: rowState("#gbmTrainingMode", "#gbmTrainingMode > .gbm-shap-options"),
+                      };
+                    }
+                    """
+                )
+                for row in desktop_control_options.values():
+                    self.assertEqual(row["display"], "flex")
+                    self.assertEqual(row["direction"], "column")
+                    self.assertAlmostEqual(row["optionsWidth"], row["rowWidth"], delta=1)
+                self.assertEqual(len(gbm_layout_api_requests), compact_request_count)
+
                 page.get_by_role("tab", name="Model navigator").click()
                 page.locator("#gbmModelGrid .tabulator-row").first.wait_for(timeout=10_000)
                 final_model_count = page.locator("#gbmModelGrid .tabulator-row").count()

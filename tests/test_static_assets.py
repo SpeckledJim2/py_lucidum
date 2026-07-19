@@ -1294,6 +1294,27 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("const GBM_DIVIDER_TRACK_WIDTH = 1;", gbm_feature_controls)
         self.assertNotIn("resizeParameter", gbm_feature_controls)
         self.assertIn("#gbmParameterGrid .tabulator-row .tabulator-cell:not(:has(~ .tabulator-cell))", gbm_css)
+        self.assertIn("clamp(280px, 42dvh, 360px)", gbm_css)
+        self.assertIn("clamp(240px, 38dvh, 320px)", gbm_css)
+        self.assertIn("clamp(220px, 35dvh, 300px)", gbm_css)
+        self.assertIn(".gbm-feature-main-control-strip,\n        .gbm-feature-control-layout {\n          display: contents;", gbm_css)
+        self.assertIn(
+            "#gbmShapRows,\n"
+            "        #gbmTrainingMode {\n"
+            "          align-items: center;\n"
+            "          column-gap: 12px;\n"
+            "          display: grid;\n"
+            "          grid-template-columns: max-content minmax(0, 1fr);",
+            gbm_css,
+        )
+        self.assertIn("#gbmTrainingMode .gbm-mode-option {\n          min-width: 60px;", gbm_css)
+        self.assertIn(
+            ".gbm-feature-column-resizer,\n"
+            "        .gbm-parameter-control-divider,\n"
+            "        .gbm-evaluation-resizer {\n"
+            "          display: none !important;",
+            gbm_css,
+        )
         self.assertIn('resizer.addEventListener("pointercancel", finishDrag);', gbm_feature_controls)
         self.assertIn('resizer.addEventListener("keydown"', gbm_feature_controls)
         self.assertIn('resizer.setAttribute("aria-valuenow"', gbm_feature_controls)

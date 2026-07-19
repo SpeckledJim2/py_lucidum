@@ -2564,6 +2564,116 @@
       }
 
       @media (max-width: 900px) {
+        .gbm-feature-workspace {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows:
+            var(--app-control-strip-height)
+            clamp(280px, 42dvh, 360px)
+            var(--app-control-strip-height)
+            clamp(240px, 38dvh, 320px)
+            var(--app-control-strip-height)
+            max-content
+            var(--app-control-strip-height)
+            clamp(220px, 35dvh, 300px);
+          overflow-x: hidden;
+          overflow-y: auto;
+        }
+
+        .gbm-feature-main-control-strip,
+        .gbm-feature-control-layout {
+          display: contents;
+        }
+
+        .gbm-feature-main-control-strip::after {
+          content: none;
+        }
+
+        .gbm-feature-control-cell,
+        .gbm-parameter-control-cell,
+        .gbm-training-control-cell {
+          background: var(--panel);
+          border-bottom: 1px solid var(--line);
+          grid-column: 1;
+          height: var(--app-control-strip-height);
+        }
+
+        .gbm-feature-control-cell {
+          grid-row: 1;
+        }
+
+        .gbm-grid-panel {
+          grid-column: 1;
+          grid-row: 2;
+        }
+
+        .gbm-parameter-control-cell {
+          grid-column: 1;
+          grid-row: 3;
+        }
+
+        .gbm-parameter-section {
+          grid-column: 1;
+          grid-row: 4;
+        }
+
+        .gbm-training-control-cell {
+          grid-column: 1;
+          grid-row: 5;
+        }
+
+        .gbm-parameter-controls-column {
+          grid-column: 1;
+          grid-row: 6;
+          overflow: visible;
+        }
+
+        #gbmShapRows,
+        #gbmTrainingMode {
+          align-items: center;
+          column-gap: 12px;
+          display: grid;
+          grid-template-columns: max-content minmax(0, 1fr);
+        }
+
+        #gbmShapRows > .gbm-shap-label,
+        #gbmTrainingMode > .gbm-shap-label {
+          margin-bottom: 0;
+        }
+
+        #gbmShapRows > .gbm-shap-options,
+        #gbmTrainingMode > .gbm-shap-options {
+          justify-content: flex-end;
+          justify-self: end;
+          width: auto;
+        }
+
+        #gbmShapRows .gbm-shap-option,
+        #gbmTrainingMode .gbm-shap-option {
+          flex: 0 0 auto;
+          min-width: 44px;
+          width: auto;
+        }
+
+        #gbmTrainingMode .gbm-mode-option {
+          min-width: 60px;
+        }
+
+        .gbm-evaluation-control-strip {
+          grid-column: 1;
+          grid-row: 7;
+        }
+
+        .gbm-evaluation-panel {
+          grid-column: 1;
+          grid-row: 8;
+        }
+
+        .gbm-feature-column-resizer,
+        .gbm-parameter-control-divider,
+        .gbm-evaluation-resizer {
+          display: none !important;
+        }
+
         .gbm-shap-workspace {
           grid-template-columns: minmax(0, 1fr);
           grid-template-rows: minmax(160px, min(34dvh, 280px)) minmax(0, 1fr);
