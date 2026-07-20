@@ -2148,7 +2148,7 @@ export function createGbmTool({
 
   function featureTableColumns() {
     return [
-      { title: "Feature", field: "name", formatter: featureNameFormatter, cssClass: "gbm-feature-name-cell", widthGrow: 3, headerSort: true },
+      { title: "Feature", field: "name", formatter: featureNameFormatter, cssClass: "gbm-feature-name-cell", minWidth: 180, widthGrow: 3, headerSort: true },
       { title: "Grouping", field: "grouping", formatter: groupingFormatter, widthGrow: 1.1, headerSort: true },
       {
         title: "Use",
@@ -2160,7 +2160,7 @@ export function createGbmTool({
         headerSort: false,
         cellClick: (event) => event.stopPropagation(),
       },
-      { title: "Monotonicity", field: "monotonicity", editor: "list", editable: (cell) => isFeatureSelectable(cell.getRow().getData()), editorParams: { values: ["", "Increasing", "Decreasing", "1", "-1"] }, width: 120 },
+      { title: "Monotonicity", field: "monotonicity", editor: "list", editable: (cell) => isFeatureSelectable(cell.getRow().getData()), editorParams: { values: ["", "Increasing", "Decreasing", "1", "-1"] }, maxWidth: 120, widthGrow: 1 },
       featureMetricColumn(),
     ];
   }
@@ -2175,7 +2175,8 @@ export function createGbmTool({
       hozAlign: "center",
       headerHozAlign: "center",
       cssClass: "gbm-feature-metric-cell",
-      width: 125,
+      maxWidth: 125,
+      widthGrow: 1,
     };
   }
 

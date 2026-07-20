@@ -18370,6 +18370,89 @@ COPY (
                 self.assertNotIn("Gain", default_metric_state["headers"])
                 self.assertIn("lat", default_metric_state["firstRowText"])
                 self.assertEqual(default_metric_state["ageShap"], "0.1830")
+
+                def gbm_feature_column_widths() -> dict[str, object]:
+                    return page.evaluate(
+                        """
+                        () => {
+                          const width = (field) => document.querySelector(
+                            `#gbmFeatureGrid .tabulator-col[tabulator-field='${field}']`
+                          )?.getBoundingClientRect().width || 0;
+                          const metricField = document.querySelector(
+                            "#gbmFeatureGrid .tabulator-col[tabulator-field='mean_abs_shap']"
+                          ) ? "mean_abs_shap" : "gain";
+                          return {
+                            feature: width("name"),
+                            monotonicity: width("monotonicity"),
+                            metric: width(metricField),
+                            metricField,
+                          };
+                        }
+                        """
+                    )
+
+                def drag_gbm_feature_divider(delta: float) -> None:
+                    resizer = page.locator("#gbmFeatureResizer")
+                    bounds = resizer.bounding_box()
+                    self.assertIsNotNone(bounds)
+                    assert bounds is not None
+                    x = bounds["x"] + bounds["width"] / 2
+                    y = bounds["y"] + min(80, bounds["height"] / 2)
+                    page.mouse.move(x, y)
+                    page.mouse.down()
+                    page.mouse.move(x + delta, y, steps=4)
+                    page.mouse.up()
+                    page.evaluate(
+                        "() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+                    )
+
+                column_resize_requests_before = len(gbm_layout_api_requests)
+                initial_feature_pane_width = page.locator(".gbm-grid-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                wide_shap_columns = gbm_feature_column_widths()
+                drag_gbm_feature_divider(360 - initial_feature_pane_width)
+                narrow_shap_columns = gbm_feature_column_widths()
+                self.assertEqual(narrow_shap_columns["metricField"], "mean_abs_shap")
+                self.assertGreaterEqual(narrow_shap_columns["feature"], 179.5)
+                self.assertLess(narrow_shap_columns["monotonicity"], wide_shap_columns["monotonicity"])
+                self.assertLess(narrow_shap_columns["metric"], wide_shap_columns["metric"])
+
+                page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option", has_text="Gain").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmFeatureGrid .tabulator-col[tabulator-field='gain']")
+                      && !document.querySelector("#gbmFeatureGrid .tabulator-col[tabulator-field='mean_abs_shap']")
+                    """,
+                    timeout=10_000,
+                )
+                narrow_gain_columns = gbm_feature_column_widths()
+                self.assertEqual(narrow_gain_columns["metricField"], "gain")
+                for field in ("feature", "monotonicity", "metric"):
+                    self.assertAlmostEqual(
+                        narrow_gain_columns[field],
+                        narrow_shap_columns[field],
+                        delta=1,
+                    )
+
+                page.locator("#gbmFeatureMetricToggle .gbm-feature-metric-option", has_text="SHAP").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmFeatureGrid .tabulator-col[tabulator-field='mean_abs_shap']")
+                      && !document.querySelector("#gbmFeatureGrid .tabulator-col[tabulator-field='gain']")
+                    """,
+                    timeout=10_000,
+                )
+                current_feature_pane_width = page.locator(".gbm-grid-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                drag_gbm_feature_divider(initial_feature_pane_width - current_feature_pane_width)
+                restored_feature_pane_width = page.locator(".gbm-grid-panel").evaluate(
+                    "node => node.getBoundingClientRect().width"
+                )
+                self.assertAlmostEqual(restored_feature_pane_width, initial_feature_pane_width, delta=2)
+                self.assertEqual(len(gbm_layout_api_requests), column_resize_requests_before)
+
                 page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
                 page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
                 normal_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
