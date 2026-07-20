@@ -821,7 +821,7 @@
       .filter-controls-row {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 1px;
         margin-bottom: 7px;
         align-items: stretch;
       }
@@ -838,9 +838,47 @@
       }
 
       .filter-controls-row .segmented button {
-        min-height: 24px;
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-sizing: border-box;
+        color: var(--muted);
+        font-weight: 400;
+        height: 20px;
+        min-height: 20px;
         padding: 2px 6px;
         font-size: 11px;
+        text-align: center;
+      }
+
+      .filter-controls-row .segmented button::after {
+        content: attr(data-stable-label);
+        display: block;
+        font-weight: 700;
+        height: 0;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+
+      .filter-controls-row .segmented button:hover {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .filter-controls-row .segmented button:focus-visible {
+        background: transparent;
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .filter-controls-row .segmented button.active {
+        background: transparent;
+        border: 0;
+        color: var(--accent);
+        font-weight: 700;
       }
 
       body.saved-filter-single-mode .filter-operator,

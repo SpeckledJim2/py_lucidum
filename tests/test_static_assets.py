@@ -1075,6 +1075,22 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
             controls,
         )
 
+    def test_sidebar_filter_buttons_explain_their_behavior(self) -> None:
+        index = (
+            Path(__file__).resolve().parents[1] / "src/py_lucidum/static/index.html"
+        ).read_text(encoding="utf-8")
+
+        for tooltip in (
+            "Select one saved filter at a time",
+            "Filters in the same group use OR; different groups use AND",
+            "Select multiple saved filters and choose how to combine them",
+            "Require all selected filters to match",
+            "Require at least one selected filter to match",
+            "Require that not all selected filters match",
+            "Require none of the selected filters to match",
+        ):
+            self.assertIn(f'title="{tooltip}"', index)
+
     def test_gbm_parameter_json_is_lightgbm_compatible(self) -> None:
         module = Path("src/py_lucidum/static/app/gbm-feature-parameter-controls.js").resolve().as_uri()
         script = f"""

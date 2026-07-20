@@ -24133,8 +24133,99 @@ COPY (
                 self.assertTrue(driver_rows.first.is_visible())
                 self.assertTrue(postcode_rows.first.is_visible())
 
+                def filter_control_state() -> dict[str, Any]:
+                    return page.evaluate(
+                        """
+                        () => {
+                          const tokenColor = (token, anchor) => {
+                            const probe = document.createElement("span");
+                            probe.style.color = `var(${token})`;
+                            anchor.append(probe);
+                            const color = getComputedStyle(probe).color;
+                            probe.remove();
+                            return color;
+                          };
+                          const buttonState = (button) => {
+                            const rect = button.getBoundingClientRect();
+                            const labelRange = document.createRange();
+                            labelRange.selectNodeContents(button);
+                            const labelRect = labelRange.getBoundingClientRect();
+                            const style = getComputedStyle(button);
+                            return {
+                              active: button.classList.contains("active"),
+                              background: style.backgroundColor,
+                              borderWidths: [
+                                style.borderTopWidth,
+                                style.borderRightWidth,
+                                style.borderBottomWidth,
+                                style.borderLeftWidth,
+                              ],
+                              color: style.color,
+                              fontWeight: style.fontWeight,
+                              geometry: {
+                                left: rect.left,
+                                top: rect.top,
+                                width: rect.width,
+                                height: rect.height,
+                              },
+                              label: button.textContent.trim(),
+                              labelCenterDelta: Math.abs(
+                                (labelRect.left + labelRect.width / 2)
+                                  - (rect.left + rect.width / 2)
+                              ),
+                              stableLabel: button.dataset.stableLabel,
+                              value: button.dataset.value,
+                            };
+                          };
+                          const groupState = (selector) => [...document.querySelectorAll(`${selector} button`)]
+                            .map(buttonState);
+                          const filterControls = document.querySelector(".filter-controls-row");
+                          return {
+                            accent: tokenColor("--accent", filterControls),
+                            muted: tokenColor("--muted", filterControls),
+                            mode: groupState(".filter-selection-mode"),
+                            operator: groupState(".filter-operator"),
+                          };
+                        }
+                        """
+                    )
+
+                def assert_filter_control_theme(
+                    state: dict[str, Any],
+                    group_name: str,
+                    active_value: str,
+                ) -> None:
+                    buttons = state[group_name]
+                    self.assertTrue(buttons)
+                    self.assertTrue(all(button["stableLabel"] == button["label"] for button in buttons))
+                    self.assertTrue(all(button["borderWidths"] == ["0px"] * 4 for button in buttons))
+                    self.assertTrue(all(button["background"] == "rgba(0, 0, 0, 0)" for button in buttons))
+                    self.assertTrue(all(button["labelCenterDelta"] <= 0.5 for button in buttons))
+                    self.assertTrue(all(button["geometry"]["height"] == 20 for button in buttons))
+                    for button in buttons:
+                        active = button["value"] == active_value
+                        self.assertEqual(button["active"], active)
+                        self.assertEqual(button["color"], state["accent"] if active else state["muted"])
+                        self.assertEqual(button["fontWeight"], "700" if active else "400")
+
                 self.assertTrue(page.locator('.filter-selection-mode button[data-value="grouped"]').evaluate("node => node.classList.contains('active')"))
+                grouped_control_state = filter_control_state()
+                assert_filter_control_theme(grouped_control_state, "mode", "grouped")
+                page.locator('.filter-selection-mode button[data-value="single"]').click()
+                single_control_state = filter_control_state()
+                assert_filter_control_theme(single_control_state, "mode", "single")
+                self.assertEqual(
+                    [button["geometry"] for button in single_control_state["mode"]],
+                    [button["geometry"] for button in grouped_control_state["mode"]],
+                )
                 page.locator('.filter-selection-mode button[data-value="multi"]').click()
+                multi_control_state = filter_control_state()
+                assert_filter_control_theme(multi_control_state, "mode", "multi")
+                assert_filter_control_theme(multi_control_state, "operator", "and")
+                self.assertEqual(
+                    [button["geometry"] for button in multi_control_state["mode"]],
+                    [button["geometry"] for button in grouped_control_state["mode"]],
+                )
                 driver_rows.first.click()
                 postcode_rows.first.click()
                 self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
@@ -24154,6 +24245,12 @@ COPY (
                 driver_rows.nth(1).click()
                 postcode_rows.nth(1).click()
                 page.locator('.filter-operator button[data-value="or"]').click()
+                or_control_state = filter_control_state()
+                assert_filter_control_theme(or_control_state, "operator", "or")
+                self.assertEqual(
+                    [button["geometry"] for button in or_control_state["operator"]],
+                    [button["geometry"] for button in multi_control_state["operator"]],
+                )
                 self.assertEqual(
                     page.locator("#filterInput").input_value(),
                     "(DRIVER_AGE >= 30 AND DRIVER_AGE < 60) OR (POSTCODE_AREA = 'SO')",
@@ -24205,6 +24302,7 @@ COPY (
                     filter_layout["text"]["right"] - filter_layout["clear"]["left"] + 14,
                 )
                 self.assertGreater(filter_layout["operator"]["top"], filter_layout["mode"]["bottom"] - 1)
+                self.assertLessEqual(filter_layout["operator"]["top"] - filter_layout["mode"]["bottom"], 1)
                 self.assertAlmostEqual(filter_layout["operator"]["left"], filter_layout["mode"]["left"], delta=1)
                 self.assertAlmostEqual(filter_layout["meta"]["right"], filter_layout["header"]["right"], delta=1)
                 self.assertEqual(

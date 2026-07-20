@@ -206,16 +206,16 @@
                 <div class="filter-controls-row">
                   <div class="filter-controls-primary">
                     <div class="segmented filter-selection-mode" data-control="filterSelectionMode" aria-label="Saved filter selection mode">
-                      <button data-value="single" type="button">Single</button>
-                      <button data-value="grouped" class="active" type="button">Grouped</button>
-                      <button data-value="multi" type="button">Multi</button>
+                      <button data-value="single" data-stable-label="Single" type="button" title="Select one saved filter at a time">Single</button>
+                      <button data-value="grouped" data-stable-label="Grouped" class="active" type="button" title="Filters in the same group use OR; different groups use AND">Grouped</button>
+                      <button data-value="multi" data-stable-label="Multi" type="button" title="Select multiple saved filters and choose how to combine them">Multi</button>
                     </div>
                   </div>
                   <div class="segmented filter-operator" data-control="filterOperator" aria-label="Saved filter operator">
-                    <button data-value="and" class="active" type="button">All</button>
-                    <button data-value="or" type="button">Any</button>
-                    <button data-value="nand" type="button">Not all</button>
-                    <button data-value="nor" type="button">None</button>
+                    <button data-value="and" data-stable-label="All" class="active" type="button" title="Require all selected filters to match">All</button>
+                    <button data-value="or" data-stable-label="Any" type="button" title="Require at least one selected filter to match">Any</button>
+                    <button data-value="nand" data-stable-label="Not all" type="button" title="Require that not all selected filters match">Not all</button>
+                    <button data-value="nor" data-stable-label="None" type="button" title="Require none of the selected filters to match">None</button>
                   </div>
                 </div>
                 <div id="savedFilterSelect" class="feature-list saved-filter-list" role="listbox" aria-label="Saved filters" aria-multiselectable="true"></div>
