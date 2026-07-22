@@ -33,7 +33,7 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
   let summaryRows = [];
   let summaryTable = null;
   let selectedDetail = null;
-  let palette = "plain";
+  let palette = "divergent";
   let direction = "left-right";
   let resizeObserver = null;
   let zoomBehavior = null;
@@ -754,6 +754,28 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
     return summaryRows.find((row) => Number(row.tree) === Number(treeIndex)) || null;
   }
 
+  function formatTreeInteractionConstraint(constraint) {
+    if (!constraint || typeof constraint !== "object") return "";
+    if (constraint.type === "singleton" && constraint.feature) {
+      return `Singleton — ${constraint.feature} only`;
+    }
+    if (constraint.type === "pairwise" && constraint.left && constraint.right) {
+      return `Pairwise — ${constraint.left} × ${constraint.right}`;
+    }
+    if (constraint.type === "group" && constraint.grouping) {
+      return `Group — ${constraint.grouping}`;
+    }
+    return "";
+  }
+
+  function treeInteractionConstraintSummary(row) {
+    const values = (Array.isArray(row?.interaction_constraints) ? row.interaction_constraints : [])
+      .map(formatTreeInteractionConstraint)
+      .filter(Boolean);
+    const label = values.length > 1 ? "Constraints applied:" : "Constraint applied:";
+    return { label, value: values.length ? values.join("; ") : "None" };
+  }
+
   function updateTreeDetailSummary(row) {
     const target = document.getElementById("gbmTreeDetailSummary");
     if (!target) return;
@@ -761,11 +783,14 @@ export function createGbmTreeViewer({ api, escapeHtml, loadTabulator, setGbmNoti
       target.innerHTML = '<h3 class="gbm-section-title">Tree viewer</h3>';
       return;
     }
+    const constraintSummary = treeInteractionConstraintSummary(row);
+    const constraintText = `${constraintSummary.label} ${constraintSummary.value}`;
     target.innerHTML = `
       <div class="gbm-tree-detail-title">Tree ${escapeHtml(row.tree)}</div>
-      <div class="gbm-tree-detail-line"><span>Dimensionality:</span> ${escapeHtml(row.dim)}</div>
       <div class="gbm-tree-detail-line gbm-tree-detail-features"><span>Tree features:</span> ${escapeHtml(row.features || "")}</div>
+      <div class="gbm-tree-detail-line"><span>Unique features:</span> ${escapeHtml(row.dim)}</div>
       <div class="gbm-tree-detail-line"><span>Tree gain:</span> ${escapeHtml(formatGain(row.gain))}</div>
+      <div class="gbm-tree-detail-line gbm-tree-detail-constraint" title="${escapeHtml(constraintText)}"><span>${escapeHtml(constraintSummary.label)}</span> ${escapeHtml(constraintSummary.value)}</div>
     `;
   }
 

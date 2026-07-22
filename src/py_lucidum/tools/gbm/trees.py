@@ -34,8 +34,12 @@ TREE_DETAIL_COLUMNS = [
 
 
 def tree_summary(store: GbmModelStore, model_id: str) -> dict[str, Any]:
-    store.manifest(model_id)
-    rows = tree_summary_from_table(store, model_id)
+    manifest = store.manifest(model_id)
+    rows = tree_summary_from_table(
+        store,
+        model_id,
+        feature_interaction_constraints=manifest.get("feature_interaction_constraints"),
+    )
     return {"model_id": model_id, "trees": rows}
 
 
@@ -59,7 +63,12 @@ def tree_detail(store: GbmModelStore, model_id: str, tree_index: int) -> dict[st
     return {"model_id": model_id, "tree": tree_index, "root": normalised, "values": values}
 
 
-def tree_summary_from_table(store: GbmModelStore, model_id: str) -> list[dict[str, Any]]:
+def tree_summary_from_table(
+    store: GbmModelStore,
+    model_id: str,
+    *,
+    feature_interaction_constraints: Any = None,
+) -> list[dict[str, Any]]:
     path = store.artifact_path(model_id, "tree_table")
     if not path.exists():
         return []
@@ -89,7 +98,18 @@ ORDER BY tree_index, node_depth, node_index
         gain_value = finite_float(split_gain)
         if gain_value is not None:
             item["gain"] += gain_value
-    return [summary_row(item["tree"], item["features"], item["gain"]) for item in sorted(grouped.values(), key=lambda row: row["tree"])]
+    return [
+        summary_row(
+            item["tree"],
+            item["features"],
+            item["gain"],
+            interaction_constraints=applied_interaction_constraints(
+                item["features"],
+                feature_interaction_constraints,
+            ),
+        )
+        for item in sorted(grouped.values(), key=lambda row: row["tree"])
+    ]
 
 
 def ebm_gain_summary_from_table(store: GbmModelStore, model_id: str, best_iteration: Any = None) -> list[dict[str, Any]]:
@@ -485,12 +505,79 @@ def format_number(value: Any) -> str:
     return f"{number:,.4f}".rstrip("0").rstrip(".")
 
 
-def summary_row(tree: int, features: list[str], gain: float) -> dict[str, Any]:
+def applied_interaction_constraints(features: list[str], raw_constraints: Any) -> list[dict[str, str]]:
+    if not isinstance(raw_constraints, dict):
+        return []
+    tree_features = set(features)
+    applied: list[dict[str, str]] = []
+
+    seen_features: set[str] = set()
+    raw_features = raw_constraints.get("features")
+    if isinstance(raw_features, list):
+        for raw_feature in raw_features:
+            feature = clean_feature_name(raw_feature)
+            if not feature or feature in seen_features:
+                continue
+            seen_features.add(feature)
+            if feature in tree_features:
+                applied.append({"type": "singleton", "feature": feature})
+
+    seen_pairs: set[tuple[str, str]] = set()
+    raw_pairs = raw_constraints.get("pairs")
+    if isinstance(raw_pairs, list):
+        for raw_pair in raw_pairs:
+            if not isinstance(raw_pair, dict):
+                continue
+            left = clean_feature_name(raw_pair.get("left"))
+            right = clean_feature_name(raw_pair.get("right"))
+            if not left or not right or left == right:
+                continue
+            key = tuple(sorted((left, right), key=lambda value: (value.lower(), value)))
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            if left in tree_features or right in tree_features:
+                applied.append({"type": "pairwise", "left": left, "right": right})
+
+    seen_groupings: set[str] = set()
+    raw_groups = raw_constraints.get("groups")
+    if isinstance(raw_groups, list):
+        for raw_group in raw_groups:
+            if not isinstance(raw_group, dict):
+                continue
+            grouping = clean_label(raw_group.get("grouping"))
+            if not grouping or grouping in seen_groupings:
+                continue
+            group_features = raw_group.get("features")
+            if not isinstance(group_features, list):
+                continue
+            normalised_features = {
+                feature
+                for feature in (clean_feature_name(item) for item in group_features)
+                if feature
+            }
+            if not normalised_features:
+                continue
+            seen_groupings.add(grouping)
+            if tree_features.intersection(normalised_features):
+                applied.append({"type": "group", "grouping": grouping})
+
+    return applied
+
+
+def summary_row(
+    tree: int,
+    features: list[str],
+    gain: float,
+    *,
+    interaction_constraints: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     return {
         "tree": int(tree),
         "dim": len(features),
         "features": " x ".join(features),
         "gain": round(float(gain or 0.0)),
+        "interaction_constraints": interaction_constraints or [],
     }
 
 

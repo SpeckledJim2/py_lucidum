@@ -7207,6 +7207,169 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_tree_viewer_reports_applied_constraint_types(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "price,value,Age,Segment,VehicleAge,Longitude,PostcodeArea,PostcodeSector\n"
+                "10,100,30,A,2,-2.1,AB,AB10 1\n"
+                "20,200,40,B,3,-2.2,CD,CD20 2\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            models = [
+                (
+                    "constraint-singleton",
+                    "Singleton model",
+                    "Longitude",
+                    {"features": ["Longitude"]},
+                    ["Longitude"],
+                ),
+                (
+                    "constraint-pairwise",
+                    "Pairwise model",
+                    "Age",
+                    {"mode": "pairs", "pairs": [{"left": "Age", "right": "Segment"}]},
+                    ["Age", "Segment"],
+                ),
+                (
+                    "constraint-group",
+                    "Group model",
+                    "PostcodeArea",
+                    {
+                        "groupings": ["POSTCODE"],
+                        "groups": [{"grouping": "POSTCODE", "features": ["PostcodeArea", "PostcodeSector"]}],
+                    },
+                    ["PostcodeArea", "PostcodeSector"],
+                ),
+                (
+                    "constraint-multiple",
+                    "Multiple model",
+                    "Age",
+                    {
+                        "mode": "pairs",
+                        "pairs": [
+                            {"left": "Age", "right": "Segment"},
+                            {"left": "Age", "right": "VehicleAge"},
+                        ],
+                    },
+                    ["Age", "Segment", "VehicleAge"],
+                ),
+                ("constraint-none", "Unconstrained model", "Segment", None, ["Segment"]),
+            ]
+            for index, (model_id, label, split_feature, constraints, feature_names) in enumerate(models):
+                model_dir = store.create_model_dir(model_id)
+                manifest: dict[str, Any] = {
+                    "model_id": model_id,
+                    "label": label,
+                    "created_at": f"2026-07-22T00:00:0{index}Z",
+                    "training_mode": "normal",
+                    "response_column": "price",
+                    "offset_column": "value",
+                    "best_iteration": 1,
+                    "training_rows": 1,
+                    "test_rows": 1,
+                    "scored_rows": 2,
+                }
+                if constraints is not None:
+                    manifest["feature_interaction_constraints"] = constraints
+                store.write_json(model_dir / "manifest.json", manifest)
+                store.write_json(
+                    model_dir / "parameters.json",
+                    {"objective": "poisson", "metric": "poisson", "num_iterations": 1},
+                )
+                write_gbm_feature_config(
+                    store,
+                    model_id,
+                    [
+                        {
+                            "name": name,
+                            "kind": "numeric",
+                            "include": True,
+                            "monotonicity": "",
+                            "gain": 1.0,
+                        }
+                        for name in feature_names
+                    ],
+                )
+                con = duckdb.connect(database=":memory:")
+                try:
+                    con.execute(
+                        f"""
+COPY (
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, {sql_literal(split_feature)} AS split_feature, 5.0 AS split_gain, '1.5' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'left' AS missing_direction, 'None' AS missing_type,
+         1.0 AS value, 2.0 AS weight, 2 AS count
+  UNION ALL
+  SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.8, 1.0, 1
+  UNION ALL
+  SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.2, 1.0, 1
+) TO {sql_literal(str(model_dir / "tree_table.parquet"))} (FORMAT PARQUET)
+"""
+                    )
+                finally:
+                    con.close()
+            store.activate_model("constraint-singleton")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "Age", "actual": "price", "denominator": "value"},
+                tools=["line_bar", "gbm"],
+                use_features=False,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#gbmTool").click()
+                    page.get_by_role("tab", name="Tree viewer").click()
+                    page.locator("#gbmTreeChart svg.gbm-tree-svg").wait_for(state="attached", timeout=10_000)
+
+                    def assert_constraint(model_id: str, expected: str) -> None:
+                        if model_id != "constraint-singleton":
+                            if page.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") != "true":
+                                page.locator("#gbmModelCollapseBtn").click()
+                            page.locator(f'#gbmModelSelect [data-gbm-model-id="{model_id}"]').click()
+                        page.wait_for_function(
+                            "expected => document.querySelector('.gbm-tree-detail-constraint')?.textContent.replace(/\\s+/g, ' ').trim() === expected",
+                            arg=expected,
+                            timeout=10_000,
+                        )
+                        line = page.locator(".gbm-tree-detail-constraint")
+                        self.assertEqual(line.text_content().strip(), expected)
+                        self.assertEqual(line.get_attribute("title"), expected)
+                        self.assertTrue(
+                            line.evaluate(
+                                "node => node.previousElementSibling?.textContent.replace(/\\s+/g, ' ').trim().startsWith('Tree gain:')"
+                            )
+                        )
+
+                    assert_constraint("constraint-singleton", "Constraint applied: Singleton — Longitude only")
+                    self.assertEqual(
+                        page.locator(".gbm-tree-detail-constraint span").text_content().strip(),
+                        "Constraint applied:",
+                    )
+                    self.assertIn("Singleton — Longitude only", page.locator(".gbm-tree-detail-constraint").text_content())
+                    assert_constraint("constraint-pairwise", "Constraint applied: Pairwise — Age × Segment")
+                    assert_constraint("constraint-group", "Constraint applied: Group — POSTCODE")
+                    assert_constraint(
+                        "constraint-multiple",
+                        "Constraints applied: Pairwise — Age × Segment; Pairwise — Age × VehicleAge",
+                    )
+                    assert_constraint("constraint-none", "Constraint applied: None")
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_tool_loads_feature_grid(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -7228,7 +7391,8 @@ COPY (
             features_path.write_text(
                 "Feature,Grouping,scenario1\n"
                 "Age,DRIVER,feature\n"
-                "Segment,VEHICLE,feature\n",
+                "Segment,VEHICLE,feature\n"
+                "PostcodeArea,DRIVER,\n",
                 encoding="utf-8",
             )
             store = GbmModelStore(data_path)
@@ -18458,15 +18622,26 @@ COPY (
                 normal_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
                     "(items) => items.map((item) => item.textContent.trim())"
                 )
-                self.assertEqual(normal_context_labels, ["Toggle interaction constraint", "Go to Line and Bar", "Go to SHAP", "Go to Stacked SHAP"])
+                self.assertEqual(
+                    normal_context_labels,
+                    [
+                        "Constrain to main effect only (1D)",
+                        "Add pair interaction (2D)…",
+                        "Go to Line and Bar",
+                        "Go to SHAP",
+                        "Go to Stacked SHAP",
+                    ],
+                )
                 self.assertEqual(page.locator("#gbmFeatureContextMenu [role='separator']").count(), 1)
-                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle interaction constraint").click()
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Constrain to main effect only (1D)").click()
                 page.wait_for_function(
                     """
                     () => {
                       const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
                         .find((item) => item.textContent.includes("Age"));
-                      return (row?.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent || "").includes("\\uD83D\\uDD12");
+                      const lock = row?.querySelector(".gbm-feature-interaction-lock");
+                      return lock?.querySelector(".gbm-interaction-lock-subscript")?.textContent.trim() === "1"
+                        && lock?.getAttribute("aria-label") === "Main effect only — cannot interact with other features";
                     }
                     """,
                     timeout=10_000,
@@ -18528,7 +18703,10 @@ COPY (
                 no_shap_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
                     "(items) => items.map((item) => item.textContent.trim())"
                 )
-                self.assertEqual(no_shap_context_labels, ["Toggle interaction constraint", "Go to Line and Bar"])
+                self.assertEqual(
+                    no_shap_context_labels,
+                    ["Constrain to main effect only (1D)", "Add pair interaction (2D)…", "Go to Line and Bar"],
+                )
                 page.keyboard.press("Escape")
                 page.wait_for_function('() => document.querySelector("#gbmFeatureContextMenu")?.hidden === true')
                 page.get_by_role("tab", name="SHAP", exact=True).click()
@@ -18649,6 +18827,8 @@ COPY (
                         title: document.querySelector("#gbmFeatureInteractionConstraintButton")?.getAttribute("title") || "",
                         rows,
                         ageGrouping: ageRow?.querySelector(".tabulator-cell[tabulator-field='grouping']")?.textContent.trim() || "",
+                        ageGroupSize: ageRow?.querySelector(".gbm-group-interaction-lock .gbm-interaction-lock-subscript")?.textContent.trim() || "",
+                        ageGroupTitle: ageRow?.querySelector(".gbm-group-interaction-lock")?.getAttribute("title") || "",
                       };
                     }
                     """
@@ -18657,6 +18837,8 @@ COPY (
                 self.assertIn("interact within selected groups", initial_constraints["title"])
                 self.assertIn("OLD (trained; missing from spec)", initial_constraints["rows"])
                 self.assertIn("\U0001f512", initial_constraints["ageGrouping"])
+                self.assertEqual(initial_constraints["ageGroupSize"], "1")
+                self.assertEqual(initial_constraints["ageGroupTitle"], "Constrained within OLD (1 feature)")
                 page.locator("#gbmFeatureInteractionConstraintButton").click()
                 page.wait_for_function(
                     """
@@ -18728,7 +18910,68 @@ COPY (
                       && [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
                         .find((row) => row.textContent.includes("Age"))
                         ?.querySelector(".tabulator-cell[tabulator-field='grouping']")
-                        ?.textContent.includes("\\uD83D\\uDD12")
+                        ?.querySelector(".gbm-group-interaction-lock .gbm-interaction-lock-subscript")
+                        ?.textContent.trim() === "1"
+                    """,
+                    timeout=10_000,
+                )
+                postcode_area_row = page.locator("#gbmFeatureGrid .tabulator-row", has_text="PostcodeArea")
+                postcode_area_row.locator(".gbm-use-checkbox").check()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
+                      const groupSize = (name) => rows
+                        .find((row) => row.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes(name))
+                        ?.querySelector(".gbm-group-interaction-lock .gbm-interaction-lock-subscript")
+                        ?.textContent.trim();
+                      return document.querySelector('[data-gbm-interaction-count-label="DRIVER"]')?.textContent.trim() === "DRIVER (2)"
+                        && groupSize("Age") === "2"
+                        && groupSize("PostcodeArea") === "2";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Constrain to main effect only (1D)").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
+                      const cell = (name, field) => rows
+                        .find((row) => row.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes(name))
+                        ?.querySelector(`.tabulator-cell[tabulator-field='${field}']`);
+                      return document.querySelector('[data-gbm-interaction-count-label="DRIVER"]')?.textContent.trim() === "DRIVER (1)"
+                        && cell("Age", "name")?.querySelector(".gbm-feature-interaction-lock .gbm-interaction-lock-subscript")?.textContent.trim() === "1"
+                        && !cell("Age", "grouping")?.querySelector(".gbm-group-interaction-lock")
+                        && cell("PostcodeArea", "grouping")?.querySelector(".gbm-group-interaction-lock .gbm-interaction-lock-subscript")?.textContent.trim() === "1";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Remove main-effect-only constraint").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
+                      const groupSize = (name) => rows
+                        .find((row) => row.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes(name))
+                        ?.querySelector(".gbm-group-interaction-lock .gbm-interaction-lock-subscript")
+                        ?.textContent.trim();
+                      return groupSize("Age") === "2" && groupSize("PostcodeArea") === "2";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                postcode_area_row.locator(".gbm-use-checkbox").uncheck()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('[data-gbm-interaction-count-label="DRIVER"]')?.textContent.trim() === "DRIVER (1)"
+                      && [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .find((row) => row.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes("Age"))
+                        ?.querySelector(".gbm-group-interaction-lock .gbm-interaction-lock-subscript")
+                        ?.textContent.trim() === "1"
                     """,
                     timeout=10_000,
                 )
@@ -18741,7 +18984,8 @@ COPY (
                       && [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
                         .find((row) => row.textContent.includes("Age"))
                         ?.querySelector(".tabulator-cell[tabulator-field='grouping']")
-                        ?.textContent.includes("\\uD83D\\uDD12")
+                        ?.querySelector(".gbm-group-interaction-lock .gbm-interaction-lock-subscript")
+                        ?.textContent.trim() === "1"
                     """,
                     timeout=10_000,
                 )
@@ -20934,8 +21178,20 @@ COPY (
                 ebm_dim2_context_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
                     "(items) => items.map((item) => item.textContent.trim())"
                 )
-                self.assertEqual(ebm_dim2_context_labels, ["Allow interaction pair", "Go to SHAP"])
-                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Allow interaction pair").click()
+                self.assertEqual(ebm_dim2_context_labels, ["Add pair interaction (2D)", "Go to SHAP"])
+                ebm_pair_action = page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Add pair interaction (2D)")
+                self.assertTrue(ebm_pair_action.is_disabled())
+                self.assertEqual(ebm_pair_action.get_attribute("title"), "Disable Constraint Group DRIVER before pairing Age")
+                page.keyboard.press("Escape")
+                page.locator("#gbmFeatureInteractionConstraintButton").click()
+                driver_constraint = page.locator('[data-gbm-interaction-grouping="DRIVER"]')
+                self.assertTrue(driver_constraint.is_checked())
+                self.assertFalse(driver_constraint.is_disabled())
+                driver_constraint.click()
+                page.keyboard.press("Escape")
+                page.locator("#gbmEbmGainSummaryGrid .tabulator-row", has_text="Age x Segment").click(button="right")
+                page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Add pair interaction (2D)").click()
                 self.assertEqual(page.locator("#gbmFeatureInteractionPairButton").text_content(), "Interaction pairs (1)")
                 page.locator("#gbmEbmGainSummaryGrid .tabulator-row", has_text="Age x Segment").click(button="right")
                 page.locator("#gbmFeatureContextMenu:not([hidden])").wait_for(timeout=10_000)
@@ -21290,12 +21546,39 @@ COPY (
                 self.assertEqual(page.locator("#gbmFeatureInteractionPairButton").text_content(), "Interaction pairs")
                 self.assertFalse(page.locator("#gbmFeatureInteractionPairButton").is_disabled())
                 page.locator("#gbmFeatureInteractionPairButton").click()
+                self.assertEqual(page.locator("#gbmInteractionPairAddTitle").text_content(), "Add pair interaction")
+                self.assertEqual(page.locator("#gbmInteractionPairListTitle").text_content(), "Allowed pair interactions (0)")
+                self.assertEqual(page.locator("#gbmInteractionPairRows").text_content().strip(), "No pair interactions added")
+                self.assertEqual(page.locator("#gbmInteractionPairRows [data-gbm-remove-interaction-pair]").count(), 0)
                 page.locator("#gbmInteractionPairLeft").select_option("Age")
                 page.locator("#gbmInteractionPairRight").select_option("Segment")
                 page.locator("#gbmInteractionPairAdd").click()
                 page.wait_for_function(
                     "() => document.querySelector('#gbmFeatureInteractionPairButton')?.textContent.trim() === 'Interaction pairs (1)'",
                     timeout=10_000,
+                )
+                page.locator("#gbmInteractionPairLeft").select_option("Segment")
+                page.locator("#gbmInteractionPairRight").select_option("PostcodeArea")
+                page.locator("#gbmInteractionPairAdd").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#gbmFeatureInteractionPairButton')?.textContent.trim() === 'Interaction pairs (2)'",
+                    timeout=10_000,
+                )
+                self.assertEqual(page.locator("#gbmInteractionPairListTitle").text_content(), "Allowed pair interactions (2)")
+                self.assertEqual(
+                    page.locator("#gbmInteractionPairRows .gbm-interaction-pair-label").evaluate_all(
+                        "labels => labels.map((label) => label.textContent.trim())"
+                    ),
+                    ["Age × Segment", "Segment × PostcodeArea"],
+                )
+                pair_manager_remove_buttons = page.locator("#gbmInteractionPairRows [data-gbm-remove-interaction-pair]")
+                self.assertEqual(pair_manager_remove_buttons.evaluate_all("buttons => buttons.map((button) => button.textContent.trim())"), ["Remove", "Remove"])
+                self.assertEqual(
+                    pair_manager_remove_buttons.evaluate_all("buttons => buttons.map((button) => button.getAttribute('aria-label'))"),
+                    [
+                        "Remove Age × Segment pairwise interaction",
+                        "Remove Segment × PostcodeArea pairwise interaction",
+                    ],
                 )
                 page.keyboard.press("Escape")
                 page.wait_for_function(
@@ -21324,39 +21607,105 @@ COPY (
                     timeout=10_000,
                 )
                 page.locator("#gbmFeatureGrid .tabulator-row", has_text="Segment").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
-                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle interaction constraint").click()
+                blocked_main_effect = page.locator(
+                    "#gbmFeatureContextMenu [role='menuitem']",
+                    has_text="Constrain to main effect only (1D)",
+                )
+                self.assertTrue(blocked_main_effect.is_disabled())
+                self.assertEqual(blocked_main_effect.get_attribute("title"), "Remove this feature's pair interactions first")
+                pair_removal_labels = page.locator("#gbmFeatureContextMenu [role='menuitem']").evaluate_all(
+                    "items => items.map((item) => item.textContent.trim()).filter((label) => label.startsWith('Remove ') && label.endsWith(' pairwise interaction'))"
+                )
+                self.assertEqual(
+                    pair_removal_labels,
+                    [
+                        "Remove Age × Segment pairwise interaction",
+                        "Remove Segment × PostcodeArea pairwise interaction",
+                    ],
+                )
+                self.assertEqual(
+                    page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Add pair interaction").count(),
+                    0,
+                )
+                page.locator(
+                    "#gbmFeatureContextMenu [role='menuitem']",
+                    has_text="Remove Age × Segment pairwise interaction",
+                ).click()
                 page.wait_for_function(
-                    """
-                    () => {
-                      const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
-                      const featureCell = (name) => rows
-                        .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes(name))
-                        ?.querySelector(".tabulator-cell[tabulator-field='name']");
-                      const ageCell = featureCell("Age");
-                      const segmentCell = featureCell("Segment");
-                      return Boolean(ageCell?.querySelector(".gbm-pair-interaction-lock"))
-                        && !ageCell?.querySelector(".gbm-feature-interaction-lock")
-                        && Boolean(segmentCell?.querySelector(".gbm-feature-interaction-lock"))
-                        && !segmentCell?.querySelector(".gbm-pair-interaction-lock");
-                    }
-                    """,
+                    "() => document.querySelector('#gbmFeatureInteractionPairButton')?.textContent.trim() === 'Interaction pairs (1)'",
                     timeout=10_000,
                 )
                 page.locator("#gbmFeatureGrid .tabulator-row", has_text="Segment").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
-                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Toggle interaction constraint").click()
+                remaining_pair_removal = page.locator(
+                    "#gbmFeatureContextMenu [role='menuitem']",
+                    has_text="Remove Segment × PostcodeArea pairwise interaction",
+                )
+                self.assertEqual(remaining_pair_removal.count(), 1)
+                self.assertEqual(
+                    page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Add pair interaction").count(),
+                    0,
+                )
+                remaining_pair_removal.click()
+                page.wait_for_function(
+                    "() => document.querySelector('#gbmFeatureInteractionPairButton')?.textContent.trim() === 'Interaction pairs'",
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Segment").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
+                enabled_main_effect = page.locator(
+                    "#gbmFeatureContextMenu [role='menuitem']",
+                    has_text="Constrain to main effect only (1D)",
+                )
+                self.assertFalse(enabled_main_effect.is_disabled())
+                enabled_main_effect.click()
                 page.wait_for_function(
                     """
                     () => {
                       const row = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
                         .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes("Segment"));
                       const cell = row?.querySelector(".tabulator-cell[tabulator-field='name']");
-                      return Boolean(cell?.querySelector(".gbm-pair-interaction-lock"))
-                        && !cell?.querySelector(".gbm-feature-interaction-lock")
-                        && cell?.querySelector(".gbm-interaction-lock-subscript")?.textContent.trim() === "2";
+                      return Boolean(cell?.querySelector(".gbm-feature-interaction-lock"))
+                        && !cell?.querySelector(".gbm-pair-interaction-lock")
+                        && cell?.querySelector(".gbm-interaction-lock-subscript")?.textContent.trim() === "1";
                     }
                     """,
                     timeout=10_000,
                 )
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Segment").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
+                blocked_pair_action = page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Add pair interaction (2D)…")
+                self.assertTrue(blocked_pair_action.is_disabled())
+                self.assertEqual(blocked_pair_action.get_attribute("title"), "Remove the main-effect-only constraint first")
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Remove main-effect-only constraint").click()
+                page.locator("#gbmFeatureGrid .tabulator-row", has_text="Segment").locator(".tabulator-cell[tabulator-field='name']").click(button="right")
+                page.locator("#gbmFeatureContextMenu [role='menuitem']", has_text="Add pair interaction (2D)…").click()
+                page.locator("#gbmFeatureInteractionPairMenu:not(.hidden)").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#gbmFeatureSetupBtn").get_attribute("aria-expanded"), "true")
+                self.assertEqual(page.locator("#gbmFeatureInteractionPairButton").get_attribute("aria-expanded"), "true")
+                self.assertEqual(page.locator("#gbmInteractionPairLeft").input_value(), "Segment")
+                page.wait_for_function('() => document.activeElement?.id === "gbmInteractionPairRight"', timeout=10_000)
+                page.locator("#gbmInteractionPairRight").select_option("Age")
+                page.locator("#gbmInteractionPairAdd").click()
+                page.keyboard.press("Escape")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
+                      const pairSubscript = (name) => rows
+                        .find((item) => item.querySelector(".tabulator-cell[tabulator-field='name']")?.textContent.includes(name))
+                        ?.querySelector(".gbm-pair-interaction-lock .gbm-interaction-lock-subscript")
+                        ?.textContent.trim();
+                      return pairSubscript("Age") === "2" && pairSubscript("Segment") === "2";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#gbmFeatureInteractionConstraintButton").click()
+                driver_with_pair = page.locator('[data-gbm-interaction-grouping="DRIVER"]')
+                vehicle_with_pair = page.locator('[data-gbm-interaction-grouping="VEHICLE"]')
+                self.assertTrue(driver_with_pair.is_disabled())
+                self.assertTrue(vehicle_with_pair.is_disabled())
+                self.assertIn("Age", driver_with_pair.get_attribute("aria-label") or "")
+                self.assertIn("Segment", vehicle_with_pair.get_attribute("aria-label") or "")
+                page.keyboard.press("Escape")
                 page.evaluate(
                     """
                     () => {
@@ -21419,7 +21768,7 @@ COPY (
                 self.assertEqual(gbm_busy_button["spinnerAnimation"], "model-busy-button-spin")
                 gbm_pointer_moves_while_busy = page.evaluate("window.__gbmBusyPointerMoves")
                 self.assertNotIn("feature_scenario", train_payload["value"])
-                self.assertEqual(train_payload["value"]["feature_interaction_pairs"], [{"left": "Age", "right": "Segment"}])
+                self.assertEqual(train_payload["value"]["feature_interaction_pairs"], [{"left": "Segment", "right": "Age"}])
                 self.assertNotIn("feature_interaction_groupings", train_payload["value"])
                 self.assertNotIn("feature_interaction_features", train_payload["value"])
                 trained_features = {feature["name"]: feature for feature in train_payload["value"]["features"]}
@@ -21518,6 +21867,19 @@ COPY (
                 gbm_top_before = page.locator(".gbm-tool").evaluate("node => node.getBoundingClientRect().top")
                 page.locator("#gbmSampleStatus").get_by_text("SAMPLE column found").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#gbmCreateSampleBtn").count(), 0)
+                page.locator("#gbmFeatureInteractionPairButton").click()
+                remove_trained_pair = page.locator("[data-gbm-remove-interaction-pair]")
+                self.assertEqual(remove_trained_pair.text_content().strip(), "Remove")
+                self.assertEqual(remove_trained_pair.get_attribute("aria-label"), "Remove Segment × Age pairwise interaction")
+                remove_trained_pair.click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#gbmInteractionPairListTitle")?.textContent.trim() === "Allowed pair interactions (0)"
+                      && document.querySelector("#gbmInteractionPairRows")?.textContent.trim() === "No pair interactions added"
+                    """,
+                    timeout=10_000,
+                )
+                page.keyboard.press("Escape")
                 page.locator("#gbmClearFeaturesBtn").click()
                 page.wait_for_function(
                     "() => document.querySelectorAll('#gbmFeatureGrid .gbm-use-checkbox:checked').length === 0",
@@ -21620,7 +21982,11 @@ COPY (
                     """
                     async () => {
                       const chart = document.querySelector("#gbmTreeChart");
-                      const plainFill = chart.querySelector("rect.gbm-tree-split-node")?.getAttribute("fill") || "";
+                      const divergentFill = chart.querySelector("rect.gbm-tree-split-node")?.getAttribute("fill") || "";
+                      const defaultPalette = document.querySelector("[data-gbm-tree-palette].active")
+                        ?.dataset.gbmTreePalette || "";
+                      const defaultPalettePressed = [...document.querySelectorAll("[data-gbm-tree-palette]")]
+                        .map((button) => button.getAttribute("aria-pressed"));
                       const beforeZoom = chart.querySelector(".gbm-tree-viewport")?.getAttribute("transform") || "";
                       document.querySelector('[data-gbm-tree-zoom="in"]').click();
                       await new Promise((resolve) => setTimeout(resolve, 220));
@@ -21852,7 +22218,9 @@ COPY (
                         textFills: [...chart.querySelectorAll(".gbm-tree-node-label")].map((node) => node.getAttribute("fill")),
                         rootLabelLines: rootLabelSpans.map((node) => node.textContent.trim()),
                         rootLabelWeights: rootLabelSpans.map((node) => node.getAttribute("font-weight")),
-                        plainFill,
+                        divergentFill,
+                        defaultPalette,
+                        defaultPalettePressed,
                         viridisFill,
                         geometry: {
                           viewer: rect(viewer),
@@ -21922,8 +22290,8 @@ COPY (
                 self.assertEqual(tree_state["selectedRows"], 1)
                 self.assertEqual(tree_state["selectedTree"], "0")
                 self.assertIn("Tree 0", tree_state["detailSummary"])
-                self.assertIn("Dimensionality: 2", tree_state["detailSummary"])
                 self.assertIn("Tree features:", tree_state["detailSummary"])
+                self.assertIn("Unique features: 2", tree_state["detailSummary"])
                 self.assertIn("Tree gain: 7", tree_state["detailSummary"])
                 self.assertEqual(tree_state["detailBackground"], "rgba(255, 255, 255, 0.84)")
                 self.assertEqual(tree_state["detailBorderWidths"], ["0px"] * 4)
@@ -22007,6 +22375,8 @@ COPY (
                     tree_state["selectedDirectionNodeAfterRedraw"], tree_state["selectedDirectionNodeId"]
                 )
                 self.assertTrue(tree_state["paletteInsideControls"])
+                self.assertEqual(tree_state["defaultPalette"], "divergent")
+                self.assertEqual(tree_state["defaultPalettePressed"], ["false", "true", "false", "false"])
                 self.assertEqual(tree_state["paletteActions"], ["plain", "divergent", "spectral", "viridis"])
                 self.assertEqual(tree_state["paletteLabels"], ["Plain", "Divergent", "Spectral", "Viridis"])
                 self.assertEqual(tree_state["paletteVisibleLabelCount"], 0)
@@ -22031,7 +22401,7 @@ COPY (
                 self.assertEqual(tree_state["rootLabelLines"][:2], ["Tree 0", "Age"])
                 self.assertEqual(tree_state["rootLabelWeights"][:2], ["700", "700"])
                 self.assertIn("400", tree_state["rootLabelWeights"][2:])
-                self.assertNotEqual(tree_state["plainFill"], tree_state["viridisFill"])
+                self.assertNotEqual(tree_state["divergentFill"], tree_state["viridisFill"])
                 geometry = tree_state["geometry"]
                 self.assertAlmostEqual(geometry["strip"]["height"], 50, delta=0.75)
                 self.assertEqual(tree_state["stripDividerHeight"], "1px")
@@ -23970,6 +24340,33 @@ COPY (
                 mobile_layout = compact_feature_layout()
                 assert_compact_feature_layout(mobile_layout)
                 self.assertAlmostEqual(mobile_layout["workspace"]["width"], 340, delta=1)
+                set_feature_setup_open(True)
+                page.locator("#gbmFeatureInteractionPairButton").click()
+                page.locator("#gbmFeatureInteractionPairMenu:not(.hidden)").wait_for(timeout=10_000)
+                mobile_pair_menu = page.locator("#gbmFeatureInteractionPairMenu").evaluate(
+                    """
+                    (menu) => {
+                      const rect = menu.getBoundingClientRect();
+                      const left = menu.querySelector("#gbmInteractionPairLeft").getBoundingClientRect();
+                      const right = menu.querySelector("#gbmInteractionPairRight").getBoundingClientRect();
+                      const add = menu.querySelector("#gbmInteractionPairAdd").getBoundingClientRect();
+                      return {
+                        left: rect.left,
+                        right: rect.right,
+                        scrollWidth: menu.scrollWidth,
+                        clientWidth: menu.clientWidth,
+                        selectorsShareRow: Math.abs(left.top - right.top) <= 1,
+                        addBelowSelectors: add.top >= Math.max(left.bottom, right.bottom),
+                      };
+                    }
+                    """
+                )
+                self.assertGreaterEqual(mobile_pair_menu["left"], 0)
+                self.assertLessEqual(mobile_pair_menu["right"], 390)
+                self.assertLessEqual(mobile_pair_menu["scrollWidth"], mobile_pair_menu["clientWidth"])
+                self.assertTrue(mobile_pair_menu["selectorsShareRow"])
+                self.assertTrue(mobile_pair_menu["addBelowSelectors"])
+                page.keyboard.press("Escape")
 
                 page.locator("#gbmFeatureWorkspace").evaluate(
                     "workspace => { workspace.scrollTop = document.querySelector('.gbm-training-control-cell').offsetTop; }"

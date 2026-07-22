@@ -1004,6 +1004,8 @@ export function createGbmTool({
       ? []
       : active.groups.filter((group) => group.status !== "current" || !currentNames.has(group.grouping));
     const counts = selectedFeatureCountsByGrouping(features);
+    const sourcePairs = featureInteractionPairsUserEdited(config) ? draft?.interactionPairs || [] : active.pairs;
+    const pairedNames = featureInteractionPairFeatureNames(sourcePairs);
     const hasOptions = rows.length || synthetic.length;
     const hidden = hasOptions ? "" : " hidden";
     const disabled = hasOptions ? "" : " disabled";
@@ -1018,12 +1020,17 @@ export function createGbmTool({
               <span>${escapeHtml(trainedFeatureInteractionLabel(group))}</span>
             </label>
           `).join("")}
-          ${rows.map((row) => `
-            <label class="gbm-interaction-constraint-row">
-              <input type="checkbox" value="${escapeHtml(row.name)}" data-gbm-interaction-grouping="${escapeHtml(row.name)}" ${selectedCurrent.has(row.name) ? "checked" : ""} />
+          ${rows.map((row) => {
+            const overlapping = groupingPairedFeatureNames(row.name, features, pairedNames);
+            const blocked = overlapping.length > 0;
+            const reason = blocked ? groupPairConflictMessage(row.name, overlapping) : "";
+            return `
+            <label class="gbm-interaction-constraint-row${blocked ? " disabled" : ""}" ${reason ? `title="${escapeHtml(reason)}"` : ""}>
+              <input type="checkbox" value="${escapeHtml(row.name)}" data-gbm-interaction-grouping="${escapeHtml(row.name)}" ${selectedCurrent.has(row.name) ? "checked" : ""} ${blocked ? `disabled aria-label="${escapeHtml(reason)}"` : ""} />
               <span data-gbm-interaction-count-label="${escapeHtml(row.name)}">${escapeHtml(featureInteractionGroupingLabel(row.name, counts))}</span>
             </label>
-          `).join("")}
+          `;
+          }).join("")}
         </div>
       </div>
     `;
@@ -1040,18 +1047,24 @@ export function createGbmTool({
       <div id="gbmFeatureInteractionPairSelect" class="gbm-interaction-pair-select" data-gbm-feature-menu-root>
         <button id="gbmFeatureInteractionPairButton" class="gbm-feature-menu-button gbm-interaction-pair-button${pairClass}" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Interaction pairs" title="Allow only these selected feature pairs to interact" data-gbm-feature-menu-button>${escapeHtml(featureInteractionPairButtonLabel(pairs.length))}</button>
         <div id="gbmFeatureInteractionPairMenu" class="gbm-feature-menu gbm-interaction-pair-menu hidden" role="menu" data-gbm-feature-menu>
-          <div class="gbm-interaction-pair-builder">
-            <select id="gbmInteractionPairLeft" class="gbm-interaction-pair-feature" aria-label="Interaction pair feature A">
-              ${featureInteractionPairOptions(pairFeatures, pairFeatures[0]?.name || "")}
-            </select>
-            <span class="gbm-interaction-pair-times">x</span>
-            <select id="gbmInteractionPairRight" class="gbm-interaction-pair-feature" aria-label="Interaction pair feature B">
-              ${featureInteractionPairOptions(pairFeatures, pairFeatures[1]?.name || pairFeatures[0]?.name || "")}
-            </select>
-            <button id="gbmInteractionPairAdd" class="tab gbm-inline-action-button gbm-interaction-pair-add" type="button">Add pair</button>
+          <div class="gbm-interaction-pair-section" role="group" aria-labelledby="gbmInteractionPairAddTitle">
+            <div id="gbmInteractionPairAddTitle" class="gbm-interaction-pair-section-title">Add pair interaction</div>
+            <div class="gbm-interaction-pair-builder">
+              <select id="gbmInteractionPairLeft" class="gbm-interaction-pair-feature" aria-label="Interaction pair feature A">
+                ${featureInteractionPairOptions(pairFeatures, pairFeatures[0]?.name || "")}
+              </select>
+              <span class="gbm-interaction-pair-times" aria-hidden="true">×</span>
+              <select id="gbmInteractionPairRight" class="gbm-interaction-pair-feature" aria-label="Interaction pair feature B">
+                ${featureInteractionPairOptions(pairFeatures, pairFeatures[1]?.name || pairFeatures[0]?.name || "")}
+              </select>
+              <button id="gbmInteractionPairAdd" class="tab gbm-inline-action-button gbm-interaction-pair-add" type="button">Add pair</button>
+            </div>
           </div>
-          <div id="gbmInteractionPairRows" class="gbm-interaction-pair-rows">
-            ${featureInteractionPairRowsHtml(pairs)}
+          <div class="gbm-interaction-pair-section gbm-interaction-pair-list-section" role="group" aria-labelledby="gbmInteractionPairListTitle">
+            <div id="gbmInteractionPairListTitle" class="gbm-interaction-pair-section-title">${escapeHtml(featureInteractionPairListLabel(pairs.length))}</div>
+            <div id="gbmInteractionPairRows" class="gbm-interaction-pair-rows">
+              ${featureInteractionPairRowsHtml(pairs)}
+            </div>
           </div>
         </div>
       </div>
@@ -1059,18 +1072,18 @@ export function createGbmTool({
   }
 
   function featureInteractionPairOptions(features = [], selected = "") {
-    return pairCandidateFeatureRows(features)
+    return (features || [])
       .map((feature) => `<option value="${escapeHtml(feature.name)}" ${feature.name === selected ? "selected" : ""}>${escapeHtml(feature.name)}</option>`)
       .join("");
   }
 
   function featureInteractionPairRowsHtml(pairs = []) {
     const rows = normaliseFeatureInteractionPairs(pairs);
-    if (!rows.length) return '<div class="gbm-interaction-pair-empty">No interaction pairs</div>';
+    if (!rows.length) return '<div class="gbm-interaction-pair-empty">No pair interactions added</div>';
     return rows.map((pair) => `
       <div class="gbm-interaction-pair-row" data-gbm-interaction-pair-row data-gbm-interaction-pair-left="${escapeHtml(pair.left)}" data-gbm-interaction-pair-right="${escapeHtml(pair.right)}">
-        <span class="gbm-interaction-pair-label">${escapeHtml(pair.left)} x ${escapeHtml(pair.right)}</span>
-        <button class="gbm-interaction-pair-remove" type="button" aria-label="Remove ${escapeHtml(pair.left)} x ${escapeHtml(pair.right)}" title="Remove pair" data-gbm-remove-interaction-pair>×</button>
+        <span class="gbm-interaction-pair-label">${escapeHtml(pair.left)} × ${escapeHtml(pair.right)}</span>
+        <button class="gbm-interaction-pair-remove" type="button" aria-label="Remove ${escapeHtml(pair.left)} × ${escapeHtml(pair.right)} pairwise interaction" title="Remove pairwise interaction" data-gbm-remove-interaction-pair>Remove</button>
       </div>
     `).join("");
   }
@@ -1090,9 +1103,19 @@ export function createGbmTool({
       const remove = event.target?.closest?.("[data-gbm-remove-interaction-pair]");
       if (!remove) return;
       const row = remove.closest("[data-gbm-interaction-pair-row]");
-      const key = featureInteractionPairKey(row?.dataset?.gbmInteractionPairLeft || "", row?.dataset?.gbmInteractionPairRight || "");
-      setFeatureInteractionPairs(currentFeatureInteractionPairs().filter((pair) => featureInteractionPairKey(pair.left, pair.right) !== key));
+      removeFeatureInteractionPair(
+        row?.dataset?.gbmInteractionPairLeft || "",
+        row?.dataset?.gbmInteractionPairRight || "",
+      );
     }, true);
+    root.addEventListener("change", (event) => {
+      const target = event.target;
+      if (target?.id === "gbmInteractionPairLeft") {
+        syncFeatureInteractionPairControls(currentFeatureRows(), null, { preferredLeft: target.value });
+      } else if (target?.id === "gbmInteractionPairRight") {
+        syncFeatureInteractionPairAddState();
+      }
+    });
   }
 
   function bindFeatureInteractionActions() {
@@ -1176,8 +1199,13 @@ export function createGbmTool({
   }
 
   function pairCandidateFeatureRows(features = currentFeatureRows()) {
+    const selectedGroupings = new Set(currentFeatureInteractionGroupings());
     return (features || [])
-      .filter((feature) => isFeaturePairCandidate(feature))
+      .filter((feature) => {
+        if (!isFeaturePairCandidate(feature) || feature?.feature_interaction_locked) return false;
+        const grouping = String(feature?.grouping || "").trim();
+        return !grouping || !selectedGroupings.has(grouping);
+      })
       .sort((left, right) => String(left?.name || "").localeCompare(String(right?.name || ""), undefined, { sensitivity: "base" }));
   }
 
@@ -1189,12 +1217,30 @@ export function createGbmTool({
   }
 
   function currentFeatureInteractionPairFeatureNames() {
+    return featureInteractionPairFeatureNames(currentFeatureInteractionPairs());
+  }
+
+  function featureInteractionPairFeatureNames(pairs = []) {
     const names = new Set();
-    for (const pair of currentFeatureInteractionPairs()) {
+    for (const pair of normaliseFeatureInteractionPairs(pairs)) {
       names.add(pair.left);
       names.add(pair.right);
     }
     return names;
+  }
+
+  function groupingPairedFeatureNames(grouping, features = currentFeatureRows(), pairedNames = currentFeatureInteractionPairFeatureNames()) {
+    const name = String(grouping || "").trim();
+    if (!name) return [];
+    return (features || [])
+      .filter((feature) => String(feature?.grouping || "").trim() === name && pairedNames.has(feature.name))
+      .map((feature) => feature.name)
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+  }
+
+  function groupPairConflictMessage(grouping, featureNames = []) {
+    const suffix = featureNames.length ? `: ${featureNames.join(", ")}` : "";
+    return `Remove pair interactions before enabling ${grouping}${suffix}`;
   }
 
   function pruneFeatureInteractionPairs(pairs = [], features = currentFeatureRows(), { requireSelected = true } = {}) {
@@ -1259,9 +1305,16 @@ export function createGbmTool({
 
   function selectedFeatureCountsByGrouping(features) {
     const counts = new Map();
+    const pairedNames = currentFeatureInteractionPairFeatureNames();
     for (const feature of features || []) {
       const grouping = String(feature?.grouping || "").trim();
-      if (!grouping || !feature?.include || !isFeatureSelectable(feature)) continue;
+      if (
+        !grouping
+        || !feature?.include
+        || !isFeatureSelectable(feature)
+        || feature?.feature_interaction_locked
+        || pairedNames.has(feature.name)
+      ) continue;
       counts.set(grouping, (counts.get(grouping) || 0) + 1);
     }
     return counts;
@@ -1321,10 +1374,20 @@ export function createGbmTool({
     return count > 0 ? `Interaction pairs (${count})` : "Interaction pairs";
   }
 
+  function featureInteractionPairListLabel(count) {
+    return `Allowed pair interactions (${count})`;
+  }
+
   function setFeatureInteractionPairs(pairs, features = currentFeatureRows()) {
     markFeatureInteractionPairsEdited(pairs, features);
-    syncFeatureInteractionPairControls(features, pairs);
-    syncFeatureInteractionLocks(currentFeatureRows());
+    syncFeatureInteractionControls();
+  }
+
+  function removeFeatureInteractionPair(left, right) {
+    const key = featureInteractionPairKey(left, right);
+    setFeatureInteractionPairs(
+      currentFeatureInteractionPairs().filter((pair) => featureInteractionPairKey(pair.left, pair.right) !== key),
+    );
   }
 
   function addFeatureInteractionPair(left, right) {
@@ -1332,7 +1395,16 @@ export function createGbmTool({
     const allowed = new Set(pairCandidateFeatureRows(features).map((feature) => feature.name));
     const cleanLeft = String(left || "").trim();
     const cleanRight = String(right || "").trim();
-    if (!cleanLeft || !cleanRight || cleanLeft === cleanRight || !allowed.has(cleanLeft) || !allowed.has(cleanRight)) return;
+    const key = featureInteractionPairKey(cleanLeft, cleanRight);
+    const existingKeys = new Set(currentFeatureInteractionPairs().map((pair) => featureInteractionPairKey(pair.left, pair.right)));
+    if (
+      !cleanLeft
+      || !cleanRight
+      || cleanLeft === cleanRight
+      || !allowed.has(cleanLeft)
+      || !allowed.has(cleanRight)
+      || existingKeys.has(key)
+    ) return;
     resetFeatureScenarioSelection();
     const pairFeatures = new Set([cleanLeft, cleanRight]);
     const nextFeatures = features.map((feature) => pairFeatures.has(feature.name) ? { ...feature, include: true } : feature);
@@ -1344,16 +1416,16 @@ export function createGbmTool({
         if (pairFeatures.has(data.name) && !data.include) updates.push(row.update({ include: true }));
       }
       syncFeatureSectionTitleAfter(updates);
-      syncFeatureInteractionPairControls(nextFeatures, nextPairs);
+      markFeatureInteractionPairsEdited(nextPairs, nextFeatures);
+      syncFeatureInteractionPairControls(nextFeatures, nextPairs, { preferredLeft: cleanLeft });
       syncFeatureInteractionLocks(nextFeatures);
+      syncFeatureInteractionCounts(nextFeatures);
       Promise.all(updates).then(
         () => {
-          syncFeatureInteractionPairControls(currentFeatureRows(), nextPairs);
-          syncFeatureInteractionLocks(currentFeatureRows());
+          syncFeatureInteractionControls();
         },
         () => {
-          syncFeatureInteractionPairControls(currentFeatureRows(), nextPairs);
-          syncFeatureInteractionLocks(currentFeatureRows());
+          syncFeatureInteractionControls();
         }
       );
       return;
@@ -1363,30 +1435,46 @@ export function createGbmTool({
       if (pairFeatures.has(name)) checkbox.checked = true;
     }
     syncFeatureSectionTitle();
-    syncFeatureInteractionPairControls(nextFeatures, nextPairs);
-    syncFeatureInteractionLocks(nextFeatures);
+    markFeatureInteractionPairsEdited(nextPairs, nextFeatures);
+    syncFeatureInteractionControls();
   }
 
-  function syncFeatureInteractionPairControls(features = currentFeatureRows(), nextPairs = null) {
+  function syncFeatureInteractionPairControls(features = currentFeatureRows(), nextPairs = null, options = {}) {
     const root = el("gbmFeatureInteractionPairSelect");
     if (!root) return;
-    const selectedFeatures = pairCandidateFeatureRows(features);
+    const candidateFeatures = pairCandidateFeatureRows(features);
     const pairs = normaliseFeatureInteractionPairs(nextPairs === null ? currentFeatureInteractionPairs() : nextPairs);
     const leftSelect = el("gbmInteractionPairLeft");
     const rightSelect = el("gbmInteractionPairRight");
-    const leftValue = selectedFeatures.some((feature) => feature.name === leftSelect?.value) ? leftSelect.value : selectedFeatures[0]?.name || "";
-    const rightValue = selectedFeatures.some((feature) => feature.name === rightSelect?.value) ? rightSelect.value : selectedFeatures.find((feature) => feature.name !== leftValue)?.name || selectedFeatures[1]?.name || "";
-    if (leftSelect) leftSelect.innerHTML = featureInteractionPairOptions(selectedFeatures, leftValue);
-    if (rightSelect) rightSelect.innerHTML = featureInteractionPairOptions(selectedFeatures, rightValue);
+    const requestedLeft = String(options.preferredLeft || leftSelect?.value || "");
+    const leftValue = candidateFeatures.some((feature) => feature.name === requestedLeft) ? requestedLeft : candidateFeatures[0]?.name || "";
+    const pairedWithLeft = new Set(
+      pairs
+        .filter((pair) => pair.left === leftValue || pair.right === leftValue)
+        .map((pair) => pair.left === leftValue ? pair.right : pair.left)
+    );
+    const partnerFeatures = candidateFeatures.filter((feature) => feature.name !== leftValue && !pairedWithLeft.has(feature.name));
+    const requestedRight = String(options.preferredRight || rightSelect?.value || "");
+    const rightValue = partnerFeatures.some((feature) => feature.name === requestedRight) ? requestedRight : partnerFeatures[0]?.name || "";
+    if (leftSelect) leftSelect.innerHTML = featureInteractionPairOptions(candidateFeatures, leftValue);
+    if (rightSelect) rightSelect.innerHTML = featureInteractionPairOptions(partnerFeatures, rightValue);
     const rows = el("gbmInteractionPairRows");
     if (rows) rows.innerHTML = featureInteractionPairRowsHtml(pairs);
+    const listTitle = el("gbmInteractionPairListTitle");
+    if (listTitle) listTitle.textContent = featureInteractionPairListLabel(pairs.length);
     const button = el("gbmFeatureInteractionPairButton");
     if (button) {
       button.textContent = featureInteractionPairButtonLabel(pairs.length);
       button.classList.toggle("has-constraints", pairs.length > 0);
     }
+    syncFeatureInteractionPairAddState();
+  }
+
+  function syncFeatureInteractionPairAddState() {
+    const left = String(el("gbmInteractionPairLeft")?.value || "").trim();
+    const right = String(el("gbmInteractionPairRight")?.value || "").trim();
     const add = el("gbmInteractionPairAdd");
-    if (add) add.disabled = selectedFeatures.length < 2;
+    if (add) add.disabled = !left || !right || Boolean(featureInteractionPairConflict([left, right]));
   }
 
   function clearTrainedInteractionConstraintRows() {
@@ -1412,6 +1500,19 @@ export function createGbmTool({
       const grouping = label.getAttribute("data-gbm-interaction-count-label") || "";
       label.textContent = featureInteractionGroupingLabel(grouping, counts);
     }
+    const pairedNames = currentFeatureInteractionPairFeatureNames();
+    for (const checkbox of root.querySelectorAll("[data-gbm-interaction-grouping]")) {
+      const grouping = checkbox.getAttribute("data-gbm-interaction-grouping") || "";
+      const overlapping = groupingPairedFeatureNames(grouping, features, pairedNames);
+      const reason = overlapping.length ? groupPairConflictMessage(grouping, overlapping) : "";
+      checkbox.disabled = overlapping.length > 0;
+      if (reason) checkbox.setAttribute("aria-label", reason);
+      else checkbox.removeAttribute("aria-label");
+      const row = checkbox.closest(".gbm-interaction-constraint-row");
+      row?.classList.toggle("disabled", overlapping.length > 0);
+      if (reason) row?.setAttribute("title", reason);
+      else row?.removeAttribute("title");
+    }
     const selectedCurrentCount = currentFeatureInteractionGroupings().length;
     const syntheticCount = root.querySelectorAll("[data-gbm-trained-interaction-row]").length;
     const button = el("gbmFeatureInteractionConstraintButton");
@@ -1421,44 +1522,59 @@ export function createGbmTool({
     }
   }
 
-  function selectedInteractionFeatureNames(features) {
-    const selectedGroupings = new Set(currentFeatureInteractionGroupings());
-    const trainedFeatures = trainedGroupInteractionFeatureNames();
-    const locked = new Set();
-    for (const feature of features || []) {
-      if (!feature?.include || !isFeatureSelectable(feature)) continue;
-      const grouping = String(feature.grouping || "").trim();
-      if ((grouping && selectedGroupings.has(grouping)) || trainedFeatures.has(feature.name)) {
-        locked.add(feature.name);
-      }
-    }
-    return locked;
-  }
-
-  function renderedInteractionFeatureNames(features) {
+  function renderedInteractionGroupMembership(features, featureLocked, pairLocked) {
     const draft = featureDraftForData(config);
-    const selectedGroupings = new Set(
+    const selectedGroupings =
       draft?.interactionGroupingsEdited
         ? draft.interactionGroupings || []
-        : activeCurrentFeatureInteractionGroupings(config)
+        : activeCurrentFeatureInteractionGroupings(config);
+    const snapshotGroups = draft?.interactionGroupingsEdited
+      ? []
+      : normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints)
+        .groups
+        .filter((group) => group.status !== "current");
+    return interactionGroupMembership(features, selectedGroupings, snapshotGroups, featureLocked, pairLocked);
+  }
+
+  function selectedInteractionGroupMembership(features, featureLocked, pairLocked) {
+    const snapshotGroups = document.querySelector("[data-gbm-trained-interaction-row]")
+      ? normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints)
+        .groups
+        .filter((group) => group.status !== "current")
+      : [];
+    return interactionGroupMembership(
+      features,
+      currentFeatureInteractionGroupings(),
+      snapshotGroups,
+      featureLocked,
+      pairLocked,
     );
-    const trainedFeatures = new Set();
-    if (!draft?.interactionGroupingsEdited) {
-      for (const group of normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints).groups) {
-        if (group.status !== "current") {
-          for (const feature of group.features) trainedFeatures.add(feature);
-        }
-      }
+  }
+
+  function interactionGroupMembership(features, selectedGroupings, snapshotGroups, featureLocked, pairLocked) {
+    const rows = (features || []).filter((feature) => feature?.include && isFeatureSelectable(feature));
+    const byName = new Map(rows.map((feature) => [feature.name, feature]));
+    const excluded = new Set([...(featureLocked || []), ...(pairLocked || [])]);
+    const membership = new Map();
+    const addGroup = (grouping, featureNames, status = "current") => {
+      const names = [...new Set(featureNames)]
+        .filter((name) => byName.has(name) && !excluded.has(name));
+      if (!names.length) return;
+      const size = names.length;
+      for (const name of names) membership.set(name, { grouping, size, status });
+    };
+    for (const grouping of selectedGroupings || []) {
+      addGroup(
+        grouping,
+        rows
+          .filter((feature) => String(feature?.grouping || "").trim() === grouping)
+          .map((feature) => feature.name),
+      );
     }
-    const locked = new Set();
-    for (const feature of features || []) {
-      if (!feature?.include || !isFeatureSelectable(feature)) continue;
-      const grouping = String(feature.grouping || "").trim();
-      if ((grouping && selectedGroupings.has(grouping)) || trainedFeatures.has(feature.name)) {
-        locked.add(feature.name);
-      }
+    for (const group of snapshotGroups || []) {
+      addGroup(group.grouping, group.features || [], group.status || "current");
     }
-    return locked;
+    return membership;
   }
 
   function renderedPairInteractionFeatureNames(features) {
@@ -1472,16 +1588,6 @@ export function createGbmTool({
       locked.add(pair.right);
     }
     return locked;
-  }
-
-  function trainedGroupInteractionFeatureNames() {
-    if (!document.querySelector("[data-gbm-trained-interaction-row]")) return new Set();
-    const active = normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints);
-    const names = new Set();
-    for (const group of active.groups) {
-      for (const feature of group.features) names.add(feature);
-    }
-    return names;
   }
 
   function activeFeatureInteractionFeatureNames() {
@@ -1507,29 +1613,37 @@ export function createGbmTool({
 
   function applyInteractionLocksToFeatures(features) {
     const draft = featureDraftForData(config);
-    const groupLocked = renderedInteractionFeatureNames(features);
     const featureLocked = draft ? selectedFeatureInteractionFeatureNames(features) : activeFeatureInteractionFeatureNames();
     const pairLocked = renderedPairInteractionFeatureNames(features);
-    return (features || []).map((feature) => ({
-      ...feature,
-      interaction_locked: groupLocked.has(feature.name),
-      feature_interaction_locked: featureLocked.has(feature.name),
-      pair_interaction_locked: !featureLocked.has(feature.name) && pairLocked.has(feature.name),
-    }));
+    const groupMembership = renderedInteractionGroupMembership(features, featureLocked, pairLocked);
+    return (features || []).map((feature) => {
+      const group = groupMembership.get(feature.name);
+      return {
+        ...feature,
+        interaction_locked: Boolean(group),
+        interaction_group_size: group?.size || null,
+        interaction_grouping: group?.grouping || "",
+        feature_interaction_locked: featureLocked.has(feature.name),
+        pair_interaction_locked: !featureLocked.has(feature.name) && pairLocked.has(feature.name),
+      };
+    });
   }
 
   function syncFeatureInteractionLocks(features = currentFeatureRows()) {
-    const groupLocked = selectedInteractionFeatureNames(features);
     const featureLocked = selectedFeatureInteractionFeatureNames(features);
     const pairLocked = selectedPairInteractionFeatureNames(features);
+    const groupMembership = selectedInteractionGroupMembership(features, featureLocked, pairLocked);
     if (featureTable) {
       for (const row of featureTable.getRows()) {
         const data = row.getData();
-        const interactionLocked = groupLocked.has(data.name);
+        const interactionGroup = groupMembership.get(data.name);
+        const interactionLocked = Boolean(interactionGroup);
         const featureInteractionLocked = featureLocked.has(data.name);
         const pairInteractionLocked = !featureInteractionLocked && pairLocked.has(data.name);
         const update = {};
         if (Boolean(data.interaction_locked) !== interactionLocked) update.interaction_locked = interactionLocked;
+        if ((data.interaction_group_size || null) !== (interactionGroup?.size || null)) update.interaction_group_size = interactionGroup?.size || null;
+        if (String(data.interaction_grouping || "") !== String(interactionGroup?.grouping || "")) update.interaction_grouping = interactionGroup?.grouping || "";
         if (Boolean(data.feature_interaction_locked) !== featureInteractionLocked) update.feature_interaction_locked = featureInteractionLocked;
         if (Boolean(data.pair_interaction_locked) !== pairInteractionLocked) update.pair_interaction_locked = pairInteractionLocked;
         if (Object.keys(update).length) row.update(update);
@@ -1542,7 +1656,14 @@ export function createGbmTool({
             pair_interaction_locked: pairInteractionLocked,
           });
         }
-        if (groupingCell) groupingCell.getElement().innerHTML = groupingHtml({ ...data, interaction_locked: interactionLocked });
+        if (groupingCell) {
+          groupingCell.getElement().innerHTML = groupingHtml({
+            ...data,
+            interaction_locked: interactionLocked,
+            interaction_group_size: interactionGroup?.size || null,
+            interaction_grouping: interactionGroup?.grouping || "",
+          });
+        }
       }
       return;
     }
@@ -2231,9 +2352,9 @@ export function createGbmTool({
 
   function featureNameHtml(feature) {
     const lock = feature?.feature_interaction_locked
-      ? `<span class="gbm-interaction-lock gbm-feature-interaction-lock" title="Feature isolated from all other features" aria-label="Feature isolated from all other features">&#128274;</span>`
+      ? `<span class="gbm-interaction-lock gbm-feature-interaction-lock" title="Main effect only — cannot interact with other features" aria-label="Main effect only — cannot interact with other features">&#128274;<sub class="gbm-interaction-lock-subscript">1</sub></span>`
       : feature?.pair_interaction_locked
-        ? `<span class="gbm-interaction-lock gbm-pair-interaction-lock" title="Feature participates in an allowed pair interaction" aria-label="Feature participates in an allowed pair interaction">&#128274;<sub class="gbm-interaction-lock-subscript">2</sub></span>`
+        ? `<span class="gbm-interaction-lock gbm-pair-interaction-lock" title="Feature participates in an allowed pair interaction (2D)" aria-label="Feature participates in an allowed pair interaction (2D)">&#128274;<sub class="gbm-interaction-lock-subscript">2</sub></span>`
       : "";
     return `
       <span class="gbm-feature-name-line">
@@ -2250,8 +2371,11 @@ export function createGbmTool({
   function groupingHtml(feature) {
     const grouping = String(feature?.grouping || "");
     if (!grouping) return "";
-    const lock = feature?.interaction_locked
-      ? `<span class="gbm-interaction-lock" title="Feature interaction constrained" aria-label="Feature interaction constrained">&#128274;</span>`
+    const constrainedGrouping = String(feature?.interaction_grouping || grouping);
+    const groupSize = Number(feature?.interaction_group_size || 0);
+    const groupFeatureNoun = groupSize === 1 ? "feature" : "features";
+    const lock = feature?.interaction_locked && groupSize > 0
+      ? `<span class="gbm-interaction-lock gbm-group-interaction-lock" title="Constrained within ${escapeHtml(constrainedGrouping)} (${groupSize.toLocaleString()} ${groupFeatureNoun})" aria-label="Constrained within ${escapeHtml(constrainedGrouping)} (${groupSize.toLocaleString()} ${groupFeatureNoun})">&#128274;<sub class="gbm-interaction-lock-subscript">${escapeHtml(groupSize)}</sub></span>`
       : "";
     return `<span class="gbm-grouping-value">${escapeHtml(grouping)}${lock}</span>`;
   }
@@ -2420,10 +2544,19 @@ export function createGbmTool({
       button.type = "button";
       button.setAttribute("role", "menuitem");
       button.textContent = action.label;
-      button.addEventListener("click", () => {
-        closeGbmFeatureContextMenu();
-        action.run();
-      });
+      if (action.disabled) {
+        const reason = String(action.disabledReason || "Action unavailable");
+        button.disabled = true;
+        button.setAttribute("aria-disabled", "true");
+        button.setAttribute("aria-label", `${action.label}. ${reason}`);
+        button.title = reason;
+      } else {
+        button.addEventListener("click", (clickEvent) => {
+          clickEvent.stopPropagation();
+          closeGbmFeatureContextMenu();
+          action.run();
+        });
+      }
       menu.append(button);
     }
     menu.hidden = false;
@@ -2433,7 +2566,7 @@ export function createGbmTool({
     const clientX = event.clientX || rowRect.left + 12;
     const clientY = event.clientY || rowRect.top + Math.min(18, Math.max(8, rowRect.height / 2));
     positionGbmFeatureContextMenu(menu, clientX, clientY);
-    menu.querySelector("button")?.focus({ preventScroll: true });
+    menu.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
     window.addEventListener("pointerdown", handleGbmFeatureContextMenuPointerDown, true);
     window.addEventListener("keydown", handleGbmFeatureContextMenuKeydown, true);
     window.addEventListener("resize", closeGbmFeatureContextMenu, true);
@@ -2458,10 +2591,13 @@ export function createGbmTool({
     if (context.ebmDim !== undefined && ![1, 2].includes(dim)) return [];
     if (dim === 2) {
       if (names.length !== 2) return [];
-      const actions = [];
-      if (canAddFeatureInteractionPair(names)) {
-        actions.push({ label: "Allow interaction pair", run: () => addFeatureInteractionPair(names[0], names[1]) });
-      }
+      const conflict = featureInteractionPairConflict(names);
+      const actions = [{
+        label: "Add pair interaction (2D)",
+        run: () => addFeatureInteractionPair(names[0], names[1]),
+        disabled: Boolean(conflict),
+        disabledReason: conflict,
+      }];
       if (featuresHaveSavedShap(names)) {
         actions.push({ label: "Go to SHAP", run: () => goToGbmShap(names) });
       }
@@ -2470,10 +2606,19 @@ export function createGbmTool({
     if (names.length !== 1) return [];
     const featureName = names[0];
     const field = String(context.field || "name");
-    const feature = featureByName(featureName);
+    const feature = currentFeatureRows().find((row) => row.name === featureName) || featureByName(featureName);
     if (field === "grouping") {
+      const checkbox = feature?.grouping
+        ? document.querySelector(`[data-gbm-interaction-grouping="${cssEscape(feature.grouping)}"]`)
+        : null;
+      const reason = checkbox?.disabled ? checkbox.getAttribute("aria-label") || checkbox.closest("label")?.title || "Remove pair interactions first" : "";
       return feature?.grouping && isFeatureSelectable(feature)
-        ? [{ label: "Toggle group interaction constraint", run: () => toggleGroupInteractionConstraint(feature.grouping) }]
+        ? [{
+            label: "Toggle group interaction constraint",
+            run: () => toggleGroupInteractionConstraint(feature.grouping),
+            disabled: Boolean(checkbox?.disabled),
+            disabledReason: reason,
+          }]
         : [];
     }
     if (field === "monotonicity") {
@@ -2492,34 +2637,104 @@ export function createGbmTool({
       navigationActions.push({ label: "Go to Stacked SHAP", run: () => goToGbmStackedShap(featureName) });
     }
     if (!feature || !isFeatureSelectable(feature)) return navigationActions;
+    const featurePairs = currentFeatureInteractionPairs()
+      .filter((pair) => pair.left === featureName || pair.right === featureName);
+    const paired = featurePairs.length > 0;
+    const mainEffectOnly = Boolean(feature.feature_interaction_locked);
+    const mainEffectReason = paired ? "Remove this feature's pair interactions first" : "";
+    const pairReason = featurePairs.length ? "" : featurePairActionConflict(featureName);
+    const pairActions = featurePairs.length
+      ? featurePairs.map((pair) => ({
+          label: `Remove ${pair.left} × ${pair.right} pairwise interaction`,
+          run: () => removeFeatureInteractionPair(pair.left, pair.right),
+        }))
+      : [{
+          label: "Add pair interaction (2D)…",
+          run: () => openFeatureInteractionPairBuilder(featureName),
+          disabled: Boolean(pairReason),
+          disabledReason: pairReason,
+        }];
     return [
-      { label: "Toggle interaction constraint", run: () => toggleFeatureInteractionConstraint(featureName) },
+      {
+        label: mainEffectOnly ? "Remove main-effect-only constraint" : "Constrain to main effect only (1D)",
+        run: () => toggleMainEffectOnlyConstraint(featureName),
+        disabled: !mainEffectOnly && Boolean(mainEffectReason),
+        disabledReason: mainEffectReason,
+      },
+      ...pairActions,
       ...(navigationActions.length ? [{ divider: true }, ...navigationActions] : []),
     ];
   }
 
-  function canAddFeatureInteractionPair(names = []) {
+  function featureInteractionPairConflict(names = []) {
     const pairNames = normaliseContextFeatureNames(names);
-    if (pairNames.length !== 2 || pairNames[0] === pairNames[1]) return false;
-    const candidates = new Set(pairCandidateFeatureRows(currentFeatureRows()).map((feature) => feature.name));
-    return pairNames.every((name) => candidates.has(name));
+    if (pairNames.length !== 2 || pairNames[0] === pairNames[1]) return "Choose two different features";
+    const features = currentFeatureRows();
+    const byName = new Map(features.map((feature) => [feature.name, feature]));
+    const selectedGroupings = new Set(currentFeatureInteractionGroupings());
+    for (const name of pairNames) {
+      const feature = byName.get(name);
+      if (!feature || !isFeaturePairCandidate(feature)) return `${name} is not available for pair interactions`;
+      if (feature.feature_interaction_locked) return `Remove the main-effect-only constraint from ${name} first`;
+      const grouping = String(feature.grouping || "").trim();
+      if (grouping && selectedGroupings.has(grouping)) return `Disable Constraint Group ${grouping} before pairing ${name}`;
+    }
+    const key = featureInteractionPairKey(pairNames[0], pairNames[1]);
+    if (currentFeatureInteractionPairs().some((pair) => featureInteractionPairKey(pair.left, pair.right) === key)) {
+      return "This pair interaction already exists";
+    }
+    return "";
   }
 
-  function toggleFeatureInteractionConstraint(featureName) {
+  function featurePairActionConflict(featureName) {
+    const name = String(featureName || "").trim();
+    const feature = currentFeatureRows().find((row) => row.name === name);
+    if (!feature || !isFeaturePairCandidate(feature)) return "This feature is not available for pair interactions";
+    if (feature.feature_interaction_locked) return "Remove the main-effect-only constraint first";
+    const grouping = String(feature.grouping || "").trim();
+    if (grouping && currentFeatureInteractionGroupings().includes(grouping)) {
+      return `Disable Constraint Group ${grouping} before adding a pair`;
+    }
+    const partners = pairCandidateFeatureRows(currentFeatureRows())
+      .filter((candidate) => candidate.name !== name)
+      .filter((candidate) => !featureInteractionPairConflict([name, candidate.name]));
+    return partners.length ? "" : "No eligible partner features are available";
+  }
+
+  function openFeatureInteractionPairBuilder(featureName) {
+    if (featurePairActionConflict(featureName)) return;
+    featureSetupOpen = true;
+    localStorage.setItem("py_lucidum_gbm_feature_setup_open", "true");
+    syncFeatureSetupPanel();
+    syncFeatureInteractionPairControls(currentFeatureRows(), null, { preferredLeft: featureName });
+    const root = el("gbmFeatureInteractionPairSelect");
+    const button = el("gbmFeatureInteractionPairButton");
+    const menu = el("gbmFeatureInteractionPairMenu");
+    if (!root || !button || !menu) return;
+    closeGbmFeatureToolbarMenus(root);
+    menu.classList.remove("hidden");
+    button.setAttribute("aria-expanded", "true");
+    positionGbmFeatureToolbarMenu(button, menu);
+    requestAnimationFrame(() => el("gbmInteractionPairRight")?.focus());
+  }
+
+  function toggleMainEffectOnlyConstraint(featureName) {
     if (!featureName) return;
     if (featureTable) {
       const row = featureTable.getRows().find((item) => item.getData()?.name === featureName);
       if (!row) return;
       const data = row.getData();
+      if (!data.feature_interaction_locked && currentFeatureInteractionPairFeatureNames().has(featureName)) return;
       row.update({ feature_interaction_locked: !data.feature_interaction_locked }).then(
-        () => syncFeatureInteractionLocks(currentFeatureRows()),
-        () => syncFeatureInteractionLocks(currentFeatureRows())
+        () => syncFeatureInteractionControls(),
+        () => syncFeatureInteractionControls()
       );
       return;
     }
     const row = document.querySelector(`[data-gbm-feature-row][data-gbm-feature-name="${cssEscape(featureName)}"]`);
     if (!row) return;
     const locked = row.dataset.gbmFeatureInteractionLocked !== "true";
+    if (locked && currentFeatureInteractionPairFeatureNames().has(featureName)) return;
     row.dataset.gbmFeatureInteractionLocked = locked ? "true" : "false";
     const feature = { ...(featureByName(featureName) || {}), feature_interaction_locked: locked };
     const featureCell = row.querySelector('[data-gbm-context-field="name"]');
@@ -2531,7 +2746,7 @@ export function createGbmTool({
     const name = String(grouping || "").trim();
     if (!name) return;
     const checkbox = document.querySelector(`[data-gbm-interaction-grouping="${cssEscape(name)}"]`);
-    if (!checkbox) return;
+    if (!checkbox || checkbox.disabled) return;
     clearTrainedInteractionConstraintRows();
     checkbox.checked = !checkbox.checked;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));

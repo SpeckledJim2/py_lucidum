@@ -1096,9 +1096,9 @@ def lightgbm_pair_interaction_constraints(
         seen_groups.add(key)
     if not constraints:
         return []
-    for index in range(len(feature_names)):
-        if index not in constrained_indexes:
-            constraints.append([index])
+    remainder = [index for index in range(len(feature_names)) if index not in constrained_indexes]
+    if remainder:
+        constraints.append(remainder)
     return constraints
 
 

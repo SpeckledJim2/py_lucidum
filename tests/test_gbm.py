@@ -1035,7 +1035,7 @@ COPY (
             ],
         )
 
-    def test_feature_interaction_constraint_groups_allow_singletons_to_override_groups(self) -> None:
+    def test_feature_interaction_constraint_groups_allow_main_effect_only_features_to_override_groups(self) -> None:
         features = [{"name": "Age"}, {"name": "Segment"}, {"name": "VehicleAge"}]
         grouping_map = {"Age": "DRIVER", "Segment": "POSTCODE", "VehicleAge": "VEHICLE"}
 
@@ -1058,7 +1058,7 @@ COPY (
         self.assertEqual(constraints, [[1], [0], [2, 3]])
         self.assertEqual(lightgbm_interaction_constraints(["Age"], [{"grouping": "DRIVER", "features": []}]), [])
 
-    def test_lightgbm_pair_interaction_constraints_add_singleton_main_effects(self) -> None:
+    def test_lightgbm_pair_interaction_constraints_add_remainder_group(self) -> None:
         pairs = [{"left": "Age", "right": "Segment"}, {"left": "Age", "right": "VehicleAge"}]
 
         constraints = lightgbm_pair_interaction_constraints(["Age", "Segment", "VehicleAge", "Ncd"], pairs)
@@ -1073,6 +1073,28 @@ COPY (
         constraints = lightgbm_pair_interaction_constraints(["Age", "Segment", "PostcodeArea", "Region", "VehicleAge"], pairs, groups)
 
         self.assertEqual(constraints, [[0, 1], [2, 3], [4]])
+
+    def test_lightgbm_pair_interaction_constraints_group_uncovered_features_together(self) -> None:
+        pairs = [{"left": "Age", "right": "Segment"}]
+
+        constraints = lightgbm_pair_interaction_constraints(
+            ["Age", "Segment", "VehicleAge", "Ncd", "PostcodeArea"],
+            pairs,
+        )
+
+        self.assertEqual(constraints, [[0, 1], [2, 3, 4]])
+
+    def test_lightgbm_pair_interaction_constraints_keep_main_effect_only_features_separate(self) -> None:
+        pairs = [{"left": "Age", "right": "Segment"}]
+        groups = [{"grouping": "VehicleAge", "features": ["VehicleAge"], "kind": "feature"}]
+
+        constraints = lightgbm_pair_interaction_constraints(
+            ["Age", "Segment", "VehicleAge", "Ncd", "PostcodeArea"],
+            pairs,
+            groups,
+        )
+
+        self.assertEqual(constraints, [[0, 1], [2], [3, 4]])
 
     def test_validate_rejects_unknown_feature_interaction_grouping(self) -> None:
         dataset = Dataset(self.data_path)
@@ -1167,7 +1189,7 @@ COPY (
         self.assertFalse(result.ok)
         self.assertIn("GBM feature interaction grouping DRIVER cannot include paired feature: Age", result.errors)
 
-    def test_validate_allows_disjoint_singleton_with_feature_interaction_pairs(self) -> None:
+    def test_validate_allows_disjoint_main_effect_only_constraint_with_feature_interaction_pairs(self) -> None:
         dataset = Dataset(self.data_path)
         features = [
             {"name": "Age", "include": True, "monotonicity": ""},
@@ -1202,7 +1224,7 @@ COPY (
 
         self.assertTrue(valid.ok, valid.errors)
         self.assertFalse(invalid.ok)
-        self.assertIn("Age cannot be both isolated and used in a GBM feature interaction pair", invalid.errors)
+        self.assertIn("Age cannot be both main-effect-only and used in a GBM feature interaction pair", invalid.errors)
 
     def test_generated_sample_sidecar_is_reused_for_missing_sample_column(self) -> None:
         data_path = self.root / "no_sample.csv"
@@ -3431,7 +3453,10 @@ COPY (
         summary = tree_summary(store, "m1")
         detail = tree_detail(store, "m1", 0)
 
-        self.assertEqual(summary["trees"], [{"tree": 0, "dim": 2, "features": "Segment x Age", "gain": 9}])
+        self.assertEqual(
+            summary["trees"],
+            [{"tree": 0, "dim": 2, "features": "Segment x Age", "gain": 9, "interaction_constraints": []}],
+        )
         self.assertEqual(detail["tree"], 0)
         self.assertEqual(detail["root"]["type"], "split")
         self.assertEqual(detail["root"]["feature"], "Segment")
@@ -3444,6 +3469,75 @@ COPY (
         self.assertEqual(detail["root"]["children"][1]["feature"], "Age")
         self.assertIn("Tree 0", detail["root"]["label"])
         self.assertIn(1.9, detail["values"])
+
+    def test_tree_summary_reports_saved_singleton_constraint(self) -> None:
+        store = self.write_model_artifacts()
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = {"features": ["Segment", "Unused"]}
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+
+        summary = tree_summary(store, "m1")
+
+        self.assertEqual(
+            summary["trees"][0]["interaction_constraints"],
+            [{"type": "singleton", "feature": "Segment"}],
+        )
+
+    def test_tree_summary_reports_every_saved_pair_governing_tree_in_persisted_order(self) -> None:
+        store = self.write_model_artifacts()
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = {
+            "mode": "pairs",
+            "pairs": [
+                {"left": "VehicleAge", "right": "Age"},
+                {"left": "PostcodeArea", "right": "Segment"},
+                {"left": "Age", "right": "VehicleAge"},
+                {"left": "Unused", "right": "Other"},
+            ],
+        }
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+
+        summary = tree_summary(store, "m1")
+
+        self.assertEqual(
+            summary["trees"][0]["interaction_constraints"],
+            [
+                {"type": "pairwise", "left": "VehicleAge", "right": "Age"},
+                {"type": "pairwise", "left": "PostcodeArea", "right": "Segment"},
+            ],
+        )
+
+    def test_tree_summary_reports_saved_group_when_any_member_appears(self) -> None:
+        store = self.write_model_artifacts()
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = {
+            "groups": [
+                {"grouping": "DRIVER", "features": ["Age", "VehicleAge"]},
+                {"grouping": "LOCATION", "features": ["PostcodeArea", "PostcodeSector"]},
+            ]
+        }
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+
+        summary = tree_summary(store, "m1")
+
+        self.assertEqual(
+            summary["trees"][0]["interaction_constraints"],
+            [{"type": "group", "grouping": "DRIVER"}],
+        )
+
+    def test_tree_summary_ignores_malformed_saved_constraints(self) -> None:
+        store = self.write_model_artifacts()
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = {
+            "features": [None, "", "Unused"],
+            "pairs": [None, {"left": "Age", "right": "Age"}, {"left": "", "right": "Segment"}],
+            "groups": [None, {"grouping": "", "features": ["Age"]}, {"grouping": "OLD", "features": "Age"}],
+        }
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+
+        summary = tree_summary(store, "m1")
+
+        self.assertEqual(summary["trees"][0]["interaction_constraints"], [])
 
     def test_tree_detail_formats_numeric_string_thresholds(self) -> None:
         store = self.write_single_split_tree_model(
@@ -3545,6 +3639,7 @@ COPY (
         self.assertEqual(summary_status, 200)
         self.assertEqual(detail_status, 200)
         self.assertEqual(json.loads(summary_body)["trees"][0]["features"], "Segment x Age")
+        self.assertEqual(json.loads(summary_body)["trees"][0]["interaction_constraints"], [])
         self.assertEqual(json.loads(detail_body)["root"]["feature"], "Segment")
 
     def write_gbm_tabulation_artifacts(

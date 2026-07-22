@@ -926,7 +926,7 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
                     errors.append(f"GBM feature interaction grouping {grouping} cannot include paired {noun}: {', '.join(overlapping)}")
         for feature_name in selected_interaction_features:
             if selected_interaction_pairs and feature_name in pair_feature_names:
-                errors.append(f"{feature_name} cannot be both isolated and used in a GBM feature interaction pair")
+                errors.append(f"{feature_name} cannot be both main-effect-only and used in a GBM feature interaction pair")
         selected_feature_names = {feature["name"] for feature in selected_features}
         errors.extend(
             feature_interaction_pair_errors(

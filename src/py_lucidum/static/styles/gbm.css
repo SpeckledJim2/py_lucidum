@@ -1249,15 +1249,41 @@
         color: var(--muted);
       }
 
+      .gbm-interaction-constraint-row.disabled {
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.58;
+      }
+
       .gbm-feature-scenario-row-trained {
         cursor: default;
       }
 
       .gbm-interaction-pair-menu {
-        gap: 5px;
-        max-width: calc(100vw - 32px);
-        min-width: 440px;
-        width: min(620px, calc(100vw - 32px));
+        gap: 7px;
+        max-width: calc(100vw - 16px);
+        min-width: min(440px, calc(100vw - 16px));
+        width: min(620px, calc(100vw - 16px));
+      }
+
+      .gbm-interaction-pair-section {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }
+
+      .gbm-interaction-pair-section-title {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 750;
+        letter-spacing: 0.01em;
+        line-height: 1.2;
+      }
+
+      .gbm-interaction-pair-list-section {
+        border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+        padding-top: 6px;
       }
 
       .gbm-interaction-pair-builder {
@@ -1291,13 +1317,11 @@
       }
 
       .gbm-interaction-pair-rows {
-        border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
         display: flex;
         flex-direction: column;
         gap: 2px;
         max-height: 150px;
         overflow: auto;
-        padding-top: 4px;
       }
 
       .gbm-interaction-pair-row,
@@ -1327,20 +1351,28 @@
 
       .gbm-interaction-pair-remove {
         background: transparent;
-        border: 0;
-        color: var(--muted);
+        border: 1px solid color-mix(in srgb, var(--danger) 48%, var(--line));
+        border-radius: 4px;
+        color: var(--danger);
         cursor: pointer;
         flex: 0 0 auto;
-        font-size: 14px;
-        font-weight: 800;
-        line-height: 18px;
-        padding: 0 4px;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1;
+        min-height: 20px;
+        padding: 3px 7px;
       }
 
       .gbm-interaction-pair-remove:hover,
       .gbm-interaction-pair-remove:focus-visible {
+        background: color-mix(in srgb, var(--danger) 10%, transparent);
+        border-color: var(--danger);
         color: var(--danger);
-        outline: none;
+      }
+
+      .gbm-interaction-pair-remove:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--danger) 65%, white);
+        outline-offset: 1px;
       }
 
       .gbm-grouping-value {
@@ -1670,15 +1702,24 @@
         white-space: nowrap;
       }
 
-      .gbm-feature-interaction-lock {
-        margin-left: 2px;
-      }
-
+      .gbm-feature-interaction-lock,
+      .gbm-group-interaction-lock,
       .gbm-pair-interaction-lock {
         align-items: flex-end;
         display: inline-flex;
         gap: 1px;
+      }
+
+      .gbm-feature-interaction-lock,
+      .gbm-pair-interaction-lock {
         margin-left: 2px;
+      }
+
+      .gbm-feature-context-menu-item:disabled {
+        background: transparent;
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.58;
       }
 
       .gbm-interaction-lock-subscript {
@@ -2074,6 +2115,10 @@
       .gbm-tree-detail-line span {
         color: var(--text);
         font-weight: 700;
+      }
+
+      .gbm-tree-detail-constraint {
+        pointer-events: auto;
       }
 
       .gbm-tree-svg-mount {
@@ -2567,6 +2612,17 @@
         font-size: 12px;
         line-height: 1.35;
         padding: 16px 0;
+      }
+
+      @media (max-width: 520px) {
+        .gbm-interaction-pair-builder {
+          grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        }
+
+        .gbm-interaction-pair-add {
+          grid-column: 1 / -1;
+          justify-self: end;
+        }
       }
 
       @media (max-width: 900px) {
