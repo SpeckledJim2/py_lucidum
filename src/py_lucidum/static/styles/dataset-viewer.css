@@ -8,25 +8,188 @@
       }
 
       .dataset-viewer-toolbar {
+        --dataset-viewer-columns-width: 312px;
+        gap: 0;
         min-width: 0;
+      }
+
+      .dataset-viewer-toolbar-group {
+        align-items: flex-start;
+        align-self: stretch;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        height: var(--app-control-strip-height);
+        justify-content: center;
+        padding: 7px 8px 1px;
+      }
+
+      .dataset-viewer-columns-control {
+        flex: 0 0 var(--dataset-viewer-columns-width);
+        min-width: 180px;
+        padding-inline-start: 0;
+        position: relative;
+      }
+
+      .dataset-viewer-pinned-move-controls {
+        align-items: center;
+        color: var(--muted);
+        display: inline-flex;
+        gap: 2px;
+        height: 16px;
+        inset-block-start: 5.5px;
+        inset-inline-end: 0;
+        max-width: calc(100% - 60px);
+        position: absolute;
+        white-space: nowrap;
+      }
+
+      .dataset-viewer-pinned-move-controls[hidden] {
+        display: none;
+      }
+
+      .dataset-viewer-pinned-move-label {
+        font-size: 11px;
+        font-weight: 400;
+        line-height: 14px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .dataset-viewer-pinned-move-button {
+        align-items: center;
+        border-radius: 3px;
+        display: inline-flex;
+        flex: 0 0 16px;
+        height: 16px;
+        justify-content: center;
+        min-height: 16px;
+        padding: 0;
+        width: 16px;
+      }
+
+      .dataset-viewer-pinned-move-button:disabled,
+      .dataset-viewer-pinned-move-button:disabled:hover,
+      .dataset-viewer-pinned-move-button:disabled:focus-visible {
+        background: transparent;
+        color: var(--muted);
+        cursor: default;
+        opacity: 0.35;
+      }
+
+      .dataset-viewer-pinned-move-chevron {
+        fill: none;
+        height: 12px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.75;
+        width: 12px;
+      }
+
+      .dataset-viewer-pinned-move-controls[data-orientation="vertical"] .dataset-viewer-pinned-move-chevron {
+        transform: rotate(90deg);
+      }
+
+      .dataset-viewer-columns-resizer {
+        align-self: stretch;
+        cursor: col-resize;
+        flex: 0 0 9px;
+        height: var(--app-control-strip-height);
+        outline: 0;
+      }
+
+      .dataset-viewer-columns-resizer.app-resizer--vertical::before {
+        border-radius: 0;
+        bottom: 0;
+        top: 0;
+        width: 1px;
+      }
+
+      .dataset-viewer-columns-resizer.app-resizer--vertical:hover::before,
+      .dataset-viewer-columns-resizer.app-resizer--vertical:focus-visible::before,
+      .dataset-viewer-columns-resizer.app-resizer--vertical.dragging::before {
+        background: var(--accent);
+        width: 3px;
+      }
+
+      body.resizing-dataset-viewer-toolbar,
+      body.resizing-dataset-viewer-toolbar * {
+        cursor: col-resize !important;
+        user-select: none !important;
+      }
+
+      .dataset-viewer-view-control {
+        flex: 0 0 auto;
+      }
+
+      .dataset-viewer-view-control .dataset-viewer-toolbar-label {
+        padding-inline-start: 0;
+      }
+
+      .dataset-viewer-view-divider {
+        align-self: stretch;
+        background: var(--line);
+        flex: 0 0 1px;
+        height: var(--app-control-strip-height);
+      }
+
+      .dataset-viewer-toolbar-label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1;
+        margin: 0 0 5px;
+        padding-inline-start: var(--app-control-button-padding-inline);
       }
 
       .dataset-viewer-search-row {
         align-items: center;
-        display: grid;
-        flex: 0 1 312px;
-        grid-template-columns: minmax(120px, 1fr) 28px;
+        display: block;
+        height: 24px;
         min-width: 180px;
+        position: relative;
+        width: 100%;
       }
 
       .dataset-viewer-search {
-        border-bottom-right-radius: 0;
-        border-top-right-radius: 0;
+        background: transparent;
+        border: 0;
+        border-radius: var(--app-control-button-radius);
+        height: 24px;
+        min-height: 24px;
+        padding: 2px 28px 2px var(--app-control-button-padding-inline);
       }
 
-      .dataset-viewer-search-row .filter-action {
-        border-bottom-left-radius: 0;
-        border-top-left-radius: 0;
+      .dataset-viewer-search:not(:placeholder-shown) {
+        background: var(--sidebar-selected-row-bg);
+      }
+
+      .app input.dataset-viewer-search:placeholder-shown:focus-visible {
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 72%, white) inset !important;
+      }
+
+      .dataset-viewer-search-clear {
+        border-radius: 0;
+        font-size: 15px;
+        height: 24px;
+        inset-block-start: 0;
+        inset-inline-end: 0;
+        line-height: 1;
+        min-height: 24px;
+        padding: 0;
+        position: absolute;
+        width: 24px;
+      }
+
+      .dataset-viewer-search-clear:focus-visible {
+        outline-offset: -2px;
+      }
+
+      .dataset-viewer-search:placeholder-shown + .dataset-viewer-search-clear {
+        pointer-events: none;
+        visibility: hidden;
       }
 
       .dataset-viewer-view-toggles {
@@ -46,8 +209,13 @@
         height: 24px;
         line-height: 1.2;
         min-height: 24px;
-        padding: 2px 6px;
+        padding: 2px var(--app-control-button-padding-inline);
         text-align: center;
+      }
+
+      .dataset-viewer-view-toggles .dataset-viewer-view-toggle:first-child {
+        padding-inline-start: 0;
+        text-align: left;
       }
 
       .dataset-viewer-view-toggles .dataset-viewer-view-toggle::after {
@@ -118,14 +286,15 @@
 
       .dataset-viewer-meta {
         align-items: flex-end;
+        box-sizing: border-box;
         display: flex;
         flex: 1 1 220px;
         flex-direction: column;
         gap: 4px;
         line-height: 1.1;
-        margin-left: auto;
-        max-width: min(440px, 46%);
         min-width: 0;
+        overflow: hidden;
+        padding-inline-start: 8px;
         text-align: right;
       }
 
@@ -472,8 +641,12 @@
           flex-wrap: wrap;
         }
 
-        .dataset-viewer-search-row {
+        .dataset-viewer-columns-control {
           flex: 1 1 100%;
+        }
+
+        .dataset-viewer-columns-resizer {
+          display: none;
         }
 
         .dataset-viewer-summary-meta {
@@ -481,7 +654,6 @@
         }
 
         .dataset-viewer-meta {
-          flex-basis: 100%;
-          max-width: 100%;
+          flex: 1 1 0;
         }
       }

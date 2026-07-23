@@ -1783,23 +1783,34 @@ class BrowserSmokeTests(unittest.TestCase):
                                       return {
                                         alphabetical: rectFor('#datasetViewerAlphabeticalColumns'),
                                         clear: rectFor("#datasetViewerSearchClear"),
+                                        columnsControl: rectFor(".dataset-viewer-columns-control"),
                                         grid: rectFor("#datasetViewerGrid"),
+                                        meta: rectFor("#datasetViewerMeta"),
+                                        resizer: rectFor("#datasetViewerColumnsResizer"),
                                         search: rectFor(".dataset-viewer-search-row"),
                                         searchInput: rectFor("#datasetViewerSearch"),
                                         toolbar: rectFor(".dataset-viewer-toolbar"),
                                         transpose: rectFor('#datasetViewerTranspose'),
+                                        viewControl: rectFor(".dataset-viewer-view-control"),
+                                        viewDivider: rectFor(".dataset-viewer-view-divider"),
                                         geometry: (() => {
                                           const toolbar = document.querySelector(".dataset-viewer-toolbar");
                                           const divider = getComputedStyle(toolbar, "::after");
                                           const style = getComputedStyle(toolbar);
+                                          const clearStyle = getComputedStyle(document.querySelector("#datasetViewerSearchClear"));
+                                          const resizerStyle = getComputedStyle(document.querySelector("#datasetViewerColumnsResizer"));
+                                          const viewStyle = getComputedStyle(document.querySelector(".dataset-viewer-view-control"));
                                           return {
                                             shared: toolbar.classList.contains("app-control-strip")
                                               && toolbar.classList.contains("app-control-strip-row"),
+                                            clearPosition: clearStyle.position,
                                             dividerHeight: divider.height,
                                             dividerLeft: divider.left,
                                             dividerRight: divider.right,
                                             paddingLeft: style.paddingLeft,
                                             paddingRight: style.paddingRight,
+                                            resizerDisplay: resizerStyle.display,
+                                            viewBorderLeft: viewStyle.borderLeftWidth,
                                           };
                                         })(),
                                       };
@@ -1807,26 +1818,64 @@ class BrowserSmokeTests(unittest.TestCase):
                                     """
                                 )
                                 self.assertAlmostEqual(
-                                    dataset_viewer_mobile_toolbar["search"]["width"],
+                                    dataset_viewer_mobile_toolbar["columnsControl"]["width"],
                                     dataset_viewer_mobile_toolbar["toolbar"]["width"] - 16,
                                     delta=0.5,
                                 )
+                                self.assertAlmostEqual(
+                                    dataset_viewer_mobile_toolbar["search"]["width"],
+                                    dataset_viewer_mobile_toolbar["columnsControl"]["width"] - 8,
+                                    delta=0.5,
+                                )
+                                self.assertGreaterEqual(
+                                    dataset_viewer_mobile_toolbar["viewControl"]["top"],
+                                    dataset_viewer_mobile_toolbar["columnsControl"]["bottom"] - 1,
+                                )
                                 self.assertGreaterEqual(
                                     dataset_viewer_mobile_toolbar["transpose"]["top"],
-                                    dataset_viewer_mobile_toolbar["search"]["bottom"] - 1,
+                                    dataset_viewer_mobile_toolbar["viewControl"]["top"],
                                 )
                                 self.assertGreaterEqual(
                                     dataset_viewer_mobile_toolbar["alphabetical"]["top"],
-                                    dataset_viewer_mobile_toolbar["search"]["bottom"] - 1,
+                                    dataset_viewer_mobile_toolbar["viewControl"]["top"],
+                                )
+                                self.assertGreaterEqual(
+                                    dataset_viewer_mobile_toolbar["meta"]["top"],
+                                    dataset_viewer_mobile_toolbar["viewControl"]["top"],
+                                )
+                                self.assertLessEqual(
+                                    dataset_viewer_mobile_toolbar["meta"]["bottom"],
+                                    dataset_viewer_mobile_toolbar["viewControl"]["bottom"],
                                 )
                                 self.assertTrue(dataset_viewer_mobile_toolbar["geometry"]["shared"])
+                                self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["clearPosition"], "absolute")
                                 self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["dividerHeight"], "1px")
                                 self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["dividerLeft"], "0px")
                                 self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["dividerRight"], "0px")
                                 self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["paddingLeft"], "8px")
                                 self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["paddingRight"], "8px")
-                                self.assertEqual(dataset_viewer_mobile_toolbar["searchInput"]["bottom"] - dataset_viewer_mobile_toolbar["searchInput"]["top"], 28)
-                                self.assertEqual(dataset_viewer_mobile_toolbar["clear"]["bottom"] - dataset_viewer_mobile_toolbar["clear"]["top"], 28)
+                                self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["resizerDisplay"], "none")
+                                self.assertEqual(dataset_viewer_mobile_toolbar["geometry"]["viewBorderLeft"], "0px")
+                                self.assertEqual(dataset_viewer_mobile_toolbar["resizer"]["width"], 0)
+                                self.assertAlmostEqual(
+                                    dataset_viewer_mobile_toolbar["viewDivider"]["left"],
+                                    dataset_viewer_mobile_toolbar["viewControl"]["left"]
+                                    + dataset_viewer_mobile_toolbar["viewControl"]["width"],
+                                    delta=0.5,
+                                )
+                                self.assertAlmostEqual(dataset_viewer_mobile_toolbar["viewDivider"]["width"], 1, delta=0.5)
+                                self.assertGreaterEqual(
+                                    dataset_viewer_mobile_toolbar["meta"]["left"],
+                                    dataset_viewer_mobile_toolbar["viewDivider"]["left"]
+                                    + dataset_viewer_mobile_toolbar["viewDivider"]["width"],
+                                )
+                                self.assertEqual(
+                                    dataset_viewer_mobile_toolbar["toolbar"]["bottom"]
+                                    - dataset_viewer_mobile_toolbar["toolbar"]["top"],
+                                    100,
+                                )
+                                self.assertEqual(dataset_viewer_mobile_toolbar["searchInput"]["bottom"] - dataset_viewer_mobile_toolbar["searchInput"]["top"], 24)
+                                self.assertEqual(dataset_viewer_mobile_toolbar["clear"]["bottom"] - dataset_viewer_mobile_toolbar["clear"]["top"], 24)
                                 self.assertAlmostEqual(
                                     dataset_viewer_mobile_toolbar["grid"]["top"],
                                     dataset_viewer_mobile_toolbar["toolbar"]["bottom"],
@@ -8249,6 +8298,22 @@ COPY (
                         """,
                         timeout=10_000,
                     )
+                    page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .dataset-viewer-header-label').click()
+                    page.locator("#datasetViewerPinnedMovePrevious").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                            .filter((cell) => cell.offsetParent !== null)
+                            .map((cell) => cell.getAttribute('tabulator-field'))
+                            .filter(Boolean);
+                          return headers.slice(0, 2).join(",") === "c0,c4"
+                            && document.querySelector("#datasetViewerCount")?.textContent.includes("vehicle_age, postcode pinned")
+                            && document.querySelector('#datasetViewerGrid .dataset-viewer-column-selected[tabulator-field="c0"]');
+                        }
+                        """,
+                        timeout=10_000,
+                    )
                     page.locator("#datasetViewerSearch").fill("price, post")
                     page.wait_for_function(
                         """
@@ -8257,7 +8322,7 @@ COPY (
                             .filter((cell) => cell.offsetParent !== null)
                             .map((cell) => cell.getAttribute('tabulator-field'))
                             .filter(Boolean);
-                          return headers.join(",") === "c4,c0,c2";
+                          return headers.join(",") === "c0,c4,c2";
                         }
                         """,
                         timeout=10_000,
@@ -8281,7 +8346,7 @@ COPY (
                             const cell = row.querySelector('.tabulator-cell[tabulator-field="__field"]');
                             return (cell?.querySelector('.dataset-viewer-pinned-field-text') || cell)?.textContent.trim();
                           }).filter(Boolean);
-                          return names.slice(0, 3).join(",") === "postcode,vehicle_age,price";
+                          return names.slice(0, 3).join(",") === "vehicle_age,postcode,price";
                         }
                         """,
                         timeout=10_000,
@@ -8329,7 +8394,7 @@ COPY (
                     self.assertTrue(dataset_view["transpose"])
                     self.assertTrue(dataset_view["alphabeticalColumns"])
                     self.assertEqual(dataset_view["selectColumns"], "price, post")
-                    self.assertEqual(dataset_view["pinnedColumns"], ["postcode", "vehicle_age"])
+                    self.assertEqual(dataset_view["pinnedColumns"], ["vehicle_age", "postcode"])
                     self.assertGreaterEqual(dataset_view["columnWidths"]["normal"]["price"], normal_width["after"] - 2)
                     self.assertGreaterEqual(dataset_view["columnWidths"]["transposed"]["__field"], transposed_width["after"] - 2)
                     self.assertEqual(dataset_view["sort"]["normal"], [{"column": "price", "dir": "desc"}])
@@ -8378,7 +8443,7 @@ COPY (
                             && document.querySelector("#datasetViewerTranspose")?.getAttribute("aria-pressed") === "true"
                             && document.querySelector("#datasetViewerAlphabeticalColumns")?.getAttribute("aria-pressed") === "true"
                             && document.querySelector('#datasetViewerGrid .tabulator-col[tabulator-field="__field"] .dataset-viewer-transposed-sort-button')?.dataset.sortDir === "asc"
-                            && names.slice(0, 3).join(",") === "postcode,vehicle_age,price";
+                            && names.slice(0, 3).join(",") === "vehicle_age,postcode,price";
                         }
                         """,
                         timeout=10_000,
@@ -8396,6 +8461,47 @@ COPY (
                           return favourite?.classList.contains("active")
                             && favourite.getAttribute("aria-selected") === "true"
                             && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "Dataset favourite";
+                        }
+                        """,
+                        arg=[dataset_favourite_id],
+                        timeout=10_000,
+                    )
+                    page.locator(
+                        '#datasetViewerGrid .tabulator-row[data-dataset-viewer-column-field="c0"]'
+                    ).click()
+                    page.locator("#datasetViewerPinnedMoveNext").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                          const names = [...grid?.querySelectorAll('.tabulator-row') || []]
+                            .filter((row) => row.offsetParent !== null)
+                            .map((row) => {
+                              const cell = row.querySelector('.tabulator-cell[tabulator-field="__field"]');
+                              return (cell?.querySelector('.dataset-viewer-pinned-field-text') || cell)?.textContent.trim();
+                            })
+                            .filter(Boolean);
+                          return names.slice(0, 3).join(",") === "postcode,vehicle_age,price"
+                            && !document.querySelector(".saved-favourite-option.active")
+                            && document.querySelector("#favouritesSelectedMeta")?.textContent.trim() === "";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator(f'.saved-favourite-option[data-favourite-id="{dataset_favourite_id}"]').click()
+                    page.wait_for_function(
+                        """
+                        ([id]) => {
+                          const grid = document.querySelector('#datasetViewerGrid.dataset-viewer-grid-transposed');
+                          const names = [...grid?.querySelectorAll('.tabulator-row') || []]
+                            .filter((row) => row.offsetParent !== null)
+                            .map((row) => {
+                              const cell = row.querySelector('.tabulator-cell[tabulator-field="__field"]');
+                              return (cell?.querySelector('.dataset-viewer-pinned-field-text') || cell)?.textContent.trim();
+                            })
+                            .filter(Boolean);
+                          return document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
+                            && names.slice(0, 3).join(",") === "vehicle_age,postcode,price";
                         }
                         """,
                         arg=[dataset_favourite_id],
@@ -8436,7 +8542,7 @@ COPY (
                             .filter(Boolean);
                           const priceWidth = grid?.querySelector('.tabulator-col[tabulator-field="c2"]')?.getBoundingClientRect().width || 0;
                           const firstPrice = grid?.querySelector('.tabulator-row .tabulator-cell[tabulator-field="c2"]')?.textContent.trim();
-                          return headers.slice(0, 3).join(",") === "c4,c0,c2" && priceWidth > 0 && firstPrice === "400";
+                          return headers.slice(0, 3).join(",") === "c0,c4,c2" && priceWidth > 0 && firstPrice === "400";
                         }
                         """,
                         timeout=10_000,
@@ -15089,6 +15195,36 @@ COPY (
                 self.assertLessEqual(layout["clearRight"], layout["textLeft"] + 1)
                 self.assertGreater(layout["textRight"], layout["textLeft"])
 
+            def assert_inactive_filter_right_alignment(
+                filter_selector: str,
+                text_selector: str,
+                meta_selector: str,
+            ) -> None:
+                layout = page.evaluate(
+                    """
+                    ({ filterSelector, textSelector, metaSelector }) => {
+                      const filter = document.querySelector(filterSelector)?.getBoundingClientRect();
+                      const text = document.querySelector(textSelector)?.getBoundingClientRect();
+                      const meta = document.querySelector(metaSelector)?.getBoundingClientRect();
+                      return filter && text && meta
+                        ? {
+                            filterRight: filter.right,
+                            textRight: text.right,
+                            metaRight: meta.right,
+                          }
+                        : null;
+                    }
+                    """,
+                    arg={
+                        "filterSelector": filter_selector,
+                        "textSelector": text_selector,
+                        "metaSelector": meta_selector,
+                    },
+                )
+                self.assertIsNotNone(layout)
+                self.assertAlmostEqual(layout["filterRight"], layout["metaRight"], delta=0.5)
+                self.assertAlmostEqual(layout["textRight"], layout["metaRight"], delta=0.5)
+
             def unit_point_alpha_pixels() -> int:
                 return page.evaluate(
                     """
@@ -15369,6 +15505,12 @@ COPY (
                       const sidebarResizer = document.querySelector("#sidebarResizer");
                       const search = document.querySelector("#datasetViewerSearch");
                       const clear = document.querySelector("#datasetViewerSearchClear");
+                      const searchRow = toolbar.querySelector(".dataset-viewer-search-row");
+                      const columnsControl = toolbar.querySelector(".dataset-viewer-columns-control");
+                      const columnsResizer = document.querySelector("#datasetViewerColumnsResizer");
+                      const viewControl = toolbar.querySelector(".dataset-viewer-view-control");
+                      const viewDivider = toolbar.querySelector(".dataset-viewer-view-divider");
+                      const toolbarLabels = [...toolbar.querySelectorAll(".dataset-viewer-toolbar-label")];
                       const meta = document.querySelector("#datasetViewerMeta");
                       const viewToggleGroup = toolbar.querySelector(".dataset-viewer-view-toggles");
                       const viewToggles = [...toolbar.querySelectorAll(".dataset-viewer-view-toggle")];
@@ -15382,11 +15524,26 @@ COPY (
                       const sidebarResizerRect = sidebarResizer.getBoundingClientRect();
                       const searchRect = search.getBoundingClientRect();
                       const clearRect = clear.getBoundingClientRect();
+                      const searchRowRect = searchRow.getBoundingClientRect();
+                      const columnsRect = columnsControl.getBoundingClientRect();
+                      const columnsResizerRect = columnsResizer.getBoundingClientRect();
+                      const viewRect = viewControl.getBoundingClientRect();
+                      const viewDividerRect = viewDivider.getBoundingClientRect();
                       const metaRect = meta.getBoundingClientRect();
+                      const viewLabelRange = document.createRange();
+                      viewLabelRange.selectNodeContents(toolbarLabels[1].firstChild);
+                      const transposeRange = document.createRange();
+                      transposeRange.selectNodeContents(viewToggles[0].firstChild);
                       const toolbarStyle = getComputedStyle(toolbar);
                       const divider = getComputedStyle(toolbar, "::after");
                       const gridStyle = getComputedStyle(grid);
                       const headerStyle = getComputedStyle(header);
+                      const searchStyle = getComputedStyle(search);
+                      const clearStyle = getComputedStyle(clear);
+                      const searchRowStyle = getComputedStyle(searchRow);
+                      const columnsResizerStyle = getComputedStyle(columnsResizer);
+                      const viewControlStyle = getComputedStyle(viewControl);
+                      const metaStyle = getComputedStyle(meta);
                       return {
                         toolbarShared: toolbar.classList.contains("app-control-strip")
                           && toolbar.classList.contains("app-control-strip-row"),
@@ -15423,18 +15580,72 @@ COPY (
                         wrapGaps: [wrapRect.left - mainRect.left, mainRect.right - wrapRect.right],
                         searchShared: search.classList.contains("app-control-input"),
                         clearShared: clear.classList.contains("app-control-button"),
+                        clearCommand: clear.classList.contains("app-command-button"),
                         searchHeight: searchRect.height,
                         clearHeight: clearRect.height,
-                        searchCenterDelta: Math.abs(
-                          (searchRect.top + searchRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)
+                        searchRowHeight: searchRowRect.height,
+                        searchClearTopDelta: Math.abs(searchRect.top - clearRect.top),
+                        searchClearRightDelta: Math.abs(searchRect.right - clearRect.right),
+                        searchBackground: searchStyle.backgroundColor,
+                        searchBorders: [
+                          searchStyle.borderTopWidth,
+                          searchStyle.borderRightWidth,
+                          searchStyle.borderBottomWidth,
+                          searchStyle.borderLeftWidth,
+                        ],
+                        searchLabelledBy: search.getAttribute("aria-labelledby"),
+                        searchRowBorderBottomWidth: searchRowStyle.borderBottomWidth,
+                        clearBorders: [
+                          clearStyle.borderTopWidth,
+                          clearStyle.borderRightWidth,
+                          clearStyle.borderBottomWidth,
+                          clearStyle.borderLeftWidth,
+                        ],
+                        clearPosition: clearStyle.position,
+                        clearVisibility: clearStyle.visibility,
+                        clearPointerEvents: clearStyle.pointerEvents,
+                        controlGroupHeights: [
+                          columnsRect.height,
+                          viewRect.height,
+                        ],
+                        columnsWidth: columnsRect.width,
+                        columnsResizerWidth: columnsResizerRect.width,
+                        columnsResizerHeight: columnsResizerRect.height,
+                        columnsResizerCursor: columnsResizerStyle.cursor,
+                        columnsResizerRole: columnsResizer.getAttribute("role"),
+                        columnsResizerOrientation: columnsResizer.getAttribute("aria-orientation"),
+                        columnsResizerLabel: columnsResizer.getAttribute("aria-label"),
+                        columnsResizerTabIndex: columnsResizer.getAttribute("tabindex"),
+                        columnsResizerAria: {
+                          min: columnsResizer.getAttribute("aria-valuemin"),
+                          max: columnsResizer.getAttribute("aria-valuemax"),
+                          now: columnsResizer.getAttribute("aria-valuenow"),
+                        },
+                        viewControlBorderLeft: viewControlStyle.borderLeftWidth,
+                        viewWidth: viewRect.width,
+                        viewDividerWidth: viewDividerRect.width,
+                        viewDividerHeight: viewDividerRect.height,
+                        viewDividerLeftDelta: Math.abs(viewDividerRect.left - viewRect.right),
+                        metaLeftDelta: Math.abs(metaRect.left - viewDividerRect.right),
+                        metaOverflow: metaStyle.overflow,
+                        viewLabelTextLeft: viewLabelRange.getBoundingClientRect().left,
+                        transposeTextLeft: transposeRange.getBoundingClientRect().left,
+                        viewTransposeTextLeftDelta: Math.abs(
+                          viewLabelRange.getBoundingClientRect().left - transposeRange.getBoundingClientRect().left
                         ),
-                        clearCenterDelta: Math.abs(
-                          (clearRect.top + clearRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)
-                        ),
+                        toolbarLabels: toolbarLabels.map((label) => {
+                          const style = getComputedStyle(label);
+                          return {
+                            text: label.textContent.trim(),
+                            color: style.color,
+                            fontSize: style.fontSize,
+                            fontWeight: style.fontWeight,
+                          };
+                        }),
                         viewToggleHeights: viewToggles.map((toggle) => toggle.getBoundingClientRect().height),
-                        viewToggleCenterDeltas: viewToggles.map((toggle) => {
+                        viewToggleTopDeltas: viewToggles.map((toggle) => {
                           const rect = toggle.getBoundingClientRect();
-                          return Math.abs((rect.top + rect.height / 2) - (toolbarRect.top + toolbarRect.height / 2));
+                          return Math.abs(rect.top - searchRect.top);
                         }),
                         viewToggleGroupRole: viewToggleGroup.getAttribute("role"),
                         viewToggleGroupLabel: viewToggleGroup.getAttribute("aria-label"),
@@ -15442,8 +15653,10 @@ COPY (
                         viewToggleStyles: viewToggles.map((toggle) => {
                           const style = getComputedStyle(toggle);
                           return {
+                            ariaLabel: toggle.getAttribute("aria-label"),
                             label: toggle.textContent.trim(),
                             stableLabel: toggle.getAttribute("data-stable-label"),
+                            title: toggle.getAttribute("title"),
                             pressed: toggle.getAttribute("aria-pressed"),
                             active: toggle.classList.contains("active"),
                             background: style.backgroundColor,
@@ -15485,23 +15698,73 @@ COPY (
                 self.assertTrue(all(abs(gap) <= 0.5 for gap in dataset_viewer_geometry["wrapGaps"]))
                 self.assertTrue(dataset_viewer_geometry["searchShared"])
                 self.assertTrue(dataset_viewer_geometry["clearShared"])
-                self.assertEqual(dataset_viewer_geometry["searchHeight"], 28)
-                self.assertEqual(dataset_viewer_geometry["clearHeight"], 28)
-                self.assertLessEqual(dataset_viewer_geometry["searchCenterDelta"], 0.5)
-                self.assertLessEqual(dataset_viewer_geometry["clearCenterDelta"], 0.5)
+                self.assertTrue(dataset_viewer_geometry["clearCommand"])
+                self.assertEqual(dataset_viewer_geometry["searchHeight"], 24)
+                self.assertEqual(dataset_viewer_geometry["clearHeight"], 24)
+                self.assertEqual(dataset_viewer_geometry["searchRowHeight"], 24)
+                self.assertLessEqual(dataset_viewer_geometry["searchClearTopDelta"], 0.5)
+                self.assertLessEqual(dataset_viewer_geometry["searchClearRightDelta"], 0.5)
+                self.assertEqual(dataset_viewer_geometry["searchBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(set(dataset_viewer_geometry["searchBorders"]), {"0px"})
+                self.assertEqual(dataset_viewer_geometry["searchLabelledBy"], "datasetViewerColumnsLabel")
+                self.assertEqual(dataset_viewer_geometry["searchRowBorderBottomWidth"], "0px")
+                self.assertEqual(set(dataset_viewer_geometry["clearBorders"]), {"0px"})
+                self.assertEqual(dataset_viewer_geometry["clearPosition"], "absolute")
+                self.assertEqual(dataset_viewer_geometry["clearVisibility"], "hidden")
+                self.assertEqual(dataset_viewer_geometry["clearPointerEvents"], "none")
+                self.assertEqual(set(dataset_viewer_geometry["controlGroupHeights"]), {50})
+                self.assertAlmostEqual(dataset_viewer_geometry["columnsWidth"], 312, delta=0.5)
+                self.assertAlmostEqual(dataset_viewer_geometry["columnsResizerWidth"], 9, delta=0.5)
+                self.assertAlmostEqual(dataset_viewer_geometry["columnsResizerHeight"], 50, delta=0.5)
+                self.assertEqual(dataset_viewer_geometry["columnsResizerCursor"], "col-resize")
+                self.assertEqual(dataset_viewer_geometry["columnsResizerRole"], "separator")
+                self.assertEqual(dataset_viewer_geometry["columnsResizerOrientation"], "vertical")
+                self.assertEqual(
+                    dataset_viewer_geometry["columnsResizerLabel"],
+                    "Resize Dataset Viewer Columns controls",
+                )
+                self.assertEqual(dataset_viewer_geometry["columnsResizerTabIndex"], "0")
+                self.assertEqual(dataset_viewer_geometry["columnsResizerAria"]["min"], "180")
+                self.assertEqual(dataset_viewer_geometry["columnsResizerAria"]["now"], "312")
+                self.assertGreater(
+                    int(dataset_viewer_geometry["columnsResizerAria"]["max"]),
+                    int(dataset_viewer_geometry["columnsResizerAria"]["now"]),
+                )
+                self.assertEqual(dataset_viewer_geometry["viewControlBorderLeft"], "0px")
+                self.assertAlmostEqual(dataset_viewer_geometry["viewDividerWidth"], 1, delta=0.5)
+                self.assertAlmostEqual(dataset_viewer_geometry["viewDividerHeight"], 50, delta=0.5)
+                self.assertLessEqual(dataset_viewer_geometry["viewDividerLeftDelta"], 0.5)
+                self.assertLessEqual(dataset_viewer_geometry["metaLeftDelta"], 0.5)
+                self.assertEqual(dataset_viewer_geometry["metaOverflow"], "hidden")
+                self.assertAlmostEqual(
+                    dataset_viewer_geometry["viewLabelTextLeft"],
+                    dataset_viewer_geometry["transposeTextLeft"],
+                    delta=0.5,
+                )
+                self.assertEqual(
+                    [label["text"] for label in dataset_viewer_geometry["toolbarLabels"]],
+                    ["Columns", "View"],
+                )
+                self.assertTrue(
+                    all(label["color"] == dataset_viewer_geometry["muted"] for label in dataset_viewer_geometry["toolbarLabels"])
+                )
+                self.assertTrue(all(label["fontSize"] == "11px" for label in dataset_viewer_geometry["toolbarLabels"]))
+                self.assertTrue(all(label["fontWeight"] == "600" for label in dataset_viewer_geometry["toolbarLabels"]))
                 self.assertEqual(set(dataset_viewer_geometry["viewToggleHeights"]), {24})
-                self.assertTrue(all(delta <= 0.5 for delta in dataset_viewer_geometry["viewToggleCenterDeltas"]))
+                self.assertTrue(all(delta <= 0.5 for delta in dataset_viewer_geometry["viewToggleTopDeltas"]))
                 self.assertEqual(dataset_viewer_geometry["viewToggleGroupRole"], "group")
                 self.assertEqual(dataset_viewer_geometry["viewToggleGroupLabel"], "Dataset view options")
                 self.assertEqual(dataset_viewer_geometry["viewToggleGroupGap"], "3px")
                 self.assertEqual(
                     [toggle["label"] for toggle in dataset_viewer_geometry["viewToggleStyles"]],
-                    ["Transpose", "Alphabetical columns"],
+                    ["Transpose", "A-Z"],
                 )
                 self.assertEqual(
                     [toggle["stableLabel"] for toggle in dataset_viewer_geometry["viewToggleStyles"]],
-                    ["Transpose", "Alphabetical columns"],
+                    ["Transpose", "A-Z"],
                 )
+                self.assertEqual(dataset_viewer_geometry["viewToggleStyles"][1]["ariaLabel"], "Alphabetical columns")
+                self.assertEqual(dataset_viewer_geometry["viewToggleStyles"][1]["title"], "Alphabetical columns")
                 self.assertTrue(all(toggle["pressed"] == "false" for toggle in dataset_viewer_geometry["viewToggleStyles"]))
                 self.assertTrue(all(not toggle["active"] for toggle in dataset_viewer_geometry["viewToggleStyles"]))
                 self.assertTrue(all(toggle["background"] == "rgba(0, 0, 0, 0)" for toggle in dataset_viewer_geometry["viewToggleStyles"]))
@@ -15514,6 +15777,135 @@ COPY (
                 )
                 self.assertTrue(dataset_viewer_geometry["metaInToolbar"])
                 self.assertLessEqual(dataset_viewer_geometry["metaCenterDelta"], 0.5)
+                page.locator("#datasetViewerSearch").focus()
+                focused_dataset_viewer_search = page.evaluate(
+                    """
+                    () => {
+                      const inputStyle = getComputedStyle(document.querySelector("#datasetViewerSearch"));
+                      const rowStyle = getComputedStyle(document.querySelector(".dataset-viewer-search-row"));
+                      return {
+                        background: inputStyle.backgroundColor,
+                        boxShadow: inputStyle.boxShadow,
+                        rowBorderBottomWidth: rowStyle.borderBottomWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(focused_dataset_viewer_search["background"], "rgba(0, 0, 0, 0)")
+                self.assertNotEqual(focused_dataset_viewer_search["boxShadow"], "none")
+                self.assertEqual(focused_dataset_viewer_search["rowBorderBottomWidth"], "0px")
+                page.locator("#datasetViewerSearch").evaluate("node => node.blur()")
+
+                def dataset_viewer_section_layout() -> dict[str, object]:
+                    return page.evaluate(
+                        """
+                        () => {
+                          const rectFor = (selector) => {
+                            const rect = document.querySelector(selector).getBoundingClientRect();
+                            return {
+                              bottom: rect.bottom,
+                              left: rect.left,
+                              right: rect.right,
+                              top: rect.top,
+                              width: rect.width,
+                            };
+                          };
+                          const resizer = document.querySelector("#datasetViewerColumnsResizer");
+                          return {
+                            columns: rectFor(".dataset-viewer-columns-control"),
+                            resizer: rectFor("#datasetViewerColumnsResizer"),
+                            view: rectFor(".dataset-viewer-view-control"),
+                            viewDivider: rectFor(".dataset-viewer-view-divider"),
+                            meta: rectFor("#datasetViewerMeta"),
+                            ariaMin: Number(resizer.getAttribute("aria-valuemin")),
+                            ariaMax: Number(resizer.getAttribute("aria-valuemax")),
+                            ariaNow: Number(resizer.getAttribute("aria-valuenow")),
+                            dragging: resizer.classList.contains("dragging"),
+                          };
+                        }
+                        """
+                    )
+
+                def assert_dataset_viewer_section_shift(
+                    before: dict[str, object],
+                    after: dict[str, object],
+                    shift: float,
+                ) -> None:
+                    self.assertAlmostEqual(after["columns"]["width"], before["columns"]["width"] + shift, delta=1)
+                    for section in ("resizer", "view", "viewDivider"):
+                        self.assertAlmostEqual(after[section]["left"], before[section]["left"] + shift, delta=1)
+                    self.assertAlmostEqual(after["view"]["width"], before["view"]["width"], delta=0.5)
+                    self.assertAlmostEqual(after["meta"]["left"], before["meta"]["left"] + shift, delta=1)
+                    self.assertAlmostEqual(after["meta"]["right"], before["meta"]["right"], delta=0.5)
+
+                resize_requests_before = dataset_viewer_requests
+                dataset_viewer_resize_before = dataset_viewer_section_layout()
+                page.locator("#datasetViewerColumnsResizer").focus()
+                page.keyboard.press("ArrowRight")
+                dataset_viewer_resize_keyboard = dataset_viewer_section_layout()
+                assert_dataset_viewer_section_shift(
+                    dataset_viewer_resize_before,
+                    dataset_viewer_resize_keyboard,
+                    24,
+                )
+                self.assertEqual(
+                    dataset_viewer_resize_keyboard["ariaNow"],
+                    round(dataset_viewer_resize_keyboard["columns"]["width"]),
+                )
+
+                resizer_box = page.locator("#datasetViewerColumnsResizer").bounding_box()
+                self.assertIsNotNone(resizer_box)
+                page.mouse.move(
+                    resizer_box["x"] + resizer_box["width"] / 2,
+                    resizer_box["y"] + resizer_box["height"] / 2,
+                )
+                page.mouse.down()
+                page.mouse.move(
+                    resizer_box["x"] + resizer_box["width"] / 2 + 36,
+                    resizer_box["y"] + resizer_box["height"] / 2,
+                    steps=3,
+                )
+                page.mouse.up()
+                dataset_viewer_resize_pointer = dataset_viewer_section_layout()
+                assert_dataset_viewer_section_shift(
+                    dataset_viewer_resize_keyboard,
+                    dataset_viewer_resize_pointer,
+                    36,
+                )
+                self.assertFalse(dataset_viewer_resize_pointer["dragging"])
+
+                page.locator("#datasetViewerColumnsResizer").focus()
+                page.keyboard.press("End")
+                dataset_viewer_resize_max = dataset_viewer_section_layout()
+                self.assertAlmostEqual(
+                    dataset_viewer_resize_max["columns"]["width"],
+                    dataset_viewer_resize_max["ariaMax"],
+                    delta=1,
+                )
+                page.keyboard.press("Home")
+                dataset_viewer_resize_min = dataset_viewer_section_layout()
+                self.assertAlmostEqual(
+                    dataset_viewer_resize_min["columns"]["width"],
+                    dataset_viewer_resize_min["ariaMin"],
+                    delta=0.5,
+                )
+                self.assertAlmostEqual(
+                    dataset_viewer_resize_min["view"]["width"],
+                    dataset_viewer_resize_before["view"]["width"],
+                    delta=0.5,
+                )
+
+                page.locator("#lineBarTool").click()
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#datasetViewerTool").click()
+                page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                dataset_viewer_resize_restored = dataset_viewer_section_layout()
+                self.assertAlmostEqual(
+                    dataset_viewer_resize_restored["columns"]["width"],
+                    dataset_viewer_resize_min["columns"]["width"],
+                    delta=0.5,
+                )
+                self.assertEqual(dataset_viewer_requests, resize_requests_before)
 
                 def dataset_viewer_toggle_layout() -> dict[str, object]:
                     return page.evaluate(
@@ -15536,10 +15928,15 @@ COPY (
                             document.querySelector("#datasetViewerTranspose"),
                             document.querySelector("#datasetViewerAlphabeticalColumns"),
                           ];
+                          const viewLabelRange = document.createRange();
+                          viewLabelRange.selectNodeContents(
+                            document.querySelector(".dataset-viewer-view-control .dataset-viewer-toolbar-label").firstChild
+                          );
                           return {
                             rects,
                             scrollWidth: toolbar.scrollWidth,
                             clientWidth: toolbar.clientWidth,
+                            viewLabelTextLeft: viewLabelRange.getBoundingClientRect().left,
                             buttons: buttons.map((button) => {
                               const style = getComputedStyle(button);
                               const range = document.createRange();
@@ -15551,6 +15948,7 @@ COPY (
                                 active: button.classList.contains("active"),
                                 color: style.color,
                                 fontWeight: style.fontWeight,
+                                textLeft: textRect.left,
                                 textCenterDelta: Math.abs(
                                   (textRect.left + textRect.width / 2) - (buttonRect.left + buttonRect.width / 2)
                                 ),
@@ -15592,7 +15990,17 @@ COPY (
                 self.assertTrue(
                     all(button["color"] == dataset_viewer_geometry["accent"] for button in dataset_toggle_layout_active["buttons"])
                 )
-                self.assertTrue(all(button["textCenterDelta"] <= 0.5 for button in dataset_toggle_layout_active["buttons"]))
+                self.assertAlmostEqual(
+                    dataset_toggle_layout_active["buttons"][0]["textLeft"],
+                    dataset_toggle_layout_active["viewLabelTextLeft"],
+                    delta=0.5,
+                )
+                self.assertAlmostEqual(
+                    dataset_toggle_layout_active["buttons"][0]["textLeft"],
+                    dataset_toggle_layout_before["buttons"][0]["textLeft"],
+                    delta=0.5,
+                )
+                self.assertLessEqual(dataset_toggle_layout_active["buttons"][1]["textCenterDelta"], 0.5)
 
                 page.locator("#datasetViewerTranspose").focus()
                 page.keyboard.press("Enter")
@@ -15618,8 +16026,8 @@ COPY (
                 page.wait_for_function(
                     """
                     () => document.querySelector(".dataset-viewer-toolbar")?.getBoundingClientRect().height === 58
-                      && document.querySelector("#datasetViewerSearch")?.getBoundingClientRect().height === 28
-                      && document.querySelector("#datasetViewerSearchClear")?.getBoundingClientRect().height === 28
+                      && document.querySelector("#datasetViewerSearch")?.getBoundingClientRect().height === 24
+                      && document.querySelector("#datasetViewerSearchClear")?.getBoundingClientRect().height === 24
                     """,
                     timeout=10_000,
                 )
@@ -15651,6 +16059,11 @@ COPY (
                 )
                 assert_filter_label_badge("#datasetViewerFilter", "dataset-viewer-filter--applied", False)
                 assert_filter_badge_clear("#datasetViewerFilterClearBtn", "#datasetViewerFilterText", False)
+                assert_inactive_filter_right_alignment(
+                    "#datasetViewerFilter",
+                    "#datasetViewerFilterText",
+                    "#datasetViewerGroupMeta",
+                )
                 self.assertFalse(page.locator("#filterRowMeta").evaluate('node => node.classList.contains("filter-row-meta--applied")'))
                 self.assertEqual(page.locator("#collapsedSidebarVersion").inner_text().strip(), f"v{__version__}")
                 self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
@@ -15686,6 +16099,58 @@ COPY (
                 assert_filter_label_badge("#filterRowMeta", "filter-row-meta--applied", True)
                 assert_filter_badge_clear("#datasetViewerFilterClearBtn", "#datasetViewerFilterText", True)
                 assert_filter_badge_clear("#filterRowClearBtn", "#filterRowMetaText", True)
+                long_dataset_viewer_filter_layout = page.evaluate(
+                    """
+                    () => {
+                      const filter = document.querySelector("#datasetViewerFilter");
+                      const text = document.querySelector("#datasetViewerFilterText");
+                      const clear = document.querySelector("#datasetViewerFilterClearBtn");
+                      const divider = document.querySelector(".dataset-viewer-view-divider");
+                      const meta = document.querySelector("#datasetViewerMeta");
+                      const original = text.textContent;
+                      text.textContent = "vehicle_age >= 3 AND ".repeat(80);
+                      const filterRect = filter.getBoundingClientRect();
+                      const textRect = text.getBoundingClientRect();
+                      const clearRect = clear.getBoundingClientRect();
+                      const dividerRect = divider.getBoundingClientRect();
+                      const metaRect = meta.getBoundingClientRect();
+                      const result = {
+                        clearHidden: clear.hidden,
+                        clearRight: clearRect.right,
+                        dividerRight: dividerRect.right,
+                        filterLeft: filterRect.left,
+                        filterRight: filterRect.right,
+                        metaRight: metaRect.right,
+                        textClientWidth: text.clientWidth,
+                        textLeft: textRect.left,
+                        textScrollWidth: text.scrollWidth,
+                      };
+                      text.textContent = original;
+                      return result;
+                    }
+                    """
+                )
+                self.assertFalse(long_dataset_viewer_filter_layout["clearHidden"])
+                self.assertGreaterEqual(
+                    long_dataset_viewer_filter_layout["filterLeft"],
+                    long_dataset_viewer_filter_layout["dividerRight"] - 0.5,
+                )
+                self.assertGreaterEqual(
+                    long_dataset_viewer_filter_layout["textLeft"],
+                    long_dataset_viewer_filter_layout["dividerRight"] - 0.5,
+                )
+                self.assertLessEqual(
+                    long_dataset_viewer_filter_layout["filterRight"],
+                    long_dataset_viewer_filter_layout["metaRight"] + 0.5,
+                )
+                self.assertLessEqual(
+                    long_dataset_viewer_filter_layout["clearRight"],
+                    long_dataset_viewer_filter_layout["metaRight"] + 0.5,
+                )
+                self.assertGreater(
+                    long_dataset_viewer_filter_layout["textScrollWidth"],
+                    long_dataset_viewer_filter_layout["textClientWidth"],
+                )
                 self.assertFalse(page.locator("#collapsedSidebarVersion").is_visible())
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function(
@@ -15785,6 +16250,11 @@ COPY (
                       && document.querySelector("#lineBarFilterClearBtn")?.hidden
                     """,
                     timeout=10_000,
+                )
+                assert_inactive_filter_right_alignment(
+                    "#lineBarFilter",
+                    "#lineBarFilterText",
+                    "#lineBarGroupMeta",
                 )
                 page.evaluate(
                     """
@@ -16159,11 +16629,197 @@ COPY (
                         .filter((cell) => cell.offsetParent !== null)
                         .map((cell) => cell.getAttribute('tabulator-field'))
                         .filter(Boolean);
-                      return headers.slice(0, 4).join(',') === 'c5,c2,c0,c1'
+                      return headers.slice(0, 4).join(',') === 'c2,c5,c0,c1'
                         && grid.querySelector('.tabulator-col[tabulator-field="c5"] .dataset-viewer-pin-indicator')
                         && grid.querySelector('.tabulator-col[tabulator-field="c2"] .dataset-viewer-pin-indicator')
-                        && document.querySelector('#datasetViewerCount')?.textContent.trim() === '4 shown · PostcodeUnit, vehicle_age pinned'
+                        && document.querySelector('#datasetViewerCount')?.textContent.trim() === '4 shown · vehicle_age, PostcodeUnit pinned'
                         && !grid.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row');
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertFalse(page.locator("#datasetViewerPinnedMoveControls").is_visible())
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .dataset-viewer-header-label').click()
+                self.assertFalse(page.locator("#datasetViewerPinnedMoveControls").is_visible())
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c0"] .dataset-viewer-header-label').click()
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .dataset-viewer-header-label').click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const controls = document.querySelector("#datasetViewerPinnedMoveControls");
+                      const previous = document.querySelector("#datasetViewerPinnedMovePrevious");
+                      const next = document.querySelector("#datasetViewerPinnedMoveNext");
+                      return controls?.offsetParent !== null
+                        && controls.textContent.includes("move pinned column")
+                        && controls.dataset.orientation === "horizontal"
+                        && previous?.disabled
+                        && !next?.disabled
+                        && previous.getAttribute("aria-label") === "Move pinned column vehicle_age left"
+                        && next.getAttribute("aria-label") === "Move pinned column vehicle_age right";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                pinned_move_geometry = page.evaluate(
+                    """
+                    () => {
+                      const rect = (selector) => {
+                        const value = document.querySelector(selector).getBoundingClientRect();
+                        return {
+                          bottom: value.bottom,
+                          height: value.height,
+                          left: value.left,
+                          right: value.right,
+                          top: value.top,
+                          width: value.width,
+                        };
+                      };
+                      const heading = document.querySelector("#datasetViewerColumnsLabel");
+                      const moveLabel = document.querySelector(".dataset-viewer-pinned-move-label");
+                      return {
+                        columns: rect(".dataset-viewer-columns-control"),
+                        controls: rect("#datasetViewerPinnedMoveControls"),
+                        chevron: rect("#datasetViewerPinnedMovePrevious .dataset-viewer-pinned-move-chevron"),
+                        label: rect("#datasetViewerColumnsLabel"),
+                        labelFontSize: getComputedStyle(heading).fontSize,
+                        labelFontWeight: getComputedStyle(heading).fontWeight,
+                        moveFontSize: getComputedStyle(moveLabel).fontSize,
+                        moveLineHeight: getComputedStyle(moveLabel).lineHeight,
+                        moveFontWeight: getComputedStyle(moveLabel).fontWeight,
+                        search: rect(".dataset-viewer-search-row"),
+                        text: moveLabel?.textContent,
+                        transform: getComputedStyle(
+                          document.querySelector("#datasetViewerPinnedMovePrevious .dataset-viewer-pinned-move-chevron")
+                        ).transform,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(pinned_move_geometry["text"], "move pinned column")
+                self.assertEqual(
+                    pinned_move_geometry["moveFontSize"],
+                    pinned_move_geometry["labelFontSize"],
+                )
+                self.assertEqual(pinned_move_geometry["moveFontWeight"], "400")
+                self.assertNotEqual(
+                    pinned_move_geometry["moveFontWeight"],
+                    pinned_move_geometry["labelFontWeight"],
+                )
+                self.assertEqual(pinned_move_geometry["moveLineHeight"], "14px")
+                self.assertAlmostEqual(
+                    (
+                        pinned_move_geometry["controls"]["top"]
+                        + pinned_move_geometry["controls"]["height"] / 2
+                    ),
+                    (
+                        pinned_move_geometry["label"]["top"]
+                        + pinned_move_geometry["label"]["height"] / 2
+                    ),
+                    delta=0.5,
+                )
+                self.assertGreaterEqual(pinned_move_geometry["chevron"]["width"], 12)
+                self.assertGreaterEqual(
+                    pinned_move_geometry["controls"]["left"],
+                    pinned_move_geometry["label"]["right"] + 2,
+                )
+                self.assertLessEqual(
+                    pinned_move_geometry["controls"]["right"],
+                    pinned_move_geometry["columns"]["right"] + 0.5,
+                )
+                self.assertLessEqual(
+                    pinned_move_geometry["controls"]["bottom"],
+                    pinned_move_geometry["search"]["top"] + 0.5,
+                )
+                self.assertEqual(pinned_move_geometry["transform"], "none")
+
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c5"] .dataset-viewer-header-label').click()
+                self.assertFalse(page.locator("#datasetViewerPinnedMoveControls").is_visible())
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c5"] .dataset-viewer-header-label').click()
+                page.locator("#datasetViewerGrid .tabulator-row").first.click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#datasetViewerPinnedMoveControls")?.hidden
+                      && document.querySelectorAll("#datasetViewerGrid .tabulator-row.tabulator-selected").length === 1
+                    """,
+                    timeout=10_000,
+                )
+                page.locator('#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .dataset-viewer-header-label').click()
+                page.locator("#datasetViewerPinnedMoveNext").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      const previous = document.querySelector("#datasetViewerPinnedMovePrevious");
+                      const next = document.querySelector("#datasetViewerPinnedMoveNext");
+                      return headers.slice(0, 2).join(",") === "c5,c2"
+                        && document.querySelector('#datasetViewerCount')?.textContent.trim() === '4 shown · PostcodeUnit, vehicle_age pinned'
+                        && document.querySelectorAll('#datasetViewerGrid .dataset-viewer-column-selected[tabulator-field="c2"]').length > 0
+                        && !previous?.disabled
+                        && next?.disabled
+                        && document.activeElement === previous;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const controls = document.querySelector("#datasetViewerPinnedMoveControls");
+                      const previous = document.querySelector("#datasetViewerPinnedMovePrevious");
+                      const next = document.querySelector("#datasetViewerPinnedMoveNext");
+                      const rows = [...document.querySelectorAll("#datasetViewerGrid .tabulator-row")]
+                        .filter((row) => row.offsetParent !== null)
+                        .map((row) => row.dataset.datasetViewerColumnField);
+                      return document.querySelector("#datasetViewerGrid")?.classList.contains("dataset-viewer-grid-transposed")
+                        && rows.slice(0, 2).join(",") === "c5,c2"
+                        && controls?.dataset.orientation === "vertical"
+                        && !previous?.disabled
+                        && next?.disabled
+                        && previous.getAttribute("aria-label") === "Move pinned column vehicle_age up"
+                        && next.getAttribute("aria-label") === "Move pinned column vehicle_age down";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertNotEqual(
+                    page.locator(
+                        "#datasetViewerPinnedMovePrevious .dataset-viewer-pinned-move-chevron"
+                    ).evaluate("node => getComputedStyle(node).transform"),
+                    "none",
+                )
+                page.locator("#datasetViewerPinnedMovePrevious").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll("#datasetViewerGrid .tabulator-row")]
+                        .filter((row) => row.offsetParent !== null)
+                        .map((row) => row.dataset.datasetViewerColumnField);
+                      const previous = document.querySelector("#datasetViewerPinnedMovePrevious");
+                      const next = document.querySelector("#datasetViewerPinnedMoveNext");
+                      return rows.slice(0, 2).join(",") === "c2,c5"
+                        && previous?.disabled
+                        && !next?.disabled
+                        && document.activeElement === next;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerTranspose").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const headers = [...document.querySelectorAll('#datasetViewerGrid .tabulator-col')]
+                        .filter((cell) => cell.offsetParent !== null)
+                        .map((cell) => cell.getAttribute('tabulator-field'))
+                        .filter(Boolean);
+                      return headers.slice(0, 2).join(",") === "c2,c5"
+                        && document.querySelector("#datasetViewerPinnedMoveControls")?.dataset.orientation === "horizontal"
+                        && document.querySelector("#datasetViewerPinnedMovePrevious")?.disabled
+                        && !document.querySelector("#datasetViewerPinnedMoveNext")?.disabled;
                     }
                     """,
                     timeout=10_000,
@@ -16193,7 +16849,7 @@ COPY (
                         .map((cell) => cell.getAttribute('tabulator-field'))
                         .filter(Boolean);
                       return visibleHeaders.length > 0
-                        && (!canScroll || holder.scrollLeft < 180 || visibleHeaders[0] !== 'c5')
+                        && (!canScroll || holder.scrollLeft < 180 || visibleHeaders[0] !== 'c2')
                         && !grid.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row');
                     }
                     """,
@@ -16216,7 +16872,7 @@ COPY (
                         .map((cell) => cell.getAttribute('tabulator-field'))
                         .filter(Boolean);
                       const row = document.querySelector('#datasetViewerGrid .tabulator-row');
-                      return headers.join(',') === 'c5,c2,c3'
+                      return headers.join(',') === 'c2,c5,c3'
                         && row?.querySelectorAll('.tabulator-cell').length === 3
                         && row.querySelector('.tabulator-cell[tabulator-field="c5"]')?.textContent.trim() === 'AB10 1AA'
                         && row.querySelector('.tabulator-cell[tabulator-field="c3"]')?.textContent.trim() === '100';
@@ -16237,7 +16893,7 @@ COPY (
                       const visibleNames = [...grid.querySelectorAll('.tabulator-tableholder .tabulator-row')]
                         .map(labelText)
                         .filter(Boolean);
-                      return visibleNames.slice(0, 3).join(',') === 'PostcodeUnit,vehicle_age,price'
+                      return visibleNames.slice(0, 3).join(',') === 'vehicle_age,PostcodeUnit,price'
                         && grid.querySelectorAll('.tabulator-tableholder .tabulator-row .dataset-viewer-pin-indicator').length >= 2
                         && !grid.querySelector('.tabulator-col.tabulator-frozen, .tabulator-cell.tabulator-frozen, .tabulator-frozen-rows-holder .tabulator-row');
                     }
@@ -16309,7 +16965,7 @@ COPY (
                         .filter((cell) => cell.offsetParent !== null)
                         .map((cell) => cell.getAttribute('tabulator-field'))
                         .filter(Boolean);
-                      return headers.join(',') === 'c5,c2,c3';
+                      return headers.join(',') === 'c2,c5,c3';
                     }
                     """,
                     timeout=10_000,
@@ -16323,7 +16979,10 @@ COPY (
                         .filter((cell) => cell.offsetParent !== null)
                         .map((cell) => cell.getAttribute('tabulator-field'))
                         .filter(Boolean);
-                      return headers.join(',') === 'c2,c3';
+                      return headers.join(',') === 'c2,c3'
+                        && document.querySelector("#datasetViewerPinnedMoveControls")?.offsetParent !== null
+                        && document.querySelector("#datasetViewerPinnedMovePrevious")?.disabled
+                        && document.querySelector("#datasetViewerPinnedMoveNext")?.disabled;
                     }
                     """,
                     timeout=10_000,
@@ -16337,11 +16996,88 @@ COPY (
                         .filter((cell) => cell.offsetParent !== null)
                         .map((cell) => cell.getAttribute('tabulator-field'))
                         .filter(Boolean);
-                      return headers.join(',') === 'c3';
+                      return headers.join(',') === 'c3'
+                        && document.querySelector("#datasetViewerPinnedMoveControls")?.hidden;
                     }
                     """,
                     timeout=10_000,
                 )
+                page.locator("#datasetViewerSearch").focus()
+                populated_search_clear_layout = page.evaluate(
+                    """
+                    () => {
+                      const input = document.querySelector("#datasetViewerSearch");
+                      const clear = document.querySelector("#datasetViewerSearchClear");
+                      const inputRect = input.getBoundingClientRect();
+                      const clearRect = clear.getBoundingClientRect();
+                      const inputStyle = getComputedStyle(input);
+                      const clearStyle = getComputedStyle(clear);
+                      const searchRowStyle = getComputedStyle(input.closest(".dataset-viewer-search-row"));
+                      const probe = document.createElement("span");
+                      probe.style.background = "var(--sidebar-selected-row-bg)";
+                      document.body.append(probe);
+                      const selectedRowBackground = getComputedStyle(probe).backgroundColor;
+                      probe.remove();
+                      return {
+                        background: inputStyle.backgroundColor,
+                        borderRadius: inputStyle.borderRadius,
+                        boxShadow: inputStyle.boxShadow,
+                        inputValue: input.value,
+                        visibility: clearStyle.visibility,
+                        pointerEvents: clearStyle.pointerEvents,
+                        position: clearStyle.position,
+                        inputRight: inputRect.right,
+                        clearRight: clearRect.right,
+                        rowBorderBottomWidth: searchRowStyle.borderBottomWidth,
+                        selectedRowBackground,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(populated_search_clear_layout["inputValue"])
+                self.assertEqual(populated_search_clear_layout["boxShadow"], "none")
+                self.assertEqual(
+                    populated_search_clear_layout["background"],
+                    populated_search_clear_layout["selectedRowBackground"],
+                )
+                self.assertEqual(populated_search_clear_layout["borderRadius"], "5px")
+                self.assertEqual(populated_search_clear_layout["rowBorderBottomWidth"], "0px")
+                self.assertEqual(populated_search_clear_layout["visibility"], "visible")
+                self.assertEqual(populated_search_clear_layout["pointerEvents"], "auto")
+                self.assertEqual(populated_search_clear_layout["position"], "absolute")
+                self.assertAlmostEqual(
+                    populated_search_clear_layout["clearRight"],
+                    populated_search_clear_layout["inputRight"],
+                    delta=0.5,
+                )
+                page.locator("#themeBtn").click()
+                page.wait_for_function('() => document.body.classList.contains("dark")', timeout=10_000)
+                populated_search_dark_palette = page.evaluate(
+                    """
+                    () => {
+                      const input = document.querySelector("#datasetViewerSearch");
+                      const probe = document.createElement("span");
+                      probe.style.background = "var(--sidebar-selected-row-bg)";
+                      document.body.append(probe);
+                      const result = {
+                        background: getComputedStyle(input).backgroundColor,
+                        selectedRowBackground: getComputedStyle(probe).backgroundColor,
+                      };
+                      probe.remove();
+                      return result;
+                    }
+                    """
+                )
+                self.assertEqual(
+                    populated_search_dark_palette["background"],
+                    populated_search_dark_palette["selectedRowBackground"],
+                )
+                self.assertNotEqual(
+                    populated_search_dark_palette["background"],
+                    populated_search_clear_layout["background"],
+                )
+                page.locator("#themeBtn").click()
+                page.wait_for_function('() => !document.body.classList.contains("dark")', timeout=10_000)
                 page.locator("#datasetViewerSearchClear").click()
                 page.wait_for_function(
                     """
@@ -16358,6 +17094,41 @@ COPY (
                     }
                     """,
                     timeout=10_000,
+                )
+                page.locator(
+                    '#datasetViewerGrid .tabulator-col[tabulator-field="c2"] .dataset-viewer-header-label'
+                ).click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll(
+                      '#datasetViewerGrid .dataset-viewer-column-selected'
+                    ).length === 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#datasetViewerSearch").focus()
+                cleared_search_layout = page.evaluate(
+                    """
+                    () => {
+                      const input = document.querySelector("#datasetViewerSearch");
+                      const clearStyle = getComputedStyle(document.querySelector("#datasetViewerSearchClear"));
+                      return {
+                        background: getComputedStyle(input).backgroundColor,
+                        focused: document.activeElement === input,
+                        visibility: clearStyle.visibility,
+                        pointerEvents: clearStyle.pointerEvents,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    cleared_search_layout,
+                    {
+                        "background": "rgba(0, 0, 0, 0)",
+                        "focused": True,
+                        "visibility": "hidden",
+                        "pointerEvents": "none",
+                    },
                 )
                 self.assertEqual(dataset_viewer_requests, pin_requests_before)
                 self.assertEqual(page.locator("#datasetViewerSearch").get_attribute("placeholder"), "Select columns, separate with commas")
@@ -16978,6 +17749,11 @@ COPY (
                     timeout=10_000,
                 )
                 assert_filter_badge_clear("#profileFilterClearBtn", "#profileFilterText", False)
+                assert_inactive_filter_right_alignment(
+                    "#profileFilter",
+                    "#profileFilterText",
+                    "#profileGroupMeta",
+                )
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]').wait_for(timeout=10_000)
                 profile_requests_before_search = profile_requests
@@ -17793,6 +18569,11 @@ COPY (
                 self.assertEqual(histogram_clear_filter_payload["filter"], "")
                 assert_filter_label_badge("#histogramFilter", "histogram-filter--applied", False)
                 assert_filter_badge_clear("#histogramFilterClearBtn", "#histogramFilterText", False)
+                assert_inactive_filter_right_alignment(
+                    "#histogramFilter",
+                    "#histogramFilterText",
+                    "#histogramGroupMeta",
+                )
 
                 with page.expect_request(lambda request: request.url.endswith("/api/histogram/chart"), timeout=10_000) as histogram_refilter_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200, timeout=10_000):

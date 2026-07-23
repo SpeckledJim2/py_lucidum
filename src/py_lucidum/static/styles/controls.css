@@ -1633,6 +1633,14 @@
         white-space: nowrap;
       }
 
+      #datasetViewerFilter:not(.dataset-viewer-filter--applied),
+      #profileFilter:not(.profile-filter--applied),
+      #lineBarFilter:not(.line-bar-filter--applied),
+      #histogramFilter:not(.histogram-filter--applied) {
+        border-inline-width: 0;
+        padding-inline: 0;
+      }
+
       #datasetViewerFilter.dataset-viewer-filter--applied,
       #profileFilter.profile-filter--applied,
       #lineBarFilter.line-bar-filter--applied,

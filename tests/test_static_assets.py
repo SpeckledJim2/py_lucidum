@@ -1247,8 +1247,33 @@ if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy
         self.assertIn(".app-command-button--danger {", controls)
         self.assertIn(".app-control-input {", controls)
         self.assertIn('class="dataset-viewer-toolbar app-control-strip app-control-strip-row"', dataset_viewer)
+        self.assertIn('class="dataset-viewer-toolbar-group dataset-viewer-columns-control"', dataset_viewer)
+        self.assertIn('id="datasetViewerColumnsLabel" class="dataset-viewer-toolbar-label"', dataset_viewer)
+        self.assertIn(
+            'id="datasetViewerPinnedMoveControls" class="dataset-viewer-pinned-move-controls" role="group"',
+            dataset_viewer,
+        )
+        self.assertIn('class="dataset-viewer-pinned-move-label">move pinned column</span>', dataset_viewer)
+        self.assertIn('id="datasetViewerPinnedMovePrevious"', dataset_viewer)
+        self.assertIn('id="datasetViewerPinnedMoveNext"', dataset_viewer)
         self.assertIn('class="search dataset-viewer-search app-control-input"', dataset_viewer)
-        self.assertIn('class="filter-action app-control-button"', dataset_viewer)
+        self.assertIn(
+            'class="dataset-viewer-search-clear app-control-button app-command-button"',
+            dataset_viewer,
+        )
+        self.assertIn(
+            'id="datasetViewerColumnsResizer" class="dataset-viewer-columns-resizer app-resizer app-resizer--vertical" role="separator"',
+            dataset_viewer,
+        )
+        self.assertIn('aria-label="Resize Dataset Viewer Columns controls"', dataset_viewer)
+        self.assertIn('class="dataset-viewer-toolbar-group dataset-viewer-view-control"', dataset_viewer)
+        self.assertIn('class="dataset-viewer-view-divider" aria-hidden="true"', dataset_viewer)
+        self.assertIn(
+            'aria-label="Alphabetical columns" title="Alphabetical columns" aria-pressed="false" data-stable-label="A-Z">A-Z</button>',
+            dataset_viewer,
+        )
+        self.assertIn('const DATASET_VIEWER_META_MIN_WIDTH = 220;', dataset_viewer)
+        self.assertIn('const DATASET_VIEWER_TOOLBAR_RESIZE_STEP = 24;', dataset_viewer)
         self.assertIn('class="profile-toolbar app-control-strip app-control-strip-row"', profile)
         self.assertIn('class="search profile-column-search app-control-input"', profile)
         self.assertIn('id="profilePaneResizer"', profile)

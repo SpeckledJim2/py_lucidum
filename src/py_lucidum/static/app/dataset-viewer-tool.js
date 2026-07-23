@@ -4,6 +4,11 @@ const TOOL_ID = "dataset_viewer";
 const MAX_ROWS = 100;
 const STYLESHEET_ID = "datasetViewerStylesheet";
 const NORMAL_SEARCH_REPLACE_MOVE_THRESHOLD = 16;
+const DATASET_VIEWER_COLUMNS_DEFAULT_WIDTH = 312;
+const DATASET_VIEWER_COLUMNS_MIN_WIDTH = 180;
+const DATASET_VIEWER_META_MIN_WIDTH = 220;
+const DATASET_VIEWER_TOOLBAR_RESIZE_STEP = 24;
+const DATASET_VIEWER_TOOLBAR_STACK_QUERY = "(max-width: 920px)";
 const DATASET_VIEWER_STATE_INLINE_STYLE = "align-items:center;display:flex;font:12px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100%;justify-content:center;min-height:220px;";
 
 function ensureDatasetViewerStyles() {
@@ -70,8 +75,10 @@ export function createDatasetViewerTool({
   let pendingFavouriteNormalColumnWidths = null;
   let pendingFavouriteNormalSorters = null;
   let pendingFavouriteTransposedSort = null;
+  let pendingPinnedMoveFocus = "";
   let suppressNextWidthSnapshot = false;
   let columnResizeGesture = null;
+  let datasetViewerColumnsControlWidth = DATASET_VIEWER_COLUMNS_DEFAULT_WIDTH;
   let resizeFrame = null;
   let resizeHard = false;
 
@@ -125,14 +132,31 @@ export function createDatasetViewerTool({
     if (!document.getElementById("datasetViewerGrid")) {
       wrap.innerHTML = `
         <div class="dataset-viewer-toolbar app-control-strip app-control-strip-row">
-          <div class="dataset-viewer-search-row">
-            <input id="datasetViewerSearch" class="search dataset-viewer-search app-control-input" placeholder="Select columns, separate with commas" />
-            <button id="datasetViewerSearchClear" class="filter-action app-control-button" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
+          <div class="dataset-viewer-toolbar-group dataset-viewer-columns-control">
+            <h3 id="datasetViewerColumnsLabel" class="dataset-viewer-toolbar-label">Columns</h3>
+            <div id="datasetViewerPinnedMoveControls" class="dataset-viewer-pinned-move-controls" role="group" aria-label="Move pinned column" hidden>
+              <span class="dataset-viewer-pinned-move-label">move pinned column</span>
+              <button id="datasetViewerPinnedMovePrevious" class="dataset-viewer-pinned-move-button app-command-button" type="button" aria-controls="datasetViewerGrid">
+                <svg class="dataset-viewer-pinned-move-chevron" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M7.5 2.5 4 6l3.5 3.5"></path></svg>
+              </button>
+              <button id="datasetViewerPinnedMoveNext" class="dataset-viewer-pinned-move-button app-command-button" type="button" aria-controls="datasetViewerGrid">
+                <svg class="dataset-viewer-pinned-move-chevron" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M4.5 2.5 8 6 4.5 9.5"></path></svg>
+              </button>
+            </div>
+            <div class="dataset-viewer-search-row">
+              <input id="datasetViewerSearch" class="search dataset-viewer-search app-control-input" placeholder="Select columns, separate with commas" aria-labelledby="datasetViewerColumnsLabel" />
+              <button id="datasetViewerSearchClear" class="dataset-viewer-search-clear app-control-button app-command-button" type="button" title="Clear table search" aria-label="Clear table search">&times;</button>
+            </div>
           </div>
-          <div class="segmented dataset-viewer-view-toggles" role="group" aria-label="Dataset view options">
-            <button id="datasetViewerTranspose" class="dataset-viewer-view-toggle app-control-button" type="button" aria-pressed="false" data-stable-label="Transpose">Transpose</button>
-            <button id="datasetViewerAlphabeticalColumns" class="dataset-viewer-view-toggle app-control-button" type="button" aria-pressed="false" data-stable-label="Alphabetical columns">Alphabetical columns</button>
+          <div id="datasetViewerColumnsResizer" class="dataset-viewer-columns-resizer app-resizer app-resizer--vertical" role="separator" aria-orientation="vertical" aria-label="Resize Dataset Viewer Columns controls" tabindex="0"></div>
+          <div class="dataset-viewer-toolbar-group dataset-viewer-view-control">
+            <h3 class="dataset-viewer-toolbar-label">View</h3>
+            <div class="segmented dataset-viewer-view-toggles" role="group" aria-label="Dataset view options">
+              <button id="datasetViewerTranspose" class="dataset-viewer-view-toggle app-control-button" type="button" aria-pressed="false" data-stable-label="Transpose">Transpose</button>
+              <button id="datasetViewerAlphabeticalColumns" class="dataset-viewer-view-toggle app-control-button" type="button" aria-label="Alphabetical columns" title="Alphabetical columns" aria-pressed="false" data-stable-label="A-Z">A-Z</button>
+            </div>
           </div>
+          <div class="dataset-viewer-view-divider" aria-hidden="true"></div>
           <div id="datasetViewerMeta" class="dataset-viewer-meta">
             <div id="datasetViewerSummaryMeta" class="dataset-viewer-summary-meta">
               <div id="datasetViewerCount" class="dataset-viewer-count"></div>
@@ -166,6 +190,13 @@ export function createDatasetViewerTool({
         rerenderCachedData();
         markDatasetViewChanged();
       });
+      el("datasetViewerPinnedMovePrevious").addEventListener("click", () => {
+        moveSelectedDatasetViewerPinnedColumn(-1, "previous");
+      });
+      el("datasetViewerPinnedMoveNext").addEventListener("click", () => {
+        moveSelectedDatasetViewerPinnedColumn(1, "next");
+      });
+      bindDatasetViewerToolbarResizer();
       el("datasetViewerGrid").addEventListener("click", handleDatasetViewerGridClick);
       el("datasetViewerGrid").addEventListener("pointerdown", handleDatasetViewerResizePointerDown);
       el("datasetViewerGrid").addEventListener("contextmenu", handleDatasetViewerGridContextMenu);
@@ -175,13 +206,114 @@ export function createDatasetViewerTool({
     if (document.activeElement !== search && search.value !== (state.datasetViewerSearch || "")) {
       search.value = state.datasetViewerSearch || "";
     }
+    requestAnimationFrame(() => syncDatasetViewerToolbarWidth());
     syncDatasetViewerViewToggles();
+    syncDatasetViewerPinnedMoveControls();
     return wrap;
+  }
+
+  function datasetViewerToolbarResizeLimits() {
+    const toolbar = document.querySelector(".dataset-viewer-toolbar");
+    const resizer = el("datasetViewerColumnsResizer");
+    const view = toolbar?.querySelector(".dataset-viewer-view-control");
+    const trailingDivider = toolbar?.querySelector(".dataset-viewer-view-divider");
+    if (!toolbar || !resizer || !view || !trailingDivider) {
+      return {
+        min: DATASET_VIEWER_COLUMNS_MIN_WIDTH,
+        max: DATASET_VIEWER_COLUMNS_MIN_WIDTH,
+      };
+    }
+    const toolbarStyle = getComputedStyle(toolbar);
+    const toolbarWidth = toolbar.getBoundingClientRect().width || 0;
+    const contentWidth = Math.max(
+      0,
+      toolbarWidth
+        - (Number.parseFloat(toolbarStyle.paddingLeft) || 0)
+        - (Number.parseFloat(toolbarStyle.paddingRight) || 0),
+    );
+    const reservedWidth = resizer.getBoundingClientRect().width
+      + view.getBoundingClientRect().width
+      + trailingDivider.getBoundingClientRect().width
+      + DATASET_VIEWER_META_MIN_WIDTH;
+    return {
+      min: DATASET_VIEWER_COLUMNS_MIN_WIDTH,
+      max: Math.max(DATASET_VIEWER_COLUMNS_MIN_WIDTH, contentWidth - reservedWidth),
+    };
+  }
+
+  function syncDatasetViewerToolbarResizerAccessibility(width) {
+    const resizer = el("datasetViewerColumnsResizer");
+    if (!resizer) return;
+    const limits = datasetViewerToolbarResizeLimits();
+    resizer.setAttribute("aria-valuemin", String(limits.min));
+    resizer.setAttribute("aria-valuemax", String(Math.round(limits.max)));
+    resizer.setAttribute("aria-valuenow", String(Math.round(width)));
+  }
+
+  function resizeDatasetViewerColumnsControl(width) {
+    if (window.matchMedia(DATASET_VIEWER_TOOLBAR_STACK_QUERY).matches) return;
+    const toolbar = document.querySelector(".dataset-viewer-toolbar");
+    if (!toolbar || !toolbar.getClientRects().length) return;
+    const limits = datasetViewerToolbarResizeLimits();
+    const clamped = Math.max(limits.min, Math.min(limits.max, width));
+    datasetViewerColumnsControlWidth = clamped;
+    toolbar.style.setProperty("--dataset-viewer-columns-width", `${Math.round(clamped)}px`);
+    syncDatasetViewerToolbarResizerAccessibility(clamped);
+  }
+
+  function syncDatasetViewerToolbarWidth() {
+    if (window.matchMedia(DATASET_VIEWER_TOOLBAR_STACK_QUERY).matches) return;
+    resizeDatasetViewerColumnsControl(datasetViewerColumnsControlWidth);
+  }
+
+  function bindDatasetViewerToolbarResizer() {
+    const toolbar = document.querySelector(".dataset-viewer-toolbar");
+    const columns = toolbar?.querySelector(".dataset-viewer-columns-control");
+    const resizer = el("datasetViewerColumnsResizer");
+    if (!toolbar || !columns || !resizer) return;
+
+    resizer.addEventListener("pointerdown", (event) => {
+      if (window.matchMedia(DATASET_VIEWER_TOOLBAR_STACK_QUERY).matches) return;
+      event.preventDefault();
+      const startClientX = event.clientX;
+      const startWidth = columns.getBoundingClientRect().width || datasetViewerColumnsControlWidth;
+      resizer.classList.add("dragging");
+      document.body.classList.add("resizing-dataset-viewer-toolbar");
+      resizer.setPointerCapture?.(event.pointerId);
+      const onMove = (moveEvent) => {
+        resizeDatasetViewerColumnsControl(startWidth + moveEvent.clientX - startClientX);
+      };
+      const onUp = () => {
+        resizer.classList.remove("dragging");
+        document.body.classList.remove("resizing-dataset-viewer-toolbar");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
+      window.addEventListener("pointercancel", onUp, { once: true });
+    });
+
+    resizer.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      if (window.matchMedia(DATASET_VIEWER_TOOLBAR_STACK_QUERY).matches) return;
+      event.preventDefault();
+      const limits = datasetViewerToolbarResizeLimits();
+      const width = columns.getBoundingClientRect().width || datasetViewerColumnsControlWidth;
+      const nextWidth = event.key === "Home"
+        ? limits.min
+        : event.key === "End"
+          ? limits.max
+          : width + (event.key === "ArrowRight" ? DATASET_VIEWER_TOOLBAR_RESIZE_STEP : -DATASET_VIEWER_TOOLBAR_RESIZE_STEP);
+      resizeDatasetViewerColumnsControl(nextWidth);
+    });
   }
 
   function syncDatasetViewerViewToggles() {
     syncDatasetViewerViewToggle(el("datasetViewerTranspose"), state.datasetViewerTranspose);
     syncDatasetViewerViewToggle(el("datasetViewerAlphabeticalColumns"), state.datasetViewerAlphabeticalColumns);
+    syncDatasetViewerPinnedMoveControls();
   }
 
   function syncDatasetViewerViewToggle(button, pressed) {
@@ -189,6 +321,53 @@ export function createDatasetViewerTool({
     const active = Boolean(pressed);
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
+  }
+
+  function selectedDatasetViewerPinnedColumnField() {
+    if (selectionAxis !== "columns" || selectedColumnFields.size !== 1) return "";
+    const field = [...selectedColumnFields][0] || "";
+    return isDatasetViewerColumnPinned(field) ? field : "";
+  }
+
+  function syncDatasetViewerPinnedMoveControls({ restoreFocus = false } = {}) {
+    const controls = el("datasetViewerPinnedMoveControls");
+    const previous = el("datasetViewerPinnedMovePrevious");
+    const next = el("datasetViewerPinnedMoveNext");
+    if (!controls || !previous || !next) return;
+    const field = selectedDatasetViewerPinnedColumnField();
+    controls.hidden = !field;
+    if (!field) {
+      previous.disabled = true;
+      next.disabled = true;
+      if (restoreFocus) pendingPinnedMoveFocus = "";
+      return;
+    }
+
+    const fields = datasetViewerPinnedColumnFields();
+    const index = fields.indexOf(field);
+    const transposed = Boolean(state.datasetViewerTranspose);
+    const previousDirection = transposed ? "up" : "left";
+    const nextDirection = transposed ? "down" : "right";
+    const column = currentDatasetColumnByField.get(field);
+    const columnName = String(column?.name || column?.field || field);
+    controls.dataset.orientation = transposed ? "vertical" : "horizontal";
+    controls.setAttribute("aria-label", `Move pinned column ${columnName}`);
+    previous.disabled = index <= 0;
+    next.disabled = index < 0 || index >= fields.length - 1;
+    previous.setAttribute("aria-label", `Move pinned column ${columnName} ${previousDirection}`);
+    previous.title = `Move pinned column ${columnName} ${previousDirection}`;
+    next.setAttribute("aria-label", `Move pinned column ${columnName} ${nextDirection}`);
+    next.title = `Move pinned column ${columnName} ${nextDirection}`;
+
+    if (!restoreFocus || !pendingPinnedMoveFocus) return;
+    const preferred = pendingPinnedMoveFocus === "previous" ? previous : next;
+    const fallback = preferred === previous ? next : previous;
+    pendingPinnedMoveFocus = "";
+    requestAnimationFrame(() => {
+      if (controls.hidden) return;
+      const target = preferred.disabled ? fallback : preferred;
+      if (!target.disabled) target.focus();
+    });
   }
 
   function attachDatasetViewerMeta() {
@@ -315,6 +494,7 @@ export function createDatasetViewerTool({
     state.datasetViewerColumnCount = Array.isArray(data?.columns) ? data.columns.length : null;
     syncDatasetViewerMeta();
     pruneSelectionsForCurrentData();
+    syncDatasetViewerPinnedMoveControls();
     const meta = countMeta(data);
     setStatus("");
     setChartMessage("");
@@ -372,6 +552,7 @@ export function createDatasetViewerTool({
           if (token !== renderToken) return;
           setDatasetViewerToolbarHidden(false);
           syncNormalRenderedSelection();
+          syncDatasetViewerPinnedMoveControls({ restoreFocus: true });
           reconcileSearch();
         });
         datasetTable.on("dataSorted", handleNormalDataSorted);
@@ -425,6 +606,7 @@ export function createDatasetViewerTool({
           if (token !== renderToken) return;
           setDatasetViewerToolbarHidden(false);
           syncTransposedRenderedSelection();
+          syncDatasetViewerPinnedMoveControls({ restoreFocus: true });
           reconcileSearch();
         });
         datasetTable.on("dataFiltered", syncTransposedRenderedSelection);
@@ -783,14 +965,13 @@ export function createDatasetViewerTool({
   }
 
   function datasetViewerPinnedColumnsKey() {
-    return datasetViewerPinnedColumnFields().slice().sort().join("|");
+    return datasetViewerPinnedColumnFields().join("|");
   }
 
   function datasetViewerPinnedColumnNames() {
     return datasetViewerPinnedColumnFields()
       .map((field) => currentDatasetColumnByField.get(field))
       .filter(Boolean)
-      .sort((left, right) => compareDatasetViewerColumnNames(left, right))
       .map((column) => column.name || column.field);
   }
 
@@ -869,11 +1050,10 @@ export function createDatasetViewerTool({
     pruneDatasetViewerPinnedColumns(sourceColumns);
     const pinnedFields = datasetViewerPinnedColumnSet();
     const indexedColumns = sourceColumns.map((column, index) => ({ column, index }));
-    const pinnedColumns = indexedColumns
-      .filter((entry) => pinnedFields.has(entry.column.field))
-      .sort((left, right) => (
-        compareDatasetViewerColumnNames(left.column, right.column) || left.index - right.index
-      ));
+    const entryByField = new Map(indexedColumns.map((entry) => [entry.column.field, entry]));
+    const pinnedColumns = datasetViewerPinnedColumnFields()
+      .map((field) => entryByField.get(field))
+      .filter(Boolean);
     const unpinnedColumns = indexedColumns.filter((entry) => !pinnedFields.has(entry.column.field));
     if (state.datasetViewerAlphabeticalColumns) {
       unpinnedColumns.sort((left, right) => (
@@ -1008,6 +1188,23 @@ export function createDatasetViewerTool({
     markDatasetViewChanged();
   }
 
+  function moveSelectedDatasetViewerPinnedColumn(offset, focusDirection) {
+    const field = selectedDatasetViewerPinnedColumnField();
+    if (!field) return;
+    const fields = datasetViewerPinnedColumnFields();
+    const index = fields.indexOf(field);
+    const nextIndex = index + Math.sign(Number(offset) || 0);
+    if (index < 0 || nextIndex < 0 || nextIndex >= fields.length || nextIndex === index) {
+      syncDatasetViewerPinnedMoveControls();
+      return;
+    }
+    [fields[index], fields[nextIndex]] = [fields[nextIndex], fields[index]];
+    state.datasetViewerPinnedColumns = fields;
+    pendingPinnedMoveFocus = focusDirection === "previous" ? "previous" : "next";
+    rerenderCachedData();
+    markDatasetViewChanged();
+  }
+
   function cycleTransposedSort(field) {
     if (!field) return;
     const current = transposedSort.field === field ? transposedSort.dir : "none";
@@ -1021,6 +1218,8 @@ export function createDatasetViewerTool({
     selectedRowIds = new Set();
     selectedColumnFields = new Set();
     selectionAxis = "";
+    pendingPinnedMoveFocus = "";
+    syncDatasetViewerPinnedMoveControls();
   }
 
   function pruneSelectionsForCurrentData() {
@@ -1034,6 +1233,7 @@ export function createDatasetViewerTool({
       selectedRowIds = new Set();
       selectedColumnFields = new Set();
     }
+    syncDatasetViewerPinnedMoveControls();
   }
 
   function handleDatasetViewerResizePointerDown(event) {
@@ -1080,6 +1280,7 @@ export function createDatasetViewerTool({
     selectionAxis = selectedColumnFields.size ? "columns" : "";
     syncNormalColumnSelectionClasses();
     syncTransposedRenderedSelection();
+    syncDatasetViewerPinnedMoveControls();
   }
 
   function toggleRowSelection(rowId) {
@@ -1097,6 +1298,7 @@ export function createDatasetViewerTool({
     } else {
       restoreNormalRowSelection();
     }
+    syncDatasetViewerPinnedMoveControls();
   }
 
   function clearRowSelection({ syncTable = false } = {}) {
@@ -1106,6 +1308,7 @@ export function createDatasetViewerTool({
     if (state.datasetViewerTranspose) {
       if (hadRows) clearTransposedRowSelectionClasses();
       syncTransposedRenderedSelection();
+      syncDatasetViewerPinnedMoveControls();
       return;
     }
     if (!syncTable || !datasetTable || typeof datasetTable.deselectRow !== "function") return;
@@ -1117,6 +1320,7 @@ export function createDatasetViewerTool({
     } finally {
       suppressRowSelectionSync = false;
     }
+    syncDatasetViewerPinnedMoveControls();
   }
 
   function clearColumnSelection() {
@@ -1126,9 +1330,11 @@ export function createDatasetViewerTool({
     if (state.datasetViewerTranspose) {
       if (hadColumns) clearTransposedColumnSelectionClasses();
       syncTransposedRenderedSelection();
+      syncDatasetViewerPinnedMoveControls();
       return;
     }
     syncNormalColumnSelectionClasses();
+    syncDatasetViewerPinnedMoveControls();
   }
 
   function clearDatasetViewerSelection() {
@@ -1150,6 +1356,7 @@ export function createDatasetViewerTool({
       selectedRowIds = new Set();
       selectionAxis = "";
     }
+    syncDatasetViewerPinnedMoveControls();
   }
 
   function restoreNormalRowSelection() {
@@ -2026,6 +2233,7 @@ export function createDatasetViewerTool({
   }
 
   function resize({ hard = true } = {}) {
+    syncDatasetViewerToolbarWidth();
     if (!datasetTable) return;
     resizeHard = resizeHard || hard;
     if (resizeFrame !== null) return;
