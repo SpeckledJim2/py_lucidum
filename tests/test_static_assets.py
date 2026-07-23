@@ -146,6 +146,91 @@ if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percen
 """
         self.run_node_script(script)
 
+    def test_saved_filter_expression_helpers_preserve_boolean_precedence(self) -> None:
+        module = Path("src/py_lucidum/static/app/shared/filter-expression.js").resolve().as_uri()
+        script = f"""
+import {{
+  combineGroupedFilterRows,
+  combineLegacyGroupedFilterRows,
+  combineSavedFilterRows,
+  filterExpressionHasTopLevelOr,
+  normaliseLegacyGroupedFilter,
+}} from "{module}";
+
+const row = (theme, expression) => ({{ theme, expression }});
+const expect = (actual, expected, label) => {{
+  if (actual !== expected) throw new Error(`${{label}}: ${{JSON.stringify(actual)}} !== ${{JSON.stringify(expected)}}`);
+}};
+const onePerGroup = [row("A", "A = 1"), row("B", "B = 2")];
+const groupedRows = [row("A", "A = 1"), row("A", "A = 2"), row("B", "B = 3")];
+
+expect(combineGroupedFilterRows([]), "", "empty grouped filter");
+expect(combineGroupedFilterRows([row("A", "A = 1")]), "A = 1", "single grouped filter");
+expect(combineGroupedFilterRows(onePerGroup), "A = 1 AND B = 2", "one row per group");
+expect(combineGroupedFilterRows(groupedRows), "(A = 1 OR A = 2) AND B = 3", "multiple rows in a group");
+expect(
+  combineGroupedFilterRows([row("A", "A = 1"), row("A", "A = 2")]),
+  "A = 1 OR A = 2",
+  "single OR group",
+);
+expect(
+  combineGroupedFilterRows([row("A", "A = 1 AND B = 2"), row("B", "C = 3")]),
+  "A = 1 AND B = 2 AND C = 3",
+  "compound AND row",
+);
+expect(
+  combineGroupedFilterRows([row("A", "A = 1 OR B = 2"), row("B", "C = 3")]),
+  "(A = 1 OR B = 2) AND C = 3",
+  "top-level OR row",
+);
+expect(
+  combineGroupedFilterRows([row("A", "(A = 1 OR B = 2)"), row("B", "C = 3")]),
+  "(A = 1 OR B = 2) AND C = 3",
+  "already grouped OR row",
+);
+expect(
+  combineGroupedFilterRows([row("A", "A = 1 AND (B = 2 OR C = 3)"), row("B", "D = 4")]),
+  "A = 1 AND (B = 2 OR C = 3) AND D = 4",
+  "nested OR row",
+);
+expect(
+  combineGroupedFilterRows([row("A", "CODE = 'A OR B'"), row("B", "C = 3")]),
+  "CODE = 'A OR B' AND C = 3",
+  "quoted OR text",
+);
+if (!filterExpressionHasTopLevelOr("A = 1 OR B = 2")) throw new Error("top-level OR was not detected");
+if (filterExpressionHasTopLevelOr("(A = 1 OR B = 2)")) throw new Error("nested OR was detected");
+if (filterExpressionHasTopLevelOr('"OR" = 1')) throw new Error("quoted identifier OR was detected");
+if (filterExpressionHasTopLevelOr("A = $$ OR $$")) throw new Error("dollar-quoted OR was detected");
+if (!filterExpressionHasTopLevelOr("A = 'text\\\\' OR B = 2")) throw new Error("OR after a standard string was not detected");
+if (filterExpressionHasTopLevelOr("A = E'text\\\\' OR value'")) throw new Error("OR in an escaped string was detected");
+
+expect(combineSavedFilterRows([row("A", "A = 1")], {{ mode: "single" }}), "A = 1", "single filter");
+expect(combineSavedFilterRows(onePerGroup, {{ mode: "multi", operator: "and" }}), "(A = 1) AND (B = 2)", "multi all");
+expect(combineSavedFilterRows(onePerGroup, {{ mode: "multi", operator: "or" }}), "(A = 1) OR (B = 2)", "multi any");
+expect(combineSavedFilterRows(onePerGroup, {{ mode: "multi", operator: "nand" }}), "NOT ((A = 1) AND (B = 2))", "multi not all");
+expect(combineSavedFilterRows(onePerGroup, {{ mode: "multi", operator: "nor" }}), "NOT ((A = 1) OR (B = 2))", "multi none");
+
+const legacy = "(A = 1) AND (B = 2)";
+expect(combineLegacyGroupedFilterRows(onePerGroup), legacy, "legacy grouped filter");
+expect(normaliseLegacyGroupedFilter(legacy, onePerGroup), "A = 1 AND B = 2", "legacy normalization");
+const legacyOrGroup = "((A = 1) OR (A = 2)) AND (B = 3)";
+expect(combineLegacyGroupedFilterRows(groupedRows), legacyOrGroup, "legacy grouped OR filter");
+expect(
+  normaliseLegacyGroupedFilter(legacyOrGroup, groupedRows),
+  "(A = 1 OR A = 2) AND B = 3",
+  "legacy grouped OR normalization",
+);
+expect(normaliseLegacyGroupedFilter("A = 1 AND B = 2", onePerGroup), "A = 1 AND B = 2", "current filter preservation");
+expect(normaliseLegacyGroupedFilter("A = 1", onePerGroup), "A = 1", "mismatched filter preservation");
+expect(
+  normaliseLegacyGroupedFilter(legacy, onePerGroup, {{ allRowsRestored: false }}),
+  legacy,
+  "missing-row preservation",
+);
+"""
+        self.run_node_script(script)
+
     def test_vertical_list_navigation_handles_rerenders_and_focus_ownership(self) -> None:
         module = Path("src/py_lucidum/static/app/shared/list-navigation.js").resolve().as_uri()
         script = f"""

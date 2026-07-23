@@ -7904,6 +7904,107 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_legacy_grouped_favourite_filter_text_is_normalised_on_restore(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "sample.csv"
+            data_path.write_text(
+                "DRIVER_AGE,POSTCODE_AREA,price\n"
+                "25,PO,100\n"
+                "45,SO,200\n"
+                "75,B,300\n",
+                encoding="utf-8",
+            )
+            filters_path = root / "filters.csv"
+            filters_path.write_text(
+                "theme,name,expression\n"
+                "DRIVER AGE,Young drivers,DRIVER_AGE < 30\n"
+                "POSTCODE AREA,Portsmouth,POSTCODE_AREA = 'PO'\n",
+                encoding="utf-8",
+            )
+            legacy_filter = "(DRIVER_AGE < 30) AND (POSTCODE_AREA = 'PO')"
+            favourite_view = {
+                "version": 1,
+                "scope": "line_bar_view",
+                "source": "dataset",
+                "x": "DRIVER_AGE",
+                "xSource": "dataset",
+                "view": "chart",
+                "sort": "alpha",
+                "lowGroup": "0",
+                "labels": "none",
+                "bandWidth": "0",
+                "quantileMode": "off",
+                "dateBucket": "none",
+                "emptyPeriods": "show",
+                "transform": "none",
+                "sigma": "0",
+                "partialDependence": "none",
+                "featureSort": "alpha",
+                "expectedSort": "alpha",
+                "actual": {"value": "price", "sourceId": "dataset", "metricKind": "metric"},
+                "denominator": "__none__",
+                "expectedSelections": [],
+                "filter": legacy_filter,
+                "filterSelectionMode": "grouped",
+                "filterOperator": "and",
+                "savedFilterRows": [
+                    {"theme": "DRIVER AGE", "name": "Young drivers", "expression": "DRIVER_AGE < 30"},
+                    {"theme": "POSTCODE AREA", "name": "Portsmouth", "expression": "POSTCODE_AREA = 'PO'"},
+                ],
+            }
+            favourites_path = root / "favourites.json"
+            favourites_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "favourites": [
+                            {
+                                "id": "legacy-grouped-filter",
+                                "name": "Legacy grouped filter",
+                                "view": favourite_view,
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                filters_path=filters_path,
+                use_saved_filters=True,
+                line_bar_favourites_path=favourites_path,
+                defaults={"x": "DRIVER_AGE", "actual": "price", "denominator": "__none__"},
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#filterInput")?.value === "DRIVER_AGE < 30 AND POSTCODE_AREA = 'PO'"
+                          && document.querySelector("#filterRowMetaText")?.textContent.trim() === "1 / 3 rows"
+                          && document.querySelectorAll('.saved-filter-option[aria-selected="true"]').length === 2
+                          && document.querySelector(".saved-favourite-option.active")?.dataset.favouriteId === "legacy-grouped-filter"
+                        """,
+                        timeout=10_000,
+                    )
+                    stored = json.loads(favourites_path.read_text(encoding="utf-8"))
+                    self.assertEqual(stored["favourites"][0]["view"]["filter"], legacy_filter)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_kpi_rows_select_metrics_and_survive_tool_switch(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -24623,6 +24724,24 @@ COPY (
                 self.assertTrue(page.locator('.filter-selection-mode button[data-value="grouped"]').evaluate("node => node.classList.contains('active')"))
                 grouped_control_state = filter_control_state()
                 assert_filter_control_theme(grouped_control_state, "mode", "grouped")
+                driver_rows.first.click()
+                postcode_rows.first.click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterInput")?.value === "DRIVER_AGE < 30 AND POSTCODE_AREA = 'PO'"
+                      && document.querySelector("#filterRowMetaText")?.textContent.trim() === "1 / 3 rows"
+                    """,
+                    timeout=10_000,
+                )
+                driver_rows.first.click()
+                postcode_rows.first.click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterInput")?.value === ""
+                      && document.querySelector("#filterRowMetaText")?.textContent.trim() === "3 rows"
+                    """,
+                    timeout=10_000,
+                )
                 page.locator('.filter-selection-mode button[data-value="single"]').click()
                 single_control_state = filter_control_state()
                 assert_filter_control_theme(single_control_state, "mode", "single")
@@ -24680,7 +24799,11 @@ COPY (
                 self.assertEqual(postcode_rows.nth(1).get_attribute("aria-selected"), "true")
                 self.assertEqual(
                     page.locator("#filterInput").input_value(),
-                    "((DRIVER_AGE >= 30 AND DRIVER_AGE < 60) OR (DRIVER_AGE > 70)) AND (POSTCODE_AREA = 'SO')",
+                    "(DRIVER_AGE >= 30 AND DRIVER_AGE < 60 OR DRIVER_AGE > 70) AND POSTCODE_AREA = 'SO'",
+                )
+                page.wait_for_function(
+                    """() => document.querySelector("#filterRowMetaText")?.textContent.trim() === "1 / 3 rows" """,
+                    timeout=10_000,
                 )
                 page.locator('.filter-selection-mode button[data-value="multi"]').click()
                 self.assertTrue(page.locator('.filter-operator button[data-value="and"]').is_visible())
@@ -24787,6 +24910,55 @@ COPY (
                 self.assertTrue(driver_rows.first.is_visible())
                 self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
                 self.assertEqual(page.locator("#filterInput").input_value(), "DRIVER_AGE < 30")
+
+                page.locator("#filterFooterToggleBtn").click()
+                page.locator("#filterInput").wait_for(state="visible", timeout=10_000)
+                page.locator("#filterApplyBtn").click()
+                self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
+                self.assertTrue(driver_heading.evaluate("node => node.classList.contains('saved-filter-theme--selected')"))
+
+                page.locator("#filterInput").fill("DRIVER_AGE > 40")
+                self.assertEqual(driver_rows.first.get_attribute("aria-selected"), "true")
+                page.locator("#filterApplyBtn").click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "2 / 3 rows"
+                      && document.querySelector("#lineBarFilterText")?.textContent.trim() === "DRIVER_AGE > 40"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertTrue(all(
+                    row.get_attribute("aria-selected") == "false"
+                    for row in driver_rows.all() + postcode_rows.all()
+                ))
+                self.assertFalse(driver_heading.evaluate("node => node.classList.contains('saved-filter-theme--selected')"))
+                self.assertFalse(
+                    page.locator('.saved-filter-theme[data-filter-theme="POSTCODE AREA"]')
+                    .evaluate("node => node.classList.contains('saved-filter-theme--selected')")
+                )
+
+                postcode_rows.first.click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "1 / 3 rows"
+                      && document.querySelector("#filterInput")?.value === "POSTCODE_AREA = 'PO'"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#filterInput").fill("DRIVER_AGE < 70")
+                self.assertEqual(postcode_rows.first.get_attribute("aria-selected"), "true")
+                page.locator("#filterInput").press("Enter")
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#filterRowMetaText")?.textContent.trim() === "2 / 3 rows"
+                      && document.querySelector("#lineBarFilterText")?.textContent.trim() === "DRIVER_AGE < 70"
+                    """,
+                    timeout=10_000,
+                )
+                self.assertTrue(all(
+                    row.get_attribute("aria-selected") == "false"
+                    for row in driver_rows.all() + postcode_rows.all()
+                ))
                 self.assertEqual(page_errors, [])
             finally:
                 browser.close()

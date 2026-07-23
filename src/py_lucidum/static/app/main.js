@@ -6,6 +6,10 @@
       import { createGbmTool } from "./gbm-tool.js";
       import { createSpecificationsTool } from "./specifications-tool.js";
       import { createApiClient, monitorPath } from "./shared/api.js";
+      import {
+        combineSavedFilterRows,
+        normaliseLegacyGroupedFilter,
+      } from "./shared/filter-expression.js";
       import { createFormatters, escapeHtml } from "./shared/format.js";
       import { bindVerticalListNavigation } from "./shared/list-navigation.js";
       import {
@@ -2950,7 +2954,8 @@
         el("filterInput").value = state.activeFilter;
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
         syncFilterOperatorControl();
-        restoreSavedFilterRows(view.savedFilterRows);
+        const allSavedFilterRowsRestored = restoreSavedFilterRows(view.savedFilterRows);
+        normaliseRestoredFavouriteFilter(allSavedFilterRowsRestored);
         clearProfileDetailCache();
         syncActiveFilterLabels();
       }
@@ -3670,6 +3675,14 @@
         });
       }
 
+      function clearSavedFilterSelection() {
+        el("savedFilterSelect").querySelectorAll(".saved-filter-option").forEach((button) => {
+          button.setAttribute("aria-selected", "false");
+          button.classList.remove("active");
+        });
+        syncSavedFilterThemeSelectionState();
+      }
+
       function restoreSavedFilterSelection(selectedKeys) {
         if (!selectedKeys?.size) {
           syncSavedFilterThemeSelectionState();
@@ -3798,49 +3811,11 @@
           .filter((row) => row.expression);
       }
 
-      function selectedSavedFilterExpressions() {
-        return selectedSavedFilterRows().map((row) => row.expression);
-      }
-
-      function wrapFilterExpression(expression) {
-        return `(${expression})`;
-      }
-
-      function combinedFlatSavedFilterExpression(rows) {
-        const expressions = rows.map((row) => row.expression);
-        if (!expressions.length) return "";
-        const operator = state.filterOperator === "or" || state.filterOperator === "nor" ? "OR" : "AND";
-        const groupedExpressions = expressions.length > 1 ? expressions.map(wrapFilterExpression) : expressions;
-        const combined = groupedExpressions.join(` ${operator} `);
-        return state.filterOperator === "nand" || state.filterOperator === "nor" ? `NOT (${combined})` : combined;
-      }
-
-      function combinedGroupedSavedFilterExpression(rows) {
-        if (rows.length === 1) return rows[0].expression;
-        const groups = [];
-        const byTheme = new Map();
-        rows.forEach((row) => {
-          if (!byTheme.has(row.theme)) {
-            const group = [];
-            byTheme.set(row.theme, group);
-            groups.push(group);
-          }
-          byTheme.get(row.theme).push(row.expression);
-        });
-        return groups
-          .map((expressions) => {
-            const groupedExpressions = expressions.map(wrapFilterExpression).join(" OR ");
-            return expressions.length > 1 ? `(${groupedExpressions})` : groupedExpressions;
-          })
-          .join(" AND ");
-      }
-
       function combinedSavedFilterExpression() {
-        const rows = selectedSavedFilterRows();
-        if (!rows.length) return "";
-        return state.filterSelectionMode === "grouped"
-          ? combinedGroupedSavedFilterExpression(rows)
-          : combinedFlatSavedFilterExpression(rows);
+        return combineSavedFilterRows(selectedSavedFilterRows(), {
+          mode: state.filterSelectionMode,
+          operator: state.filterOperator,
+        });
       }
 
       function applySavedFilters() {
@@ -3967,12 +3942,28 @@
         selectedThemes.forEach((theme) => state.collapsedSavedFilterThemes.delete(theme));
         renderSavedFilters();
         const selectedKeys = new Set(selectedRows.map(savedFilterRowKey));
+        const restoredKeys = new Set();
         el("savedFilterSelect").querySelectorAll(".saved-filter-option").forEach((button) => {
           const active = selectedKeys.has(savedFilterButtonKey(button));
           button.setAttribute("aria-selected", String(active));
           button.classList.toggle("active", active);
+          if (active) restoredKeys.add(savedFilterButtonKey(button));
         });
         syncSavedFilterThemeSelectionState();
+        return selectedKeys.size === restoredKeys.size
+          && Array.from(selectedKeys).every((key) => restoredKeys.has(key));
+      }
+
+      function normaliseRestoredFavouriteFilter(allRowsRestored) {
+        if (state.filterSelectionMode !== "grouped") return;
+        const nextFilter = normaliseLegacyGroupedFilter(
+          state.activeFilter,
+          selectedSavedFilterRows(),
+          { allRowsRestored },
+        );
+        if (nextFilter === state.activeFilter) return;
+        state.activeFilter = nextFilter;
+        el("filterInput").value = nextFilter;
       }
 
       function setLineBarManualGroupingKeys() {
@@ -4014,7 +4005,8 @@
         el("filterInput").value = state.activeFilter;
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
         syncFilterOperatorControl();
-        restoreSavedFilterRows(view.savedFilterRows);
+        const allSavedFilterRowsRestored = restoreSavedFilterRows(view.savedFilterRows);
+        normaliseRestoredFavouriteFilter(allSavedFilterRowsRestored);
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
@@ -4091,6 +4083,10 @@
 
       function applyFilter() {
         const nextFilter = el("filterInput").value.trim();
+        const savedFilterExpression = combinedSavedFilterExpression().trim();
+        if (selectedSavedFilterRows().length && nextFilter !== savedFilterExpression) {
+          clearSavedFilterSelection();
+        }
         if (nextFilter === state.activeFilter) {
           syncActiveFilterLabels();
           refreshMetricSummary();
@@ -4109,11 +4105,7 @@
 
       function clearFilter() {
         el("filterInput").value = "";
-        Array.from(el("savedFilterSelect").querySelectorAll(".saved-filter-option")).forEach((button) => {
-          button.setAttribute("aria-selected", "false");
-          button.classList.remove("active");
-        });
-        syncSavedFilterThemeSelectionState();
+        clearSavedFilterSelection();
         if (state.activeFilter === "") {
           syncActiveFilterLabels();
           refreshMetricSummary();
