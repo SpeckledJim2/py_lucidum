@@ -158,10 +158,16 @@ export function createColumnProfileTool({
       : "";
     el("profileWrap").innerHTML = `
       <div class="profile-toolbar app-control-strip app-control-strip-row">
-        <div class="profile-column-search-row">
-          <input id="profileColumnSearch" class="search profile-column-search app-control-input" type="search" placeholder="Search columns" aria-label="Search profile columns" autocomplete="off" value="${escapeHtml(state.profileColumnSearch || "")}" />
+        <div class="profile-toolbar-group profile-columns-control">
+          <h3 id="profileColumnsLabel" class="profile-toolbar-label">Columns</h3>
+          <div class="profile-column-search-row">
+            <input id="profileColumnSearch" class="search profile-column-search app-control-input" type="search" placeholder="Search columns" aria-labelledby="profileColumnsLabel" autocomplete="off" value="${escapeHtml(state.profileColumnSearch || "")}" />
+            <button id="profileColumnSearchClear" class="profile-column-search-clear app-control-button app-command-button" type="button" title="Clear column search" aria-label="Clear column search">&times;</button>
+          </div>
         </div>
+        <div class="profile-toolbar-group-divider" aria-hidden="true"></div>
         ${profileSummaryActionsHtml()}
+        <div class="profile-toolbar-meta-divider" aria-hidden="true"></div>
         <div id="profileMeta" class="profile-meta"></div>
       </div>
       <div class="profile-content"${splitStyle}>
@@ -219,6 +225,7 @@ export function createColumnProfileTool({
     bindProfileSummaryModeControl();
     bindProfilePaneResizer();
     el("profileColumnSearch")?.addEventListener("input", handleProfileColumnSearch);
+    el("profileColumnSearchClear")?.addEventListener("click", clearProfileColumnSearch);
     el("profileWrap").querySelectorAll("[data-profile-sort]").forEach((button) => {
       button.addEventListener("click", () => setProfileSort(button.dataset.profileSort));
     });
@@ -322,6 +329,15 @@ export function createColumnProfileTool({
   function handleProfileColumnSearch(event) {
     state.profileColumnSearch = event.target.value;
     applyProfileColumnSearch();
+  }
+
+  function clearProfileColumnSearch() {
+    const search = el("profileColumnSearch");
+    if (!search) return;
+    search.value = "";
+    state.profileColumnSearch = "";
+    applyProfileColumnSearch();
+    search.focus();
   }
 
   function applyProfileColumnSearch() {
@@ -485,10 +501,13 @@ export function createColumnProfileTool({
   function profileSummaryActionsHtml() {
     const selected = profileSummaryMode();
     return `
-      <div class="profile-summary-actions">
-        <div id="profileSummaryMode" class="profile-summary-mode" role="group" aria-label="Profile calculation rows">
-          <button type="button" class="profile-summary-mode-option app-control-button ${selected === "auto" ? "active" : ""}" data-profile-summary-mode="auto" data-stable-label="Use 100k" aria-pressed="${String(selected === "auto")}">Use 100k</button>
-          <button type="button" class="profile-summary-mode-option app-control-button ${selected === "full" ? "active" : ""}" data-profile-summary-mode="full" data-stable-label="Use all rows" aria-pressed="${String(selected === "full")}">Use all rows</button>
+      <div class="profile-toolbar-group profile-rows-control">
+        <h3 class="profile-toolbar-label">Rows</h3>
+        <div class="profile-summary-actions">
+          <div id="profileSummaryMode" class="profile-summary-mode" role="group" aria-label="Profile calculation rows">
+            <button type="button" class="profile-summary-mode-option app-control-button ${selected === "auto" ? "active" : ""}" data-profile-summary-mode="auto" data-stable-label="Use 100k" aria-pressed="${String(selected === "auto")}">Use 100k</button>
+            <button type="button" class="profile-summary-mode-option app-control-button ${selected === "full" ? "active" : ""}" data-profile-summary-mode="full" data-stable-label="Use all" aria-label="Use all rows" title="Use all rows" aria-pressed="${String(selected === "full")}">Use all</button>
+          </div>
         </div>
       </div>
     `;

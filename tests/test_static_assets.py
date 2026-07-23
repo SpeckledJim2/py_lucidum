@@ -1275,7 +1275,22 @@ if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy
         self.assertIn('const DATASET_VIEWER_META_MIN_WIDTH = 220;', dataset_viewer)
         self.assertIn('const DATASET_VIEWER_TOOLBAR_RESIZE_STEP = 24;', dataset_viewer)
         self.assertIn('class="profile-toolbar app-control-strip app-control-strip-row"', profile)
+        self.assertIn('class="profile-toolbar-group profile-columns-control"', profile)
+        self.assertIn('id="profileColumnsLabel" class="profile-toolbar-label">Columns</h3>', profile)
         self.assertIn('class="search profile-column-search app-control-input"', profile)
+        self.assertIn('aria-labelledby="profileColumnsLabel"', profile)
+        self.assertIn(
+            'id="profileColumnSearchClear" class="profile-column-search-clear app-control-button app-command-button"',
+            profile,
+        )
+        self.assertIn('class="profile-toolbar-group-divider" aria-hidden="true"', profile)
+        self.assertIn('class="profile-toolbar-group profile-rows-control"', profile)
+        self.assertIn('class="profile-toolbar-label">Rows</h3>', profile)
+        self.assertIn(
+            'data-profile-summary-mode="full" data-stable-label="Use all" aria-label="Use all rows" title="Use all rows"',
+            profile,
+        )
+        self.assertIn('class="profile-toolbar-meta-divider" aria-hidden="true"', profile)
         self.assertIn('id="profilePaneResizer"', profile)
         self.assertIn('role="separator"', profile)
         self.assertIn('aria-orientation="vertical"', profile)

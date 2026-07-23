@@ -1936,15 +1936,36 @@ class BrowserSmokeTests(unittest.TestCase):
                                       const summary = document.querySelector("#profileWrap .profile-summary-pane").getBoundingClientRect();
                                       const detail = document.querySelector("#profileDetailPane").getBoundingClientRect();
                                       const toolbar = document.querySelector("#profileWrap .profile-toolbar");
+                                      const columnsControl = toolbar.querySelector(".profile-columns-control");
+                                      const rowsControl = toolbar.querySelector(".profile-rows-control");
+                                      const groupDivider = toolbar.querySelector(".profile-toolbar-group-divider");
+                                      const metaDivider = toolbar.querySelector(".profile-toolbar-meta-divider");
+                                      const meta = toolbar.querySelector("#profileMeta");
+                                      const rowsLabel = rowsControl.querySelector(".profile-toolbar-label");
+                                      const rowButtons = [...rowsControl.querySelectorAll(".profile-summary-mode-option")];
+                                      const search = toolbar.querySelector("#profileColumnSearch");
+                                      const searchClear = toolbar.querySelector("#profileColumnSearchClear");
                                       const resizer = document.querySelector("#profilePaneResizer");
                                       const tableScroll = document.querySelector(".profile-table-scroll");
                                       const table = document.querySelector(".profile-table");
                                       const contentStyle = getComputedStyle(document.querySelector("#profileWrap .profile-content"));
                                       const detailStyle = getComputedStyle(document.querySelector("#profileDetailPane"));
+                                      const rect = (node) => {
+                                        const value = node.getBoundingClientRect();
+                                        return {
+                                          bottom: value.bottom,
+                                          height: value.height,
+                                          left: value.left,
+                                          right: value.right,
+                                          top: value.top,
+                                          width: value.width,
+                                        };
+                                      };
                                       return {
+                                        columnsControl: rect(columnsControl),
                                         controlHeights: [
                                           ...document.querySelectorAll(".profile-summary-mode-option"),
-                                          document.querySelector("#profileColumnSearch"),
+                                          search,
                                         ].map((control) => control.getBoundingClientRect().height),
                                         detailBottomBorder: detailStyle.borderBottomWidth,
                                         detailHeightRatio: detail.height / content.height,
@@ -1953,8 +1974,31 @@ class BrowserSmokeTests(unittest.TestCase):
                                         detailTop: detail.top,
                                         gridColumns: contentStyle.gridTemplateColumns,
                                         gridRows: contentStyle.gridTemplateRows,
+                                        groupDividerDisplay: getComputedStyle(groupDivider).display,
+                                        meta: rect(meta),
+                                        metaBorderTopColor: getComputedStyle(meta).borderTopColor,
+                                        metaBorderTopWidth: getComputedStyle(meta).borderTopWidth,
+                                        metaContentCenterDelta: Math.abs(
+                                          (meta.getBoundingClientRect().top + meta.getBoundingClientRect().height / 2)
+                                          - (rowsControl.getBoundingClientRect().top + rowsControl.getBoundingClientRect().height / 2)
+                                        ),
+                                        metaDivider: rect(metaDivider),
+                                        metaDividerDisplay: getComputedStyle(metaDivider).display,
                                         mobile: window.matchMedia("(max-width: 640px)").matches,
                                         resizerDisplay: getComputedStyle(resizer).display,
+                                        rowsControl: rect(rowsControl),
+                                        rowsBorderTopColor: getComputedStyle(rowsControl).borderTopColor,
+                                        rowsBorderTopWidth: getComputedStyle(rowsControl).borderTopWidth,
+                                        rowsItemCenterDeltas: [rowsLabel, ...rowButtons].map((node) => {
+                                          const nodeRect = node.getBoundingClientRect();
+                                          const rowsRect = rowsControl.getBoundingClientRect();
+                                          return Math.abs(
+                                            (nodeRect.top + nodeRect.height / 2)
+                                            - (rowsRect.top + rowsRect.height / 2)
+                                          );
+                                        }),
+                                        search: rect(search),
+                                        searchClearPosition: getComputedStyle(searchClear).position,
                                         summaryBottomAligned: Math.abs(summary.bottom - content.bottom) <= 2,
                                         summaryHeightRatio: summary.height / content.height,
                                         summaryTop: summary.top,
@@ -1965,6 +2009,7 @@ class BrowserSmokeTests(unittest.TestCase):
                                         ].map((row) => row.getBoundingClientRect().height),
                                         toolbarHasNoOverflow: toolbar.scrollWidth <= toolbar.clientWidth + 1,
                                         toolbarHeight: toolbar.getBoundingClientRect().height,
+                                        toolbarRect: rect(toolbar),
                                       };
                                     }
                                     """
@@ -1978,11 +2023,62 @@ class BrowserSmokeTests(unittest.TestCase):
                                 self.assertEqual(profile_mobile_layout["detailLeftBorder"], "0px")
                                 self.assertEqual(profile_mobile_layout["detailBottomBorder"], "1px")
                                 self.assertEqual(profile_mobile_layout["resizerDisplay"], "none")
-                                self.assertEqual(profile_mobile_layout["controlHeights"], [24, 24, 28])
+                                self.assertEqual(profile_mobile_layout["controlHeights"], [24, 24, 24])
+                                self.assertEqual(profile_mobile_layout["columnsControl"]["height"], 50)
+                                self.assertAlmostEqual(
+                                    profile_mobile_layout["columnsControl"]["width"],
+                                    profile_mobile_layout["toolbarRect"]["width"] - 16,
+                                    delta=1,
+                                )
+                                self.assertAlmostEqual(
+                                    profile_mobile_layout["search"]["width"],
+                                    profile_mobile_layout["columnsControl"]["width"] - 8,
+                                    delta=1,
+                                )
+                                self.assertGreaterEqual(
+                                    profile_mobile_layout["rowsControl"]["top"],
+                                    profile_mobile_layout["columnsControl"]["bottom"] - 1,
+                                )
+                                self.assertEqual(profile_mobile_layout["groupDividerDisplay"], "none")
+                                self.assertEqual(profile_mobile_layout["metaDividerDisplay"], "none")
+                                self.assertEqual(profile_mobile_layout["metaDivider"]["width"], 0)
+                                self.assertEqual(profile_mobile_layout["rowsControl"]["height"], 40)
+                                self.assertEqual(profile_mobile_layout["meta"]["height"], 40)
+                                self.assertAlmostEqual(
+                                    profile_mobile_layout["meta"]["top"],
+                                    profile_mobile_layout["rowsControl"]["top"],
+                                    delta=0.5,
+                                )
+                                self.assertAlmostEqual(
+                                    profile_mobile_layout["meta"]["left"],
+                                    profile_mobile_layout["rowsControl"]["right"],
+                                    delta=0.5,
+                                )
+                                self.assertAlmostEqual(
+                                    profile_mobile_layout["rowsControl"]["left"],
+                                    profile_mobile_layout["toolbarRect"]["left"] + 8,
+                                    delta=0.5,
+                                )
+                                self.assertAlmostEqual(
+                                    profile_mobile_layout["meta"]["right"],
+                                    profile_mobile_layout["toolbarRect"]["right"] - 8,
+                                    delta=0.5,
+                                )
+                                self.assertEqual(profile_mobile_layout["rowsBorderTopWidth"], "1px")
+                                self.assertEqual(profile_mobile_layout["metaBorderTopWidth"], "1px")
+                                self.assertEqual(
+                                    profile_mobile_layout["rowsBorderTopColor"],
+                                    profile_mobile_layout["metaBorderTopColor"],
+                                )
+                                self.assertTrue(
+                                    all(delta <= 0.5 for delta in profile_mobile_layout["rowsItemCenterDeltas"])
+                                )
+                                self.assertLessEqual(profile_mobile_layout["metaContentCenterDelta"], 0.5)
+                                self.assertEqual(profile_mobile_layout["searchClearPosition"], "absolute")
                                 self.assertTrue(profile_mobile_layout["tableIsScrollable"])
                                 self.assertEqual(profile_mobile_layout["tableRowHeights"], [22, 22])
                                 self.assertTrue(profile_mobile_layout["toolbarHasNoOverflow"])
-                                self.assertGreaterEqual(profile_mobile_layout["toolbarHeight"], 50)
+                                self.assertEqual(profile_mobile_layout["toolbarHeight"], 90)
                             if tool_button == "#ukMapTool":
                                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                                 page.wait_for_function(
@@ -2616,6 +2712,13 @@ class BrowserSmokeTests(unittest.TestCase):
                               const detailTitle = document.querySelector("#profileDetailTitle");
                               const detailTable = detail.querySelector(".profile-stats-table, .profile-count-table");
                               const search = document.querySelector("#profileColumnSearch");
+                              const searchClear = document.querySelector("#profileColumnSearchClear");
+                              const columnsControl = document.querySelector(".profile-columns-control");
+                              const rowsControl = document.querySelector(".profile-rows-control");
+                              const columnsLabel = document.querySelector("#profileColumnsLabel");
+                              const rowsLabel = rowsControl.querySelector(".profile-toolbar-label");
+                              const groupDivider = document.querySelector(".profile-toolbar-group-divider");
+                              const metaDivider = document.querySelector(".profile-toolbar-meta-divider");
                               const meta = document.querySelector("#profileMeta");
                               const buttons = [...document.querySelectorAll(".profile-summary-mode-option")];
                               const toolbarRect = toolbar.getBoundingClientRect();
@@ -2630,8 +2733,21 @@ class BrowserSmokeTests(unittest.TestCase):
                               const wrapRect = wrap.getBoundingClientRect();
                               const tableRect = table.getBoundingClientRect();
                               const searchRect = search.getBoundingClientRect();
+                              const searchClearRect = searchClear.getBoundingClientRect();
+                              const columnsControlRect = columnsControl.getBoundingClientRect();
+                              const rowsControlRect = rowsControl.getBoundingClientRect();
+                              const columnsLabelRect = columnsLabel.getBoundingClientRect();
+                              const rowsLabelRect = rowsLabel.getBoundingClientRect();
+                              const groupDividerRect = groupDivider.getBoundingClientRect();
+                              const metaDividerRect = metaDivider.getBoundingClientRect();
                               const toolbarDivider = getComputedStyle(toolbar, "::after");
+                              const groupDividerRule = getComputedStyle(groupDivider, "::before");
                               const resizerRule = getComputedStyle(resizer, "::before");
+                              const textLeft = (node) => {
+                                const range = document.createRange();
+                                range.selectNodeContents(node.firstChild);
+                                return range.getBoundingClientRect().left;
+                              };
                               return {
                                 toolbarHeight: toolbarRect.height,
                                 toolbarPaddingTop: getComputedStyle(toolbar).paddingTop,
@@ -2652,13 +2768,34 @@ class BrowserSmokeTests(unittest.TestCase):
                                 wrapRightGap: mainRect.right - wrapRect.right,
                                 buttonsShared: buttons.every((button) => button.classList.contains("app-control-button")),
                                 buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
-                                buttonCenterDeltas: buttons.map((button) => {
-                                  const rect = button.getBoundingClientRect();
-                                  return Math.abs((rect.top + rect.height / 2) - (toolbarRect.top + toolbarRect.height / 2));
-                                }),
+                                buttonTops: buttons.map((button) => button.getBoundingClientRect().top),
+                                columnsControlWidth: columnsControlRect.width,
+                                columnsLabelFontSize: getComputedStyle(columnsLabel).fontSize,
+                                columnsLabelFontWeight: getComputedStyle(columnsLabel).fontWeight,
+                                columnsLabelTop: columnsLabelRect.top,
+                                columnsTextLeft: textLeft(columnsLabel),
+                                groupDividerAriaHidden: groupDivider.getAttribute("aria-hidden"),
+                                groupDividerHeight: groupDividerRect.height,
+                                groupDividerRole: groupDivider.getAttribute("role"),
+                                groupDividerRuleColor: groupDividerRule.backgroundColor,
+                                groupDividerRuleLeft: groupDividerRule.left,
+                                groupDividerRuleWidth: groupDividerRule.width,
+                                groupDividerTabIndex: groupDivider.tabIndex,
+                                groupDividerWidth: groupDividerRect.width,
+                                metaDividerHeight: metaDividerRect.height,
+                                metaDividerWidth: metaDividerRect.width,
+                                rowsLabelFontSize: getComputedStyle(rowsLabel).fontSize,
+                                rowsLabelFontWeight: getComputedStyle(rowsLabel).fontWeight,
+                                rowsLabelTop: rowsLabelRect.top,
+                                rowsTextLeft: textLeft(rowsLabel),
+                                firstButtonTextLeft: textLeft(buttons[0]),
+                                rowsControlHeight: rowsControlRect.height,
                                 searchShared: search.classList.contains("app-control-input"),
                                 searchHeight: searchRect.height,
-                                searchCenterDelta: Math.abs((searchRect.top + searchRect.height / 2) - (toolbarRect.top + toolbarRect.height / 2)),
+                                searchClearHeight: searchClearRect.height,
+                                searchClearPosition: getComputedStyle(searchClear).position,
+                                searchTextLeft: searchRect.left + parseFloat(getComputedStyle(search).paddingLeft),
+                                searchTop: searchRect.top,
                                 metaInToolbar: toolbar.contains(meta),
                                 metaCenterDelta: Math.abs(
                                   (meta.getBoundingClientRect().top + meta.getBoundingClientRect().height / 2)
@@ -2723,10 +2860,50 @@ class BrowserSmokeTests(unittest.TestCase):
                             self.assertAlmostEqual(profile_geometry[edge_gap], 0, delta=0.5)
                         self.assertTrue(profile_geometry["buttonsShared"])
                         self.assertEqual(profile_geometry["buttonHeights"], [24, 24])
-                        self.assertTrue(all(delta <= 0.1 for delta in profile_geometry["buttonCenterDeltas"]))
+                        self.assertEqual(len(set(profile_geometry["buttonTops"])), 1)
+                        self.assertAlmostEqual(
+                            profile_geometry["buttonTops"][0],
+                            profile_geometry["searchTop"],
+                            delta=0.5,
+                        )
+                        self.assertEqual(profile_geometry["columnsControlWidth"], 312)
+                        self.assertEqual(profile_geometry["rowsControlHeight"], 50)
+                        self.assertEqual(profile_geometry["columnsLabelFontSize"], "11px")
+                        self.assertEqual(profile_geometry["rowsLabelFontSize"], "11px")
+                        self.assertEqual(profile_geometry["columnsLabelFontWeight"], "600")
+                        self.assertEqual(profile_geometry["rowsLabelFontWeight"], "600")
+                        self.assertAlmostEqual(
+                            profile_geometry["columnsLabelTop"],
+                            profile_geometry["rowsLabelTop"],
+                            delta=0.5,
+                        )
+                        self.assertAlmostEqual(
+                            profile_geometry["columnsTextLeft"],
+                            profile_geometry["searchTextLeft"],
+                            delta=0.5,
+                        )
+                        self.assertAlmostEqual(
+                            profile_geometry["rowsTextLeft"],
+                            profile_geometry["firstButtonTextLeft"],
+                            delta=0.5,
+                        )
+                        self.assertEqual(profile_geometry["groupDividerAriaHidden"], "true")
+                        self.assertIsNone(profile_geometry["groupDividerRole"])
+                        self.assertEqual(profile_geometry["groupDividerTabIndex"], -1)
+                        self.assertEqual(profile_geometry["groupDividerWidth"], 9)
+                        self.assertEqual(profile_geometry["groupDividerHeight"], 50)
+                        self.assertEqual(profile_geometry["groupDividerRuleLeft"], "4px")
+                        self.assertEqual(profile_geometry["groupDividerRuleWidth"], "1px")
+                        self.assertEqual(
+                            profile_geometry["groupDividerRuleColor"],
+                            profile_geometry["toolbarDividerColor"],
+                        )
+                        self.assertEqual(profile_geometry["metaDividerWidth"], 1)
+                        self.assertEqual(profile_geometry["metaDividerHeight"], 50)
                         self.assertTrue(profile_geometry["searchShared"])
-                        self.assertEqual(profile_geometry["searchHeight"], 28)
-                        self.assertLessEqual(profile_geometry["searchCenterDelta"], 0.1)
+                        self.assertEqual(profile_geometry["searchHeight"], 24)
+                        self.assertEqual(profile_geometry["searchClearHeight"], 24)
+                        self.assertEqual(profile_geometry["searchClearPosition"], "absolute")
                         self.assertTrue(profile_geometry["metaInToolbar"])
                         self.assertLessEqual(profile_geometry["metaCenterDelta"], 0.5)
                         self.assertEqual(profile_geometry["resizerWidth"], 12)
@@ -17571,6 +17748,36 @@ COPY (
                 page.locator('#profileWrap .profile-summary-row[aria-selected="true"]').wait_for(timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#profileFilter").evaluate("node => getComputedStyle(node).fontSize"), "10px")
+                page.locator("#profileColumnSearch").focus()
+                profile_empty_search_style = page.evaluate(
+                    """
+                    () => {
+                      const input = document.querySelector("#profileColumnSearch");
+                      const clear = document.querySelector("#profileColumnSearchClear");
+                      const inputStyle = getComputedStyle(input);
+                      const clearStyle = getComputedStyle(clear);
+                      return {
+                        ariaLabelledBy: input.getAttribute("aria-labelledby"),
+                        background: inputStyle.backgroundColor,
+                        borderWidths: [
+                          inputStyle.borderTopWidth,
+                          inputStyle.borderRightWidth,
+                          inputStyle.borderBottomWidth,
+                          inputStyle.borderLeftWidth,
+                        ],
+                        boxShadow: inputStyle.boxShadow,
+                        clearPointerEvents: clearStyle.pointerEvents,
+                        clearVisibility: clearStyle.visibility,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(profile_empty_search_style["ariaLabelledBy"], "profileColumnsLabel")
+                self.assertEqual(profile_empty_search_style["background"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(profile_empty_search_style["borderWidths"], ["0px"] * 4)
+                self.assertNotEqual(profile_empty_search_style["boxShadow"], "none")
+                self.assertEqual(profile_empty_search_style["clearPointerEvents"], "none")
+                self.assertEqual(profile_empty_search_style["clearVisibility"], "hidden")
                 profile_mode_geometry = page.evaluate(
                     """
                     () => {
@@ -17623,12 +17830,12 @@ COPY (
                     """
                 )
                 self.assertTrue(profile_mode_geometry["searchBeforeButtons"])
-                self.assertEqual([button["label"] for button in profile_mode_geometry["buttons"]], ["Use 100k", "Use all rows"])
-                self.assertEqual([button["stableLabel"] for button in profile_mode_geometry["buttons"]], ["Use 100k", "Use all rows"])
+                self.assertEqual([button["label"] for button in profile_mode_geometry["buttons"]], ["Use 100k", "Use all"])
+                self.assertEqual([button["stableLabel"] for button in profile_mode_geometry["buttons"]], ["Use 100k", "Use all"])
                 self.assertEqual([button["pressed"] for button in profile_mode_geometry["buttons"]], ["true", "false"])
                 self.assertEqual([button["fontSize"] for button in profile_mode_geometry["buttons"]], ["12px", "12px"])
                 self.assertEqual([button["fontWeight"] for button in profile_mode_geometry["buttons"]], ["700", "400"])
-                self.assertEqual([button["paddingLeft"] for button in profile_mode_geometry["buttons"]], ["3px", "3px"])
+                self.assertEqual([button["paddingLeft"] for button in profile_mode_geometry["buttons"]], ["0px", "3px"])
                 self.assertEqual([button["paddingRight"] for button in profile_mode_geometry["buttons"]], ["3px", "3px"])
                 first_mode_button = profile_mode_geometry["buttons"][0]["geometry"]
                 second_mode_button = profile_mode_geometry["buttons"][1]["geometry"]
@@ -17643,7 +17850,8 @@ COPY (
                 )
                 self.assertTrue(all(button["background"] == "rgba(0, 0, 0, 0)" for button in profile_mode_geometry["buttons"]))
                 self.assertTrue(all(button["borderWidths"] == ["0px"] * 4 for button in profile_mode_geometry["buttons"]))
-                self.assertTrue(all(button["labelCenterDelta"] <= 0.5 for button in profile_mode_geometry["buttons"]))
+                self.assertLessEqual(profile_mode_geometry["buttons"][0]["labelCenterDelta"], 2)
+                self.assertLessEqual(profile_mode_geometry["buttons"][1]["labelCenterDelta"], 0.5)
                 disabled_mode_cursor = page.locator('[data-profile-summary-mode="full"]').evaluate(
                     """
                     button => {
@@ -17659,7 +17867,7 @@ COPY (
                 )
                 self.assertEqual(disabled_mode_cursor, "pointer")
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_full_request_info:
-                    page.locator(".profile-summary-mode-option", has_text="Use all rows").click()
+                    page.locator(".profile-summary-mode-option", has_text="Use all").click()
                 profile_full_payload = json.loads(profile_full_request_info.value.post_data or "{}")
                 self.assertEqual(profile_full_payload["mode"], "full")
                 page.locator('[data-profile-summary-mode="full"][aria-pressed="true"]').wait_for(state="attached", timeout=10_000)
@@ -17697,17 +17905,19 @@ COPY (
                 self.assertEqual(profile_mode_geometry_after["meta"], profile_mode_geometry["meta"])
                 self.assertEqual(profile_mode_geometry_after["toolbarScrollWidth"], profile_mode_geometry["toolbarScrollWidth"])
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
+                long_profile_filter = " AND ".join(["vehicle_age >= 1"] * 12)
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_filter_request_info:
                     page.evaluate(
                         """
-                        () => {
-                            document.querySelector("#filterInput").value = "vehicle_age >= 1";
-                            document.querySelector("#filterApplyBtn").click();
+                        (value) => {
+                          document.querySelector("#filterInput").value = value;
+                          document.querySelector("#filterApplyBtn").click();
                         }
-                        """
+                        """,
+                        long_profile_filter,
                     )
                 profile_filter_payload = json.loads(profile_filter_request_info.value.post_data or "{}")
-                self.assertEqual(profile_filter_payload["filter"], "vehicle_age >= 1")
+                self.assertEqual(profile_filter_payload["filter"], long_profile_filter)
                 self.assertEqual(profile_filter_payload["mode"], "full")
                 page.wait_for_function(
                     """
@@ -17725,6 +17935,39 @@ COPY (
                     timeout=10_000,
                 )
                 assert_filter_badge_clear("#profileFilterClearBtn", "#profileFilterText", True)
+                profile_filter_containment = page.evaluate(
+                    """
+                    () => {
+                      const meta = document.querySelector("#profileMeta");
+                      const divider = document.querySelector(".profile-toolbar-meta-divider");
+                      const filter = document.querySelector("#profileFilter");
+                      const clear = document.querySelector("#profileFilterClearBtn");
+                      const text = document.querySelector("#profileFilterText");
+                      const metaRect = meta.getBoundingClientRect();
+                      const dividerRect = divider.getBoundingClientRect();
+                      const filterRect = filter.getBoundingClientRect();
+                      const clearRect = clear.getBoundingClientRect();
+                      return {
+                        clearInside: clearRect.left >= filterRect.left - 0.5
+                          && clearRect.right <= filterRect.right + 0.5,
+                        filterAfterDivider: filterRect.left >= dividerRect.right - 0.5,
+                        filterInsideMeta: filterRect.right <= metaRect.right + 0.5,
+                        metaOverflow: getComputedStyle(meta).overflow,
+                        textClipped: text.scrollWidth > text.clientWidth + 1,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    profile_filter_containment,
+                    {
+                        "clearInside": True,
+                        "filterAfterDivider": True,
+                        "filterInsideMeta": True,
+                        "metaOverflow": "hidden",
+                        "textClipped": True,
+                    },
+                )
                 page.locator('[data-profile-summary-mode="full"][aria-pressed="true"]').wait_for(state="attached", timeout=10_000)
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_auto_request_info:
@@ -17765,11 +18008,107 @@ COPY (
                 self.assertEqual(postcode_area_row.get_attribute("aria-selected"), "true")
                 self.assertFalse(postcode_area_row.evaluate("node => node.hidden"))
                 self.assertEqual(profile_requests, profile_requests_before_search)
-                page.locator("#profileColumnSearch").fill("")
+                populated_profile_search = page.evaluate(
+                    """
+                    () => {
+                      const input = document.querySelector("#profileColumnSearch");
+                      const clear = document.querySelector("#profileColumnSearchClear");
+                      const inputRect = input.getBoundingClientRect();
+                      const clearRect = clear.getBoundingClientRect();
+                      const inputStyle = getComputedStyle(input);
+                      const clearStyle = getComputedStyle(clear);
+                      const probe = document.createElement("span");
+                      probe.style.background = "var(--sidebar-selected-row-bg)";
+                      document.body.append(probe);
+                      const selectedRowBackground = getComputedStyle(probe).backgroundColor;
+                      probe.remove();
+                      return {
+                        background: inputStyle.backgroundColor,
+                        borderRadius: inputStyle.borderRadius,
+                        boxShadow: inputStyle.boxShadow,
+                        clearPointerEvents: clearStyle.pointerEvents,
+                        clearPosition: clearStyle.position,
+                        clearRight: clearRect.right,
+                        clearVisibility: clearStyle.visibility,
+                        inputRight: inputRect.right,
+                        selectedRowBackground,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    populated_profile_search["background"],
+                    populated_profile_search["selectedRowBackground"],
+                )
+                self.assertEqual(populated_profile_search["borderRadius"], "5px")
+                self.assertEqual(populated_profile_search["boxShadow"], "none")
+                self.assertEqual(populated_profile_search["clearPointerEvents"], "auto")
+                self.assertEqual(populated_profile_search["clearPosition"], "absolute")
+                self.assertEqual(populated_profile_search["clearVisibility"], "visible")
+                self.assertAlmostEqual(
+                    populated_profile_search["clearRight"],
+                    populated_profile_search["inputRight"],
+                    delta=0.5,
+                )
+                page.locator("#themeBtn").click()
+                page.wait_for_function('() => document.body.classList.contains("dark")', timeout=10_000)
+                populated_profile_search_dark = page.evaluate(
+                    """
+                    () => {
+                      const input = document.querySelector("#profileColumnSearch");
+                      const probe = document.createElement("span");
+                      probe.style.background = "var(--sidebar-selected-row-bg)";
+                      document.body.append(probe);
+                      const result = {
+                        background: getComputedStyle(input).backgroundColor,
+                        selectedRowBackground: getComputedStyle(probe).backgroundColor,
+                      };
+                      probe.remove();
+                      return result;
+                    }
+                    """
+                )
+                self.assertEqual(
+                    populated_profile_search_dark["background"],
+                    populated_profile_search_dark["selectedRowBackground"],
+                )
+                self.assertNotEqual(
+                    populated_profile_search_dark["background"],
+                    populated_profile_search["background"],
+                )
+                page.locator("#themeBtn").click()
+                page.wait_for_function('() => !document.body.classList.contains("dark")', timeout=10_000)
+                page.locator("#profileColumnSearchClear").click()
                 page.wait_for_function(
-                    '() => document.querySelector("#profileWrap .profile-summary-row[data-profile-column=\\"vehicle_age\\"]")?.hidden === false'
+                    """
+                    () => document.querySelector("#profileColumnSearch")?.value === ""
+                      && document.activeElement?.id === "profileColumnSearch"
+                      && document.querySelector('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]')?.hidden === false
+                    """
                 )
                 self.assertEqual(profile_requests, profile_requests_before_search)
+                cleared_profile_search = page.evaluate(
+                    """
+                    () => {
+                      const input = document.querySelector("#profileColumnSearch");
+                      const clearStyle = getComputedStyle(document.querySelector("#profileColumnSearchClear"));
+                      return {
+                        background: getComputedStyle(input).backgroundColor,
+                        clearPointerEvents: clearStyle.pointerEvents,
+                        clearVisibility: clearStyle.visibility,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    cleared_profile_search,
+                    {
+                        "background": "rgba(0, 0, 0, 0)",
+                        "clearPointerEvents": "none",
+                        "clearVisibility": "hidden",
+                    },
+                )
+                self.assertEqual(postcode_area_row.get_attribute("aria-selected"), "true")
                 vehicle_age_row = page.locator('#profileWrap .profile-summary-row[data-profile-column="vehicle_age"]')
                 self.assertEqual(vehicle_age_row.evaluate("node => getComputedStyle(node).userSelect"), "none")
                 page.evaluate(
