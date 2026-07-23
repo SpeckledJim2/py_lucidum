@@ -7449,6 +7449,7 @@ COPY (
                         "learning_rate": learning_rate,
                         "num_iterations": 123 if model_id.endswith("-2") else 77,
                         "early_stopping_rounds": 25,
+                        "interaction_constraints": [[0], [1]],
                     },
                 )
                 if model_id == "browser-smoke-model":
@@ -19008,6 +19009,13 @@ COPY (
                 self.assertEqual(feature_scenario_state()["value"], "")
                 page.get_by_text("Parameters", exact=True).wait_for(timeout=10_000)
                 page.get_by_text("Evaluation Log", exact=True).wait_for(timeout=10_000)
+                self.assertEqual(
+                    page.locator(
+                        "#gbmParameterGrid .tabulator-cell[tabulator-field='name']",
+                        has_text="interaction_constraints",
+                    ).count(),
+                    0,
+                )
                 parameter_copy_requests_before = len(gbm_layout_api_requests)
                 learning_rate_cell = page.locator(
                     "#gbmParameterGrid .tabulator-row",
@@ -19024,6 +19032,7 @@ COPY (
                       if (!window.__lucidumCopiedParameters) return false;
                       const params = JSON.parse(window.__lucidumCopiedParameters);
                       return !("init_score" in params)
+                        && !("interaction_constraints" in params)
                         && params.learning_rate === 0.125
                         && typeof params.learning_rate === "number"
                         && typeof params.num_iterations === "number"
@@ -21771,6 +21780,12 @@ COPY (
                 self.assertEqual(train_payload["value"]["feature_interaction_pairs"], [{"left": "Segment", "right": "Age"}])
                 self.assertNotIn("feature_interaction_groupings", train_payload["value"])
                 self.assertNotIn("feature_interaction_features", train_payload["value"])
+                self.assertFalse(
+                    any(
+                        parameter.get("name") == "interaction_constraints"
+                        for parameter in train_payload["value"]["parameters"]
+                    )
+                )
                 trained_features = {feature["name"]: feature for feature in train_payload["value"]["features"]}
                 self.assertTrue(trained_features["Age"]["include"])
                 self.assertTrue(trained_features["Segment"]["include"])

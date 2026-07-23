@@ -140,7 +140,12 @@ WHERE feature IS NOT NULL
 
         for name, value in values.items():
             text_name = str(name)
-            if text_name in {INIT_SCORE_PARAMETER, "training_mode", "init_score_metadata"}:
+            if text_name in {
+                INIT_SCORE_PARAMETER,
+                "training_mode",
+                "init_score_metadata",
+                "interaction_constraints",
+            }:
                 continue
             if text_name not in seen:
                 rows.append({"name": text_name, "value": value, "important": False})

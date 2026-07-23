@@ -1107,8 +1107,9 @@ const json = gbmParametersJson([
   {{ name: "interaction_constraints", value: [[0, 1], [2]] }},
 ]);
 const params = JSON.parse(json);
-if (Object.keys(params).join("|") !== "objective|num_iterations|learning_rate|force_col_wise|force_row_wise|monotone_constraints|interaction_constraints") throw new Error("parameter order or metadata filtering failed");
+if (Object.keys(params).join("|") !== "objective|num_iterations|learning_rate|force_col_wise|force_row_wise|monotone_constraints") throw new Error("parameter order or metadata filtering failed");
 if ("init_score" in params) throw new Error("init_score was copied");
+if ("interaction_constraints" in params) throw new Error("generated interaction constraints were copied");
 if (params.num_iterations !== 250 || params.learning_rate !== 0.05) throw new Error("numeric coercion failed");
 if (params.force_col_wise !== true || params.force_row_wise !== false) throw new Error("boolean coercion failed");
 if (JSON.stringify(params.monotone_constraints) !== "[-1,0,1]") throw new Error("list value changed");

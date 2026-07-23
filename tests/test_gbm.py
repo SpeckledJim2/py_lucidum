@@ -2071,6 +2071,7 @@ COPY (
                 "num_iterations": 88,
                 "learning_rate": 0.125,
                 "custom_penalty": 2.5,
+                "interaction_constraints": [[0], [1, 2]],
             },
         )
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
@@ -2086,6 +2087,11 @@ COPY (
         self.assertEqual(parameters["num_iterations"], 88)
         self.assertEqual(parameters["learning_rate"], 0.125)
         self.assertEqual(parameters["custom_penalty"], 2.5)
+        self.assertNotIn("interaction_constraints", parameters)
+        self.assertEqual(
+            store.read_json(store.artifact_path("m1", "parameters"))["interaction_constraints"],
+            [[0], [1, 2]],
+        )
         self.assertTrue(features["Age"]["include"])
         self.assertEqual(features["Age"]["monotonicity"], "Increasing")
         self.assertTrue(features["Segment"]["include"])
@@ -2439,6 +2445,10 @@ COPY (
                 "groups": [{"grouping": "POSTCODE", "features": ["PostcodeArea"]}],
                 "features": ["VehicleAge"],
             },
+        )
+        self.assertEqual(
+            store.read_json(store.artifact_path(result["model_id"], "parameters"))["interaction_constraints"],
+            [[0, 2], [1], [3]],
         )
 
     def test_training_persists_init_score_and_uses_it_for_predictions(self) -> None:

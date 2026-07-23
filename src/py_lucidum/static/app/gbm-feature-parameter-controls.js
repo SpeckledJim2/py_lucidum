@@ -56,7 +56,7 @@ export function gbmParametersJson(parameters = []) {
   for (const parameter of parameters) {
     if (!parameter || typeof parameter !== "object") continue;
     const name = String(parameter.name || "").trim();
-    if (!name || name === "init_score") continue;
+    if (!name || name === "init_score" || name === "interaction_constraints") continue;
     if (typeof parameter.value === "string" && /[{}]/.test(parameter.value)) {
       throw new Error(GBM_PARAMETER_GRID_COPY_ERROR);
     }
