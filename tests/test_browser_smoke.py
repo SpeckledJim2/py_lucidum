@@ -610,9 +610,16 @@ class BrowserSmokeTests(unittest.TestCase):
     def test_histogram_full_bleed_settings_and_splitter(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "histogram_full_bleed.csv"
+            very_long_denominator = (
+                "earned_exposure_in_period_with_an_exceptionally_long_name_"
+                "that_must_be_ellipsized_inside_the_histogram_chart_area"
+            )
             data_path.write_text(
-                "value,weight\n"
-                + "\n".join(f"{index % 20 + 1},{index % 5 + 1}" for index in range(1, 121))
+                f"value,earned_exposure_in_period,{very_long_denominator}\n"
+                + "\n".join(
+                    f"{index % 20 + 1},{index % 5 + 1},{index % 7 + 1}"
+                    for index in range(1, 121)
+                )
                 + "\n",
                 encoding="utf-8",
             )
@@ -621,7 +628,7 @@ class BrowserSmokeTests(unittest.TestCase):
                 defaults={
                     "x": "value",
                     "actual": "value",
-                    "denominator": "__none__",
+                    "denominator": "earned_exposure_in_period",
                 },
                 tools=["histogram", "line_bar"],
             )
@@ -818,6 +825,134 @@ class BrowserSmokeTests(unittest.TestCase):
                             """
                         )
 
+                    def assert_histogram_y_axis_title_layout(*, expect_truncated: bool = False) -> None:
+                        layout = page.evaluate(
+                            """
+                            () => {
+                              const chartNode = document.querySelector("#histogramChart");
+                              const chart = echarts.getInstanceByDom(chartNode);
+                              const canvas = chartNode.querySelector("canvas");
+                              const canvasRect = canvas.getBoundingClientRect();
+                              const button = document.querySelector("#histogramToolbarToggleBtn");
+                              const buttonRect = button.getBoundingClientRect();
+                              const option = chart.getOption();
+                              const yAxis = option.yAxis?.[0] || {};
+                              const titlePrefix = String(yAxis.name || "").slice(0, 24);
+                              const grid = chart.getModel().getComponent("grid")?.coordinateSystem?.getRect?.();
+                              const title = chart.getZr().storage.getDisplayList(true).find(
+                                (item) => (item.type === "tspan" || item.type === "text")
+                                  && String(item.style?.text || "").startsWith(titlePrefix)
+                              );
+                              const titlePaint = title?.getPaintRect?.() || title?.getBoundingRect?.();
+                              const front = document.elementFromPoint(
+                                buttonRect.left + buttonRect.width / 2,
+                                buttonRect.top + buttonRect.height / 2,
+                              );
+                              const buttonStyle = getComputedStyle(button);
+                              return {
+                                button: {
+                                  left: buttonRect.left,
+                                  right: buttonRect.right,
+                                  top: buttonRect.top,
+                                  bottom: buttonRect.bottom,
+                                  frontmost: front === button || button.contains(front),
+                                  opacity: buttonStyle.opacity,
+                                  visibility: buttonStyle.visibility,
+                                },
+                                canvas: {
+                                  left: canvasRect.left,
+                                  right: canvasRect.right,
+                                  top: canvasRect.top,
+                                },
+                                grid: grid ? {
+                                  left: canvasRect.left + grid.x,
+                                  right: canvasRect.left + grid.x + grid.width,
+                                  top: canvasRect.top + grid.y,
+                                  width: grid.width,
+                                } : null,
+                                title: titlePaint ? {
+                                  left: canvasRect.left + titlePaint.x,
+                                  right: canvasRect.left + titlePaint.x + titlePaint.width,
+                                  top: canvasRect.top + titlePaint.y,
+                                  bottom: canvasRect.top + titlePaint.y + titlePaint.height,
+                                } : null,
+                                titleAlign: yAxis.nameTextStyle?.align || "",
+                                titleGap: Number(yAxis.nameGap || 0),
+                                titleMaxWidth: Number(yAxis.nameTruncate?.maxWidth || 0),
+                                sourceTitle: String(yAxis.name || ""),
+                                renderedTitle: String(title?.style?.text || ""),
+                              };
+                            }
+                            """
+                        )
+                        self.assertIsNotNone(layout["grid"])
+                        self.assertIsNotNone(layout["title"])
+                        title = layout["title"]
+                        grid = layout["grid"]
+                        self.assertGreaterEqual(title["left"], layout["canvas"]["left"])
+                        self.assertGreaterEqual(title["left"], layout["button"]["right"] + 8)
+                        self.assertLessEqual(title["right"], layout["canvas"]["right"] + 0.5)
+                        self.assertGreaterEqual(grid["top"] - title["bottom"], 7)
+                        self.assertEqual(layout["titleAlign"], "left")
+                        self.assertEqual(layout["titleGap"], 19)
+                        self.assertAlmostEqual(layout["titleMaxWidth"], grid["width"], delta=0.5)
+                        self.assertTrue(layout["button"]["frontmost"])
+                        self.assertEqual(layout["button"]["opacity"], "1")
+                        self.assertEqual(layout["button"]["visibility"], "visible")
+                        if expect_truncated:
+                            self.assertNotEqual(layout["renderedTitle"], layout["sourceTitle"])
+                            self.assertTrue(layout["renderedTitle"].endswith("…"))
+                        else:
+                            self.assertEqual(layout["renderedTitle"], layout["sourceTitle"])
+
+                    def assert_histogram_x_axis_title_layout(
+                        expected_title: str,
+                        *,
+                        expect_truncated: bool = False,
+                    ) -> None:
+                        layout = page.evaluate(
+                            """
+                            () => {
+                              const chartNode = document.querySelector("#histogramChart");
+                              const chart = echarts.getInstanceByDom(chartNode);
+                              const canvas = chartNode.querySelector("canvas");
+                              const canvasRect = canvas.getBoundingClientRect();
+                              const xAxis = chart.getOption().xAxis?.[0] || {};
+                              const titlePrefix = String(xAxis.name || "").slice(0, 24);
+                              const grid = chart.getModel().getComponent("grid")?.coordinateSystem?.getRect?.();
+                              const title = chart.getZr().storage.getDisplayList(true).find(
+                                (item) => (item.type === "tspan" || item.type === "text")
+                                  && String(item.style?.text || "").startsWith(titlePrefix)
+                              );
+                              const titlePaint = title?.getPaintRect?.() || title?.getBoundingRect?.();
+                              return {
+                                canvas: {
+                                  left: canvasRect.left,
+                                  right: canvasRect.right,
+                                },
+                                gridWidth: Number(grid?.width || 0),
+                                title: titlePaint ? {
+                                  left: canvasRect.left + titlePaint.x,
+                                  right: canvasRect.left + titlePaint.x + titlePaint.width,
+                                } : null,
+                                titleMaxWidth: Number(xAxis.nameTruncate?.maxWidth || 0),
+                                sourceTitle: String(xAxis.name || ""),
+                                renderedTitle: String(title?.style?.text || ""),
+                              };
+                            }
+                            """
+                        )
+                        self.assertIsNotNone(layout["title"])
+                        self.assertEqual(layout["sourceTitle"], expected_title)
+                        self.assertGreaterEqual(layout["title"]["left"], layout["canvas"]["left"])
+                        self.assertLessEqual(layout["title"]["right"], layout["canvas"]["right"] + 0.5)
+                        self.assertAlmostEqual(layout["titleMaxWidth"], layout["gridWidth"], delta=0.5)
+                        if expect_truncated:
+                            self.assertNotEqual(layout["renderedTitle"], layout["sourceTitle"])
+                            self.assertTrue(layout["renderedTitle"].endswith("…"))
+                        else:
+                            self.assertEqual(layout["renderedTitle"], layout["sourceTitle"])
+
                     def assert_toggle_trace(trace: dict[str, Any], *, expanded: bool) -> None:
                         expected_expanded = "true" if expanded else "false"
                         first_frame = trace["firstFrame"]
@@ -982,6 +1117,8 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(initial_layout["workspaceRadius"], "0px")
                     self.assertEqual(initial_layout["workspaceShadow"], "none")
                     self.assertEqual(initial_layout["workspacePadding"], ["0px", "0px", "0px", "0px"])
+                    assert_histogram_y_axis_title_layout()
+                    assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
 
                     requests_before_toggle = histogram_requests
                     page.evaluate("window.__armHistogramToggleTrace()")
@@ -999,6 +1136,8 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     page.mouse.move(0, 0)
                     before = settings_layout()
+                    assert_histogram_y_axis_title_layout()
+                    assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
                     self.assertTrue(before["shared"])
                     self.assertEqual(before["height"], 50)
                     self.assertTrue(before["labelsReserved"])
@@ -1221,7 +1360,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         delta=0.5,
                     )
                     self.assertIsNotNone(split_before["chartPlot"])
-                    self.assertAlmostEqual(split_before["chartPlot"]["top"], 34, delta=0.5)
+                    self.assertAlmostEqual(split_before["chartPlot"]["top"], 40, delta=0.5)
                     self.assertAlmostEqual(
                         split_before["chart"]["top"] + split_before["chartPlot"]["top"],
                         split_before["statsGrid"]["top"],
@@ -1229,7 +1368,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     self.assertAlmostEqual(
                         split_before["chart"]["height"],
-                        split_before["stats"]["height"] + 34,
+                        split_before["stats"]["height"] + 40,
                         delta=0.5,
                     )
                     self.assertAlmostEqual(
@@ -1239,9 +1378,11 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     self.assertAlmostEqual(
                         split_before["chartPlot"]["height"],
-                        split_before["chartRenderedHeight"] - 34 - 92,
+                        split_before["chartRenderedHeight"] - 40 - 92,
                         delta=0.5,
                     )
+                    assert_histogram_y_axis_title_layout()
+                    assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
                     requests_before_drag = histogram_requests
                     splitter_box = page.locator("#histogramSplitResizer").bounding_box()
                     self.assertIsNotNone(splitter_box)
@@ -1278,6 +1419,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         delta=2,
                     )
                     self.assertEqual(histogram_requests, requests_before_drag)
+                    assert_histogram_y_axis_title_layout()
+                    assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
 
                     splitter = page.locator("#histogramSplitResizer")
                     splitter.focus()
@@ -1331,6 +1474,61 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(mobile_layout["display"], "none")
                     self.assertLessEqual(mobile_layout["stats"]["bottom"], mobile_layout["chart"]["top"] + 0.5)
                     self.assertGreaterEqual(mobile_status["statsTop"], mobile_status["controlsBottom"] + 4)
+                    assert_histogram_y_axis_title_layout()
+                    assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#denominator").evaluate(
+                            """
+                            (node) => {
+                              node.value = "__none__";
+                              node.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                    page.wait_for_function(
+                        """
+                        () => echarts
+                          .getInstanceByDom(document.querySelector("#histogramChart"))
+                          ?.getOption?.().xAxis?.[0]?.name === "value"
+                        """,
+                        timeout=10_000,
+                    )
+                    assert_histogram_x_axis_title_layout("value")
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#denominator").evaluate(
+                            """
+                            (node, value) => {
+                              node.value = value;
+                              node.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """,
+                            very_long_denominator,
+                        )
+                    page.wait_for_function(
+                        """
+                        (expected) => echarts
+                          .getInstanceByDom(document.querySelector("#histogramChart"))
+                          ?.getOption?.().yAxis?.[0]?.name?.endsWith(expected)
+                          && echarts
+                            .getInstanceByDom(document.querySelector("#histogramChart"))
+                            ?.getOption?.().xAxis?.[0]?.name === `value / ${expected}`
+                        """,
+                        arg=very_long_denominator,
+                        timeout=10_000,
+                    )
+                    assert_histogram_y_axis_title_layout(expect_truncated=True)
+                    assert_histogram_x_axis_title_layout(
+                        f"value / {very_long_denominator}",
+                        expect_truncated=True,
+                    )
 
                     self.assertEqual(page_errors, [])
                     browser.close()
@@ -25184,10 +25382,35 @@ COPY (
                         "badge => Number(badge.querySelector('.app-status-badge-elapsed')?.textContent.match(/(\\d+)s/)?.[1] || -1)"
                     )
                     self.assertGreaterEqual(phase_elapsed, gbm_training_badge["elapsed"])
+                page.evaluate(
+                    """
+                    () => {
+                      const badge = document.querySelector("#appStatusBadge");
+                      window.__gbmObservedStatusTexts = [];
+                      window.__gbmStatusObserver?.disconnect();
+                      const recordStatus = () => {
+                        const text = badge?.textContent.trim() || "";
+                        if (text) window.__gbmObservedStatusTexts.push(text);
+                      };
+                      window.__gbmStatusObserver = new MutationObserver(recordStatus);
+                      window.__gbmStatusObserver.observe(badge, {
+                        attributes: true,
+                        childList: true,
+                        characterData: true,
+                        subtree: true,
+                      });
+                      recordStatus();
+                    }
+                    """
+                )
                 live_job_status["value"] = "succeeded"
-                page.locator("#appStatusBadge.busy", has_text="Finalising GBM").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    "() => window.__gbmObservedStatusTexts?.some(text => text.includes('Finalising GBM'))",
+                    timeout=10_000,
+                )
                 page.locator("#gbmTrainBtn", has_text="Train GBM").wait_for(timeout=10_000)
                 page.locator("#appStatusBadge.ready", has_text="Ready").wait_for(timeout=10_000)
+                page.evaluate("window.__gbmStatusObserver?.disconnect()")
                 self.assertEqual(page.locator("#appStatusBadge .app-status-badge-elapsed").text_content(), "")
                 gbm_ready_button = page.locator("#gbmTrainBtn").evaluate(
                     """

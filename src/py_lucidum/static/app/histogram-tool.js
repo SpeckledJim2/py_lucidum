@@ -11,9 +11,15 @@ const HISTOGRAM_X_AXIS_MAX_LABELS = 100;
 const HISTOGRAM_X_AXIS_FONT_SIZE = 10;
 const HISTOGRAM_X_AXIS_LABEL_WIDTH_FACTOR = 0.56;
 const HISTOGRAM_X_AXIS_LABEL_PADDING = 10;
-const HISTOGRAM_X_AXIS_HORIZONTAL_PADDING = 102;
+const HISTOGRAM_GRID_LEFT = 72;
+const HISTOGRAM_GRID_RIGHT = 30;
+const HISTOGRAM_GRID_TOP = 40;
+const HISTOGRAM_GRID_TOP_WITH_BIN_LABELS = 56;
+const HISTOGRAM_X_AXIS_HORIZONTAL_PADDING = HISTOGRAM_GRID_LEFT + HISTOGRAM_GRID_RIGHT;
 const HISTOGRAM_X_AXIS_ROTATION = 65;
 const HISTOGRAM_Y_AXIS_TARGET_INTERVALS = 6;
+const HISTOGRAM_Y_AXIS_NAME_GAP = 19;
+const HISTOGRAM_AXIS_NAME_MIN_WIDTH = 40;
 const HISTOGRAM_BIN_OUTLINE_LIMIT = 200;
 const HISTOGRAM_BIN_LABEL_MIN_FONT_SIZE = 7;
 const HISTOGRAM_BIN_LABEL_MAX_FONT_SIZE = 10;
@@ -358,6 +364,7 @@ export function createHistogramTool({
     const chartWidth = Number(chart.getWidth?.()) || el("histogramChart")?.clientWidth || 800;
     histogramAxisChartWidth = chartWidth;
     const xAxisPolicy = histogramXAxisPolicy(data, rows, xLog, chartWidth, formatAxisValue);
+    const axisNameMaxWidth = Math.max(HISTOGRAM_AXIS_NAME_MIN_WIDTH, chartWidth - HISTOGRAM_X_AXIS_HORIZONTAL_PADDING);
     const showBinLabels = state.histogramLabels === "bins";
     const barColor = getCss("--bar") || "#5bc0de";
     const binOutlineColor = getCss("--histogram-bin-outline") || "#4b5563";
@@ -385,17 +392,21 @@ export function createHistogramTool({
           formatter: histogramTooltip,
         },
         grid: {
-          left: 72,
-          right: 30,
-          top: showBinLabels ? 50 : 34,
+          left: HISTOGRAM_GRID_LEFT,
+          right: HISTOGRAM_GRID_RIGHT,
+          top: showBinLabels ? HISTOGRAM_GRID_TOP_WITH_BIN_LABELS : HISTOGRAM_GRID_TOP,
           bottom: xAxisPolicy.gridBottom,
           containLabel: false,
         },
         xAxis: {
           type: xLog ? "log" : "value",
-          name: data.response?.label || data.actual || "Actual",
+          name: histogramXAxisTitle(data),
           nameLocation: "middle",
           nameGap: xAxisPolicy.nameGap,
+          nameTruncate: {
+            maxWidth: axisNameMaxWidth,
+            ellipsis: "…",
+          },
           min: xBounds.min,
           max: xBounds.max,
           scale: true,
@@ -432,12 +443,17 @@ export function createHistogramTool({
         yAxis: {
           type: yLog ? "log" : "value",
           name: yLabel,
+          nameGap: HISTOGRAM_Y_AXIS_NAME_GAP,
+          nameTruncate: {
+            maxWidth: axisNameMaxWidth,
+            ellipsis: "…",
+          },
           min: yLog ? yBaseline : 0,
           ...yAxisPolicy,
           axisLabel: { color: textColor, formatter: (value) => formatYAxisValue(value, data.y_axis) },
           axisLine: { lineStyle: { color: lineColor } },
           splitLine: { lineStyle: { color: lineColor } },
-          nameTextStyle: { color: textColor, fontSize: 12, fontWeight: 700 },
+          nameTextStyle: { color: textColor, fontSize: 12, fontWeight: 700, align: "left" },
         },
         series: [
           {
@@ -707,6 +723,13 @@ export function createHistogramTool({
   function yAxisLabel(data) {
     const base = data.y_axis === "probability" ? "Probability" : (data.denominator?.bar_label || "Weight");
     return data.distribution === "cumulative" ? `Cumulative ${base}` : base;
+  }
+
+  function histogramXAxisTitle(data) {
+    const responseLabel = String(data.response?.label || data.actual || "Actual").trim() || "Actual";
+    const numerator = String(data.response?.numerator || data.actual || responseLabel).trim() || responseLabel;
+    const denominator = String(data.denominator?.column || "").trim();
+    return denominator ? `${numerator} / ${denominator}` : responseLabel;
   }
 
   function histogramTooltip(params) {

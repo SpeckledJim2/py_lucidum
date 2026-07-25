@@ -150,7 +150,7 @@
         height: auto;
         min-height: 0;
         min-width: 0;
-        padding-top: 40px;
+        padding-top: 46px;
         position: relative;
       }
 
@@ -172,7 +172,7 @@
         border: 0;
         grid-column: 1;
         grid-row: 1;
-        margin-top: -34px;
+        margin-top: -40px;
       }
 
       .histogram-split-resizer {
@@ -181,7 +181,7 @@
         left: calc(100% - var(--histogram-stats-width, 240px));
         min-width: 12px;
         position: absolute;
-        top: 40px;
+        top: 46px;
         transform: translateX(-50%);
         width: 12px;
         z-index: 4;
