@@ -2066,6 +2066,10 @@ export function createLineBarTool({
       ...data.responses.map((response) => response.label),
       { name: weightLabel, icon: "roundRect", itemStyle: { color: nColor, borderColor: nColor } },
     ];
+    const primaryResponseLabel = String(data.responses[0]?.label || "");
+    const mainLegendDisplayLabels = primaryResponseLabel
+      ? { [primaryResponseLabel]: responseMetricAxisLabel(data, 0) }
+      : {};
     const mainLegendSelection = matchingLegendSelection(previousOption, legendData);
     const overlayLegendSelection = matchingLegendSelection(previousOption, overlayLegendData);
     const responseAxis = responseAxisOptions(data, { ...mainLegendSelection, ...overlayLegendSelection }, renderTransform);
@@ -2158,7 +2162,13 @@ export function createLineBarTool({
           trigger: "axis",
           formatter: (params) => formatChartTooltip(params, weightLabel, formatChartResponseValue),
         },
-        legend: lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection),
+        legend: lineBarLegendOptions(
+          legendData,
+          mainLegendSelection,
+          overlayLegendData,
+          overlayLegendSelection,
+          mainLegendDisplayLabels,
+        ),
         grid: {
           left: responseAxisLayout.gridMargin,
           right: volumeAxisLayout.gridMargin,
@@ -2447,13 +2457,20 @@ export function createLineBarTool({
     return segments;
   }
 
-  function lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection) {
+  function lineBarLegendOptions(
+    legendData,
+    mainLegendSelection,
+    overlayLegendData,
+    overlayLegendSelection,
+    displayLabels = {},
+  ) {
     const textStyle = { color: getCss("--text"), fontWeight: 700, fontSize: 13 };
     const overlayTextStyle = { color: getCss("--text"), fontWeight: 400, fontSize: 11 };
     const mainLegend = {
       top: LINE_BAR_MAIN_LEGEND_TOP,
       data: legendData,
       selected: mainLegendSelection,
+      formatter: (name) => displayLabels[name] || name,
       textStyle,
     };
     if (!overlayLegendData.length) return mainLegend;

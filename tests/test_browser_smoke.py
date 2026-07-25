@@ -4441,6 +4441,114 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_single_feature_legend_uses_metric_ratio_label(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "single_feature_legend.csv"
+            data_path.write_text(
+                "age,price,expected,value\n"
+                "20,100,90,10\n"
+                "30,200,210,20\n"
+                "40,300,290,30\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "age",
+                    "actual": "price",
+                    "expected": "expected",
+                    "denominator": "value",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.wait_for_function(
+                        '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                        timeout=10_000,
+                    )
+
+                    weighted_legend = page.evaluate(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.();
+                          const legend = option?.legend?.[0];
+                          const names = (legend?.data || []).map((entry) => entry?.name || entry);
+                          return {
+                            displayed: names.map((name) => legend?.formatter?.(name) || name),
+                            seriesNames: (option?.series || []).map((series) => series.name),
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(
+                        weighted_legend["displayed"],
+                        ["price / value", "expected", "value"],
+                    )
+                    self.assertEqual(
+                        weighted_legend["seriesNames"],
+                        ["value", "price", "expected"],
+                    )
+
+                    page.evaluate(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.dispatchAction({ type: "legendUnSelect", name: "price" })
+                        """
+                    )
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption?.().legend?.[0]?.selected?.price === false
+                        """,
+                        timeout=10_000,
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#denominator").select_option("__none__")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.();
+                          const legend = option?.legend?.[0];
+                          return legend?.formatter?.("price") === "price"
+                            && legend?.selected?.price === false
+                            && option?.yAxis?.[0]?.name === "price";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    average_row_legend = page.evaluate(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.();
+                          const legend = option?.legend?.[0];
+                          return (legend?.data || [])
+                            .map((entry) => entry?.name || entry)
+                            .map((name) => legend?.formatter?.(name) || name);
+                        }
+                        """
+                    )
+                    self.assertEqual(
+                        average_row_legend,
+                        ["price", "expected", "Row count"],
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_two_feature_grouping_controls_charts_table_and_favourite(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -12171,6 +12279,12 @@ COPY (
                                 denominatorName: option?.yAxis?.[1]?.name || "",
                                 denominatorNameGap: Number(option?.yAxis?.[1]?.nameGap || 0),
                                 gridRight: Number(option?.grid?.[0]?.right || 0),
+                                primaryLegendLabel: (() => {
+                                  const legend = option?.legend?.[0];
+                                  const primaryName = (option?.series || [])
+                                    .find((series) => series.type === "line")?.name || "";
+                                  return legend?.formatter?.(primaryName) || primaryName;
+                                })(),
                               };
                             }
                             """
@@ -12194,6 +12308,10 @@ COPY (
                         self.assertEqual(request_body["responses"][2]["source"], active_gbm_source)
                         self.assertEqual(axis_presentation["responseName"], "actualNumerator / gbm_prediction")
                         self.assertEqual(axis_presentation["denominatorName"], "gbm_prediction")
+                        self.assertEqual(
+                            axis_presentation["primaryLegendLabel"],
+                            "actualNumerator / gbm_prediction",
+                        )
                         self.assertGreater(
                             axis_presentation["gridRight"],
                             axis_presentation["denominatorNameGap"],
