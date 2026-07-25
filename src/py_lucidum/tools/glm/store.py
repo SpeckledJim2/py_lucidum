@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import duckdb
 
-from py_lucidum.core import Dataset, ModelPredictionSource, ModelSourceBinding, dataset_workspace_metadata, quote_ident, sql_literal
+from py_lucidum.core import ColumnInfo, Dataset, ModelPredictionSource, ModelSourceBinding, dataset_workspace_metadata, quote_ident, sql_literal
 
 from .validation import denominator_valid_sql, dataset_relation_sql
 
@@ -521,10 +521,62 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
             bindings=bindings,
         )
 
+    def published_schema(self, dataset: Dataset, model_id: str, source_id: str) -> dict[str, Any]:
+        try:
+            manifest = self.store.manifest(model_id)
+            prediction_path = self.store.source_path(model_id, "predictions")
+            prediction_metadata = dataset.parquet_artifact_metadata(prediction_path)
+            prediction_columns = {column.name: column for column in prediction_metadata.columns}
+            if "__lucidum_row_id" not in prediction_columns or "glm_prediction" not in prediction_columns:
+                raise ValueError("Unsupported GLM prediction artifact schema")
+
+            dataset_columns = dataset.valid_schema_columns()
+            dataset_column_names = {column.name for column in dataset_columns}
+            output_names = {"glm_prediction"}
+            denominator_col = str(manifest.get("denominator_column") or "").strip()
+            if denominator_col:
+                if denominator_col not in dataset_column_names:
+                    raise ValueError("GLM denominator is not a readable dataset column")
+                output_names.add("glm_prediction_rate")
+
+            tabulated_path = self.store.artifact_path(model_id, "tabulated_predictions")
+            tabulated_column: ColumnInfo | None = None
+            if tabulated_path.exists():
+                tabulated_metadata = dataset.parquet_artifact_metadata(tabulated_path)
+                tabulated_columns = {column.name: column for column in tabulated_metadata.columns}
+                if "__lucidum_row_id" not in tabulated_columns or "glm_tabulated_prediction" not in tabulated_columns:
+                    raise ValueError("Unsupported GLM tabulated prediction artifact schema")
+                tabulated_column = tabulated_columns["glm_tabulated_prediction"]
+                output_names.add(tabulated_column.name)
+
+            if dataset_column_names.intersection(output_names):
+                raise ValueError("GLM output columns collide with dataset columns")
+
+            columns = [dataset.column_payload(column) for column in dataset_columns]
+            columns.append(dataset.column_payload(prediction_columns["glm_prediction"]))
+            if denominator_col:
+                rate_column = prediction_columns.get("glm_prediction_rate") or ColumnInfo(
+                    name="glm_prediction_rate",
+                    duckdb_type="DOUBLE",
+                    kind="numeric",
+                )
+                columns.append(dataset.column_payload(rate_column))
+            if tabulated_column is not None:
+                columns.append(dataset.column_payload(tabulated_column))
+            return {
+                "path": source_id,
+                "file_size": None,
+                "row_count": prediction_metadata.row_count,
+                "columns": columns,
+            }
+        except (duckdb.Error, FileNotFoundError, KeyError, ValueError):
+            return dataset.schema_for_source(source_id)
+
     def data_sources(self, dataset: Dataset) -> list[dict[str, Any]]:
         sources: list[dict[str, Any]] = []
         for model, source_id, info in self.store.source_manifest_entries():
-            schema = dataset.schema_for_source(source_id)
+            model_id = str(model.get("model_id") or "")
+            schema = self.published_schema(dataset, model_id, source_id)
             diagnostics = model.get("diagnostics") if isinstance(model.get("diagnostics"), dict) else {}
             label = f"{model.get('label') or model.get('model_id')} - {info['label']}"
             sources.append(

@@ -1582,6 +1582,30 @@ COPY (
         self.assertTrue(all(column["band_suggestion"] is None for column in payload["columns"]))
         self.assertTrue(all(column["band_suggestion"] is None for column in payload["data_sources"][0]["columns"]))
 
+    def test_parquet_artifact_metadata_cache_tracks_file_replacement_and_reload(self) -> None:
+        artifact_path = self.root / "cached_predictions.parquet"
+        self.write_prediction_parquet(artifact_path, "glm_prediction", [1.0, 2.0])
+        dataset = Dataset(self.data_path)
+
+        first = dataset.parquet_artifact_metadata(artifact_path)
+        cached = dataset.parquet_artifact_metadata(artifact_path)
+
+        self.assertIs(cached, first)
+        self.assertEqual(first.row_count, 2)
+        self.assertEqual([column.name for column in first.columns], ["__lucidum_row_id", "glm_prediction"])
+
+        artifact_path.unlink()
+        self.write_prediction_parquet(artifact_path, "glm_prediction", [1.0, 2.0, 3.0])
+        replaced = dataset.parquet_artifact_metadata(artifact_path)
+
+        self.assertIsNot(replaced, first)
+        self.assertEqual(replaced.row_count, 3)
+
+        dataset.reload()
+        reloaded = dataset.parquet_artifact_metadata(artifact_path)
+        self.assertIsNot(reloaded, replaced)
+        self.assertEqual(reloaded, replaced)
+
     def test_gbm_to_glm_ratio_source_requires_active_gbm_and_glm(self) -> None:
         self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0])
         app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
@@ -1597,7 +1621,12 @@ COPY (
         self.write_simple_glm_prediction_model([10.0, 0.0, None, 100.0])
         app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
-        status, _, body = asgi_get(app, "/api/schema")
+        with patch.object(
+            app.state.dataset,
+            "schema_for_source",
+            side_effect=AssertionError("schema publication inspected a joined model relation"),
+        ):
+            status, _, body = asgi_get(app, "/api/schema")
         payload = json.loads(body)
         ratio_sources = [source for source in payload["data_sources"] if source.get("kind") == RATIO_KIND]
 

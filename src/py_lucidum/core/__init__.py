@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .dataset import Dataset, ModelPredictionSource, ModelSourceBinding
+from .dataset import Dataset, ModelPredictionSource, ModelSourceBinding, ParquetArtifactMetadata
 from .features import load_features, resolve_features_path
 from .filters import load_saved_filters, resolve_filters_path
 from .kpis import load_kpis, resolve_kpis_path
@@ -58,6 +58,7 @@ __all__ = [
     "mixed_metric_relation_sql",
     "ModelPredictionSource",
     "ModelSourceBinding",
+    "ParquetArtifactMetadata",
     "missing_response_condition",
     "normalise_denominator",
     "normalise_denominator_source",

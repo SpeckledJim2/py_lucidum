@@ -12,7 +12,16 @@ from uuid import uuid4
 
 import duckdb
 
-from py_lucidum.core import Dataset, ModelPredictionSource, ModelSourceBinding, dataset_workspace_metadata, quote_ident, sql_literal
+from py_lucidum.core import (
+    ColumnInfo,
+    Dataset,
+    ModelPredictionSource,
+    ModelSourceBinding,
+    ParquetArtifactMetadata,
+    dataset_workspace_metadata,
+    quote_ident,
+    sql_literal,
+)
 
 from .sample import GENERATED_SAMPLE_FILENAME
 from .validation import DEFAULT_TRAINING_MODE, display_monotonicity, normalise_monotonicity
@@ -547,11 +556,20 @@ class GbmModelStore:
         finally:
             con.close()
 
-    def shap_value_columns(self, model_id: str, source_columns: list[str] | None = None) -> list[dict[str, str]]:
+    def shap_value_columns(
+        self,
+        model_id: str,
+        source_columns: list[str] | None = None,
+        *,
+        artifact_columns: list[str] | None = None,
+    ) -> list[dict[str, str]]:
         used_names = set(source_columns or self.source_projection_columns())
         used_names.add("__lucidum_row_id")
         columns: list[dict[str, str]] = []
-        for artifact_column in self.parquet_columns(self.artifact_path(model_id, "shap_long")):
+        stored_columns = artifact_columns
+        if stored_columns is None:
+            stored_columns = self.parquet_columns(self.artifact_path(model_id, "shap_long"))
+        for artifact_column in stored_columns:
             if artifact_column == "__lucidum_row_id":
                 continue
             alias = unique_output_column_name(f"SHAP__{artifact_column}", used_names)
@@ -886,6 +904,122 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
             bindings=bindings,
         )
 
+    def _prediction_artifact_columns(
+        self,
+        dataset: Dataset,
+        model_id: str,
+        offset_col: str,
+        *,
+        include_tabulated: bool,
+    ) -> tuple[ParquetArtifactMetadata, list[ColumnInfo]]:
+        prediction_path = self.store.source_path(model_id, "predictions")
+        prediction_metadata = dataset.parquet_artifact_metadata(prediction_path)
+        prediction_columns = {column.name: column for column in prediction_metadata.columns}
+        if "__lucidum_row_id" not in prediction_columns or "gbm_prediction" not in prediction_columns:
+            raise ValueError("Unsupported GBM prediction artifact schema")
+
+        columns = [prediction_columns["gbm_prediction"]]
+        if offset_col:
+            columns.append(
+                prediction_columns.get("gbm_prediction_rate")
+                or ColumnInfo(name="gbm_prediction_rate", duckdb_type="DOUBLE", kind="numeric")
+            )
+        if include_tabulated:
+            tabulated_path = self.store.artifact_path(model_id, "tabulated_predictions")
+            if tabulated_path.exists():
+                tabulated_metadata = dataset.parquet_artifact_metadata(tabulated_path)
+                tabulated_columns = {column.name: column for column in tabulated_metadata.columns}
+                if "__lucidum_row_id" not in tabulated_columns or "gbm_tabulated_prediction" not in tabulated_columns:
+                    raise ValueError("Unsupported GBM tabulated prediction artifact schema")
+                columns.append(tabulated_columns["gbm_tabulated_prediction"])
+        return prediction_metadata, columns
+
+    def published_schema(self, dataset: Dataset, model_id: str, source_id: str) -> dict[str, Any]:
+        try:
+            ref = self.store.source_ref(source_id)
+            if ref is None:
+                raise ValueError("Choose a valid GBM data source")
+            source_path = self.store.source_path(model_id, ref.source_kind)
+            source_metadata = dataset.parquet_artifact_metadata(source_path)
+
+            if ref.source_kind == "shap_summary":
+                return {
+                    "path": source_id,
+                    "file_size": None,
+                    "row_count": source_metadata.row_count,
+                    "columns": [dataset.column_payload(column) for column in source_metadata.columns],
+                }
+
+            manifest = self.store.manifest(model_id)
+            offset_col = str(manifest.get("offset_column") or "").strip()
+            dataset_columns = dataset.valid_schema_columns()
+            dataset_column_names = {column.name for column in dataset_columns}
+            if offset_col and offset_col not in dataset_column_names:
+                raise ValueError("GBM offset is not a readable dataset column")
+
+            columns = [dataset.column_payload(column) for column in dataset_columns]
+            if ref.source_kind == "predictions":
+                prediction_metadata, output_columns = self._prediction_artifact_columns(
+                    dataset,
+                    model_id,
+                    offset_col,
+                    include_tabulated=True,
+                )
+                if dataset_column_names.intersection(column.name for column in output_columns):
+                    raise ValueError("GBM output columns collide with dataset columns")
+                columns.extend(dataset.column_payload(column) for column in output_columns)
+                return {
+                    "path": source_id,
+                    "file_size": None,
+                    "row_count": prediction_metadata.row_count,
+                    "columns": columns,
+                }
+
+            if ref.source_kind != "shap_long":
+                raise ValueError("Unsupported GBM source kind")
+            shap_columns = {column.name: column for column in source_metadata.columns}
+            if "__lucidum_row_id" not in shap_columns:
+                raise ValueError("Unsupported GBM SHAP artifact schema")
+
+            prediction_path = self.store.source_path(model_id, "predictions")
+            if prediction_path.exists():
+                _prediction_metadata, prediction_outputs = self._prediction_artifact_columns(
+                    dataset,
+                    model_id,
+                    offset_col,
+                    include_tabulated=False,
+                )
+                if dataset_column_names.intersection(column.name for column in prediction_outputs):
+                    raise ValueError("GBM output columns collide with dataset columns")
+                columns.extend(dataset.column_payload(column) for column in prediction_outputs)
+
+            shap_aliases = self.store.shap_value_columns(
+                model_id,
+                [column.name for column in dataset_columns],
+                artifact_columns=[column.name for column in source_metadata.columns],
+            )
+            for alias in shap_aliases:
+                artifact_column = shap_columns.get(alias["artifact_column"])
+                if artifact_column is None:
+                    raise ValueError("Unsupported GBM SHAP artifact schema")
+                columns.append(
+                    dataset.column_payload(
+                        ColumnInfo(
+                            name=alias["name"],
+                            duckdb_type=artifact_column.duckdb_type,
+                            kind=artifact_column.kind,
+                        )
+                    )
+                )
+            return {
+                "path": source_id,
+                "file_size": None,
+                "row_count": source_metadata.row_count,
+                "columns": columns,
+            }
+        except (duckdb.Error, FileNotFoundError, KeyError, ValueError):
+            return dataset.schema_for_source(source_id)
+
     def active_shap_overlay_source(self, dataset: Dataset | None = None) -> dict[str, Any] | None:
         model_id = self.store.active_model_id()
         if not model_id:
@@ -919,12 +1053,19 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
     def data_sources(self, dataset: Dataset) -> list[dict[str, Any]]:
         sources: list[dict[str, Any]] = []
         for model, source_id, info in self.store.source_manifest_entries():
-            schema = dataset.schema_for_source(source_id)
+            model_id = str(model.get("model_id") or "")
+            schema = self.published_schema(dataset, model_id, source_id)
             columns = schema["columns"]
             if info["kind"] == "gbm_shap_long":
+                shap_path = self.store.source_path(model_id, "shap_long")
+                shap_metadata = dataset.parquet_artifact_metadata(shap_path)
                 shap_labels = {
                     column["name"]: column["label"]
-                    for column in self.store.shap_value_columns(str(model.get("model_id") or ""))
+                    for column in self.store.shap_value_columns(
+                        model_id,
+                        list(dataset.column_map()),
+                        artifact_columns=[column.name for column in shap_metadata.columns],
+                    )
                 }
                 columns = [
                     {

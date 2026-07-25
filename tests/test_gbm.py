@@ -3373,6 +3373,74 @@ ORDER BY Age
         self.assertIn("SHAP__Age", shap_columns)
         self.assertIn("SHAP__Segment", shap_columns)
 
+    def test_schema_metadata_path_preserves_shap_alias_collisions(self) -> None:
+        data_path = self.root / "shap_alias_collision.csv"
+        data_path.write_text(
+            "ID,Age,SHAP__Age\n"
+            "1,30,raw-a\n"
+            "2,40,raw-b\n",
+            encoding="utf-8",
+        )
+        store = GbmModelStore(data_path)
+        model_dir = store.create_model_dir("alias-model")
+        store.write_json(
+            model_dir / "manifest.json",
+            {
+                "model_id": "alias-model",
+                "label": "Alias model",
+                "created_at": "2026-07-25T00:00:00Z",
+                "response_column": "ID",
+                "offset_column": None,
+                "scored_rows": 2,
+                "shap_rows": 2,
+            },
+        )
+        write_gbm_parameters(store, "alias-model")
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 1.5 AS gbm_prediction
+  UNION ALL SELECT 2, 2.5
+) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 0.1 AS Age
+  UNION ALL SELECT 2, -0.1
+) TO {sql_literal(str(model_dir / "shap_values.parquet"))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        store.activate_model("alias-model")
+        app = create_app(data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+
+        with (
+            patch.object(
+                app.state.dataset,
+                "schema_for_source",
+                side_effect=AssertionError("schema publication inspected a joined model relation"),
+            ),
+            patch.object(
+                app.state.dataset,
+                "model_source_binding_eligible",
+                side_effect=AssertionError("schema publication validated SHAP row bindings"),
+            ),
+        ):
+            status, body = asgi_get(app, "/api/schema")
+        schema = json.loads(body)
+        shap_source = next(source for source in schema["data_sources"] if source["id"] == "gbm:alias-model:shap_long")
+        columns = {column["name"]: column for column in shap_source["columns"]}
+
+        self.assertEqual(status, 200)
+        self.assertNotIn("source_role", columns["SHAP__Age"])
+        self.assertEqual(columns["SHAP__Age_2"]["artifact_column"], "Age")
+        self.assertEqual(columns["SHAP__Age_2"]["source_role"], "gbm_shap_value")
+
     def test_gbm_workspaces_are_isolated_by_dataset_file_and_signature(self) -> None:
         other_path = self.root / "credit.csv"
         other_path.write_text(
@@ -4084,7 +4152,19 @@ COPY (
         )
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
-        status, body = asgi_get(app, "/api/schema")
+        with (
+            patch.object(
+                app.state.dataset,
+                "schema_for_source",
+                side_effect=AssertionError("schema publication inspected a joined model relation"),
+            ),
+            patch.object(
+                app.state.dataset,
+                "model_source_binding_eligible",
+                side_effect=AssertionError("schema publication validated SHAP row bindings"),
+            ),
+        ):
+            status, body = asgi_get(app, "/api/schema")
         schema = json.loads(body)
         models_status, models_body = asgi_get(app, "/api/gbm/models")
         models = {model["model_id"]: model for model in json.loads(models_body)["models"]}

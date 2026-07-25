@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import duckdb
 from fastapi import FastAPI
 
-from py_lucidum.core import Dataset, ModelPredictionSource, ModelSourceBinding, quote_ident
+from py_lucidum.core import Dataset, ModelPredictionSource, ModelSourceBinding, quote_ident, sql_literal
 
 
 RATIO_COLUMN = "gbm_to_glm_ratio"
@@ -73,8 +74,32 @@ INNER JOIN {glm_relation} glm USING (__lucidum_row_id)
         source_id = self.active_source_id()
         if not source_id:
             return []
-        schema = dataset.schema_for_source(source_id)
         context = self._source_context(source_id) or {}
+        try:
+            gbm_ref = self.gbm_store.source_ref(str(context.get("gbm_source_id") or ""))
+            glm_ref = self.glm_store.source_ref(str(context.get("glm_source_id") or ""))
+            if gbm_ref is None or glm_ref is None:
+                raise ValueError("Choose valid GBM and GLM prediction sources")
+            gbm_path = self.gbm_store.source_path(gbm_ref.model_id, "predictions")
+            glm_path = self.glm_store.source_path(glm_ref.model_id, "predictions")
+            gbm_metadata = dataset.parquet_artifact_metadata(gbm_path)
+            glm_metadata = dataset.parquet_artifact_metadata(glm_path)
+            if "__lucidum_row_id" not in {column.name for column in gbm_metadata.columns}:
+                raise ValueError("Unsupported GBM prediction artifact schema")
+            if "__lucidum_row_id" not in {column.name for column in glm_metadata.columns}:
+                raise ValueError("Unsupported GLM prediction artifact schema")
+            with dataset.lock:
+                row_count = int(
+                    dataset.con.execute(
+                        f"""
+SELECT COUNT(*)
+FROM read_parquet({sql_literal(str(gbm_path))}) gbm
+INNER JOIN read_parquet({sql_literal(str(glm_path))}) glm USING (__lucidum_row_id)
+"""
+                    ).fetchone()[0]
+                )
+        except (duckdb.Error, FileNotFoundError, KeyError, ValueError):
+            row_count = int(dataset.schema_for_source(source_id)["row_count"])
         return [
             {
                 "id": source_id,
@@ -83,7 +108,7 @@ INNER JOIN {glm_relation} glm USING (__lucidum_row_id)
                 "active": True,
                 "gbm_model_id": context.get("gbm_model_id"),
                 "glm_model_id": context.get("glm_model_id"),
-                "row_count": schema["row_count"],
+                "row_count": row_count,
                 "columns": [
                     {
                         "name": RATIO_COLUMN,

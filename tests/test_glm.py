@@ -1560,16 +1560,28 @@ COPY (
 ) TO {sql_literal(str(model_dir / "predictions.parquet"))} (FORMAT PARQUET)
 """
             )
+            con.execute(
+                f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 95.0 AS glm_tabulated_prediction
+  UNION ALL
+  SELECT 3, 325.0
+) TO {sql_literal(str(model_dir / "tabulated_predictions.parquet"))} (FORMAT PARQUET)
+"""
+            )
         finally:
             con.close()
         store.activate_model(model_id)
         dataset = Dataset(self.data_path)
         dataset.register_data_source_provider(GlmSourceProvider(store))
         source_id = store.source_id(model_id)
-        sources = dataset.data_sources()
+        with patch.object(dataset, "schema_for_source", side_effect=AssertionError("schema publication inspected the joined relation")):
+            sources = dataset.data_sources()
         source = next(item for item in sources if item["id"] == source_id)
 
         self.assertIn("glm_prediction_rate", [column["name"] for column in source["columns"]])
+        self.assertIn("glm_tabulated_prediction", [column["name"] for column in source["columns"]])
+        self.assertEqual(source["row_count"], 2)
         with dataset.lock:
             rows = dataset.con.execute(
                 f"""

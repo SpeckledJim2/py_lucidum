@@ -32,7 +32,14 @@ class ModelPredictionSource:
     bindings: dict[str, ModelSourceBinding] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ParquetArtifactMetadata:
+    row_count: int
+    columns: tuple[ColumnInfo, ...]
+
+
 ParquetFolderManifest = tuple[tuple[Path, int, int], ...]
+ParquetArtifactCacheKey = tuple[str, int, int]
 
 
 class Dataset:
@@ -52,6 +59,7 @@ class Dataset:
         self._band_suggestions: dict[str, float | int | None] | None = None
         self._source_band_suggestions: dict[str, dict[str, float | int | None]] = {}
         self._model_binding_cache: dict[tuple[Any, ...], bool] = {}
+        self._parquet_artifact_metadata_cache: dict[ParquetArtifactCacheKey, ParquetArtifactMetadata] = {}
         self._lock = threading.RLock()
         self._source_providers: list[Any] = []
 
@@ -321,6 +329,7 @@ FROM mismatches
         self._band_suggestions = None
         self._source_band_suggestions = {}
         self._model_binding_cache = {}
+        self._parquet_artifact_metadata_cache = {}
 
     def schema(self) -> dict[str, Any]:
         with self._lock:
@@ -363,6 +372,37 @@ FROM mismatches
             "kind": column.kind,
             "band_suggestion": column.band_suggestion,
         }
+
+    def parquet_artifact_metadata(self, path: str | Path) -> ParquetArtifactMetadata:
+        resolved = Path(path).expanduser().resolve()
+        with self._lock:
+            file_stat = resolved.stat()
+            cache_key = (str(resolved), int(file_stat.st_size), int(file_stat.st_mtime_ns))
+            cached = self._parquet_artifact_metadata_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            relation = f"read_parquet({sql_literal(str(resolved))})"
+            rows = self.con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
+            columns = tuple(
+                ColumnInfo(name=str(row[0]), duckdb_type=str(row[1]), kind=infer_kind(str(row[1])))
+                for row in rows
+            )
+            row_count = int(self.con.execute(f"SELECT COUNT(*) FROM {relation}").fetchone()[0])
+
+            final_stat = resolved.stat()
+            final_key = (str(resolved), int(final_stat.st_size), int(final_stat.st_mtime_ns))
+            if final_key != cache_key:
+                return self.parquet_artifact_metadata(resolved)
+
+            metadata = ParquetArtifactMetadata(row_count=row_count, columns=columns)
+            self._parquet_artifact_metadata_cache = {
+                key: value
+                for key, value in self._parquet_artifact_metadata_cache.items()
+                if key[0] != str(resolved)
+            }
+            self._parquet_artifact_metadata_cache[cache_key] = metadata
+            return metadata
 
     def invalid_columns(self) -> list[dict[str, str]]:
         errors = self.invalid_column_errors()
